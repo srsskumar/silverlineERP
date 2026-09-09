@@ -13,22 +13,22 @@
     "worker": "tsx src/jobs.ts"
   },
   "dependencies": {
-    "@silverline/shared": "0.1.0",
-    "fastify": "^5.2.0",
     "@fastify/cors": "^10.0.1",
-    "pg": "^8.13.1",
+    "@silverline/shared": "0.1.0",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/pg": "^8.23.1",
     "bcryptjs": "^2.4.3",
-    "otplib": "^12.0.1",
+    "dotenv": "^16.4.5",
+    "fastify": "^5.2.0",
     "jsonwebtoken": "^9.0.2",
-    "dotenv": "^16.4.5"
+    "otplib": "^12.0.1",
+    "pg": "^8.13.1"
   },
   "devDependencies": {
-    "typescript": "^5.6.3",
     "@types/node": "^22.9.0",
-    "@types/pg": "^8.11.0",
-    "@types/jsonwebtoken": "^9.0.7",
-    "@types/bcryptjs": "^2.4.6",
     "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
     "vitest": "^3.2.6"
   }
 }

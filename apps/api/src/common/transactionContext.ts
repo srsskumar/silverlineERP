@@ -8,7 +8,7 @@ export function transactionPool(raw:Pool):Pool{
  const pool=new Proxy(raw,{
   get(target,property){
    if(property==='query')return (...args:unknown[])=>{
-    const context=transactions.getStore(),db=context?.pool===pool?context.client:target;
+    const context=transactions.getStore(),db=context && context.pool===pool?context.client:target;
     return (db.query as (...args:unknown[])=>unknown).apply(db,args);
    };
    const value=Reflect.get(target,property,target);

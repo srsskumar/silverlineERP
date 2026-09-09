@@ -758,7 +758,7 @@ export async function registerS6Routes(
       });
     }
     user.scopes=await scopesForPermission(req,domainRead);
-    if(['inventory','assets','invoices','payroll'].includes(type)&&!resolveScopes(user.scopes).global)return sendError(reply,req.requestId,{status:403,code:'FORBIDDEN',message:'This report requires organization-wide permission'});
+    if(['inventory','assets','invoices','payroll'].includes(type)&&!resolveScopes(user.scopes??[]).global)return sendError(reply,req.requestId,{status:403,code:'FORBIDDEN',message:'This report requires organization-wide permission'});
     const filters = filtersOf(parsed.data as { filters?: unknown });
     const piiScopes=await scopesForPermission(req,'employee.pii.read');
     const canSeePii = user.permissions.includes("employee.pii.read")&&(resolveScopes(piiScopes).global||scopeFingerprint({...user,scopes:piiScopes})===scopeFingerprint(user));
@@ -803,7 +803,7 @@ export async function registerS6Routes(
     const dir = reportsDir();
     await mkdir(dir, { recursive: true });
     const filePath = join(dir, `${id}.enc`);
-    const metadata=[['Report',type],['Generated at',new Date().toISOString()],['Parameters',JSON.stringify(filters)],['Data scope',resolveScopes(user.scopes).global?'Organization':scopeFingerprint(user)]];
+    const metadata=[['Report',type],['Generated at',new Date().toISOString()],['Parameters',JSON.stringify(filters)],['Data scope',resolveScopes(user.scopes??[]).global?'Organization':scopeFingerprint(user)]];
     const content=format==='xlsx'?spreadsheet(headers,rows,metadata):format==='pdf'?textPdf(`Silverline ${type} report`,[...metadata.map(([k,v])=>`${k}: ${v}`),'',...rows.flatMap((row,index)=>[`Record ${index+1}`,...headers.map((h,i)=>`${h}: ${row[i]??''}`),''])]):Buffer.from(metadata.map(([k,v])=>`# ${k}: ${v}`).join('\n')+'\n'+toCsv(headers,rows));
     await writeFile(filePath,encryptPii(content.toString('base64')),{encoding:'utf8',mode:0o600});
     const entry: ReportEntry = {
