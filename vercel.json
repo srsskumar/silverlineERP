@@ -1,7 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": "static",
-  "installCommand": "npm install --include=dev",
-  "buildCommand": "npx turbo run build --filter=web",
-  "outputDirectory": ".next-verify"
+  "installCommand": "npm install --include=dev --workspaces=false",
+  "buildCommand": "cd apps/web && NEXT_VERIFY_BUILD=1 npx next build",
+  "outputDirectory": "apps/web/.next-verify"
 }
