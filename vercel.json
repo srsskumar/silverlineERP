@@ -3,5 +3,5 @@
   "framework": "nextjs",
   "installCommand": "npm install --include=dev",
   "buildCommand": "npx turbo run build --filter=web",
-  "outputDirectory": "apps/web/.next-verify"
+  "outputDirectory": ".next-verify"
 }
