@@ -1,7 +1,7 @@
 import "./common/env.js";
 import { getConfig } from "./config.js";
 import { createPool } from "./database/db.js";
-import { buildApp } from "./app.js";
+import { buildApp } from "./createApp.js";
 
 const config = getConfig();
 const pool = createPool(config.databaseUrl);

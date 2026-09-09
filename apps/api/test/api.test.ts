@@ -5,7 +5,7 @@ import bcrypt from "bcryptjs";
 import { authenticator } from "otplib";
 import { Pool } from "pg";
 import type { FastifyInstance } from "fastify";
-import { buildApp } from "../src/app.js";
+import { buildApp } from "../src/createApp.js";
 import { migrate } from "../src/database/migrate.js";
 import {
   ADMIN_PASSWORD,

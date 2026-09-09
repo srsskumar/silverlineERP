@@ -3,7 +3,7 @@ import {afterAll,beforeAll,beforeEach,describe,it,expect} from 'vitest';
 import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import type {FastifyInstance,HTTPMethods} from 'fastify';
-import {buildApp} from '../src/app.js';
+import {buildApp} from '../src/createApp.js';
 import {migrate} from '../src/database/migrate.js';
 import {seedDatabase,ADMIN_PASSWORD} from '../src/database/seed.js';
 import {runJobs,publicAddress} from '../src/modules/automation/worker.js';

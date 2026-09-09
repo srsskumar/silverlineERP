@@ -4,7 +4,7 @@ import {Pool} from 'pg';
 process.env.NODE_ENV='test';
 const {migrate}=await import('../apps/api/dist/database/migrate.js');
 const {seedDatabase}=await import('../apps/api/dist/database/seed.js');
-const {buildApp}=await import('../apps/api/dist/app.js');
+const {buildApp}=await import('../apps/api/dist/createApp.js');
 const bcrypt=(await import('bcryptjs')).default;
 const base=new URL(process.env.TEST_DATABASE_URL??'postgresql://localhost:5432/silverline_test');
 if(!/(^test_|_test$)/.test(base.pathname.slice(1)))throw new Error('Use a dedicated TEST_DATABASE_URL');

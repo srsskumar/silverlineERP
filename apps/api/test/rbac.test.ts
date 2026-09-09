@@ -9,7 +9,7 @@ import {
   resolveScopes,
   villagesInScope,
 } from "../src/common/scopes.js";
-import { buildApp } from "../src/app.js";
+import { buildApp } from "../src/createApp.js";
 import { migrate } from "../src/database/migrate.js";
 import {
   ADMIN_PASSWORD,

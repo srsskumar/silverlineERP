@@ -7,7 +7,7 @@ import type { FastifyInstance } from "fastify";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { encryptPii } from "../src/common/crypto.js";
 import { createRateLimiter } from "../src/common/rateLimit.js";
-import { buildApp } from "../src/app.js";
+import { buildApp } from "../src/createApp.js";
 import { migrate } from "../src/database/migrate.js";
 import { clearDashboardCache, clearReportRegistry } from "../src/modules/s6/routes.js";
 import {

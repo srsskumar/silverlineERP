@@ -1,5 +1,5 @@
 import "./common/env.js";
-import {buildApp} from './app.js';
+import {buildApp} from './createApp.js';
 import {getConfig} from './config.js';
 import {runJobs} from './modules/automation/worker.js';
 const config=getConfig(),app=await buildApp();

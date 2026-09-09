@@ -6,7 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import bcrypt from "bcryptjs";
 import { Pool } from "pg";
 import type { FastifyInstance } from "fastify";
-import { buildApp } from "../src/app.js";
+import { buildApp } from "../src/createApp.js";
 import { migrate } from "../src/database/migrate.js";
 import {
   ADMIN_PASSWORD,

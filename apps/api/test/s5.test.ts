@@ -5,7 +5,7 @@ import bcrypt from "bcryptjs";
 import { Pool } from "pg";
 import type { FastifyInstance } from "fastify";
 import { computeSlaStatus } from "@silverline/shared";
-import { buildApp } from "../src/app.js";
+import { buildApp } from "../src/createApp.js";
 import { migrate } from "../src/database/migrate.js";
 import {
   ADMIN_PASSWORD,
