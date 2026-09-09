@@ -9,6 +9,12 @@
  * Vercel's build-time detector only checks this file's own source for a
  * "fastify" import to confirm it's a Fastify entrypoint — it doesn't follow
  * into dist/createApp.js, which is where the app is actually constructed.
+ *
+ * Serverless functions can't bind a real listening socket, so this calls
+ * app.ready() (finishes plugin/route registration) instead of app.listen()
+ * — Vercel's runtime dispatches requests into the exported instance
+ * directly. Calling listen() here hung every request indefinitely, since
+ * its promise never resolves in the sandbox.
  */
 import "fastify";
 import "./dist/common/env.js";
@@ -20,9 +26,6 @@ const config = getConfig();
 const pool = createPool(config.databaseUrl);
 const app = await buildApp({ pool });
 
-await app.listen({
-  port: Number(process.env.PORT ?? config.port),
-  host: "0.0.0.0",
-});
+await app.ready();
 
 export default app;
