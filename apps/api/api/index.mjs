@@ -1,7 +1,9 @@
 /**
- * Vercel Fastify entry. Keep this file as plain JavaScript so @vercel/node
- * does not recompile TypeScript with the API tsconfig (that path reports
- * "src/app.ts: Emit skipped" after a successful turbo build).
+ * Vercel Fastify entry. Lives under api/ (not src/) because Vercel's
+ * `functions` config in vercel.json only matches Serverless Functions it
+ * discovers inside the `api` directory. Kept as plain JavaScript so
+ * @vercel/node does not recompile TypeScript with the API tsconfig (that
+ * path reports "src/app.ts: Emit skipped" after a successful turbo build).
  */
 import "../dist/common/env.js";
 import { getConfig } from "../dist/config.js";

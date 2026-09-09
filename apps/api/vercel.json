@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "fastify",
   "functions": {
-    "src/app.mjs": {
+    "api/index.mjs": {
       "includeFiles": "dist/**",
       "maxDuration": 60
     }
