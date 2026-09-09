@@ -125,7 +125,7 @@ describe('report type→perm mapping', () => {
       'leave',
     ]);
     expect(reportTypesForPermissions([])).toEqual([]);
-    expect(REPORT_TYPE_META).toHaveLength(8);
+    expect(REPORT_TYPE_META).toHaveLength(11);
     expect(REPORT_TYPE_PERMISSION.tasks).toBe('task.read');
   });
 });
