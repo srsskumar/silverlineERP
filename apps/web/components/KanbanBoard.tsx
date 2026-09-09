@@ -477,8 +477,8 @@ const TaskCard = React.memo(function TaskCard({
         <Link
           href={`/projects/${projectId}/tasks/${task.id}`}
           className="text-brand-600 hover:underline"
-          onClick={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e: React.MouseEvent) => e.stopPropagation()}
+          onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
         >
           Open
         </Link>
