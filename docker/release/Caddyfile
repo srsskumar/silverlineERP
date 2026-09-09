@@ -1,0 +1,20 @@
+{$PUBLIC_HOST} {
+  encode gzip zstd
+  header {
+    X-Content-Type-Options nosniff
+    Referrer-Policy strict-origin-when-cross-origin
+    X-Frame-Options DENY
+    Permissions-Policy "camera=(), microphone=(), geolocation=(self)"
+  }
+  handle /api/* {
+    reverse_proxy api:3101
+  }
+  handle /health {
+    reverse_proxy api:3101
+  }
+  handle {
+    root * /srv
+    try_files {path} {path}.html {path}/index.html
+    file_server
+  }
+}

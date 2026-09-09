@@ -1,0 +1,25 @@
+name: silverline
+
+services:
+  db:
+    image: postgres:16
+    container_name: silverline-db
+    restart: unless-stopped
+    ports:
+      # 5440 on the host: 5432 = local Postgres, 5433-5435 = other projects.
+      - "5440:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-silverline}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: silverline_dev
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d silverline_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

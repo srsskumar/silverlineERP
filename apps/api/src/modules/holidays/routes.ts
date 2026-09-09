@@ -1,0 +1,204 @@
+import {mutationRoute} from "../../common/mutationRoute.js";
+import type { FastifyInstance } from "fastify";
+import type { Pool } from "pg";
+import { z } from "zod";
+import {
+  S1_PERMISSIONS,
+  cursorPageQuerySchema,
+  decodeCursor,
+  encodeCursor,
+  holidayCreateSchema,
+  toFieldErrors,
+} from "@silverline/shared";
+import { buildAuthenticate, requirePermission } from "../../common/auth.js";
+import { writeAudit } from "../../common/audit.js";
+import { sendError } from "../../common/httpErrors.js";
+
+export interface HolidayRoutesOptions {
+  pool: Pool;
+  jwtSecret: string;
+}
+
+const listQuerySchema = cursorPageQuerySchema.extend({
+  year: z.coerce.number().int().min(1900).max(2100).optional(),
+  scope_type: z.string().max(50).optional(),
+  scope_id: z.string().uuid().optional(),
+});
+
+interface HolidayCursor {
+  date: string;
+  id: string;
+}
+
+interface HolidayRow {
+  id: string;
+  date: Date | string;
+  name: string;
+  type: string;
+  scope_type: string | null;
+  scope_id: string | null;
+  created_at: Date | string;
+}
+
+function toShape(row: HolidayRow) {
+  const date = row.date instanceof Date ? row.date.toISOString().slice(0, 10) : String(row.date).slice(0, 10);
+  return {
+    id: row.id,
+    date,
+    name: row.name,
+    type: row.type,
+    scope_type: row.scope_type,
+    scope_id: row.scope_id,
+  };
+}
+
+export async function registerHolidayRoutes(
+  app: FastifyInstance,
+  opts: HolidayRoutesOptions,
+): Promise<void> {
+  const authenticate = buildAuthenticate({
+    pool: opts.pool,
+    jwtSecret: opts.jwtSecret,
+  });
+  const canRead = requirePermission(authenticate, S1_PERMISSIONS.HOLIDAY_READ);
+  const canManage = requirePermission(
+    authenticate,
+    S1_PERMISSIONS.HOLIDAY_MANAGE,
+  );
+
+  // GET /api/v1/holidays?year=&scope_type=&scope_id=
+  app.get("/api/v1/holidays", { preHandler: canRead }, async (req, reply) => {
+    const parsed = listQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return sendError(reply, req.requestId, {
+        status: 422,
+        code: "VALIDATION_ERROR",
+        message: "Validation failed",
+        fieldErrors: toFieldErrors(parsed.error),
+      });
+    }
+    const user = req.authUser;
+    if (!user) {
+      return sendError(reply, req.requestId, {
+        status: 401,
+        code: "UNAUTHENTICATED",
+        message: "Authentication required",
+      });
+    }
+    const { limit, cursor, year, scope_type, scope_id } = parsed.data;
+    const values: unknown[] = [user.orgId];
+    const clauses = ["org_id = $1", "active = true"];
+    if (year !== undefined) {
+      values.push(year);
+      clauses.push(`EXTRACT(YEAR FROM date) = $${values.length}`);
+    }
+    if (scope_type !== undefined) {
+      values.push(scope_type);
+      clauses.push(`scope_type = $${values.length}`);
+    }
+    if (scope_id !== undefined) {
+      values.push(scope_id);
+      clauses.push(`scope_id = $${values.length}::uuid`);
+    }
+    if (cursor) {
+      const decoded = decodeCursor<HolidayCursor>(cursor);
+      if (!decoded) {
+        return sendError(reply, req.requestId, {
+          status: 422,
+          code: "VALIDATION_ERROR",
+          message: "Validation failed",
+          fieldErrors: [
+            { field: "cursor", message: "Invalid cursor", code: "invalid_string" },
+          ],
+        });
+      }
+      values.push(decoded.date, decoded.id);
+      clauses.push(
+        `(date, id) > ($${values.length - 1}::date, $${values.length}::uuid)`,
+      );
+    }
+    values.push(limit + 1);
+    const res = await opts.pool.query(
+      `SELECT id, date, name, type, scope_type, scope_id, created_at
+       FROM holidays WHERE ${clauses.join(" AND ")}
+       ORDER BY date ASC, id ASC LIMIT $${values.length}`,
+      values as string[],
+    );
+    const hasMore = res.rows.length > limit;
+    const page = (res.rows as HolidayRow[]).slice(0, limit);
+    const last = page[page.length - 1];
+    return reply.status(200).send({
+      data: page.map(toShape),
+      next_cursor:
+        hasMore && last
+          ? encodeCursor({
+              date:
+                last.date instanceof Date
+                  ? last.date.toISOString().slice(0, 10)
+                  : String(last.date).slice(0, 10),
+              id: last.id,
+            })
+          : null,
+      has_more: hasMore,
+    });
+  });
+
+  // POST /api/v1/holidays
+  app.post("/api/v1/holidays", { preHandler: canManage }, async (req, reply) => {return mutationRoute(opts.pool,req,reply,async(db,reply)=>{
+    const parsed = holidayCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendError(reply, req.requestId, {
+        status: 422,
+        code: "VALIDATION_ERROR",
+        message: "Validation failed",
+        fieldErrors: toFieldErrors(parsed.error),
+      });
+    }
+    const user = req.authUser;
+    if (!user) {
+      return sendError(reply, req.requestId, {
+        status: 401,
+        code: "UNAUTHENTICATED",
+        message: "Authentication required",
+      });
+    }
+    const { date, name, type, scope_type, scope_id } = parsed.data;
+    let row: HolidayRow;
+    try {
+      const ins = await db.query(
+        `INSERT INTO holidays (org_id, date, name, type, scope_type, scope_id, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6::uuid, $7::uuid)
+         RETURNING id, date, name, type, scope_type, scope_id, created_at`,
+        [user.orgId, date, name, type, scope_type ?? null, scope_id ?? null, user.id],
+      );
+      row = ins.rows[0] as HolidayRow;
+    } catch (err) {
+      if ((err as { code?: string }).code === "23505") {
+        return sendError(reply, req.requestId, {
+          status: 409,
+          code: "CONFLICT",
+          message: "A holiday already exists for this date and scope",
+          fieldErrors: [{ field: "date", message: "Duplicate holiday for this date and scope" }],
+        });
+      }
+      throw err;
+    }
+    const body = toShape(row);
+    await writeAudit(db, {
+      orgId: user.orgId,
+      actorId: user.id,
+      actorIp: req.ip,
+      actorUserAgent:
+        typeof req.headers["user-agent"] === "string"
+          ? (req.headers["user-agent"] as string)
+          : null,
+      action: "holiday.create",
+      entityType: "holiday",
+      entityId: row.id,
+      afterState: body,
+      requestId: req.requestId,
+    });
+    return reply.status(201).send(body);
+  
+});});
+}

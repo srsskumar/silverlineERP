@@ -1,0 +1,5 @@
+CREATE TABLE report_registry(id uuid PRIMARY KEY,org_id uuid NOT NULL REFERENCES organizations(id),created_by uuid NOT NULL REFERENCES users(id),entry jsonb NOT NULL,created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE payslip_documents(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),org_id uuid NOT NULL REFERENCES organizations(id),payslip_id uuid NOT NULL REFERENCES payslips(id),version integer NOT NULL,content_encrypted text NOT NULL,created_at timestamptz NOT NULL DEFAULT now(),UNIQUE(payslip_id,version));
+CREATE TABLE report_schedules(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),org_id uuid NOT NULL REFERENCES organizations(id),name text NOT NULL,report_type text NOT NULL,filters jsonb NOT NULL DEFAULT '{}',frequency text NOT NULL CHECK(frequency IN('DAILY','WEEKLY','MONTHLY')),active boolean NOT NULL DEFAULT true,next_run_at timestamptz NOT NULL DEFAULT now(),last_run_at timestamptz,error text,created_by uuid NOT NULL REFERENCES users(id),created_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE sessions ADD COLUMN device_id text;
+CREATE INDEX sessions_device ON sessions(user_id,device_id);

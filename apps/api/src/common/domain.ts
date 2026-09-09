@@ -1,0 +1,72 @@
+import { createHash } from 'node:crypto';
+import {inTransaction} from './transactionContext.js';
+import type { FastifyRequest } from 'fastify';
+import type { Pool, PoolClient } from 'pg';
+import { ApiError, toFieldErrors } from '@silverline/shared';
+import type { z } from 'zod';
+import { resolveScopes, taskScopeClause, employeeScopeClause } from './scopes.js';
+
+export function parse<T>(schema:z.ZodType<T, z.ZodTypeDef, unknown>,body:unknown):T {
+ const result=schema.safeParse(body);
+ if(!result.success) throw new ApiError({status:422,code:'VALIDATION_ERROR',message:'Validation failed',fieldErrors:toFieldErrors(result.error)});
+ return result.data;
+}
+export function fail(code:string,message:string,status=422):never {throw new ApiError({status,code,message});}
+export function actor(req:FastifyRequest) {if(!req.authUser) fail('UNAUTHENTICATED','Sign in first',401);return req.authUser;}
+export function version(req:FastifyRequest,row:{version:number}) {
+ const n=Number(String(req.headers['if-match']??'').replaceAll('"',''));
+ if(!Number.isSafeInteger(n)||n<1) fail('VERSION_REQUIRED','If-Match must contain the current version');
+ if(n!==row.version) fail('VERSION_CONFLICT','This record changed. Reload before editing.',409);
+}
+export function page(req:FastifyRequest) {
+ const q=req.query as Record<string,string>;
+ const limit=Math.min(100,Math.max(1,Number(q.limit)||30));
+ const offset=Math.max(0,Number(q.offset)||0);
+ if(!Number.isSafeInteger(limit)||!Number.isSafeInteger(offset)) fail('VALIDATION_ERROR','Invalid pagination');
+ return {limit,offset,q};
+}
+export async function inOrg(db:Pool|PoolClient,table:string,id:string,orgId:string,lock=false):Promise<Record<string,any>> {
+ const allowed=['vendors','inventory_items','invoices','assets','employees','projects','tasks','cycles','automation_rules','webhook_subscriptions','custom_field_definitions','users'];
+ if(!allowed.includes(table)) throw new Error('Unknown domain table');
+ const r=await db.query(`SELECT * FROM ${table} WHERE id=$1 AND org_id=$2${lock?' FOR UPDATE':''}`,[id,orgId]);
+ if(!r.rowCount) fail('NOT_FOUND','Record not found',404);
+ return r.rows[0];
+}
+export async function projectAccess(pool:Pool,req:FastifyRequest,id:string) {
+ const u=actor(req);await inOrg(pool,'projects',id,u.orgId);
+ const scopes=resolveScopes(u.scopes);
+ if(scopes.global||scopes.projects.includes(id)) return;
+ const values:unknown[]=[id,u.orgId];
+ const clause=await taskScopeClause(pool,u.orgId,scopes,values);
+ const r=await pool.query(`SELECT 1 FROM tasks WHERE project_id=$1 AND org_id=$2 AND ${clause} LIMIT 1`,values);
+ if(!r.rowCount) fail('FORBIDDEN','Project outside your scope',403);
+}
+export async function employeeAccess(pool:Pool,req:FastifyRequest,id:string) {
+ const u=actor(req),scopes=resolveScopes(u.scopes);if(scopes.global)return;
+ const values:unknown[]=[id,u.orgId],clause=await employeeScopeClause(pool,u.orgId,scopes,values);
+ const r=await pool.query(`SELECT 1 FROM employees WHERE id=$1 AND org_id=$2 AND ${clause}`,values);
+ if(!r.rowCount)fail('FORBIDDEN','Employee outside your scope',403);
+}
+/** Serialize matching retries; commit business mutation, receipt, audit and event atomically. */
+export async function mutate<T>(pool:Pool,req:FastifyRequest,action:string,entity:string,fn:(db:PoolClient)=>Promise<T>):Promise<T> {
+ const u=actor(req),key=String(req.headers['idempotency-key']??'');
+ if(key.length>255)fail('INVALID_IDEMPOTENCY_KEY','Idempotency key is too long');
+ const hash=createHash('sha256').update(JSON.stringify({method:req.method,url:req.url,body:req.body??null})).digest('hex');
+ const db=await pool.connect();
+ try {
+  await db.query('BEGIN');
+  if(key){
+   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${u.id}:${key}`]);
+   const prior=await db.query('SELECT * FROM v2_operations WHERE user_id=$1 AND key=$2',[u.id,key]);
+   if(prior.rowCount){if(prior.rows[0].request_hash!==hash)fail('IDEMPOTENCY_CONFLICT','Key was already used for another request',409);await db.query('COMMIT');return prior.rows[0].response as T;}
+  }
+  const value=await inTransaction(pool,db,()=>fn(db));
+  const object=value as Record<string,unknown>;
+  const id=typeof object?.id==='string'?object.id:null;
+  // Secrets and personal records are never copied into event payloads.
+  const safe=entity==='user'||entity==='webhook'||entity==='settings'?{id}:value;
+  await db.query('INSERT INTO audit_events(org_id,actor_id,action,entity_type,entity_id,after_state,request_id,idempotency_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[u.orgId,u.id,action,entity,id,JSON.stringify(safe),req.requestId,key||null]);
+  if(key)await db.query('INSERT INTO v2_operations(key,user_id,path,request_hash,response) VALUES($1,$2,$3,$4,$5)',[key,u.id,req.url,hash,JSON.stringify(value)]);
+  await db.query('COMMIT');return value;
+ }catch(e){await db.query('ROLLBACK');throw e;}finally{db.release();}
+}

@@ -1,0 +1,16 @@
+{
+  "generated_at": "2026-09-08T19:21:33.337Z",
+  "environment": "Local loopback HTTP, PostgreSQL, one API process; excludes UI rendering and native startup",
+  "concurrent_users": 200,
+  "requests": 1600,
+  "read_write_mix": "75% reads / 25% comment writes",
+  "fixture_tasks": 4000,
+  "errors": 0,
+  "statuses": [],
+  "duration_ms": 715,
+  "requests_per_second": 2237.8,
+  "p50_ms": 85,
+  "p95_ms": 115,
+  "p99_ms": 178,
+  "node": "v26.3.0"
+}

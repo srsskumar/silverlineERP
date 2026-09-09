@@ -1,0 +1,134 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  ApiClientError,
+  __resetAuthStateForTests,
+  apiRequest,
+  getAccessToken,
+  setTokens,
+} from '../lib/apiClient';
+
+function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...headers },
+  });
+}
+
+describe('apiClient', () => {
+  beforeEach(() => {
+    __resetAuthStateForTests();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, { data: { ok: true } })));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    __resetAuthStateForTests();
+  });
+
+  it('attaches the Bearer access token when one is stored', async () => {
+    setTokens('access-123', 'refresh-123');
+    await apiRequest('/api/v1/auth/me');
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+    expect(init.headers.Authorization).toBe('Bearer access-123');
+  });
+
+  it('sends no Authorization header when signed out', async () => {
+    await apiRequest('/api/v1/auth/me');
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+    expect(init.headers.Authorization).toBeUndefined();
+  });
+
+  it('sends an Idempotency-Key header on POST', async () => {
+    await apiRequest('/api/v1/auth/login', {
+      method: 'POST',
+      body: { username: 'u', password: 'p' },
+      skipAuthRetry: true,
+    });
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+    expect(typeof init.headers['Idempotency-Key']).toBe('string');
+    expect(init.headers['Idempotency-Key'].length).toBeGreaterThan(0);
+  });
+
+  it('does not send an Idempotency-Key header on GET', async () => {
+    await apiRequest('/api/v1/auth/me');
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+    expect(init.headers['Idempotency-Key']).toBeUndefined();
+  });
+
+  it('on 401 refreshes once and retries the original request', async () => {
+    setTokens('expired-access', 'valid-refresh');
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith('/api/v1/auth/refresh')) {
+        return jsonResponse(200, { access_token: 'new-access', refresh_token: 'new-refresh' });
+      }
+      const callsSoFar = fetchMock.mock.calls.length;
+      if (callsSoFar === 1) {
+        return jsonResponse(401, { code: 'TOKEN_EXPIRED', message: 'expired', request_id: 'req-1' });
+      }
+      return jsonResponse(200, { data: { user: 'u' }, request_id: 'req-2' }, { 'x-request-id': 'req-2' });
+    });
+
+    const result = await apiRequest<{ user: string }>('/api/v1/auth/me');
+
+    expect(result.data).toEqual({ user: 'u' });
+    expect(result.request_id).toBe('req-2');
+    // Original + refresh + retry = exactly 3 calls; refresh called exactly once.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const refreshCalls = fetchMock.mock.calls.filter(([url]) =>
+      (url as string).endsWith('/api/v1/auth/refresh'),
+    );
+    expect(refreshCalls).toHaveLength(1);
+    // Retried request carries the new token.
+    const [, retryInit] = fetchMock.mock.calls[2] as [string, RequestInit & { headers: Record<string, string> }];
+    expect(retryInit.headers.Authorization).toBe('Bearer new-access');
+    expect(getAccessToken()).toBe('new-access');
+  });
+
+  it('throws a typed ApiClientError carrying the envelope on error responses', async () => {
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        422,
+        {
+          code: 'VALIDATION_ERROR',
+          message: 'Invalid input',
+          field_errors: [{ field: 'username', message: 'required' }],
+          request_id: 'req-err-1',
+          retryable: false,
+        },
+        { 'x-request-id': 'req-err-1' },
+      ),
+    );
+
+    const err = await apiRequest('/api/v1/employees', { method: 'POST', body: {} }).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiClientError);
+    expect((err as ApiClientError).code).toBe('VALIDATION_ERROR');
+    expect((err as ApiClientError).status).toBe(422);
+    expect((err as ApiClientError).requestId).toBe('req-err-1');
+    expect((err as ApiClientError).retryable).toBe(false);
+    expect((err as ApiClientError).fieldErrors).toEqual([{ field: 'username', message: 'required' }]);
+  });
+
+  it('logs out (clears tokens) and throws when refresh fails after a 401', async () => {
+    setTokens('expired-access', 'bad-refresh');
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (url: string) => {
+      if ((url as string).endsWith('/api/v1/auth/refresh')) {
+        return jsonResponse(401, { code: 'INVALID_REFRESH', message: 'bad refresh' });
+      }
+      return jsonResponse(401, { code: 'TOKEN_EXPIRED', message: 'expired' });
+    });
+
+    const err = await apiRequest('/api/v1/auth/me').catch((e) => e);
+    expect(err).toBeInstanceOf(ApiClientError);
+    expect((err as ApiClientError).code).toBe('UNAUTHORIZED');
+    expect(getAccessToken()).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});

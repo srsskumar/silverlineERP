@@ -1,0 +1,15 @@
+.git
+**/node_modules
+**/dist
+**/.next*
+**/out
+**/.turbo
+**/.expo
+**/android
+**/ios
+**/uploads
+**/exports
+.env*
+backups
+*.docx
+docs/CREDENTIALS.md

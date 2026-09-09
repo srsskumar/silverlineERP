@@ -1,0 +1,68 @@
+{
+  "expo": {
+    "name": "Silverline ERP",
+    "slug": "silverline-erp",
+    "version": "1.0.0",
+    "scheme": "silverline",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Your location is attached to attendance punches for geo-fence verification.",
+        "NSCameraUsageDescription": "Camera is used to capture task evidence photos.",
+        "NSFaceIDUsageDescription": "Biometrics unlock the app without re-entering your password."
+      },
+      "bundleIdentifier": "com.silverline.erp"
+    },
+    "android": {
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "CAMERA",
+        "USE_BIOMETRIC",
+        "RECEIVE_BOOT_COMPLETED"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.silverline.erp"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      "expo-secure-store",
+      "expo-local-authentication",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Your location is attached to attendance punches for geo-fence verification."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Camera is used to capture task evidence photos."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#1a56db"
+        }
+      ],
+      "expo-splash-screen",
+      "expo-background-task",
+      "expo-sharing"
+    ]
+  }
+}

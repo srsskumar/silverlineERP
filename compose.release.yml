@@ -1,0 +1,88 @@
+name: silverline-release
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: silverline
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_DB: silverline
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U silverline -d silverline]
+      interval: 5s
+      retries: 10
+  api:
+    build:
+      context: .
+      dockerfile: docker/release/api.Dockerfile
+    restart: unless-stopped
+    environment: &api-env
+      NODE_ENV: production
+      DATABASE_URL: ${RELEASE_DATABASE_URL:?set postgres URL using host db and database silverline}
+      JWT_SECRET: ${JWT_SECRET:?required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?required}
+      CORS_ORIGIN: https://${PUBLIC_HOST:?required}
+      PUSH_ENABLED: ${PUSH_ENABLED:-false}
+      EXPO_ACCESS_TOKEN: ${EXPO_ACCESS_TOKEN:-}
+      PROVIDER_SMS_ENABLED: ${PROVIDER_SMS_ENABLED:-false}
+      PROVIDER_SMS_URL: ${PROVIDER_SMS_URL:-}
+      PROVIDER_SMS_TOKEN: ${PROVIDER_SMS_TOKEN:-}
+      PROVIDER_WHATSAPP_ENABLED: ${PROVIDER_WHATSAPP_ENABLED:-false}
+      PROVIDER_WHATSAPP_URL: ${PROVIDER_WHATSAPP_URL:-}
+      PROVIDER_WHATSAPP_TOKEN: ${PROVIDER_WHATSAPP_TOKEN:-}
+      PROVIDER_WEATHER_ENABLED: ${PROVIDER_WEATHER_ENABLED:-false}
+      PROVIDER_WEATHER_URL: ${PROVIDER_WEATHER_URL:-}
+      PROVIDER_WEATHER_TOKEN: ${PROVIDER_WEATHER_TOKEN:-}
+      PROVIDER_ACCOUNTING_ENABLED: ${PROVIDER_ACCOUNTING_ENABLED:-false}
+      PROVIDER_ACCOUNTING_URL: ${PROVIDER_ACCOUNTING_URL:-}
+      PROVIDER_ACCOUNTING_TOKEN: ${PROVIDER_ACCOUNTING_TOKEN:-}
+      MALWARE_SCANNER_HOST: clamav
+      MALWARE_SCANNER_PORT: 3310
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?required for first seed}
+    volumes: [private-files:/data]
+    depends_on:
+      db: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+      clamav: {condition: service_healthy}
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/release/api.Dockerfile
+    command: [node, apps/api/dist/database/migrate.js]
+    environment: *api-env
+    depends_on:
+      db: {condition: service_healthy}
+  clamav:
+    image: clamav/clamav:stable
+    restart: unless-stopped
+    volumes: [clamav-data:/var/lib/clamav]
+  worker:
+    build:
+      context: .
+      dockerfile: docker/release/api.Dockerfile
+    command: [node, apps/api/dist/jobs.js]
+    restart: unless-stopped
+    environment: *api-env
+    volumes: [private-files:/data]
+    depends_on:
+      db: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+  web:
+    build:
+      context: .
+      dockerfile: docker/release/web.Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: https://${PUBLIC_HOST:?required}
+    restart: unless-stopped
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?required}
+    ports: ['80:80', '443:443', '443:443/udp']
+    volumes: [caddy-data:/data, caddy-config:/config]
+    depends_on: [api]
+volumes:
+  pgdata:
+  private-files:
+  caddy-data:
+  caddy-config:
+  clamav-data:

@@ -1,0 +1,23 @@
+node_modules/
+dist/
+.next/
+.next-verify/
+out/
+coverage/
+.turbo/
+*.log
+.env
+.env*.local
+.DS_Store
+*.tsbuildinfo
+
+# Local private files and generated native/build state
+uploads/
+exports/
+backups/
+.expo/
+android/
+ios/
+*.apk
+*.aab
+*.ipa
