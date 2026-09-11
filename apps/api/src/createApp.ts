@@ -59,7 +59,13 @@ export async function buildApp(
   app.decorate("db", pool);
   app.decorate("appConfig", config);
 
-  await app.register(cors, { origin: config.corsOrigin, exposedHeaders: ['x-request-id', 'content-disposition', 'retry-after'] });
+  await app.register(cors, {
+    origin: config.corsOrigin,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-ID'],
+    exposedHeaders: ['x-request-id', 'content-disposition', 'retry-after'],
+    credentials: true,
+  });
   if (!options.pool) app.addHook('onClose', async () => { await pool.end(); });
   await registerRequestId(app);
   await registerErrorHandler(app);
