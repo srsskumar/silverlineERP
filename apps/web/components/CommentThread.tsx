@@ -61,10 +61,10 @@ export function CommentThread({
   });
 
   return (
-    <section aria-label="Comments" className="rounded-lg border border-slate-200 bg-white p-4">
-      <h2 className="text-sm font-semibold text-slate-900">Comments</h2>
+    <section aria-label="Comments" className="rounded-lg border border-border bg-surface p-4">
+      <h2 className="text-sm font-semibold text-text">Comments</h2>
       {commentsQuery.isLoading ? (
-        <div className="flex items-center gap-2 py-6 text-sm text-slate-500">
+        <div className="flex items-center gap-2 py-6 text-sm text-text-muted">
           <Spinner size="sm" /> Loading comments…
         </div>
       ) : commentsQuery.isError ? (
@@ -78,39 +78,39 @@ export function CommentThread({
       ) : (
         <ul className="mt-3 flex flex-col gap-3">
           {(commentsQuery.data ?? []).map((c) => (
-            <li key={c.id} className="rounded-md bg-slate-50 px-3 py-2">
-              <p className="text-xs text-slate-500">
-                <span className="font-medium text-slate-700">{c.author_username || shortUserId(c.author_user_id)}</span>
+            <li key={c.id} className="rounded-md bg-surface-sunken px-3 py-2">
+              <p className="text-xs text-text-muted">
+                <span className="font-medium text-text-muted">{c.author_username || shortUserId(c.author_user_id)}</span>
                 {' · '}
                 <span className="font-mono" title={c.author_user_id}>{shortUserId(c.author_user_id)}</span>
                 {c.created_at ? ` · ${String(c.created_at)}` : ''}
               </p>
-              <p className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{c.body}</p>
+              <p className="mt-1 whitespace-pre-wrap text-sm text-text">{c.body}</p>
             </li>
           ))}
         </ul>
       )}
       {canComment && (
         <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="mt-4 flex flex-col gap-2" noValidate>
-          <label htmlFor={`comment-box-${taskId}`} className="text-sm font-medium text-slate-700">
+          <label htmlFor={`comment-box-${taskId}`} className="text-sm font-medium text-text-muted">
             Add a comment
           </label>
           <textarea
             id={`comment-box-${taskId}`}
             rows={3}
-            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1"
+            className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
             placeholder="Write an update, question, or decision…"
             {...register('body')}
           />
           {errors.body?.message ? (
-            <p role="alert" className="text-xs text-red-600">
+            <p role="alert" className="text-xs text-danger">
               {errors.body.message}
             </p>
           ) : null}
-          <p className="text-xs text-slate-500">{MENTION_HINT_TEXT}</p>
+          <p className="text-xs text-text-muted">{MENTION_HINT_TEXT}</p>
           {submitError ? <ErrorCard title="Could not post comment" error={submitError} /> : null}
           {lastMentioned && lastMentioned.length > 0 ? (
-            <p role="status" className="text-xs text-green-700">
+            <p role="status" className="text-xs text-success">
               Mentioned: {lastMentioned.map((u) => `@${u}`).join(', ')}
             </p>
           ) : null}

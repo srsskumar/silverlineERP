@@ -31,7 +31,7 @@ import { Input } from '@/components/ui/Input';
 export const dynamic = 'force-static';
 
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 interface KnownException {
   id: string;
@@ -75,9 +75,9 @@ function RegularizeCard({ onCreated }: { onCreated: (ex: AttendanceException) =>
   });
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4">
-      <h2 className="text-sm font-semibold text-slate-900">Request regularization</h2>
-      <p className="mt-1 text-xs text-slate-500">Creates an exception carrying the claimed times; it appears in the known-ids queue below.</p>
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <h2 className="text-sm font-semibold text-text">Request regularization</h2>
+      <p className="mt-1 text-xs text-text-muted">Creates an exception carrying the claimed times; it appears in the known-ids queue below.</p>
       <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="mt-3 grid gap-3 sm:grid-cols-2" noValidate>
         <FormField label="Employee ID *" htmlFor="reg-employee" error={errors.employee_id?.message}>
           <Input id="reg-employee" {...register('employee_id')} />
@@ -100,7 +100,7 @@ function RegularizeCard({ onCreated }: { onCreated: (ex: AttendanceException) =>
           <div className="sm:col-span-2"><ErrorCard title="Could not request regularization" error={submitError} /></div>
         ) : null}
         {created ? (
-          <p role="status" className="text-sm text-green-700 sm:col-span-2">
+          <p role="status" className="text-sm text-success sm:col-span-2">
             Regularization filed as <span className="font-mono text-xs">{created.id}</span> (v{created.version}).
           </p>
         ) : null}
@@ -149,15 +149,15 @@ function ExceptionsManager() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+      <div className="rounded-md border border-warning/30 bg-warning-subtle px-4 py-3 text-xs text-warning">
         The S2 contract has no <span className="font-mono">GET /attendance/exceptions</span> list endpoint, so there is no
         server-side queue to render. This page works from <em>known</em> exception ids: ids returned by file/regularize
         actions, <span className="font-mono">exception_id</span> values from 202 punch responses, or ids you paste manually.
         A list endpoint is tracked as an S3 backend gap.
       </div>
 
-      <div className="rounded-lg border border-slate-200 bg-white p-4">
-        <h2 className="text-sm font-semibold text-slate-900">1 · Load record by employee + date</h2>
+      <div className="rounded-lg border border-border bg-surface p-4">
+        <h2 className="text-sm font-semibold text-text">1 · Load record by employee + date</h2>
         <div className="mt-3 grid gap-3 sm:grid-cols-3 sm:items-end">
           <FormField label="Employee ID" htmlFor="exc-lookup-emp">
             <Input id="exc-lookup-emp" value={lookupEmployee} onChange={(e) => setLookupEmployee(e.target.value)} />
@@ -174,10 +174,10 @@ function ExceptionsManager() {
           <div className="mt-3"><EmptyState title="No record for that employee + date" description="File an unlinked exception below, or check the lookup values." /></div>
         ) : null}
         {lookup.record ? (
-          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-slate-200 px-3 py-2 text-sm">
+          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-border px-3 py-2 text-sm">
             <AttendanceStatusBadge status={String(lookup.record.status)} violation={!!lookup.record.geofence_violation} />
-            <span className="font-mono text-xs text-slate-600">{lookup.record.id} · {lookup.record.work_date}</span>
-            <Link href={`/attendance/records/${lookup.record.id}`} className="text-brand-600 hover:underline">
+            <span className="font-mono text-xs text-text-muted">{lookup.record.id} · {lookup.record.work_date}</span>
+            <Link href={`/attendance/records/${lookup.record.id}`} className="text-primary hover:underline">
               Open record
             </Link>
             <Button variant="secondary" onClick={() => setFileOpen(true)}>File exception…</Button>
@@ -187,8 +187,8 @@ function ExceptionsManager() {
 
       <RegularizeCard onCreated={(ex) => addKnown({ id: ex.id, version: String(ex.version), label: 'regularization' })} />
 
-      <div className="rounded-lg border border-slate-200 bg-white p-4">
-        <h2 className="text-sm font-semibold text-slate-900">2 · Decide queue ({known.length} known)</h2>
+      <div className="rounded-lg border border-border bg-surface p-4">
+        <h2 className="text-sm font-semibold text-text">2 · Decide queue ({known.length} known)</h2>
         <div className="mt-3 grid gap-3 sm:grid-cols-3 sm:items-end">
           <FormField label="Exception ID" htmlFor="exc-manual-id">
             <Input id="exc-manual-id" placeholder="Paste from a 202 punch…" value={manualId} onChange={(e) => setManualId(e.target.value)} />
@@ -210,10 +210,10 @@ function ExceptionsManager() {
         {known.length === 0 ? (
           <div className="mt-3"><EmptyState title="Queue is empty" description="File an exception or regularization above, or track an ID from a 202 punch response." /></div>
         ) : (
-          <ul className="mt-3 divide-y divide-slate-100 rounded-md border border-slate-200">
+          <ul className="mt-3 divide-y divide-border rounded-md border border-border">
             {known.map((k) => (
               <li key={k.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
-                <span className="font-mono text-xs text-slate-800">{k.id}</span>
+                <span className="font-mono text-xs text-text">{k.id}</span>
                 <Badge tone="info">v{k.version}</Badge>
                 {k.label && <Badge>{k.label}</Badge>}
                 <span className="ml-auto flex items-center gap-2">
@@ -227,10 +227,10 @@ function ExceptionsManager() {
                   {canDecide ? (
                     <Button variant="secondary" onClick={() => setDecideTarget(k)}>Decide…</Button>
                   ) : (
-                    <span className="text-xs text-slate-400">needs attendance.decide</span>
+                    <span className="text-xs text-text-subtle">needs attendance.decide</span>
                   )}
                   <button
-                    className="text-xs text-slate-500 hover:underline"
+                    className="text-xs text-text-muted hover:underline"
                     onClick={() => setKnown((prev) => prev.filter((p) => p.id !== k.id))}
                   >
                     Remove
@@ -270,8 +270,8 @@ export default function ExceptionsPage() {
   return (
     <AppShell>
       <RequirePermission code={PERMISSIONS.ATTENDANCE_READ}>
-        <h1 className="text-xl font-bold text-slate-900">Attendance exceptions</h1>
-        <p className="mt-1 text-sm text-slate-500">File, regularize and decide attendance exceptions by known ID.</p>
+        <h1 className="text-xl font-bold text-text">Attendance exceptions</h1>
+        <p className="mt-1 text-sm text-text-muted">File, regularize and decide attendance exceptions by known ID.</p>
         <div className="mt-6">
           <ExceptionsManager />
         </div>

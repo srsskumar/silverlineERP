@@ -1,17 +1,13 @@
 import { useState } from "react";
-import {
-  Pressable,
-  ScrollView,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { View } from "react-native";
 import { router } from "expo-router";
 import { useForm, Controller } from "react-hook-form";
+import { Ionicons } from "@expo/vector-icons";
 import { ApiError } from "../../src/api/client";
 import { useAuth } from "../../src/auth/AuthContext";
 import { validateLogin } from "../../src/validators";
-import { useStyles } from "../../src/ui";
+import { Banner, Button, Input, Muted, Screen, Subtle, Title } from "../../src/ui/primitives";
+import { radius, space, useTheme } from "../../src/theme";
 
 interface Form {
   username: string;
@@ -19,7 +15,7 @@ interface Form {
 }
 
 export default function LoginScreen() {
-  const S=useStyles();
+  const t = useTheme();
   const { login } = useAuth();
   const [serverError, setServerError] = useState<string | null>(null);
   const [requestId, setRequestId] = useState<string | null>(null);
@@ -40,9 +36,7 @@ export default function LoginScreen() {
       router.replace(next === "mfa" ? "/(auth)/mfa" : "/(tabs)");
     } catch (e) {
       if (e instanceof ApiError) {
-        const fields = e.fieldErrors
-          .map((x) => `${x.field}: ${x.message}`)
-          .join("\n");
+        const fields = e.fieldErrors.map((x) => `${x.field}: ${x.message}`).join("\n");
         setServerError(fields || e.message);
         setRequestId(e.requestId);
       } else {
@@ -52,18 +46,36 @@ export default function LoginScreen() {
   };
 
   return (
-    <ScrollView contentContainerStyle={S.screen}>
-      <Text style={[S.h1, { marginTop: 48 }]}>Silverline ERP</Text>
-      <Text style={S.muted}>Sign in with your org account.</Text>
-      <View style={{ height: 16 }} />
+    <Screen>
+      <View style={{ alignItems: "center", marginTop: space.xxl * 2, marginBottom: space.xl }}>
+        <View
+          style={{
+            width: 52,
+            height: 52,
+            borderRadius: radius.xl,
+            backgroundColor: t.primary,
+            alignItems: "center",
+            justifyContent: "center",
+            marginBottom: space.md,
+          }}
+        >
+          <Ionicons name="layers-outline" size={26} color={t.primaryFg} />
+        </View>
+        <Title>Silverline ERP</Title>
+        <Muted style={{ marginTop: 4 }}>Sign in with your organisation account</Muted>
+      </View>
+
       <Controller
         control={control}
         name="username"
         render={({ field }) => (
-          <TextInput
-            style={S.input}
-            placeholder="Username"
+          <Input
+            label="Username"
+            placeholder="Your username"
             autoCapitalize="none"
+            autoCorrect={false}
+            textContentType="username"
+            returnKeyType="next"
             value={field.value}
             onChangeText={field.onChange}
           />
@@ -73,28 +85,30 @@ export default function LoginScreen() {
         control={control}
         name="password"
         render={({ field }) => (
-          <TextInput
-            style={S.input}
-            placeholder="Password"
+          <Input
+            label="Password"
+            placeholder="Your password"
             secureTextEntry
+            textContentType="password"
+            returnKeyType="go"
+            onSubmitEditing={handleSubmit(onSubmit)}
             value={field.value}
             onChangeText={field.onChange}
           />
         )}
       />
-      {serverError ? <Text style={S.error}>{serverError}</Text> : null}
-      {requestId ? (
-        <Text style={S.muted}>request_id: {requestId}</Text>
+
+      {serverError ? (
+        <Banner tone="danger" icon="alert-circle-outline" title="Sign-in failed" message={serverError} />
       ) : null}
-      <Pressable
-        style={S.btn}
+      {requestId ? <Subtle>Reference: {requestId}</Subtle> : null}
+
+      <Button
+        title={formState.isSubmitting ? "Signing in…" : "Sign in"}
+        loading={formState.isSubmitting}
         onPress={handleSubmit(onSubmit)}
-        disabled={formState.isSubmitting}
-      >
-        <Text style={S.btnText}>
-          {formState.isSubmitting ? "Signing in…" : "Sign in"}
-        </Text>
-      </Pressable>
-    </ScrollView>
+        style={{ marginTop: space.sm }}
+      />
+    </Screen>
   );
 }

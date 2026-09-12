@@ -1,0 +1,23 @@
+# Cloudflare Pages deep-link routing for the static export.
+#
+# `output: 'export'` prerenders each dynamic route exactly once, against the
+# id `__placeholder__`, so there is no document for /projects/<real-id>. The
+# app already navigates record links through /record?type=&id= (see
+# lib/routes.ts staticHref), which is a fully static page that resolves the
+# record client-side. These rules give the canonical URLs — bookmarks, pasted
+# links, notification targets, a browser refresh — the same destination.
+#
+# Pages serves a matching static asset before consulting this file, so real
+# pages such as /projects/new, /leave/balances and /employees/import are
+# unaffected and must NOT be listed here.
+#
+# Most specific patterns first: /projects/:id/tasks/:taskId would otherwise be
+# swallowed by /projects/:id.
+
+/projects/:id/tasks/:taskId   /record?type=task&project=:id&id=:taskId   302
+/projects/:id/board           /record?type=board&id=:id                  302
+/attendance/records/:id       /record?type=attendance&id=:id             302
+/projects/:id                 /record?type=project&id=:id                302
+/employees/:id                /record?type=employee&id=:id               302
+/leave/:id                    /record?type=leave&id=:id                  302
+/payroll/:id                  /record?type=payroll&id=:id                302

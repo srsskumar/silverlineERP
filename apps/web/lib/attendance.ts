@@ -277,3 +277,38 @@ export function formatHours(totalHours: unknown): string {
   if (m === 0) return `${h}h`;
   return `${h}h ${m}m`;
 }
+
+/** One positioned punch, shaped for the operations map. */
+export interface AttendanceMapEvent {
+  id: string;
+  employee_id: string;
+  event_type: string;
+  at: string;
+  lat: number;
+  lng: number;
+  geofence_result: string;
+  geofence_id: string | null;
+  /** Precomputed server-side so the map colours by one field. */
+  outcome: 'ok' | 'review' | 'outside';
+}
+
+/**
+ * Positioned punches for the map. Separate from listRecords because records
+ * carry no coordinates — only the underlying events do.
+ */
+export async function listMapEvents(params: {
+  employee_id?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+} = {}): Promise<{ data: AttendanceMapEvent[]; truncated: boolean }> {
+  const search = new URLSearchParams();
+  if (params.employee_id) search.set('employee_id', params.employee_id);
+  if (params.from) search.set('from', params.from);
+  if (params.to) search.set('to', params.to);
+  search.set('limit', String(params.limit ?? 1000));
+  const { data } = await apiRequest<{ data: AttendanceMapEvent[]; truncated: boolean }>(
+    `/api/v1/attendance/events/map?${search.toString()}`,
+  );
+  return { data: data?.data ?? [], truncated: Boolean(data?.truncated) };
+}

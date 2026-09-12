@@ -2,11 +2,12 @@
 
 import * as React from 'react';
 import Link from '@/components/AppLink';
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { AppShell } from '@/components/AppShell';
 import { RequirePermission } from '@/components/RequirePermission';
 import { AttendanceStatusBadge } from '@/components/AttendanceStatusBadge';
 import { PunchPanel } from '@/components/PunchPanel';
+import { PunchClusterMap } from '@/components/map/PunchClusterMap';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -15,14 +16,14 @@ import { Input } from '@/components/ui/Input';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Spinner } from '@/components/ui/Spinner';
 import { PERMISSIONS } from '@/lib/permissions';
-import { formatHours, listRecords } from '@/lib/attendance';
+import { formatHours, listMapEvents, listRecords } from '@/lib/attendance';
 import { queryKeys } from '@/lib/query-keys';
 
 export const dynamic = 'force-static';
 
 const PAGE_LIMIT = 20;
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 function RecordsTable() {
   const [employeeId, setEmployeeId] = React.useState('');
@@ -53,24 +54,32 @@ function RecordsTable() {
   });
 
   const rows = (listQuery.data?.pages ?? []).flatMap((p) => p.data);
+  const [showMap, setShowMap] = React.useState(false);
+  const mapQuery = useQuery({
+    queryKey: queryKeys.attendance.map(filters),
+    queryFn: () => listMapEvents({ employee_id: employeeId || undefined, from: from || undefined, to: to || undefined }),
+    // Only fetched once the user opens the map: it is a second round trip over
+    // a different table, and most visits to this page never need it.
+    enabled: showMap,
+  });
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 lg:flex-row lg:items-end">
+      <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4 lg:flex-row lg:items-end">
         <div className="flex-1">
-          <label htmlFor="rec-employee" className="text-sm font-medium text-slate-700">Employee ID</label>
+          <label htmlFor="rec-employee" className="text-sm font-medium text-text-muted">Employee ID</label>
           <Input id="rec-employee" placeholder="Filter by employee…" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} />
         </div>
         <div>
-          <label htmlFor="rec-from" className="text-sm font-medium text-slate-700">From</label>
+          <label htmlFor="rec-from" className="text-sm font-medium text-text-muted">From</label>
           <Input id="rec-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
         </div>
         <div>
-          <label htmlFor="rec-to" className="text-sm font-medium text-slate-700">To</label>
+          <label htmlFor="rec-to" className="text-sm font-medium text-text-muted">To</label>
           <Input id="rec-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
         </div>
         <div>
-          <label htmlFor="rec-status" className="text-sm font-medium text-slate-700">Status</label>
+          <label htmlFor="rec-status" className="text-sm font-medium text-text-muted">Status</label>
           <select id="rec-status" className={inputClass} value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All</option>
             {['PRESENT', 'PARTIAL', 'ABSENT', 'VIOLATION'].map((s) => (
@@ -79,12 +88,21 @@ function RecordsTable() {
           </select>
         </div>
         <div>
-          <label htmlFor="rec-violation" className="text-sm font-medium text-slate-700">Geofence</label>
+          <label htmlFor="rec-violation" className="text-sm font-medium text-text-muted">Geofence</label>
           <select id="rec-violation" className={inputClass} value={violation} onChange={(e) => setViolation(e.target.value)}>
             <option value="">All</option>
             <option value="true">Violation only</option>
             <option value="false">No violation</option>
           </select>
+        </div>
+        <div className="flex items-end">
+          <Button
+            variant={showMap ? 'primary' : 'secondary'}
+            onClick={() => setShowMap((v) => !v)}
+            aria-pressed={showMap}
+          >
+            {showMap ? 'Hide map' : 'Show map'}
+          </Button>
         </div>
         <Button variant="secondary" onClick={() => setPunchOpen((v) => !v)}>
           {punchOpen ? 'Hide punch' : 'Manual punch'}
@@ -92,8 +110,8 @@ function RecordsTable() {
       </div>
 
       {punchOpen && (
-        <div className="rounded-lg border border-slate-200 bg-white p-4">
-          <h2 className="mb-3 text-sm font-semibold text-slate-900">Manual punch (testing / admin)</h2>
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <h2 className="mb-3 text-sm font-semibold text-text">Manual punch (testing / admin)</h2>
           <PunchPanel
             onPunched={() => {
               listQuery.refetch();
@@ -101,6 +119,34 @@ function RecordsTable() {
           />
         </div>
       )}
+
+      {/* Map view: the table answers "who punched", the map answers "where from",
+          which is the question a geofence violation actually raises. Hidden
+          until there is something positioned to plot. */}
+      {showMap ? (
+        mapQuery.isLoading ? (
+          <Skeleton className="mb-4 h-[420px] w-full" />
+        ) : mapQuery.data && mapQuery.data.data.length > 0 ? (
+          <div className="mb-4">
+            <PunchClusterMap points={mapQuery.data.data} />
+            <p className="mt-1.5 text-xs text-text-muted">
+              {mapQuery.data.data.length} positioned {mapQuery.data.data.length === 1 ? 'punch' : 'punches'}
+              {mapQuery.data.truncated ? ' (showing the most recent — narrow the date range for the full set)' : ''}
+              {' · '}
+              <span className="text-success">green</span> inside a fence,{' '}
+              <span className="text-danger">red</span> outside,{' '}
+              <span className="text-warning">amber</span> flagged for review
+            </p>
+          </div>
+        ) : (
+          <div className="mb-4">
+            <EmptyState
+              title="No positioned punches"
+              description="Punches recorded without GPS do not appear on the map."
+            />
+          </div>
+        )
+      ) : null}
 
       {listQuery.isLoading ? (
         <Skeleton className="h-64 w-full" />
@@ -110,32 +156,32 @@ function RecordsTable() {
         <EmptyState title="No attendance records" description="Adjust filters or record a punch above." />
       ) : (
         <>
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
-            <table className="min-w-full divide-y divide-slate-200 bg-white text-sm">
-              <thead className="bg-slate-50">
+          <div className="overflow-x-auto rounded-lg border border-border">
+            <table className="min-w-full divide-y divide-border bg-surface text-sm">
+              <thead className="bg-surface-sunken">
                 <tr>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Date</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Employee</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Status</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Check in</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Check out</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Hours</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Action</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Date</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Employee</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Status</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Check in</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Check out</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Hours</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-border">
                 {rows.map((r) => (
                   <tr key={r.id}>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-800">{r.work_date}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-700">{r.employee_id}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-text">{r.work_date}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-text-muted">{r.employee_id}</td>
                     <td className="px-3 py-2">
                       <AttendanceStatusBadge status={String(r.status)} violation={!!r.geofence_violation} />
                     </td>
-                    <td className="px-3 py-2 text-xs text-slate-700">{r.check_in_at ? String(r.check_in_at) : '—'}</td>
-                    <td className="px-3 py-2 text-xs text-slate-700">{r.check_out_at ? String(r.check_out_at) : '—'}</td>
-                    <td className="px-3 py-2 text-slate-800">{formatHours(r.total_hours)}</td>
+                    <td className="px-3 py-2 text-xs text-text-muted">{r.check_in_at ? String(r.check_in_at) : '—'}</td>
+                    <td className="px-3 py-2 text-xs text-text-muted">{r.check_out_at ? String(r.check_out_at) : '—'}</td>
+                    <td className="px-3 py-2 text-text">{formatHours(r.total_hours)}</td>
                     <td className="px-3 py-2">
-                      <Link href={`/attendance/records/${r.id}`} className="text-brand-600 hover:underline">
+                      <Link href={`/attendance/records/${r.id}`} className="text-primary hover:underline">
                         View
                       </Link>
                       {r.geofence_violation ? (
@@ -155,7 +201,7 @@ function RecordsTable() {
                 Load more
               </Button>
             ) : (
-              <p className="text-xs text-slate-500">End of list ({rows.length} shown).</p>
+              <p className="text-xs text-text-muted">End of list ({rows.length} shown).</p>
             )}
             {listQuery.isFetching && !listQuery.isFetchingNextPage && <Spinner size="sm" />}
           </div>
@@ -169,8 +215,8 @@ export default function AttendancePage() {
   return (
     <AppShell>
       <RequirePermission code={PERMISSIONS.ATTENDANCE_READ}>
-        <h1 className="text-xl font-bold text-slate-900">Attendance records</h1>
-        <p className="mt-1 text-sm text-slate-500">Daily records with punch status, hours and geofence flags.</p>
+        <h1 className="text-xl font-bold text-text">Attendance records</h1>
+        <p className="mt-1 text-sm text-text-muted">Daily records with punch status, hours and geofence flags.</p>
         <div className="mt-6">
           <RecordsTable />
         </div>

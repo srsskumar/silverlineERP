@@ -267,7 +267,7 @@ export function KanbanBoard({
     <div className="flex flex-col gap-4">
       <TaskFilters project={projectId} value={filters} onChange={setFilters}/>
       {transitionError ? (
-        <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <div role="alert" className="rounded-lg border border-warning/30 bg-warning-subtle px-4 py-3 text-sm text-warning">
           <p className="font-medium">Could not move task — rolled back.</p>
           <p className="mt-1">{transitionError.message}</p>
           {transitionError.allowed.length > 0 ? (
@@ -330,12 +330,12 @@ export function KanbanBoard({
                   />
                 ))}
                 {rows.length === 0 ? (
-                  <p className="rounded-md border border-dashed border-slate-200 px-3 py-4 text-center text-xs text-slate-400">
+                  <p className="rounded-md border border-dashed border-border px-3 py-4 text-center text-xs text-text-subtle">
                     Drop tasks here
                   </p>
                 ) : null}
                 {hidden > 0 ? (
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-text-muted">
                     +{hidden} more in this column (capped at {COLUMN_CAP}) — use Load more below.
                   </p>
                 ) : null}
@@ -345,7 +345,7 @@ export function KanbanBoard({
         </div>
         <DragOverlay>
           {activeTask ? (
-            <div className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-lg">
+            <div className="rounded-lg border border-border bg-surface px-3 py-2 text-sm shadow-lg">
               {activeTask.title}
             </div>
           ) : null}
@@ -362,7 +362,7 @@ export function KanbanBoard({
             Load more tasks
           </Button>
         ) : (
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-text-muted">
             {allTasks.length} task{allTasks.length === 1 ? '' : 's'} on this board.
           </p>
         )}
@@ -399,21 +399,21 @@ function KanbanColumn({
   const tone = wipTone(count, wipLimit);
   const badgeClass =
     tone === 'danger'
-      ? 'bg-red-100 text-red-700'
+      ? 'bg-danger-subtle text-danger'
       : tone === 'warning'
-        ? 'bg-amber-100 text-amber-800'
-        : 'bg-slate-100 text-slate-600';
+        ? 'bg-warning-subtle text-warning'
+        : 'bg-surface-sunken text-text-muted';
   return (
     <section
       aria-label={`Column ${name}`}
       data-column={statusCode}
       ref={setNodeRef}
-      className={`flex min-h-[200px] flex-col gap-2 rounded-lg border bg-slate-50 p-3 ${
-        isOver ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'
+      className={`flex min-h-[200px] flex-col gap-2 rounded-lg border bg-surface-sunken p-3 ${
+        isOver ? 'border-primary ring-2 ring-primary-subtle' : 'border-border'
       }`}
     >
       <header className="flex items-center justify-between gap-2">
-        <h3 className="flex min-w-0 items-center gap-2 text-sm font-semibold text-slate-900">
+        <h3 className="flex min-w-0 items-center gap-2 text-sm font-semibold text-text">
           {color ? (
             <span aria-hidden="true" className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
           ) : null}
@@ -423,7 +423,7 @@ function KanbanColumn({
           {wipLimit ? `${count}/${wipLimit}` : count}
         </span>
       </header>
-      <p className="font-mono text-[11px] text-slate-400">{statusCode}</p>
+      <p className="font-mono text-[11px] text-text-subtle">{statusCode}</p>
       <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
         <div className="flex flex-col gap-2">{children}</div>
       </SortableContext>
@@ -456,27 +456,27 @@ const TaskCard = React.memo(function TaskCard({
       data-task-id={task.id}
       {...attributes}
       {...listeners}
-      className={`rounded-lg border bg-white px-3 py-2 shadow-sm ${
-        shake ? 'border-red-500 ring-2 ring-red-200' : 'border-slate-200'
+      className={`rounded-lg border bg-surface px-3 py-2 shadow-sm ${
+        shake ? 'border-danger ring-2 ring-danger/30' : 'border-border'
       }`}
     >
-      <p className="text-sm font-medium text-slate-900">{task.title}</p>
+      <p className="text-sm font-medium text-text">{task.title}</p>
       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
         <SlaBadge status={task.sla_status} />
         {(task.labels ?? []).slice(0, 4).map((l) => (
           <LabelPill key={l.id} label={l} />
         ))}
         {(task.labels ?? []).length > 4 ? (
-          <span className="text-[11px] text-slate-400">+{(task.labels ?? []).length - 4}</span>
+          <span className="text-[11px] text-text-subtle">+{(task.labels ?? []).length - 4}</span>
         ) : null}
       </div>
       <div className="mt-1.5 flex items-center justify-between gap-2 text-xs">
-        <span className="font-mono text-slate-500" title={task.assignee_id ? String(task.assignee_id) : undefined}>
+        <span className="font-mono text-text-muted" title={task.assignee_id ? String(task.assignee_id) : undefined}>
           {task.assignee_id ? shortUserId(String(task.assignee_id)) : 'unassigned'}
         </span>
         <Link
           href={`/projects/${projectId}/tasks/${task.id}`}
-          className="text-brand-600 hover:underline"
+          className="text-primary hover:underline"
           onClick={(e: React.MouseEvent) => e.stopPropagation()}
           onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
         >

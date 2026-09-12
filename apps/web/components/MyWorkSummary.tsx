@@ -25,7 +25,7 @@ export function MyWorkSummary({
     return (
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4" aria-label="Loading work summary">
         {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="rounded-lg border border-slate-200 bg-white p-4">
+          <div key={i} className="rounded-lg border border-border bg-surface p-4">
             <Skeleton className="h-4 w-24" />
             <Skeleton className="mt-3 h-8 w-16" />
           </div>
@@ -70,11 +70,11 @@ export function MyWorkSummary({
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
       {cards.map((c) => (
-        <div key={c.title} className="rounded-lg border border-slate-200 bg-white p-4">
-          <p className="text-sm font-medium text-slate-500">{c.title}</p>
-          <p className="mt-2 text-2xl font-bold text-slate-900">{c.value}</p>
-          {c.extra ? <p className="mt-1 text-xs text-slate-500">{c.extra}</p> : null}
-          <Link href={c.href} className="mt-2 inline-block text-sm text-brand-600 hover:underline">
+        <div key={c.title} className="rounded-lg border border-border bg-surface p-4">
+          <p className="text-sm font-medium text-text-muted">{c.title}</p>
+          <p className="mt-2 text-2xl font-bold text-text">{c.value}</p>
+          {c.extra ? <p className="mt-1 text-xs text-text-muted">{c.extra}</p> : null}
+          <Link href={c.href} className="mt-2 inline-block text-sm text-primary hover:underline">
             {c.linkLabel} →
           </Link>
         </div>

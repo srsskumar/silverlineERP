@@ -34,13 +34,13 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { applyFieldErrors, isConflictError, requestIdOf } from '@/lib/form-errors';
 
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5 py-2 sm:flex-row sm:gap-4">
-      <dt className="w-40 shrink-0 text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt>
-      <dd className="text-sm text-slate-800">{value}</dd>
+      <dt className="w-40 shrink-0 text-xs font-medium uppercase tracking-wide text-text-muted">{label}</dt>
+      <dd className="text-sm text-text">{value}</dd>
     </div>
   );
 }
@@ -96,10 +96,10 @@ export function TaskDetailView({ projectId, taskId }: { projectId: string; taskI
     <AppShell>
       <RequirePermission code={PERMISSIONS.TASK_READ}>
         <div className="flex flex-col gap-6">
-          <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
+          <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h1 className="text-xl font-bold text-slate-900">{task.title}</h1>
+                <h1 className="text-xl font-bold text-text">{task.title}</h1>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <TaskStatusBadge status={String(task.status)} />
                   <SlaBadge status={task.sla_status} />
@@ -107,15 +107,15 @@ export function TaskDetailView({ projectId, taskId }: { projectId: string; taskI
                     <LabelPill key={l.id} label={l} />
                   ))}
                   {task.priority ? (
-                    <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+                    <span className="rounded-full bg-surface-sunken px-2.5 py-0.5 text-xs font-medium text-text-muted">
                       {String(task.priority)}
                     </span>
                   ) : null}
-                  <span className="text-xs text-slate-500">v{task.version}</span>
+                  <span className="text-xs text-text-muted">v{task.version}</span>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Link href={`/projects/${projectId}`} className="text-sm text-brand-600 hover:underline">
+                <Link href={`/projects/${projectId}`} className="text-sm text-primary hover:underline">
                   Back to project
                 </Link>
                 {canAssign && (
@@ -125,7 +125,7 @@ export function TaskDetailView({ projectId, taskId }: { projectId: string; taskI
                 )}
               </div>
             </div>
-            <dl className="mt-4 divide-y divide-slate-100">
+            <dl className="mt-4 divide-y divide-border">
               <DetailRow label="Task ID" value={<span className="font-mono text-xs">{task.id}</span>} />
               <DetailRow
                 label="Assignee"
@@ -133,7 +133,7 @@ export function TaskDetailView({ projectId, taskId }: { projectId: string; taskI
                   task.assignee_id ? (
                     <span className="font-mono text-xs" title={String(task.assignee_id)}>
                       {shortUserId(String(task.assignee_id))}
-                      <span className="ml-2 text-slate-400">(user id — no users directory in S4)</span>
+                      <span className="ml-2 text-text-subtle">(user id — no users directory in S4)</span>
                     </span>
                   ) : (
                     'Unassigned'
@@ -142,14 +142,14 @@ export function TaskDetailView({ projectId, taskId }: { projectId: string; taskI
               />
               <DetailRow label="Description" value={task.description ? String(task.description) : '—'} />
             </dl>
-            <div className="mt-4 border-t border-slate-100 pt-4">
+            <div className="mt-4 border-t border-border pt-4">
               <WorkflowStepper status={String(task.status)} />
             </div>
           </div>
 
           {canTransition && (
-            <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
-              <h2 className="text-sm font-semibold text-slate-900">Change status</h2>
+            <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+              <h2 className="text-sm font-semibold text-text">Change status</h2>
               <div className="mt-3 max-w-xl">
                 <StatusTransitionSelect
                   taskId={task.id}
@@ -177,18 +177,18 @@ export function TaskDetailView({ projectId, taskId }: { projectId: string; taskI
             />
           )}
 
-          <section aria-label="Subtasks" className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
-            <h2 className="text-sm font-semibold text-slate-900">Subtasks ({subtasks.length})</h2>
+          <section aria-label="Subtasks" className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+            <h2 className="text-sm font-semibold text-text">Subtasks ({subtasks.length})</h2>
             {subtasks.length === 0 ? (
-              <p className="mt-2 text-sm text-slate-500">No subtasks yet.</p>
+              <p className="mt-2 text-sm text-text-muted">No subtasks yet.</p>
             ) : (
-              <ul className="mt-3 divide-y divide-slate-100">
+              <ul className="mt-3 divide-y divide-border">
                 {subtasks.map((s) => (
                   <li key={s.id} className="flex items-center justify-between gap-3 py-2 text-sm">
-                    <span className="min-w-0 truncate text-slate-800">{s.title}</span>
+                    <span className="min-w-0 truncate text-text">{s.title}</span>
                     <span className="flex shrink-0 items-center gap-3">
                       <TaskStatusBadge status={String(s.status)} />
-                      <Link href={`/projects/${projectId}/tasks/${s.id}`} className="text-brand-600 hover:underline">
+                      <Link href={`/projects/${projectId}/tasks/${s.id}`} className="text-primary hover:underline">
                         Open
                       </Link>
                     </span>
@@ -197,7 +197,7 @@ export function TaskDetailView({ projectId, taskId }: { projectId: string; taskI
               </ul>
             )}
             {canCreateTask && (
-              <div className="mt-4 border-t border-slate-100 pt-4">
+              <div className="mt-4 border-t border-border pt-4">
                 <QuickAddTask
                   projectId={task.project_id}
                   parentId={task.id}
@@ -208,8 +208,8 @@ export function TaskDetailView({ projectId, taskId }: { projectId: string; taskI
             )}
           </section>
 
-          <section aria-label="Dependencies" className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
-            <h2 className="text-sm font-semibold text-slate-900">Dependencies</h2>
+          <section aria-label="Dependencies" className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+            <h2 className="text-sm font-semibold text-text">Dependencies</h2>
             <div className="mt-3">
               <DependencyManager
                 taskId={task.id}
@@ -221,10 +221,10 @@ export function TaskDetailView({ projectId, taskId }: { projectId: string; taskI
           </section>
 
           <EvidenceList taskId={task.id} canUpload={canUpdate} />
-          <section aria-label="Labels" className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
-            <h2 className="text-sm font-semibold text-slate-900">Labels</h2>
+          <section aria-label="Labels" className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+            <h2 className="text-sm font-semibold text-text">Labels</h2>
             {(task.labels ?? []).length === 0 && !canUpdate ? (
-              <p className="mt-2 text-sm text-slate-500">No labels on this task.</p>
+              <p className="mt-2 text-sm text-text-muted">No labels on this task.</p>
             ) : null}
             {(task.labels ?? []).length > 0 && !canUpdate ? (
               <div className="mt-3 flex flex-wrap gap-2">
@@ -322,8 +322,8 @@ function EditTaskFields({
   });
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
-      <h2 className="text-sm font-semibold text-slate-900">Edit details</h2>
+    <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+      <h2 className="text-sm font-semibold text-text">Edit details</h2>
       <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="mt-3 flex max-w-xl flex-col gap-4" noValidate>
         <FormField label="Title" htmlFor={`task-title-${taskId}`} error={errors.title?.message}>
           <Input id={`task-title-${taskId}`} invalid={!!errors.title} {...register('title')} />

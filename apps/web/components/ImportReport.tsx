@@ -15,23 +15,23 @@ export function ImportReport({ report }: { report: BulkImportResult | null }) {
         <Badge tone={report.failed > 0 ? 'danger' : 'neutral'}>Failed: {report.failed}</Badge>
       </div>
       {report.errors.length === 0 ? (
-        <p className="text-sm text-slate-600">{report.dry_run?'Validation passed. Review the preview, then import the rows.':'All rows imported successfully.'}</p>
+        <p className="text-sm text-text-muted">{report.dry_run?'Validation passed. Review the preview, then import the rows.':'All rows imported successfully.'}</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="min-w-full divide-y divide-slate-200 bg-white text-sm">
-            <thead className="bg-slate-50">
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="min-w-full divide-y divide-border bg-surface text-sm">
+            <thead className="bg-surface-sunken">
               <tr>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Row</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Emp No</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Errors</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Row</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Emp No</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Errors</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-border">
               {report.errors.map((e, i) => (
                 <tr key={`${e.index}-${i}`}>
-                  <td className="px-3 py-2 text-slate-800">{e.index}</td>
-                  <td className="px-3 py-2 text-slate-800">{e.emp_no ?? '—'}</td>
-                  <td className="px-3 py-2 text-slate-700">
+                  <td className="px-3 py-2 text-text">{e.index}</td>
+                  <td className="px-3 py-2 text-text">{e.emp_no ?? '—'}</td>
+                  <td className="px-3 py-2 text-text-muted">
                     <ul className="list-disc pl-4">
                       {e.errors.map((msg, j) => (
                         <li key={j}>{msg}</li>

@@ -2,10 +2,194 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: light;
+/**
+ * Silverline design tokens.
+ *
+ * Dense operational surface: compact rows, a tight type scale, and colour
+ * reserved almost entirely for state. Every value is an HSL triple so Tailwind
+ * can compose opacity (`bg-surface/60`). Light is the base; the dark block
+ * only reassigns roles, so no component needs a `dark:` variant to be correct.
+ */
+@layer base {
+  :root {
+    /* Neutrals — the app is mostly these. */
+    --canvas: 210 20% 97%;
+    --surface: 0 0% 100%;
+    --surface-raised: 0 0% 100%;
+    --surface-sunken: 210 20% 98%;
+    --overlay: 0 0% 100%;
+
+    --border: 214 20% 89%;
+    --border-strong: 214 16% 80%;
+    --ring: 222 84% 58%;
+
+    --text: 222 24% 12%;
+    --text-muted: 217 12% 42%;
+    --text-subtle: 217 11% 58%;
+    --text-inverse: 0 0% 100%;
+
+    /* Brand — actions and focus only. */
+    --primary: 222 84% 58%;
+    --primary-hover: 222 74% 50%;
+    --primary-subtle: 222 92% 96%;
+    --primary-text: 0 0% 100%;
+
+    /* State — the only other colour that appears. */
+    --success: 152 56% 36%;
+    --success-subtle: 150 60% 95%;
+    --warning: 32 88% 44%;
+    --warning-subtle: 40 90% 94%;
+    --danger: 358 68% 50%;
+    --danger-subtle: 356 82% 96%;
+    --info: 205 82% 44%;
+    --info-subtle: 205 86% 95%;
+    --neutral-status: 217 12% 46%;
+    --neutral-subtle: 214 22% 95%;
+
+    --radius: 0.5rem;
+
+    /* Flat, tight shadows — depth reads as a hairline, not a glow. */
+    --shadow-sm: 0 1px 2px 0 hsl(222 24% 12% / 0.06);
+    --shadow-md: 0 2px 4px -1px hsl(222 24% 12% / 0.08), 0 1px 2px -1px hsl(222 24% 12% / 0.06);
+    --shadow-lg: 0 8px 24px -6px hsl(222 24% 12% / 0.16), 0 2px 6px -2px hsl(222 24% 12% / 0.08);
+  }
+
+  .dark {
+    --canvas: 222 26% 8%;
+    --surface: 222 22% 11%;
+    --surface-raised: 222 20% 14%;
+    --surface-sunken: 222 26% 9%;
+    --overlay: 222 20% 13%;
+
+    --border: 220 14% 21%;
+    --border-strong: 220 12% 30%;
+    --ring: 222 84% 64%;
+
+    --text: 210 22% 96%;
+    --text-muted: 216 12% 68%;
+    --text-subtle: 216 10% 52%;
+    --text-inverse: 222 26% 8%;
+
+    --primary: 222 84% 62%;
+    --primary-hover: 222 84% 70%;
+    --primary-subtle: 222 60% 18%;
+    --primary-text: 222 40% 8%;
+
+    --success: 152 52% 50%;
+    --success-subtle: 152 40% 15%;
+    --warning: 36 84% 58%;
+    --warning-subtle: 36 50% 16%;
+    --danger: 358 72% 62%;
+    --danger-subtle: 358 44% 18%;
+    --info: 205 78% 58%;
+    --info-subtle: 205 50% 16%;
+    --neutral-status: 216 12% 62%;
+    --neutral-subtle: 220 14% 19%;
+
+    --shadow-sm: 0 1px 2px 0 hsl(0 0% 0% / 0.4);
+    --shadow-md: 0 2px 4px -1px hsl(0 0% 0% / 0.5), 0 1px 2px -1px hsl(0 0% 0% / 0.4);
+    --shadow-lg: 0 8px 24px -6px hsl(0 0% 0% / 0.6), 0 2px 6px -2px hsl(0 0% 0% / 0.5);
+  }
 }
 
-body {
-  @apply bg-slate-100 text-slate-900 antialiased;
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  html {
+    /* Tell the UA which form controls/scrollbars to paint. */
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  body {
+    background-color: hsl(var(--canvas));
+    color: hsl(var(--text));
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  /* Tabular figures everywhere numbers line up in a column. */
+  table, .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
+  /**
+   * Native form controls.
+   *
+   * 46 raw <select>/<input> elements are used directly across 26 route files
+   * rather than through the primitives. Styling them in the base layer keeps
+   * them on-theme (and legible in dark mode) without touching every call site;
+   * anything that opts out can still override with a utility class.
+   */
+  select,
+  input:not([type='checkbox']):not([type='radio']):not([type='file']),
+  textarea {
+    background-color: hsl(var(--surface));
+    color: hsl(var(--text));
+    border: 1px solid hsl(var(--border));
+    border-radius: calc(var(--radius) - 2px);
+    font-size: 0.8125rem;
+    line-height: 1.25rem;
+  }
+  select,
+  input:not([type='checkbox']):not([type='radio']):not([type='file']) {
+    height: 2rem;
+    padding-inline: 0.625rem;
+  }
+  textarea {
+    padding: 0.375rem 0.625rem;
+  }
+  select {
+    /* Room for the chevron the UA draws on the right. */
+    padding-inline-end: 1.75rem;
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: hsl(var(--text-subtle));
+  }
+  input:disabled,
+  select:disabled,
+  textarea:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  /* Checkboxes and radios follow the brand rather than the UA default blue. */
+  input[type='checkbox'],
+  input[type='radio'] {
+    accent-color: hsl(var(--primary));
+    width: 0.875rem;
+    height: 0.875rem;
+  }
+  /* The UA calendar/clock glyphs are near-invisible on a dark surface. */
+  .dark input[type='date']::-webkit-calendar-picker-indicator,
+  .dark input[type='month']::-webkit-calendar-picker-indicator,
+  .dark input[type='time']::-webkit-calendar-picker-indicator,
+  .dark input[type='datetime-local']::-webkit-calendar-picker-indicator {
+    filter: invert(1) opacity(0.65);
+  }
+}
+
+@layer utilities {
+  /* Rows are scanned, not read — keep the hit area generous but the box tight. */
+  .row-hover {
+    transition: background-color 100ms ease;
+  }
+  .row-hover:hover {
+    background-color: hsl(var(--surface-sunken));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

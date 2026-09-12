@@ -19,7 +19,14 @@ export async function enforceRecordScope(req:FastifyRequest,permission:string):P
    }
   }
  }
- async function project(id:string){if(scopes.global||scopes.projects.includes(id))return;if(['project.update','project.close','board.manage','cycle.manage','custom_field.manage'].includes(permission))deny();const values:unknown[]=[id,u!.orgId],clause=await taskScopeClause(pool,u!.orgId,scopes,values);if(!(await pool.query(`SELECT 1 FROM tasks WHERE project_id=$1 AND org_id=$2 AND ${clause} LIMIT 1`,values)).rowCount)deny();}
+ /**
+  * Quick capture (`task.create`) is deliberately wider than task visibility:
+  * a self/geo/team-scoped user can file work into any project in their org,
+  * but still only sees tasks their task scope matches. Requiring an already
+  * visible task made the FIRST task in a new project uncreatable. Users who
+  * hold explicit `project` grants stay restricted to those projects.
+  */
+ async function project(id:string){if(scopes.global||scopes.projects.includes(id))return;if(['project.update','project.close','board.manage','cycle.manage','custom_field.manage'].includes(permission))deny();if(permission==='task.create'){if(scopes.projects.length)deny();if(!(await pool.query('SELECT 1 FROM projects WHERE id=$1 AND org_id=$2',[id,u!.orgId])).rowCount)deny();return;}const values:unknown[]=[id,u!.orgId],clause=await taskScopeClause(pool,u!.orgId,scopes,values);if(!(await pool.query(`SELECT 1 FROM tasks WHERE project_id=$1 AND org_id=$2 AND ${clause} LIMIT 1`,values)).rowCount)deny();}
  if(permission==='task.create'&&typeof body.assignee_id==='string'&&body.assignee_id!==u.id&&!u.permissions.includes('task.assign'))deny();
  if(params.id&&path.startsWith('/api/v1/tasks/:id'))await task(params.id);
  if(params.id&&path.startsWith('/api/v1/employees/:id'))await employee(params.id);

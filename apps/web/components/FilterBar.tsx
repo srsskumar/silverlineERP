@@ -27,7 +27,7 @@ import { ErrorCard } from './ui/ErrorCard';
 import { Input } from './ui/Input';
 
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 const saveSchema = z.object({
   name: z.string().trim().min(1, 'Name is required').max(255),
@@ -138,7 +138,7 @@ export function FilterBar({
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
         <div>
-          <label htmlFor={`${idPrefix}-status`} className="text-sm font-medium text-slate-700">
+          <label htmlFor={`${idPrefix}-status`} className="text-sm font-medium text-text-muted">
             Status
           </label>
           <select id={`${idPrefix}-status`} className={inputClass} value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -151,17 +151,17 @@ export function FilterBar({
           </select>
         </div>
         <div className="flex-1">
-          <label htmlFor={`${idPrefix}-q`} className="text-sm font-medium text-slate-700">
+          <label htmlFor={`${idPrefix}-q`} className="text-sm font-medium text-text-muted">
             Search
           </label>
           <Input id={`${idPrefix}-q`} placeholder="Search tasks…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
-        <label className="flex items-center gap-2 text-sm text-slate-700">
+        <label className="flex items-center gap-2 text-sm text-text-muted">
           <input type="checkbox" checked={mineOnly} onChange={(e) => setMineOnly(e.target.checked)} />
           Assigned to me
         </label>
         <div>
-          <label htmlFor={`${idPrefix}-sla`} className="text-sm font-medium text-slate-700">
+          <label htmlFor={`${idPrefix}-sla`} className="text-sm font-medium text-text-muted">
             SLA
           </label>
           <select id={`${idPrefix}-sla`} className={inputClass} value={sla} onChange={(e) => setSla(e.target.value)}>
@@ -178,17 +178,17 @@ export function FilterBar({
       {setExtra ? <AdvancedTaskFilters project={projectId} value={extra} onChange={setExtra} /> : null}
       {canReadLabels ? (
         <fieldset>
-          <legend className="text-sm font-medium text-slate-700">Labels</legend>
+          <legend className="text-sm font-medium text-text-muted">Labels</legend>
           {labelsQuery.isLoading ? (
-            <p className="mt-1 text-sm text-slate-500">Loading labels…</p>
+            <p className="mt-1 text-sm text-text-muted">Loading labels…</p>
           ) : labelsQuery.isError ? (
-            <p className="mt-1 text-sm text-slate-500">Labels unavailable.</p>
+            <p className="mt-1 text-sm text-text-muted">Labels unavailable.</p>
           ) : labels.length === 0 ? (
-            <p className="mt-1 text-sm text-slate-500">No labels in this project yet.</p>
+            <p className="mt-1 text-sm text-text-muted">No labels in this project yet.</p>
           ) : (
             <div className="mt-2 flex flex-wrap gap-3">
               {labels.map((l) => (
-                <label key={l.id} className="flex items-center gap-1.5 text-sm text-slate-700">
+                <label key={l.id} className="flex items-center gap-1.5 text-sm text-text-muted">
                   <input
                     type="checkbox"
                     checked={labelIds.includes(l.id)}
@@ -196,7 +196,7 @@ export function FilterBar({
                   />
                   <span
                     aria-hidden="true"
-                    className="inline-block h-2.5 w-2.5 rounded-full ring-1 ring-slate-300"
+                    className="inline-block h-2.5 w-2.5 rounded-full ring-1 ring-border"
                     style={{ backgroundColor: l.color ?? '#cbd5e1' }}
                   />
                   {l.name}
@@ -206,7 +206,7 @@ export function FilterBar({
                 <button
                   type="button"
                   onClick={() => setLabelIds([])}
-                  className="text-xs text-brand-600 hover:underline"
+                  className="text-xs text-primary hover:underline"
                 >
                   Clear labels
                 </button>
@@ -217,9 +217,9 @@ export function FilterBar({
       ) : null}
 
       {canReadFilters ? (
-        <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-end">
+        <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface-sunken p-3 sm:flex-row sm:items-end">
           <div className="flex-1">
-            <label htmlFor={`${idPrefix}-saved`} className="text-sm font-medium text-slate-700">
+            <label htmlFor={`${idPrefix}-saved`} className="text-sm font-medium text-text-muted">
               Saved filters
             </label>
             <select
@@ -260,7 +260,7 @@ export function FilterBar({
         </div>
       ) : null}
       {savedNote ? (
-        <p role="status" className="text-sm text-green-700">
+        <p role="status" className="text-sm text-success">
           {savedNote}
         </p>
       ) : null}
@@ -349,10 +349,10 @@ function SaveFilterDialog({
   return (
     <form
       onSubmit={handleSubmit((v) => mutation.mutate(v))}
-      className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-3"
+      className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-3"
       noValidate
     >
-      <label htmlFor="save-filter-name" className="text-sm font-medium text-slate-700">
+      <label htmlFor="save-filter-name" className="text-sm font-medium text-text-muted">
         Save current filters as
       </label>
       <div className="flex flex-col gap-2 sm:flex-row">
@@ -364,7 +364,7 @@ function SaveFilterDialog({
             {...register('name')}
           />
           {errors.name?.message ? (
-            <p role="alert" className="mt-1 text-xs text-red-600">
+            <p role="alert" className="mt-1 text-xs text-danger">
               {errors.name.message}
             </p>
           ) : null}

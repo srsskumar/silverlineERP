@@ -69,10 +69,10 @@ export function AssignDialog({
   if (!open) return null;
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Assign task" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-      <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-lg">
-        <h2 className="text-base font-semibold text-slate-900">Assign task</h2>
-        <p className="mt-1 text-xs text-slate-500">
+    <div role="dialog" aria-modal="true" aria-label="Assign task" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="w-full max-w-md rounded-lg bg-surface p-6 shadow-lg">
+        <h2 className="text-base font-semibold text-text">Assign task</h2>
+        <p className="mt-1 text-xs text-text-muted">
           {currentAssigneeId ? (
             <>
               Currently assigned to <span className="font-mono" title={String(currentAssigneeId)}>{shortUserId(String(currentAssigneeId))}</span>.
@@ -96,7 +96,7 @@ export function AssignDialog({
             <textarea
               id="assign-reason"
               rows={2}
-              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1"
+              className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
               placeholder="Why is this person the right owner? (required)"
               {...register('reason')}
             />

@@ -178,6 +178,38 @@ export const attendanceReviewCodeSchema = z.enum([
 export type AttendanceReviewCode = z.infer<typeof attendanceReviewCodeSchema>;
 
 /** POST /api/v1/attendance/events */
+/**
+ * Device-reported anti-fraud signals. Kept permissive: an older or newer client
+ * must never have a punch rejected over a telemetry field, so unknown keys are
+ * simply dropped and every member is optional.
+ */
+export const deviceSignalsSchema = z.object({
+  device: z
+    .object({
+      is_physical_device: z.boolean().optional(),
+      device_type: z.string().max(50).nullable().optional(),
+      os_name: z.string().max(50).nullable().optional(),
+      os_version: z.string().max(50).nullable().optional(),
+      manufacturer: z.string().max(100).nullable().optional(),
+      model_name: z.string().max(100).nullable().optional(),
+      os_build_id: z.string().max(200).nullable().optional(),
+      suspected_emulator: z.boolean().optional(),
+    })
+    .optional(),
+  movement: z
+    .object({
+      distance_m: z.number().optional(),
+      elapsed_ms: z.number().optional(),
+      implied_speed_mps: z.number().optional(),
+      impossible_travel: z.boolean().optional(),
+    })
+    .nullable()
+    .optional(),
+  review_suggested: z.boolean().optional(),
+});
+
+export type DeviceSignals = z.infer<typeof deviceSignalsSchema>;
+
 export const attendanceEventSchema = z
   .object({
     employee_id: z.string().uuid("employee_id must be a UUID"),
@@ -192,6 +224,11 @@ export const attendanceEventSchema = z
     mock_location: z.boolean().default(false),
     device_id: z.string().max(255).optional(),
     app_version: z.string().max(50).optional(),
+    // Advisory anti-fraud signals from the device (requirements §9.3). Passed
+    // through and stored; the server re-derives movement from its own history
+    // rather than trusting the client's copy. Loose by design — platforms keep
+    // adding fields, and a strict shape would reject punches from a newer app.
+    device_signals: deviceSignalsSchema.optional(),
   })
   .refine(
     (v) =>

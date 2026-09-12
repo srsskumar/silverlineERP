@@ -24,6 +24,8 @@ import { buildAuthenticate, requirePermission } from "../../common/auth.js";
 import { writeAudit } from "../../common/audit.js";
 import { createRateLimiter } from "../../common/rateLimit.js";
 import { isInsideFence } from "../../common/geo.js";
+import type { FenceShape } from "@silverline/shared";
+import { detectMovementAnomaly } from "@silverline/shared";
 import { sendError } from "../../common/httpErrors.js";
 import { emitNotification } from "../s5/notify.js";
 
@@ -165,7 +167,7 @@ function toExceptionShape(row: ExceptionRow) {
 
 const EVENT_COLS = `id, employee_id, event_type, client_timestamp,
   server_timestamp, lat, lng, gps_accuracy, geofence_result, geofence_id,
-  mock_location, device_id, app_version, idempotency_key`;
+  mock_location, device_id, app_version, idempotency_key, device_signals`;
 
 const RECORD_COLS = `id, employee_id, work_date, check_in_event_id,
   check_out_event_id, check_in_at, check_out_at, total_hours, status,
@@ -229,11 +231,20 @@ interface FenceRow {
  * Resolve the applicable ACTIVE fence: employee village → parent mandal →
  * parent district (walked via org_units), falling back to the employee's
  * direct mandal/district refs when the chain is broken. Null = NO_FENCE.
+ *
+ * A scope may hold more than one fence — a village with both a depot and a
+ * site office is ordinary — so when the punch position is known, every active
+ * fence at that level is considered and the one actually containing the punch
+ * wins. Previously only the most recently created fence at a level was ever
+ * evaluated, so a worker standing inside any older fence was recorded OUTSIDE
+ * and sent to review. With no position, or when none contains the punch, the
+ * newest is returned, which preserves the previous reporting behaviour.
  */
 async function resolveFence(
   pool: Pool,
   orgId: string,
   emp: EmployeeLite,
+  at?: { lat: number; lng: number },
 ): Promise<FenceRow | null> {
   const startIds = [emp.village_id, emp.mandal_id, emp.district_id].filter(
     (v): v is string => !!v,
@@ -281,16 +292,47 @@ async function resolveFence(
       `SELECT id, geometry_type, geometry, tolerance_meters, accuracy_threshold_meters
        FROM geo_fences
        WHERE org_id = $1 AND scope_type = $2 AND scope_id = $3::uuid AND status = 'ACTIVE'
-       ORDER BY created_at DESC LIMIT 1`,
+       ORDER BY created_at DESC`,
       [orgId, type, id],
     );
-    const row = fence.rows[0] as FenceRow | undefined;
-    if (row) {
-      return row;
+    const rows = fence.rows as FenceRow[];
+    if (rows.length === 0) {
+      continue;
     }
+    if (at) {
+      const containing = rows.find((row) =>
+        isInsideFence(
+          {
+            geometry_type: row.geometry_type,
+            geometry: row.geometry,
+            tolerance_meters:
+              row.tolerance_meters === null ? null : Number(row.tolerance_meters),
+          } as FenceShape,
+          at.lat,
+          at.lng,
+        ),
+      );
+      if (containing) {
+        return containing;
+      }
+    }
+    // Nothing contains the punch (or there is no position): report against the
+    // newest fence at the finest scope that has one.
+    return rows[0];
   }
   return null;
 }
+
+/** Upper bound on markers returned to the map in one request. */
+const MAX_MAP_EVENTS = 5000;
+
+const mapEventsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(MAX_MAP_EVENTS).default(1000),
+  employee_id: z.string().uuid().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  result: z.enum(["INSIDE", "OUTSIDE", "NO_FENCE"]).optional(),
+});
 
 const recordsListQuerySchema = cursorPageQuerySchema.extend({
   employee_id: z.string().uuid().optional(),
@@ -401,7 +443,7 @@ export async function registerAttendanceRoutes(
 
   function review(
     reply: Parameters<typeof sendError>[0],
-    code: "TIMESTAMP_SKEW" | "POOR_ACCURACY" | "MOCK_LOCATION" | "OUTSIDE_GEOFENCE",
+    code: "TIMESTAMP_SKEW" | "POOR_ACCURACY" | "MOCK_LOCATION" | "OUTSIDE_GEOFENCE" | "DEVICE_SIGNAL",
     exceptionId: string,
     message: string,
   ) {
@@ -489,6 +531,56 @@ export async function registerAttendanceRoutes(
       });
     }
 
+    /*
+     * Anti-fraud signals (§9.3).
+     *
+     * The client sends what it can observe about its own device, but a client
+     * can lie about all of it, so the movement half is re-derived here from the
+     * employee's own last positioned punch. `client_movement` is kept alongside
+     * for comparison — a client claiming "no anomaly" while the server sees one
+     * is itself interesting during a review.
+     */
+    let serverMovement: ReturnType<typeof detectMovementAnomaly> = null;
+    if (d.latitude !== undefined && d.longitude !== undefined) {
+      const prior = await db.query(
+        `SELECT lat, lng, gps_accuracy, client_timestamp
+           FROM attendance_events
+          WHERE employee_id = $1::uuid AND lat IS NOT NULL AND lng IS NOT NULL
+          ORDER BY client_timestamp DESC
+          LIMIT 1`,
+        [emp.id],
+      );
+      const previous = prior.rows[0] as
+        | { lat: number; lng: number; gps_accuracy: number | null; client_timestamp: Date | string }
+        | undefined;
+      if (previous) {
+        serverMovement = detectMovementAnomaly(
+          {
+            latitude: Number(previous.lat),
+            longitude: Number(previous.lng),
+            accuracy: previous.gps_accuracy === null ? null : Number(previous.gps_accuracy),
+            timestamp: new Date(previous.client_timestamp).getTime(),
+          },
+          {
+            latitude: d.latitude,
+            longitude: d.longitude,
+            accuracy: d.gps_accuracy ?? null,
+            timestamp: clientTime.getTime(),
+          },
+        );
+      }
+    }
+    const suspectedEmulator = d.device_signals?.device?.suspected_emulator === true;
+    const storedSignals =
+      d.device_signals || serverMovement
+        ? {
+            device: d.device_signals?.device ?? null,
+            client_movement: d.device_signals?.movement ?? null,
+            server_movement: serverMovement,
+            flagged: suspectedEmulator || serverMovement?.impossible_travel === true,
+          }
+        : null;
+
     // 2. Skew vs server clock > 15 min → review + SYSTEM exception.
     if (Math.abs(clientTime.getTime() - serverNow.getTime()) > SKEW_MS) {
       const workDate = workDateFor(serverNow);
@@ -497,8 +589,8 @@ export async function registerAttendanceRoutes(
         `INSERT INTO attendance_events
            (employee_id, event_type, client_timestamp, server_timestamp,
             lat, lng, gps_accuracy, geofence_result, geofence_id,
-            mock_location, device_id, app_version, idempotency_key)
-         VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,'NO_FENCE',NULL,$8,$9,$10,$11)
+            mock_location, device_id, app_version, idempotency_key, device_signals)
+         VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,'NO_FENCE',NULL,$8,$9,$10,$11,$12::jsonb)
          RETURNING ${EVENT_COLS}`,
         [
           emp.id,
@@ -512,6 +604,7 @@ export async function registerAttendanceRoutes(
           d.device_id ?? null,
           d.app_version ?? null,
           idemKey,
+          storedSignals ? JSON.stringify(storedSignals) : null,
         ],
       );
       void ins;
@@ -597,7 +690,14 @@ export async function registerAttendanceRoutes(
     }
 
     // 8. Resolve the applicable fence (village → mandal → district).
-    const fence = await resolveFence(db, user.orgId, emp);
+    const fence = await resolveFence(
+      db,
+      user.orgId,
+      emp,
+      d.latitude !== undefined && d.longitude !== undefined
+        ? { lat: d.latitude, lng: d.longitude }
+        : undefined,
+    );
     const hasCoords = d.latitude !== undefined && d.longitude !== undefined;
     const inside =
       fence && hasCoords
@@ -620,8 +720,8 @@ export async function registerAttendanceRoutes(
         `INSERT INTO attendance_events
            (employee_id, event_type, client_timestamp, server_timestamp,
             lat, lng, gps_accuracy, geofence_result, geofence_id,
-            mock_location, device_id, app_version, idempotency_key)
-         VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9::uuid,$10,$11,$12,$13)
+            mock_location, device_id, app_version, idempotency_key, device_signals)
+         VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9::uuid,$10,$11,$12,$13,$14::jsonb)
          RETURNING ${EVENT_COLS}`,
         [
           emp!.id,
@@ -637,6 +737,7 @@ export async function registerAttendanceRoutes(
           d.device_id ?? null,
           d.app_version ?? null,
           idemKey,
+          storedSignals ? JSON.stringify(storedSignals) : null,
         ],
       );
       return ins.rows[0] as EventRow;
@@ -672,6 +773,25 @@ export async function registerAttendanceRoutes(
         reason: message,
       });
       return review(reply, "MOCK_LOCATION", exceptionId, message);
+    }
+
+    // 10b. Emulator or impossible travel → review. Placed after mock_location
+    // so the more specific MOCK_LOCATION code still wins when both apply.
+    if (suspectedEmulator || serverMovement?.impossible_travel === true) {
+      const event = await storeEvent(geoResult);
+      void event;
+      const message = serverMovement?.impossible_travel
+        ? `Punch is ${serverMovement.distance_m}m from the previous one after ` +
+          `${Math.round(serverMovement.elapsed_ms / 1000)}s (${serverMovement.implied_speed_mps}m/s); ` +
+          "queued for review"
+        : "Punch came from a device that appears to be an emulator; queued for review";
+      const exceptionId = await createSystemException(db, {
+        employeeId: emp.id,
+        recordId: record?.id ?? null,
+        type: "SYSTEM_FLAG",
+        reason: message,
+      });
+      return review(reply, "DEVICE_SIGNAL", exceptionId, message);
     }
 
     // 11. Outside boundary + tolerance → review.
@@ -856,6 +976,103 @@ export async function registerAttendanceRoutes(
             })
           : null,
       has_more: hasMore,
+    });
+  });
+
+  /*
+   * GET /attendance/events/map — positioned punches for the operations map.
+   *
+   * Separate from the records list because records carry no coordinates: only
+   * events do, and a map needs a flat stream of positions rather than one row
+   * per employee-day. Returns just what a marker needs (position, outcome,
+   * time) so the payload stays small enough to cluster client-side; this is the
+   * endpoint to replace with vector tiles if a deployment ever exceeds the
+   * MAX_MAP_EVENTS ceiling in practice.
+   */
+  app.get("/api/v1/attendance/events/map", { preHandler: canRead }, async (req, reply) => {
+    const parsed = mapEventsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return sendError(reply, req.requestId, {
+        status: 422,
+        code: "VALIDATION_ERROR",
+        message: "Validation failed",
+        fieldErrors: toFieldErrors(parsed.error),
+      });
+    }
+    const user = req.authUser;
+    if (!user) {
+      return sendError(reply, req.requestId, {
+        status: 401,
+        code: "UNAUTHENTICATED",
+        message: "Authentication required",
+      });
+    }
+    const { limit, employee_id, from, to, result } = parsed.data;
+    const values: unknown[] = [user.orgId];
+    // Coordinates are the whole point, so unpositioned events are excluded.
+    const clauses = ["e.org_id = $1", "ev.lat IS NOT NULL", "ev.lng IS NOT NULL"];
+    clauses.push(await employeeRestriction(opts.pool, user, values, "ev.employee_id"));
+    if (employee_id) {
+      values.push(employee_id);
+      clauses.push(`ev.employee_id = $${values.length}::uuid`);
+    }
+    if (from) {
+      values.push(from);
+      clauses.push(`ev.client_timestamp >= $${values.length}::timestamptz`);
+    }
+    if (to) {
+      values.push(to);
+      clauses.push(`ev.client_timestamp <= $${values.length}::timestamptz`);
+    }
+    if (result) {
+      values.push(result);
+      clauses.push(`ev.geofence_result = $${values.length}`);
+    }
+    values.push(limit);
+    const res = await opts.pool.query(
+      `SELECT ev.id, ev.employee_id, ev.event_type, ev.client_timestamp,
+              ev.lat, ev.lng, ev.geofence_result, ev.geofence_id,
+              ev.mock_location, (ev.device_signals->>'flagged')::boolean AS flagged
+         FROM attendance_events ev
+         JOIN employees e ON e.id = ev.employee_id
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY ev.client_timestamp DESC
+        LIMIT $${values.length}`,
+      values as string[],
+    );
+    type MapRow = {
+      id: string;
+      employee_id: string;
+      event_type: string;
+      client_timestamp: Date | string;
+      lat: number;
+      lng: number;
+      geofence_result: string;
+      geofence_id: string | null;
+      mock_location: boolean;
+      flagged: boolean | null;
+    };
+    return reply.status(200).send({
+      data: (res.rows as MapRow[]).map((r) => ({
+        id: r.id,
+        employee_id: r.employee_id,
+        event_type: r.event_type,
+        at: iso(r.client_timestamp),
+        lat: Number(r.lat),
+        lng: Number(r.lng),
+        geofence_result: r.geofence_result,
+        geofence_id: r.geofence_id,
+        // One field the map can colour by, rather than making the client
+        // re-derive precedence from three separate flags.
+        outcome:
+          r.mock_location || r.flagged === true
+            ? "review"
+            : r.geofence_result === "OUTSIDE"
+              ? "outside"
+              : "ok",
+      })),
+      // No cursor: the map draws a bounded working set, not a paged list.
+      truncated: res.rows.length === limit,
     });
   });
 

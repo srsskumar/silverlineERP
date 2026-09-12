@@ -56,10 +56,10 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
-      <div className="w-full max-w-sm rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-        <h1 className="text-xl font-bold text-slate-900">Silverline ERP</h1>
-        <p className="mt-1 text-sm text-slate-500">Sign in to continue</p>
+    <div className="flex min-h-screen items-center justify-center bg-surface-sunken px-4">
+      <div className="w-full max-w-sm rounded-lg border border-border bg-surface p-6 shadow-sm">
+        <h1 className="text-xl font-bold text-text">Silverline ERP</h1>
+        <p className="mt-1 text-sm text-text-muted">Sign in to continue</p>
         <form onSubmit={handleSubmit(onSubmit)} className="mt-6 flex flex-col gap-4" noValidate>
           <FormField label="Username" htmlFor="username" error={errors.username?.message}>
             <Input
@@ -79,7 +79,7 @@ export default function LoginPage() {
             />
           </FormField>
           {submitError && isLockout(submitError) ? (
-            <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            <p role="alert" className="rounded-md bg-warning-subtle px-3 py-2 text-sm text-warning">
               Account temporarily locked after too many failed attempts. Please try again later.
             </p>
           ) : null}

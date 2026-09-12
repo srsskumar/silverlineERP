@@ -63,12 +63,12 @@ export function ExitDialog({
   const onSubmit = (values: EmployeeExitInput) => mutation.mutate(values);
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Exit employee" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-      <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-lg">
-        <h2 className="text-base font-semibold text-slate-900">
+    <div role="dialog" aria-modal="true" aria-label="Exit employee" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="w-full max-w-md rounded-lg bg-surface p-6 shadow-lg">
+        <h2 className="text-base font-semibold text-text">
           Exit{employeeName ? ` ${employeeName}` : ' employee'}
         </h2>
-        <p className="mt-1 text-sm text-slate-500">This marks the employee as exited. A reason is required.</p>
+        <p className="mt-1 text-sm text-text-muted">This marks the employee as exited. A reason is required.</p>
         <form onSubmit={handleSubmit(onSubmit)} className="mt-4 flex flex-col gap-4" noValidate>
           <FormField label="Exit date" htmlFor="exit-date" error={errors.exit_date?.message}>
             <Input id="exit-date" type="date" invalid={!!errors.exit_date} {...register('exit_date')} />
@@ -77,7 +77,7 @@ export function ExitDialog({
             <textarea
               id="exit-reason"
               rows={3}
-              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500"
+              className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring"
               {...register('reason')}
             />
           </FormField>

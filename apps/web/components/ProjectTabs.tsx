@@ -21,8 +21,8 @@ export function ProjectTabs({ projectId, active }: { projectId: string; active: 
       aria-current={isActive ? 'page' : undefined}
       className={`rounded-md px-3 py-1.5 text-sm font-medium ${
         isActive
-          ? 'bg-slate-900 text-white'
-          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+          ? 'bg-primary text-primary-fg'
+          : 'text-text-muted hover:bg-surface-sunken hover:text-text'
       }`}
     >
       {label}

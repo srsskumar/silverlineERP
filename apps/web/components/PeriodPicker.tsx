@@ -52,7 +52,7 @@ export function PeriodPicker({
           />
         </FormField>
       </div>
-      <p role="status" className="text-xs text-slate-500">
+      <p role="status" className="text-xs text-text-muted">
         {span === null
           ? 'Enter valid YYYY-MM-DD dates to preview the span.'
           : span <= 0

@@ -82,13 +82,13 @@ export function LabelManager({
   return (
     <div className="flex flex-col gap-3">
       {labelsQuery.isLoading ? (
-        <div className="flex items-center gap-2 text-sm text-slate-500">
+        <div className="flex items-center gap-2 text-sm text-text-muted">
           <Spinner size="sm" /> Loading labels…
         </div>
       ) : labelsQuery.isError ? (
         <ErrorCard title="Could not load labels" error={labelsQuery.error} onRetry={() => labelsQuery.refetch()} />
       ) : rows.length === 0 ? (
-        <p className="text-sm text-slate-500">No labels yet.</p>
+        <p className="text-sm text-text-muted">No labels yet.</p>
       ) : (
         <div className="flex flex-wrap gap-2">
           {rows.map((l) => (
@@ -113,7 +113,7 @@ export function LabelManager({
             </FormField>
           </div>
           {conflictNote ? (
-            <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
+            <div role="alert" className="rounded-lg border border-warning/30 bg-warning-subtle px-4 py-2 text-sm text-warning">
               {conflictNote}
             </div>
           ) : null}

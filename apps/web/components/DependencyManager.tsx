@@ -94,7 +94,7 @@ export function DependencyManager({
       </div>
       <form onSubmit={handleSubmit((v) => addMutation.mutate(v))} className="flex flex-col gap-2 sm:flex-row sm:items-start" noValidate>
         <div className="flex-1">
-          <label htmlFor={`dep-add-${taskId}`} className="text-sm font-medium text-slate-700">
+          <label htmlFor={`dep-add-${taskId}`} className="text-sm font-medium text-text-muted">
             Add predecessor (task ID)
           </label>
           <Input
@@ -105,7 +105,7 @@ export function DependencyManager({
             {...register('predecessor_id')}
           />
           {errors.predecessor_id?.message ? (
-            <p role="alert" className="mt-1 text-xs text-red-600">
+            <p role="alert" className="mt-1 text-xs text-danger">
               {errors.predecessor_id.message}
             </p>
           ) : null}
@@ -135,26 +135,26 @@ function EdgeList({
   onRemove: (edge: DependencyEdge) => void;
 }) {
   return (
-    <div className="rounded-lg border border-slate-200 p-3">
-      <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
-      <p className="text-xs text-slate-500">{description}</p>
+    <div className="rounded-lg border border-border p-3">
+      <h3 className="text-sm font-semibold text-text">{title}</h3>
+      <p className="text-xs text-text-muted">{description}</p>
       {edges.length === 0 ? (
-        <p className="mt-2 text-sm text-slate-400">None.</p>
+        <p className="mt-2 text-sm text-text-subtle">None.</p>
       ) : (
         <ul className="mt-2 flex flex-col gap-2">
           {edges.map((e, i) => {
             const key = dependencyEdgeKey(e) || `edge-${i}`;
             return (
-              <li key={key} className="flex items-center justify-between gap-2 rounded-md bg-slate-50 px-2 py-1.5 text-sm">
+              <li key={key} className="flex items-center justify-between gap-2 rounded-md bg-surface-sunken px-2 py-1.5 text-sm">
                 <span className="min-w-0">
-                  <span className="block truncate font-medium text-slate-800">{dependencyEdgeLabel(e)}</span>
-                  {e.status ? <span className="font-mono text-xs text-slate-500">{String(e.status)}</span> : null}
+                  <span className="block truncate font-medium text-text">{dependencyEdgeLabel(e)}</span>
+                  {e.status ? <span className="font-mono text-xs text-text-muted">{String(e.status)}</span> : null}
                 </span>
                 <button
                   type="button"
                   onClick={() => onRemove(e)}
                   disabled={removing === key}
-                  className="inline-flex shrink-0 items-center gap-1 text-xs text-red-600 hover:underline disabled:opacity-50"
+                  className="inline-flex shrink-0 items-center gap-1 text-xs text-danger hover:underline disabled:opacity-50"
                 >
                   {removing === key ? <Spinner size="sm" /> : null}
                   Remove

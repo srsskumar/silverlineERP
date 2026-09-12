@@ -39,14 +39,14 @@ export function WorkforceStrip() {
       {widgetsQuery.isLoading ? (
         <Skeleton className="h-14 w-full" />
       ) : widgetsQuery.isError || widgets.length === 0 ? (
-        <p className="text-xs text-slate-500">Workforce numbers unavailable right now.</p>
+        <p className="text-xs text-text-muted">Workforce numbers unavailable right now.</p>
       ) : (
         widgets.slice(0, 6).map((w) => (
           <div
             key={String(w.key)}
-            className="min-w-28 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2"
+            className="min-w-28 flex-1 rounded-lg border border-border bg-surface px-3 py-2"
           >
-            <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-text-muted">
               {String(w.title)}
             </p>
             <p className={`mt-0.5 text-lg font-bold ${toneClass(widgetTone(w.key))}`}>
@@ -62,14 +62,14 @@ export function WorkforceStrip() {
 function toneClass(tone: string): string {
   switch (tone) {
     case 'danger':
-      return 'text-red-700';
+      return 'text-danger';
     case 'warning':
-      return 'text-amber-700';
+      return 'text-warning';
     case 'success':
-      return 'text-green-700';
+      return 'text-success';
     case 'info':
-      return 'text-brand-700';
+      return 'text-primary';
     default:
-      return 'text-slate-900';
+      return 'text-text';
   }
 }

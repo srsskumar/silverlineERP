@@ -1,58 +1,70 @@
-import {useAuth} from "../../src/auth/AuthContext";
-import {EvidenceCapture} from "../../src/device/EvidenceCapture";
-import { submitQueued } from "../../src/sync/engine";
 /**
- * Tasks: list w/ local search + detail modal (stepper / fwd-only status
- * advance with If-Match, comment, evidence photo button) + quick-add.
- * Deep link: /(tabs)/tasks?taskId=<id> opens the detail modal (from push).
+ * Tasks: searchable list with a detail sheet (forward-only status advance with
+ * If-Match, comments, evidence capture) and quick-add.
+ *
+ * Deep link: /(tabs)/tasks?taskId=<id> opens the detail sheet, which is how a
+ * push notification lands the user on the right task.
  */
-import { useEffect,useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  Modal,
-  Pressable,
-  ScrollView,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { Modal, ScrollView, View } from "react-native";
 import { useLocalSearchParams } from "expo-router";
-import { ApiError } from "../../src/api/client";
+import { Ionicons } from "@expo/vector-icons";
+import { useAuth } from "../../src/auth/AuthContext";
+import { EvidenceCapture } from "../../src/device/EvidenceCapture";
+import { submitQueued } from "../../src/sync/engine";
 import {
   getProjects,
   getTask,
   getTaskComments,
   getTasks,
-  patchTaskStatus,
-  postTask,
-  postTaskComment,
   type Task,
 } from "../../src/api/endpoints";
 import { validateComment, validateTaskCreate } from "../../src/validators";
-import { enqueueOp } from "../../src/sync/queue";
-import { Card, Pill, useStyles } from "../../src/ui";
+import {
+  Badge,
+  Banner,
+  Button,
+  Card,
+  Divider,
+  EmptyState,
+  Input,
+  ListRow,
+  Loading,
+  Muted,
+  Row,
+  Screen,
+  SectionLabel,
+  Subtle,
+  Title,
+} from "../../src/ui/primitives";
+import { radius, space, useTheme } from "../../src/theme";
 
-/** Fwd-only stepper order (subset of the frozen S4 workflow's happy path). */
-const STEP_ORDER = ["TO_DO", "IN_PROGRESS", "IN_REVIEW", "DONE"];
+function statusTone(status: string): "success" | "warning" | "info" | "neutral" {
+  if (status === "DONE") return "success";
+  if (status === "BLOCKED") return "warning";
+  if (status === "IN_PROGRESS" || status === "IN_REVIEW") return "info";
+  return "neutral";
+}
 
 export default function TasksScreen() {
-  const S=useStyles();
   const params = useLocalSearchParams<{ taskId?: string }>();
   const [search, setSearch] = useState("");
   const [onlyMine, setOnlyMine] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(
     typeof params.taskId === "string" ? params.taskId : null,
   );
-  const {canDo}=useAuth();
-  const projects=useQuery({queryKey:['projects'],queryFn:getProjects});
-  const [quickProject,setQuickProject]=useState('');
+  const { canDo } = useAuth();
+  const projects = useQuery({ queryKey: ["projects"], queryFn: getProjects });
+  const [quickProject, setQuickProject] = useState("");
   const [quickTitle, setQuickTitle] = useState("");
   const [quickMsg, setQuickMsg] = useState<string | null>(null);
+  const [quickBusy, setQuickBusy] = useState(false);
+  const [showQuickAdd, setShowQuickAdd] = useState(false);
 
   const list = useQuery({
     queryKey: ["tasks", onlyMine ? "mine" : "all"],
-    queryFn: () =>
-      getTasks({ assignee_me: onlyMine || undefined, limit: 50 }),
+    queryFn: () => getTasks({ assignee_me: onlyMine || undefined, limit: 50 }),
   });
 
   const filtered = useMemo(() => {
@@ -60,98 +72,167 @@ export default function TasksScreen() {
     const items = list.data?.items ?? [];
     if (!q) return items;
     return items.filter(
-      (t) =>
-        t.title.toLowerCase().includes(q) ||
-        t.status.toLowerCase().includes(q),
+      (t) => t.title.toLowerCase().includes(q) || t.status.toLowerCase().includes(q),
     );
   }, [list.data, search]);
 
   const quickAdd = async () => {
     setQuickMsg(null);
+    setQuickBusy(true);
     try {
-      const projectId = quickProject;
-      if (!projectId) throw new Error("Select the project for this task");
-      const v = validateTaskCreate({ project_id: projectId, title: quickTitle });
+      if (!quickProject) throw new Error("Select the project for this task");
+      const v = validateTaskCreate({ project_id: quickProject, title: quickTitle });
       if (!v.ok) {
         setQuickMsg(v.errors.map((e) => e.message).join("; "));
         return;
       }
-      setQuickMsg(await submitQueued({entity:'task_create',op:`quickadd:${Date.now()}`,payload:{project_id:projectId,title:quickTitle.trim()}}));
+      setQuickMsg(
+        await submitQueued({
+          entity: "task_create",
+          op: `quickadd:${Date.now()}`,
+          payload: { project_id: quickProject, title: quickTitle.trim() },
+        }),
+      );
       setQuickTitle("");
       void list.refetch();
     } catch (e) {
       setQuickMsg(e instanceof Error ? e.message : "Quick-add failed");
+    } finally {
+      setQuickBusy(false);
     }
   };
 
+  const openProjects = (projects.data ?? []).filter(
+    (p) => !["CLOSED", "CANCELLED"].includes(p.status ?? ""),
+  );
+
   return (
-    <ScrollView style={S.screen}>
-      <TextInput
-        style={S.input}
-        placeholder="Search tasks…"
-        value={search}
-        onChangeText={setSearch}
-      />
-      <View style={[S.row, { marginBottom: 12 }]}>
-        <Pressable onPress={() => setOnlyMine((v) => !v)}>
-          <Pill text={onlyMine ? "Mine" : "All"} tone="info" />
-        </Pressable>
-      </View>
+    <Screen>
+      <Row style={{ justifyContent: "space-between" }}>
+        <Title>Tasks</Title>
+        {canDo("task.create") ? (
+          <Button
+            title={showQuickAdd ? "Cancel" : "Add"}
+            icon={showQuickAdd ? "close-outline" : "add-outline"}
+            variant={showQuickAdd ? "secondary" : "primary"}
+            onPress={() => setShowQuickAdd((v) => !v)}
+          />
+        ) : null}
+      </Row>
+      <Muted style={{ marginTop: 2, marginBottom: space.lg }}>
+        {onlyMine ? "Assigned to you" : "Everything in your scope"}
+      </Muted>
 
-      {canDo('task.create')?<Card title="Quick-add">
-        <Text style={S.body}>Project</Text><ScrollView horizontal style={{marginVertical:8}}>{(projects.data??[]).filter(p=>!['CLOSED','CANCELLED'].includes(p.status??'')).map(p=><Pressable key={p.id} accessibilityRole="radio" accessibilityState={{checked:quickProject===p.id}} onPress={()=>setQuickProject(p.id)} style={{marginRight:8}}><Pill text={p.name} tone={quickProject===p.id?'ok':'info'}/></Pressable>)}</ScrollView>
-        {projects.isError?<Text style={S.error}>Projects are unavailable. Reconnect to refresh them.</Text>:null}
-        <TextInput
-          style={S.input}
-          placeholder="New task title…"
-          value={quickTitle}
-          onChangeText={setQuickTitle}
-        />
-        <Pressable style={S.btn} onPress={() => void quickAdd()}>
-          <Text style={S.btnText}>Add</Text>
-        </Pressable>
-        {quickMsg ? <Text style={S.muted}>{quickMsg}</Text> : null}
-      </Card>:null}
-
-      {filtered.map((t) => (
-        <Pressable key={t.id} onPress={() => setSelectedId(t.id)}>
-          <Card>
-            <View style={S.row}>
-              <Text style={[S.body, { flex: 1 }]} numberOfLines={2}>
-                {t.title}
-              </Text>
-              <Pill text={t.status} tone={t.status === "DONE" ? "ok" : "info"} />
-            </View>
-          </Card>
-        </Pressable>
-      ))}
-      {list.isLoading ? <Text style={S.muted}>Loading…</Text> : null}
-      {list.isError ? (
-        <Text style={S.error}>Couldn&apos;t load tasks (offline?)</Text>
+      {showQuickAdd && canDo("task.create") ? (
+        <Card title="New task">
+          <Subtle style={{ marginBottom: space.xs }}>Project</Subtle>
+          {projects.isError ? (
+            <Banner
+              tone="warning"
+              icon="cloud-offline-outline"
+              title="Projects unavailable"
+              message="Reconnect to load the project list."
+            />
+          ) : openProjects.length === 0 ? (
+            <Subtle>No open projects.</Subtle>
+          ) : (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: space.md }}>
+              <Row gap={space.sm}>
+                {openProjects.map((p) => (
+                  <Button
+                    key={p.id}
+                    title={p.name}
+                    variant={quickProject === p.id ? "primary" : "secondary"}
+                    onPress={() => setQuickProject(p.id)}
+                    style={{ borderRadius: radius.pill, minHeight: 36, paddingHorizontal: space.md }}
+                  />
+                ))}
+              </Row>
+            </ScrollView>
+          )}
+          <Input
+            placeholder="What needs doing?"
+            value={quickTitle}
+            onChangeText={setQuickTitle}
+            onSubmitEditing={() => void quickAdd()}
+          />
+          <Button
+            title="Add task"
+            icon="add-outline"
+            loading={quickBusy}
+            disabled={quickBusy || !quickTitle.trim() || !quickProject}
+            onPress={() => void quickAdd()}
+          />
+          {quickMsg ? <Subtle style={{ marginTop: space.sm }}>{quickMsg}</Subtle> : null}
+        </Card>
       ) : null}
 
-      <TaskModal
+      <Card>
+        <Input placeholder="Search tasks…" value={search} onChangeText={setSearch} />
+        <Row gap={space.sm}>
+          <Button
+            title="Mine"
+            variant={onlyMine ? "primary" : "secondary"}
+            onPress={() => setOnlyMine(true)}
+            style={{ flex: 1, borderRadius: radius.pill, minHeight: 36 }}
+          />
+          <Button
+            title="All"
+            variant={!onlyMine ? "primary" : "secondary"}
+            onPress={() => setOnlyMine(false)}
+            style={{ flex: 1, borderRadius: radius.pill, minHeight: 36 }}
+          />
+        </Row>
+      </Card>
+
+      <SectionLabel>{filtered.length} {filtered.length === 1 ? "task" : "tasks"}</SectionLabel>
+      <Card>
+        {list.isLoading ? (
+          <Loading />
+        ) : list.isError ? (
+          <EmptyState
+            icon="cloud-offline-outline"
+            title="Could not load tasks"
+            message="You may be offline. Cached tasks show when available."
+          />
+        ) : filtered.length === 0 ? (
+          <EmptyState
+            icon="checkmark-done-outline"
+            title={search ? "No matches" : "Nothing assigned"}
+            message={search ? "Try a different search." : "Tasks assigned to you appear here."}
+          />
+        ) : (
+          filtered.map((t, i, arr) => (
+            <ListRow
+              key={t.id}
+              title={t.title}
+              subtitle={typeof t.due_date === "string" ? `Due ${t.due_date}` : undefined}
+              right={<Badge text={t.status} tone={statusTone(t.status)} />}
+              onPress={() => setSelectedId(t.id)}
+              last={i === arr.length - 1}
+            />
+          ))
+        )}
+      </Card>
+
+      <TaskSheet
         taskId={selectedId}
         onClose={() => {
           setSelectedId(null);
           void list.refetch();
         }}
       />
-    </ScrollView>
+    </Screen>
   );
 }
 
-function TaskModal({
-  taskId,
-  onClose,
-}: {
-  taskId: string | null;
-  onClose: () => void;
-}) {
-  const S=useStyles();
+function TaskSheet({ taskId, onClose }: { taskId: string | null; onClose: () => void }) {
+  const t = useTheme();
   const [comment, setComment] = useState("");
-  const [capturing,setCapturing]=useState(false);
+  const [capturing, setCapturing] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
   const detail = useQuery({
     queryKey: ["task", taskId],
     queryFn: () => getTask(taskId as string),
@@ -165,97 +246,183 @@ function TaskModal({
 
   const advance = async (next: string) => {
     setMsg(null);
-    const t: Task | undefined = detail.data;
-    if (!t) return;
+    const task: Task | undefined = detail.data;
+    if (!task) return;
+    setBusy(true);
     try {
-      setMsg(await submitQueued({entity:'task_status',op:`status:${t.id}`,payload:{task_id:t.id,status:next,version:t.version},baseVersion:t.version}));
+      setMsg(
+        await submitQueued({
+          entity: "task_status",
+          op: `status:${task.id}`,
+          payload: { task_id: task.id, status: next, version: task.version },
+          baseVersion: task.version,
+        }),
+      );
       await detail.refetch();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Advance failed");
+    } finally {
+      setBusy(false);
     }
   };
 
   const sendComment = async () => {
     setMsg(null);
-    const t = detail.data;
-    if (!t) return;
+    const task = detail.data;
+    if (!task) return;
     const v = validateComment(comment);
     if (!v.ok) {
       setMsg(v.errors[0]?.message ?? "Invalid comment");
       return;
     }
+    setBusy(true);
     try {
-      setMsg(await submitQueued({entity:'task_comment',op:`comment:${t.id}:${Date.now()}`,payload:{task_id:t.id,body:comment.trim()}}));
+      setMsg(
+        await submitQueued({
+          entity: "task_comment",
+          op: `comment:${task.id}:${Date.now()}`,
+          payload: { task_id: task.id, body: comment.trim() },
+        }),
+      );
       setComment("");
       await comments.refetch();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Comment failed");
+    } finally {
+      setBusy(false);
     }
   };
 
-  useEffect(()=>{setComment('');setMsg(null);setCapturing(false);},[taskId]);
-  const t = detail.data;
-  const nextSteps = useMemo(() => {
-    if (!t) return [] as string[];
-    return t.allowed_next ?? [];
-  }, [t]);
+  useEffect(() => {
+    setComment("");
+    setMsg(null);
+    setCapturing(false);
+  }, [taskId]);
+
+  const task = detail.data;
+  const nextSteps = task?.allowed_next ?? [];
 
   return (
-    <Modal visible={taskId !== null} animationType="slide" onRequestClose={onClose}>
-      <ScrollView style={[S.screen, { marginTop: 40 }]}>
-        <Pressable style={S.btnGhost} onPress={onClose}>
-          <Text style={S.btnGhostText}>Close</Text>
-        </Pressable>
-        {detail.isLoading ? <Text style={S.muted}>Loading…</Text> : null}
-        {t ? (
-          <>
-            <Card title={t.title}>
-              <View style={S.row}>
-                <Pill text={t.status} tone="info" />
-                <Text style={S.muted}>v{t.version}</Text>
-              </View>
-              <View style={[S.row, { marginTop: 10 }]}>
-                {nextSteps.map((n) => (
-                  <Pressable
-                    key={n}
-                    style={[S.btn, { flex: 1, marginTop: 0 }]}
-                    onPress={() => void advance(n)}
-                  >
-                    <Text style={S.btnText}>→ {n}</Text>
-                  </Pressable>
-                ))}
-              </View>
-              {nextSteps.length === 0 ? (
-                <Text style={S.muted}>No transition available.</Text>
+    <Modal visible={taskId !== null} animationType="slide" onRequestClose={onClose} presentationStyle="pageSheet">
+      <View style={{ flex: 1, backgroundColor: t.canvas }}>
+        {/* Sheet header: a fixed bar keeps Close reachable while the body scrolls. */}
+        <Row
+          style={{
+            justifyContent: "space-between",
+            paddingHorizontal: space.lg,
+            paddingVertical: space.md,
+            borderBottomWidth: 1,
+            borderBottomColor: t.border,
+            backgroundColor: t.surface,
+          }}
+        >
+          <Muted style={{ color: t.text, fontWeight: "700" }}>Task</Muted>
+          <Button title="Close" variant="ghost" icon="close-outline" onPress={onClose} />
+        </Row>
+
+        <ScrollView
+          contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}
+          keyboardShouldPersistTaps="handled"
+        >
+          {detail.isLoading ? <Loading /> : null}
+          {task ? (
+            <>
+              <Card>
+                <Muted style={{ color: t.text, fontWeight: "700", fontSize: 17 }}>
+                  {task.title}
+                </Muted>
+                <Row gap={space.sm} style={{ marginTop: space.sm }}>
+                  <Badge text={task.status} tone={statusTone(task.status)} />
+                  <Subtle>version {task.version}</Subtle>
+                </Row>
+
+                {nextSteps.length > 0 ? (
+                  <>
+                    <Divider />
+                    <Subtle style={{ marginBottom: space.sm }}>Move to</Subtle>
+                    <View style={{ gap: space.sm }}>
+                      {nextSteps.map((n) => (
+                        <Button
+                          key={n}
+                          title={n.replaceAll("_", " ")}
+                          icon="arrow-forward-outline"
+                          loading={busy}
+                          disabled={busy}
+                          onPress={() => void advance(n)}
+                        />
+                      ))}
+                    </View>
+                  </>
+                ) : (
+                  <Subtle style={{ marginTop: space.md }}>
+                    No transition available from this status.
+                  </Subtle>
+                )}
+              </Card>
+
+              {msg ? (
+                <Banner tone="info" icon="information-circle-outline" title={msg} />
               ) : null}
-            </Card>
-            <Card title="Comments">
-              {(comments.data ?? []).map((c) => (
-                <View key={c.id} style={{ marginBottom: 8 }}>
-                  <Text style={S.body}>{c.body}</Text>
-                  <Text style={S.muted}>
-                    {c.author_username ?? "?"} · {c.created_at ?? ""}
-                  </Text>
-                </View>
-              ))}
-              <TextInput
-                style={S.input}
-                placeholder="Add a comment… (@user mentions work)"
-                value={comment}
-                onChangeText={setComment}
-              />
-              <Pressable style={S.btn} onPress={() => void sendComment()}>
-                <Text style={S.btnText}>Send</Text>
-              </Pressable>
-            </Card>
-            <Card title="Evidence">
-              <Text style={S.muted}>Capture a photo with employee, GPS, date and project details burned into the image. It syncs when a connection is available.</Text>
-              <Pressable style={S.btnGhost} onPress={()=>setCapturing(true)}><Text style={S.btnGhostText}>Attach photo</Text></Pressable>
-              {capturing?<EvidenceCapture task={t} onClose={()=>setCapturing(false)} onSaved={message=>{setMsg(message);setCapturing(false);}}/>:null}
-            </Card>       </>
-        ) : null}
-        {msg ? <Text style={S.muted}>{msg}</Text> : null}
-      </ScrollView>
+
+              <SectionLabel>Evidence</SectionLabel>
+              <Card>
+                <Muted>
+                  Capture a photo with the employee, GPS, date and project burned into the
+                  image. It syncs when a connection is available.
+                </Muted>
+                <Button
+                  title="Attach photo"
+                  icon="camera-outline"
+                  variant="secondary"
+                  style={{ marginTop: space.md }}
+                  onPress={() => setCapturing(true)}
+                />
+                {capturing ? (
+                  <EvidenceCapture
+                    task={task}
+                    onClose={() => setCapturing(false)}
+                    onSaved={(message) => {
+                      setMsg(message);
+                      setCapturing(false);
+                    }}
+                  />
+                ) : null}
+              </Card>
+
+              <SectionLabel>Comments</SectionLabel>
+              <Card>
+                {(comments.data ?? []).length === 0 ? (
+                  <EmptyState icon="chatbubble-outline" title="No comments yet" />
+                ) : (
+                  (comments.data ?? []).map((c) => (
+                    <View key={c.id} style={{ marginBottom: space.md }}>
+                      <Muted style={{ color: t.text }}>{c.body}</Muted>
+                      <Subtle>
+                        {c.author_username ?? "?"} · {c.created_at ?? ""}
+                      </Subtle>
+                    </View>
+                  ))
+                )}
+                <Divider />
+                <Input
+                  placeholder="Add a comment… @mentions work"
+                  value={comment}
+                  onChangeText={setComment}
+                  multiline
+                  style={{ minHeight: 72, paddingTop: space.md, textAlignVertical: "top" }}
+                />
+                <Button
+                  title="Send"
+                  icon="send-outline"
+                  loading={busy}
+                  disabled={busy || !comment.trim()}
+                  onPress={() => void sendComment()}
+                />
+              </Card>
+            </>
+          ) : null}
+        </ScrollView>
+      </View>
     </Modal>
   );
 }

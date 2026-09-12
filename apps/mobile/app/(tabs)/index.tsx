@@ -1,22 +1,44 @@
-import {useAuth} from "../../src/auth/AuthContext";
 /**
- * Home: today-attendance chip + My Work (≤20) + sync pill.
+ * Home: sync state, today's attendance, and the user's open work.
+ *
+ * Ordered by what a field user opens the app to find out, in order: is my work
+ * saved, am I punched in, what am I doing today.
  */
 import { useQuery } from "@tanstack/react-query";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { View } from "react-native";
 import { router } from "expo-router";
-import {
-  getAttendanceRecords,
-  getTasks,
-} from "../../src/api/endpoints";
+import { Ionicons } from "@expo/vector-icons";
+import { useAuth } from "../../src/auth/AuthContext";
+import { getAttendanceRecords, getTasks } from "../../src/api/endpoints";
 import { useSyncEngine } from "../../src/sync/engine";
-import { Card, Pill, useStyles } from "../../src/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ListRow,
+  Loading,
+  Muted,
+  Row,
+  Screen,
+  SectionLabel,
+  StatTile,
+  StatusDot,
+  Subtle,
+  Title,
+} from "../../src/ui/primitives";
+import { space, useTheme } from "../../src/theme";
 
 export default function HomeScreen() {
-  const S=useStyles();
+  const t = useTheme();
   const sync = useSyncEngine();
-  const {user}=useAuth();
-  const today = new Intl.DateTimeFormat('en-CA',{timeZone:user?.timezone??'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const { user } = useAuth();
+  const today = new Intl.DateTimeFormat("en-CA", {
+    timeZone: user?.timezone ?? "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
 
   const attendance = useQuery({
     queryKey: ["attendance", "today"],
@@ -27,60 +49,144 @@ export default function HomeScreen() {
     queryFn: () => getTasks({ assignee_me: true, limit: 20 }),
   });
 
-  const todayStatus =
-    attendance.data?.[0]?.status ?? (attendance.isLoading ? "…" : "not punched");
+  const todayStatus = attendance.data?.[0]?.status ?? null;
+  const tasks = work.data?.items ?? [];
+  const overdue = tasks.filter(
+    (x) =>
+      typeof x.due_date === "string" &&
+      x.due_date < today &&
+      !["DONE", "CANCELLED"].includes(String(x.status)),
+  ).length;
+
+  const syncTone =
+    sync.status === "offline" ? "danger" : sync.pending > 0 ? "warning" : "success";
+  const syncText =
+    sync.status === "syncing"
+      ? "Syncing…"
+      : sync.status === "offline"
+        ? "Offline"
+        : sync.pending > 0
+          ? `${sync.pending} waiting to send`
+          : "All work saved";
 
   return (
-    <ScrollView style={S.screen}>
-      <Pressable onPress={() => void sync.syncNow()}>
-        <Card title="Sync">
-          <View style={S.row}>
-            <Pill
-              text={
-                sync.status === "syncing"
-                  ? "syncing…"
-                  : sync.status === "offline"
-                    ? "offline"
-                    : sync.pending > 0
-                      ? `${sync.pending} pending`
-                      : "up to date"
-              }
-              tone={
+    <Screen>
+      <Title>{greeting()}</Title>
+      <Muted style={{ marginTop: 2, marginBottom: space.lg }}>
+        {user?.username ? `Signed in as ${user.username}` : "Your day at a glance"}
+      </Muted>
+
+      <Card>
+        <Row style={{ justifyContent: "space-between" }}>
+          <Row gap={space.sm}>
+            <Ionicons
+              name={
                 sync.status === "offline"
-                  ? "bad"
+                  ? "cloud-offline-outline"
                   : sync.pending > 0
-                    ? "warn"
-                    : "ok"
+                    ? "cloud-upload-outline"
+                    : "cloud-done-outline"
+              }
+              size={18}
+              color={
+                syncTone === "danger" ? t.danger : syncTone === "warning" ? t.warning : t.success
               }
             />
-            <Text style={S.muted}>tap to Sync now</Text>
-          </View>
-        </Card>
-      </Pressable>
-
-      <Card title="Today">
-        <Pill text={String(todayStatus)} tone="info" />
-      </Card>
-
-      <Card title={`My Work (${work.data?.items.length ?? 0})`}>
-        {(work.data?.items ?? []).slice(0, 20).map((t) => (
-          <Pressable
-            key={t.id}
-            onPress={() => router.push(`/(tabs)/tasks?taskId=${t.id}`)}
-          >
-            <View style={[S.row, { paddingVertical: 6 }]}>
-              <Text style={[S.body, { flex: 1 }]} numberOfLines={1}>
-                {t.title}
-              </Text>
-              <Text style={S.muted}>{t.status}</Text>
-            </View>
-          </Pressable>
-        ))}
-        {work.isLoading ? <Text style={S.muted}>Loading…</Text> : null}
-        {work.isError ? (
-          <Text style={S.error}>Couldn&apos;t load tasks (offline?)</Text>
+            <StatusDot text={syncText} tone={syncTone} />
+          </Row>
+          <Button
+            title="Sync now"
+            variant="ghost"
+            onPress={() => void sync.syncNow()}
+            loading={sync.status === "syncing"}
+          />
+        </Row>
+        {sync.status === "offline" ? (
+          <Subtle style={{ marginTop: space.sm }}>
+            Punches and updates are saved on this device and sent when you are back online.
+          </Subtle>
         ) : null}
       </Card>
-    </ScrollView>
+
+      <Row gap={space.md} style={{ marginBottom: space.md }}>
+        <StatTile
+          label="Today"
+          value={todayStatus ? String(todayStatus) : attendance.isLoading ? "…" : "Not in"}
+          tone={todayStatus ? "success" : "neutral"}
+          icon="time-outline"
+        />
+        <StatTile
+          label="Open tasks"
+          value={work.isLoading ? "…" : tasks.length}
+          icon="checkbox-outline"
+        />
+      </Row>
+
+      {overdue > 0 ? (
+        <Row gap={space.md} style={{ marginBottom: space.md }}>
+          <StatTile label="Overdue" value={overdue} tone="danger" icon="alert-circle-outline" />
+          <View style={{ flex: 1 }} />
+        </Row>
+      ) : null}
+
+      {!todayStatus && !attendance.isLoading ? (
+        <Card>
+          <Row style={{ justifyContent: "space-between" }}>
+            <View style={{ flex: 1 }}>
+              <Muted>You have not checked in today.</Muted>
+            </View>
+            <Button
+              title="Check in"
+              icon="log-in-outline"
+              onPress={() => router.push("/(tabs)/attendance")}
+            />
+          </Row>
+        </Card>
+      ) : null}
+
+      <SectionLabel>My work</SectionLabel>
+      <Card>
+        {work.isLoading ? (
+          <Loading />
+        ) : work.isError ? (
+          <EmptyState
+            icon="cloud-offline-outline"
+            title="Could not load tasks"
+            message="You may be offline. Cached work still shows on the Tasks tab."
+          />
+        ) : tasks.length === 0 ? (
+          <EmptyState
+            icon="checkmark-done-outline"
+            title="Nothing assigned"
+            message="Tasks assigned to you will show up here."
+          />
+        ) : (
+          tasks.slice(0, 20).map((task, i, arr) => (
+            <ListRow
+              key={task.id}
+              title={task.title}
+              subtitle={typeof task.due_date === "string" ? `Due ${task.due_date}` : undefined}
+              right={<Badge text={String(task.status)} tone={taskTone(String(task.status))} />}
+              onPress={() => router.push(`/(tabs)/tasks?taskId=${task.id}`)}
+              last={i === arr.length - 1}
+            />
+          ))
+        )}
+      </Card>
+    </Screen>
   );
+}
+
+function greeting(): string {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+function taskTone(status: string): "success" | "warning" | "info" | "neutral" {
+  if (status === "DONE") return "success";
+  if (status === "BLOCKED") return "warning";
+  if (status === "IN_PROGRESS" || status === "IN_REVIEW") return "info";
+  return "neutral";
 }

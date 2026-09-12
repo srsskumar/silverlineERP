@@ -67,12 +67,12 @@ export function ReportForm() {
     <div className="flex flex-col gap-4">
       <form
         onSubmit={handleSubmit(onSubmit)}
-        className="flex flex-col gap-4 rounded-lg border border-slate-200 bg-white p-4"
+        className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-4"
       >
         <FormField label="Report type" error={errors.type?.message} htmlFor="report-type">
           <select
             id="report-type"
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-border px-3 py-2 text-sm"
             {...register('type')}
           >
             <option value="">Pick a report type</option>
@@ -92,7 +92,7 @@ export function ReportForm() {
         </FormField>
         {selected==='attendance'||selected==='leave'?<div className="grid grid-cols-2 gap-3"><label className="text-sm">From<input type="date" className="block w-full rounded border p-2" value={from} onChange={e=>setFrom(e.target.value)}/></label><label className="text-sm">To<input type="date" className="block w-full rounded border p-2" value={to} onChange={e=>setTo(e.target.value)}/></label></div>:null}
         {selected==='tasks'?<label className="text-sm">Project ID (optional)<input className="block w-full rounded border p-2" value={projectId} onChange={e=>setProjectId(e.target.value)}/></label>:null}
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-text-muted">
           Reports larger than{' '}
           {REPORT_ROW_LIMIT} rows run in the background. Your inbox will notify you when they are ready.
         </p>
@@ -106,7 +106,7 @@ export function ReportForm() {
           </Button>
         </div>
         {selected && !selectedAllowed && selectedMeta ? (
-          <p role="alert" className="text-sm text-amber-700">
+          <p role="alert" className="text-sm text-warning">
             Your session lacks <span className="font-mono text-xs">{selectedMeta.permission}</span> — this
             report type is unavailable.
           </p>
@@ -115,7 +115,7 @@ export function ReportForm() {
 
       {mutation.isError ? (
         mutation.error instanceof ApiClientError && mutation.error.status === 403 ? (
-          <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <div role="alert" className="rounded-lg border border-warning/30 bg-warning-subtle px-4 py-3 text-sm text-warning">
             <p className="font-medium">Not allowed to generate this report (403).</p>
             <p className="mt-1">{mutation.error.message}</p>
             {requestIdOf(mutation.error) ? (
@@ -132,9 +132,9 @@ export function ReportForm() {
       ) : null}
 
       {result ? (
-        <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3" role="status">
-          <p className="text-sm font-medium text-green-900">{result.status==='READY'?`Report ready — ${result.rows} row(s).`:'Report queued. You can keep working while it is generated.'}</p>
-          <p className="mt-1 font-mono text-xs text-green-800">
+        <div className="rounded-lg border border-success/30 bg-success-subtle px-4 py-3" role="status">
+          <p className="text-sm font-medium text-success">{result.status==='READY'?`Report ready — ${result.rows} row(s).`:'Report queued. You can keep working while it is generated.'}</p>
+          <p className="mt-1 font-mono text-xs text-success">
             {result.id} · {result.status}
           </p>
           <div className="mt-3">

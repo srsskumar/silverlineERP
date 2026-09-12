@@ -79,10 +79,10 @@ export function EvidenceList({
   };
 
   return (
-    <section aria-label="Evidence" className="rounded-lg border border-slate-200 bg-white p-4">
-      <h2 className="text-sm font-semibold text-slate-900">Evidence</h2>
+    <section aria-label="Evidence" className="rounded-lg border border-border bg-surface p-4">
+      <h2 className="text-sm font-semibold text-text">Evidence</h2>
       {evidenceQuery.isLoading ? (
-        <div className="flex items-center gap-2 py-6 text-sm text-slate-500">
+        <div className="flex items-center gap-2 py-6 text-sm text-text-muted">
           <Spinner size="sm" /> Loading evidence…
         </div>
       ) : evidenceQuery.isError ? (
@@ -94,12 +94,12 @@ export function EvidenceList({
           <EmptyState title="No evidence" description="Attach photos or files that prove this task's progress." />
         </div>
       ) : (
-        <ul className="mt-3 divide-y divide-slate-100">
+        <ul className="mt-3 divide-y divide-border">
           {(evidenceQuery.data ?? []).map((item) => (
             <li key={item.id} className="flex items-center justify-between gap-3 py-2 text-sm">
               <div className="min-w-0">
-                <p className="truncate font-medium text-slate-800">{item.file_name}</p>
-                <p className="font-mono text-xs text-slate-500">
+                <p className="truncate font-medium text-text">{item.file_name}</p>
+                <p className="font-mono text-xs text-text-muted">
                   {item.evidence_type}
                   {item.created_at ? ` · ${String(item.created_at)}` : ''}
                 </p>
@@ -109,7 +109,7 @@ export function EvidenceList({
         </ul>
       )}
       {canUpload && (
-        <div className="mt-4 flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-end">
+        <div className="mt-4 flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-end">
           <div className="w-full sm:w-48">
             <FormField label="Evidence type" htmlFor={`evidence-type-${taskId}`}>
               <Input

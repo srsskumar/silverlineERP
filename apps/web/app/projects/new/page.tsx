@@ -24,7 +24,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 export const dynamic = 'force-static';
 
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 /**
  * Create a project (always starts DRAFT server-side). Workspace + type are
@@ -103,7 +103,7 @@ function NewProjectPanel() {
   }
 
   return (
-    <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="flex max-w-2xl flex-col gap-4 rounded-lg border border-slate-200 bg-white p-4 sm:p-6" noValidate>
+    <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="flex max-w-2xl flex-col gap-4 rounded-lg border border-border bg-surface p-4 sm:p-6" noValidate>
       {canReadWorkspaces ? (
         <FormField label="Workspace *" htmlFor="project-workspace" error={errors.workspace_id?.message}>
           <select id="project-workspace" className={inputClass} {...register('workspace_id')}>
@@ -172,7 +172,7 @@ function NewProjectPanel() {
         <Button type="submit" loading={mutation.isPending}>
           Create project (starts DRAFT)
         </Button>
-        <Link href="/projects" className="text-sm text-brand-600 hover:underline">
+        <Link href="/projects" className="text-sm text-primary hover:underline">
           Cancel
         </Link>
       </div>
@@ -184,8 +184,8 @@ export default function NewProjectPage() {
   return (
     <AppShell>
       <RequirePermission code={PERMISSIONS.PROJECT_CREATE}>
-        <h1 className="text-xl font-bold text-slate-900">New project</h1>
-        <p className="mt-1 text-sm text-slate-500">Projects start as DRAFT — activate them from the detail page.</p>
+        <h1 className="text-xl font-bold text-text">New project</h1>
+        <p className="mt-1 text-sm text-text-muted">Projects start as DRAFT — activate them from the detail page.</p>
         <div className="mt-6">
           <NewProjectPanel />
         </div>

@@ -52,17 +52,17 @@ function ImportForm() {
   return (
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <div className="rounded-lg border border-border bg-surface p-4">
           <FormField label="CSV file" htmlFor="import-file">
             <input
               id="import-file"
               type="file"
               accept=".csv,text/csv,text/plain"
               onChange={onFile}
-              className="w-full text-sm text-slate-700"
+              className="w-full text-sm text-text-muted"
             />
           </FormField>
-          {fileName && <p className="mt-1 text-xs text-slate-500">Loaded: {fileName}</p>}
+          {fileName && <p className="mt-1 text-xs text-text-muted">Loaded: {fileName}</p>}
           <div className="mt-3">
             <FormField label="Or paste CSV text" htmlFor="import-text">
               <textarea
@@ -74,7 +74,7 @@ function ImportForm() {
                   setReport(null);
                 }}
                 placeholder={SAMPLE_CSV}
-                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                className="w-full rounded-md border border-border bg-surface px-3 py-2 font-mono text-xs text-text focus:outline-none focus:ring-2 focus:ring-ring"
               />
             </FormField>
           </div>
@@ -91,14 +91,14 @@ function ImportForm() {
             </Button>
           </div>
         </div>
-        <div className="rounded-lg border border-slate-200 bg-white p-4">
-          <h2 className="text-sm font-semibold text-slate-900">Preview</h2>
-          <p className="mt-1 text-sm text-slate-600">
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <h2 className="text-sm font-semibold text-text">Preview</h2>
+          <p className="mt-1 text-sm text-text-muted">
             {parsed.rows.length} valid row(s)
             {parsed.parseErrors.length > 0 && `, ${parsed.parseErrors.length} malformed row(s) skipped`}.
           </p>
           {parsed.parseErrors.length > 0 && (
-            <ul className="mt-2 list-disc pl-5 text-xs text-red-700">
+            <ul className="mt-2 list-disc pl-5 text-xs text-danger">
               {parsed.parseErrors.slice(0, 10).map((e) => (
                 <li key={e.index}>
                   Row {e.index}: {e.errors.join('; ')}
@@ -108,8 +108,8 @@ function ImportForm() {
           )}
           {validationIssues.length > 0 && (
             <div className="mt-2">
-              <p className="text-xs font-medium text-amber-800">Client-side validation warnings (first 20 rows):</p>
-              <ul className="mt-1 list-disc pl-5 text-xs text-amber-800">
+              <p className="text-xs font-medium text-warning">Client-side validation warnings (first 20 rows):</p>
+              <ul className="mt-1 list-disc pl-5 text-xs text-warning">
                 {validationIssues.slice(0, 10).map((v) => (
                   <li key={v.index}>
                     Row {v.index}: {v.message}
@@ -118,7 +118,7 @@ function ImportForm() {
               </ul>
             </div>
           )}
-          <p className="mt-3 text-xs text-slate-500">
+          <p className="mt-3 text-xs text-text-muted">
             Columns map to employee fields (emp_no, first_name, phone, date_of_joining/doj, designation, district…).
             Server validates again and returns per-row errors below.
           </p>
@@ -126,8 +126,8 @@ function ImportForm() {
       </div>
       {report?.dry_run?<Button disabled={mutation.isPending||!report.validated} onClick={()=>mutation.mutate(false)}>Import {report.validated??0} validated rows</Button>:null}
       {mutation.isError && <ErrorCard title="Import failed" error={mutation.error} onRetry={() => mutation.mutate(true)} />}
-      <div className="rounded-lg border border-slate-200 bg-white p-4">
-        <h2 className="mb-3 text-sm font-semibold text-slate-900">Report</h2>
+      <div className="rounded-lg border border-border bg-surface p-4">
+        <h2 className="mb-3 text-sm font-semibold text-text">Report</h2>
         <ImportReport report={report} />
       </div>
     </div>
@@ -138,8 +138,8 @@ export default function ImportPage() {
   return (
     <AppShell>
       <RequirePermission code={PERMISSIONS.EMPLOYEE_IMPORT}>
-        <h1 className="text-xl font-bold text-slate-900">Bulk import employees</h1>
-        <p className="mt-1 text-sm text-slate-500">CSV → preview → submit → per-row report.</p>
+        <h1 className="text-xl font-bold text-text">Bulk import employees</h1>
+        <p className="mt-1 text-sm text-text-muted">CSV → preview → submit → per-row report.</p>
         <div className="mt-6">
           <ImportForm />
         </div>

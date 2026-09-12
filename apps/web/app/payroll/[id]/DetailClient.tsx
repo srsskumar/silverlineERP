@@ -40,8 +40,8 @@ import { Skeleton } from '@/components/ui/Skeleton';
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5 py-2 sm:flex-row sm:gap-4">
-      <dt className="w-40 shrink-0 text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt>
-      <dd className="text-sm text-slate-800">{value}</dd>
+      <dt className="w-40 shrink-0 text-xs font-medium uppercase tracking-wide text-text-muted">{label}</dt>
+      <dd className="text-sm text-text">{value}</dd>
     </div>
   );
 }
@@ -111,7 +111,7 @@ function RunActions({ detail, onChanged }: { detail: RunDetail; onChanged: () =>
 
   if (!action) {
     return (
-      <p className="text-sm text-slate-500">
+      <p className="text-sm text-text-muted">
         {detail.run.status === 'VALIDATING'
           ? 'Calculation in progress — refresh to pick up the CALCULATED state.'
           : `No action is available in state ${String(detail.run.status)}.`}
@@ -161,7 +161,7 @@ function RunActions({ detail, onChanged }: { detail: RunDetail; onChanged: () =>
             onChange={(e) => setReason(e.target.value)}
           />
         </FormField>
-        <label className="flex items-start gap-2 text-sm text-slate-700">
+        <label className="flex items-start gap-2 text-sm text-text-muted">
           <input type="checkbox" checked={recalculate} disabled={!allowed || mutation.isPending}
             onChange={(e) => setRecalculate(e.target.checked)} className="mt-1" />
           Recalculate this period from corrected records. This returns the run to OPEN and requires approval again. Previous payslip versions remain in history.
@@ -170,14 +170,14 @@ function RunActions({ detail, onChanged }: { detail: RunDetail; onChanged: () =>
       )}
 
       {sealedExpected && (
-        <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-          <p className="text-sm font-medium text-amber-800">Wrong state (RUN_SEALED)</p>
-          <p className="mt-1 text-sm text-amber-700">
+        <div role="alert" className="rounded-lg border border-warning/30 bg-warning-subtle px-4 py-3">
+          <p className="text-sm font-medium text-warning">Wrong state (RUN_SEALED)</p>
+          <p className="mt-1 text-sm text-warning">
             The run moved on — this action needs state {sealedExpected}. Reload to see the current state, then
             continue from there.
           </p>
           {requestIdOf(submitError) && (
-            <p className="mt-1 text-xs text-amber-600">Request ID: {requestIdOf(submitError)}</p>
+            <p className="mt-1 text-xs text-warning">Request ID: {requestIdOf(submitError)}</p>
           )}
         </div>
       )}
@@ -185,14 +185,14 @@ function RunActions({ detail, onChanged }: { detail: RunDetail; onChanged: () =>
         <ErrorCard title="Wrong state (RUN_SEALED)" error={submitError} />
       )}
       {noAttendance && (
-        <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-          <p className="text-sm font-medium text-amber-800">No attendance data (NO_ATTENDANCE_DATA)</p>
-          <p className="mt-1 text-sm text-amber-700">
+        <div role="alert" className="rounded-lg border border-warning/30 bg-warning-subtle px-4 py-3">
+          <p className="text-sm font-medium text-warning">No attendance data (NO_ATTENDANCE_DATA)</p>
+          <p className="mt-1 text-sm text-warning">
             Nothing can be calculated — no attendance records exist for this period. Record attendance first, then
             retry calculation.
           </p>
           {requestIdOf(submitError) && (
-            <p className="mt-1 text-xs text-amber-600">Request ID: {requestIdOf(submitError)}</p>
+            <p className="mt-1 text-xs text-warning">Request ID: {requestIdOf(submitError)}</p>
           )}
         </div>
       )}
@@ -204,7 +204,7 @@ function RunActions({ detail, onChanged }: { detail: RunDetail; onChanged: () =>
         <Button type="submit" loading={mutation.isPending} disabled={!allowed}>
           {action.label}
         </Button>
-        {!allowed && <span className="text-xs text-slate-500">needs {action.perm}</span>}
+        {!allowed && <span className="text-xs text-text-muted">needs {action.perm}</span>}
       </div>
     </form>
   );
@@ -257,24 +257,24 @@ export function RunDetailView({ id }: { id: string }) {
     <AppShell>
       <RequirePermission code={PERMISSIONS.PAYROLL_READ}>
         <div className="flex flex-col gap-6">
-          <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
+          <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h1 className="font-mono text-xl font-bold text-slate-900">
+                <h1 className="font-mono text-xl font-bold text-text">
                   {formatPeriod(detail.run.period_start, detail.run.period_end)}
                 </h1>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <RunStatusBadge status={String(detail.run.status)} />
                   {typeof detail.run.version === 'number' && (
-                    <span className="text-xs text-slate-500">v{detail.run.version}</span>
+                    <span className="text-xs text-text-muted">v{detail.run.version}</span>
                   )}
                 </div>
               </div>
-              <Link href="/payroll" className="text-sm text-brand-600 hover:underline">
+              <Link href="/payroll" className="text-sm text-primary hover:underline">
                 Back to runs
               </Link>
             </div>
-            <dl className="mt-4 divide-y divide-slate-100">
+            <dl className="mt-4 divide-y divide-border">
               <DetailRow label="Run ID" value={<span className="font-mono text-xs">{detail.run.id}</span>} />
               <DetailRow
                 label="Timeline"
@@ -283,23 +283,23 @@ export function RunDetailView({ id }: { id: string }) {
             </dl>
           </div>
 
-          <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
-            <h2 className="text-sm font-semibold text-slate-900">Totals</h2>
+          <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+            <h2 className="text-sm font-semibold text-text">Totals</h2>
             <div className="mt-3">
               <TotalsCards totals={detail.totals} />
             </div>
           </div>
 
-          <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
-            <h2 className="text-sm font-semibold text-slate-900">Warnings ({detail.warnings.length})</h2>
+          <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+            <h2 className="text-sm font-semibold text-text">Warnings ({detail.warnings.length})</h2>
             <div className="mt-3">
               <WarningsList warnings={detail.warnings} />
             </div>
           </div>
 
-          <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
-            <h2 className="text-sm font-semibold text-slate-900">Next step</h2>
-            <p className="mt-1 text-xs text-slate-500">
+          <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+            <h2 className="text-sm font-semibold text-text">Next step</h2>
+            <p className="mt-1 text-xs text-text-muted">
               One action at a time — the state machine guards the order (no version handshake in P1).
             </p>
             <div className="mt-3">
@@ -307,9 +307,9 @@ export function RunDetailView({ id }: { id: string }) {
             </div>
           </div>
 
-          <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
-            <h2 className="text-sm font-semibold text-slate-900">Payslips</h2>
-            <p className="mt-1 text-xs text-slate-500">
+          <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+            <h2 className="text-sm font-semibold text-text">Payslips</h2>
+            <p className="mt-1 text-xs text-text-muted">
               Summary columns only — full-slip detail is available to each employee on /my-payslip (P1 gap, see README).
             </p>
             <div className="mt-3">

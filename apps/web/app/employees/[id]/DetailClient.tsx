@@ -22,8 +22,8 @@ import { ReactivateDialog } from '@/components/ReactivateDialog';
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5 py-2 sm:flex-row sm:gap-4">
-      <dt className="w-40 shrink-0 text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt>
-      <dd className="text-sm text-slate-800">{value}</dd>
+      <dt className="w-40 shrink-0 text-xs font-medium uppercase tracking-wide text-text-muted">{label}</dt>
+      <dd className="text-sm text-text">{value}</dd>
     </div>
   );
 }
@@ -62,15 +62,15 @@ export function EmployeeDetailView({ id }: { id: string }) {
     <AppShell>
       <RequirePermission code={PERMISSIONS.EMPLOYEE_READ}>
         <div className="flex flex-col gap-6">
-          <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
+          <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h1 className="text-xl font-bold text-slate-900">
-                  {displayEmployeeName(emp)} <span className="font-mono text-sm font-normal text-slate-500">{emp.emp_no}</span>
+                <h1 className="text-xl font-bold text-text">
+                  {displayEmployeeName(emp)} <span className="font-mono text-sm font-normal text-text-muted">{emp.emp_no}</span>
                 </h1>
                 <div className="mt-2 flex items-center gap-2">
                   <Badge>{emp.status}</Badge>
-                  <span className="text-xs text-slate-500">v{emp.version}</span>
+                  <span className="text-xs text-text-muted">v{emp.version}</span>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -91,7 +91,7 @@ export function EmployeeDetailView({ id }: { id: string }) {
                 )}
               </div>
             </div>
-            <dl className="mt-4 divide-y divide-slate-100">
+            <dl className="mt-4 divide-y divide-border">
               <DetailRow label="Phone" value={displayMasked(emp.phone ?? null, emp.phone_last4 ?? null)} />
               <DetailRow label="Email" value={(emp.email as string) ?? '—'} />
               <DetailRow label="Designation" value={(emp.designation as string) ?? '—'} />
@@ -114,8 +114,8 @@ export function EmployeeDetailView({ id }: { id: string }) {
           </div>
 
           {editing && canUpdate && (
-            <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
-              <h2 className="mb-4 text-sm font-semibold text-slate-900">Edit employee (v{emp.version})</h2>
+            <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+              <h2 className="mb-4 text-sm font-semibold text-text">Edit employee (v{emp.version})</h2>
               <EmployeeForm
                 key={`${emp.version}-${savedTick}`}
                 mode="edit"

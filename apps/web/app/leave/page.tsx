@@ -22,7 +22,7 @@ export const dynamic = 'force-static';
 
 const PAGE_LIMIT = 20;
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 function RequestsTable({ view }: { view: LeaveListView }) {
   const [status, setStatus] = React.useState('');
@@ -46,9 +46,9 @@ function RequestsTable({ view }: { view: LeaveListView }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:flex-row sm:items-end">
+      <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4 sm:flex-row sm:items-end">
         <div>
-          <label htmlFor={`leave-status-${view}`} className="text-sm font-medium text-slate-700">Status</label>
+          <label htmlFor={`leave-status-${view}`} className="text-sm font-medium text-text-muted">Status</label>
           <select id={`leave-status-${view}`} className={inputClass} value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All</option>
             {LEAVE_STATUSES.map((s) => (
@@ -58,11 +58,11 @@ function RequestsTable({ view }: { view: LeaveListView }) {
         </div>
         {view === 'all' && (
           <div className="flex-1">
-            <label htmlFor={`leave-employee-${view}`} className="text-sm font-medium text-slate-700">Employee ID</label>
+            <label htmlFor={`leave-employee-${view}`} className="text-sm font-medium text-text-muted">Employee ID</label>
             <Input id={`leave-employee-${view}`} placeholder="Filter by employee…" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} />
           </div>
         )}
-        <Link href="/leave/new" className="text-sm text-brand-600 hover:underline">
+        <Link href="/leave/new" className="text-sm text-primary hover:underline">
           + New request
         </Link>
       </div>
@@ -75,30 +75,30 @@ function RequestsTable({ view }: { view: LeaveListView }) {
         <EmptyState title="No leave requests" description="Nothing matches this view and filter yet." />
       ) : (
         <>
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
-            <table className="min-w-full divide-y divide-slate-200 bg-white text-sm">
-              <thead className="bg-slate-50">
+          <div className="overflow-x-auto rounded-lg border border-border">
+            <table className="min-w-full divide-y divide-border bg-surface text-sm">
+              <thead className="bg-surface-sunken">
                 <tr>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Type</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">From → To</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Days</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Status</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Employee</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Action</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Type</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">From → To</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Days</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Status</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Employee</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-border">
                 {rows.map((r) => (
                   <tr key={r.id}>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-800">{r.leave_code}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-700">{r.from_date} → {r.to_date}</td>
-                    <td className="px-3 py-2 text-slate-800">{formatDays(r.total_days)}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-text">{r.leave_code}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-text-muted">{r.from_date} → {r.to_date}</td>
+                    <td className="px-3 py-2 text-text">{formatDays(r.total_days)}</td>
                     <td className="px-3 py-2">
                       <LeaveStatusBadge status={String(r.status)} />
                     </td>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-700">{r.employee_id}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-text-muted">{r.employee_id}</td>
                     <td className="px-3 py-2">
-                      <Link href={`/leave/${r.id}`} className="text-brand-600 hover:underline">
+                      <Link href={`/leave/${r.id}`} className="text-primary hover:underline">
                         View
                       </Link>
                     </td>
@@ -113,7 +113,7 @@ function RequestsTable({ view }: { view: LeaveListView }) {
                 Load more
               </Button>
             ) : (
-              <p className="text-xs text-slate-500">End of list ({rows.length} shown).</p>
+              <p className="text-xs text-text-muted">End of list ({rows.length} shown).</p>
             )}
             {listQuery.isFetching && !listQuery.isFetchingNextPage && <Spinner size="sm" />}
           </div>
@@ -147,7 +147,7 @@ function LeaveTabs() {
             aria-selected={view === t.view}
             onClick={() => setView(t.view)}
             className={`rounded-md px-4 py-2 text-sm font-medium ring-1 ${
-              view === t.view ? 'bg-slate-900 text-white ring-slate-900' : 'bg-white text-slate-700 ring-slate-300'
+              view === t.view ? 'bg-primary text-primary-fg ring-primary' : 'bg-surface text-text-muted ring-border'
             }`}
           >
             {t.label}
@@ -163,8 +163,8 @@ export default function LeavePage() {
   return (
     <AppShell>
       <RequirePermission code={PERMISSIONS.LEAVE_REQUEST}>
-        <h1 className="text-xl font-bold text-slate-900">Leave requests</h1>
-        <p className="mt-1 text-sm text-slate-500">Your requests, your approval queue, and the full directory (permission-gated).</p>
+        <h1 className="text-xl font-bold text-text">Leave requests</h1>
+        <p className="mt-1 text-sm text-text-muted">Your requests, your approval queue, and the full directory (permission-gated).</p>
         <div className="mt-6">
           <LeaveTabs />
         </div>

@@ -4,9 +4,9 @@ import { inr, type PayrollTotals } from '@/lib/payroll';
 
 function MoneyCard({ label, value, accent }: { label: string; value: unknown; accent?: boolean }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4">
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <p className={`mt-1 font-mono text-lg font-semibold ${accent ? 'text-slate-900' : 'text-slate-800'}`}>
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <p className="text-xs font-medium uppercase tracking-wide text-text-muted">{label}</p>
+      <p className={`mt-1 font-mono text-lg font-semibold ${accent ? 'text-text' : 'text-text'}`}>
         {inr(value)}
       </p>
     </div>
@@ -24,9 +24,9 @@ export function TotalsCards({ totals }: { totals: PayrollTotals | null | undefin
       <MoneyCard label="Gross" value={totals?.gross} />
       <MoneyCard label="Deductions" value={totals?.total_deductions} />
       <MoneyCard label="Net pay" value={totals?.net_pay} accent />
-      <div className="rounded-lg border border-slate-200 bg-white p-4">
-        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Headcount</p>
-        <p className="mt-1 font-mono text-lg font-semibold text-slate-800">{headcount}</p>
+      <div className="rounded-lg border border-border bg-surface p-4">
+        <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Headcount</p>
+        <p className="mt-1 font-mono text-lg font-semibold text-text">{headcount}</p>
       </div>
     </div>
   );

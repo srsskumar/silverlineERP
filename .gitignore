@@ -21,3 +21,4 @@ ios/
 *.apk
 *.aab
 *.ipa
+.gstack/

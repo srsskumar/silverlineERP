@@ -431,6 +431,220 @@ describe("attendance punches", () => {
     expect(row.status).toBe("PENDING");
   });
 
+  it("flags an emulator device for review (202 DEVICE_SIGNAL)", async () => {
+    const h = await adminHeaders();
+    const ids = await unitChain(h, "EMU");
+    await createFence(h, circleFenceBody("village", ids.village), nextKey());
+    const empId = await activeEmployee(h, { village_id: ids.village });
+    const res = await punch(
+      h,
+      checkinBody(empId, {
+        device_signals: {
+          device: { is_physical_device: false, suspected_emulator: true, model_name: "sdk_gphone64_arm64" },
+          review_suggested: true,
+        },
+      }),
+      nextKey(),
+    );
+    expect(res.statusCode).toBe(202);
+    const body = res.json() as { review: string; code: string; exception_id: string };
+    expect(body.review).toBe("REQUIRES_REVIEW");
+    expect(body.code).toBe("DEVICE_SIGNAL");
+    const stored = await pool.query(
+      "SELECT device_signals FROM attendance_events WHERE employee_id = $1::uuid",
+      [empId],
+    );
+    const signals = stored.rows[0] as { device_signals: { flagged: boolean } };
+    expect(signals.device_signals.flagged).toBe(true);
+  });
+
+  it("derives impossible travel from its own history, not the client's claim", async () => {
+    const h = await adminHeaders();
+    const ids = await unitChain(h, "TRV");
+    await createFence(h, circleFenceBody("village", ids.village), nextKey());
+    const empId = await activeEmployee(h, { village_id: ids.village });
+
+    // First punch establishes the reference position, backdated 30s so the
+    // second one is still in the past (future timestamps are rejected as 422).
+    const first = await punch(
+      h,
+      checkinBody(empId, { client_timestamp: new Date(Date.now() - 30_000).toISOString() }),
+      nextKey(),
+    );
+    expect(first.statusCode).toBe(201);
+
+    // Second punch ~550 km away 30s later. The client claims everything is
+    // fine; the server must reach its own conclusion from the stored history.
+    const res = await punch(
+      h,
+      checkinBody(empId, {
+        event_type: "CHECK_OUT",
+        latitude: FAR.lat,
+        longitude: FAR.lng,
+        device_signals: { movement: { impossible_travel: false }, review_suggested: false },
+      }),
+      nextKey(),
+    );
+    expect(res.statusCode).toBe(202);
+    const body = res.json() as { code: string };
+    expect(body.code).toBe("DEVICE_SIGNAL");
+
+    const stored = await pool.query(
+      `SELECT device_signals FROM attendance_events
+        WHERE employee_id = $1::uuid AND event_type = 'CHECK_OUT'`,
+      [empId],
+    );
+    const row = stored.rows[0] as {
+      device_signals: {
+        flagged: boolean;
+        server_movement: { impossible_travel: boolean };
+        client_movement: { impossible_travel: boolean };
+      };
+    };
+    expect(row.device_signals.server_movement.impossible_travel).toBe(true);
+    // The client's contradicting claim is retained for the reviewer.
+    expect(row.device_signals.client_movement.impossible_travel).toBe(false);
+    expect(row.device_signals.flagged).toBe(true);
+  });
+
+  it("accepts a clean punch from a physical device without flagging", async () => {
+    const h = await adminHeaders();
+    const ids = await unitChain(h, "OK");
+    await createFence(h, circleFenceBody("village", ids.village), nextKey());
+    const empId = await activeEmployee(h, { village_id: ids.village });
+    const res = await punch(
+      h,
+      checkinBody(empId, {
+        device_signals: {
+          device: { is_physical_device: true, suspected_emulator: false, model_name: "Pixel 7a" },
+          movement: null,
+          review_suggested: false,
+        },
+      }),
+      nextKey(),
+    );
+    expect(res.statusCode).toBe(201);
+    const stored = await pool.query(
+      "SELECT device_signals FROM attendance_events WHERE employee_id = $1::uuid",
+      [empId],
+    );
+    const row = stored.rows[0] as { device_signals: { flagged: boolean } };
+    expect(row.device_signals.flagged).toBe(false);
+  });
+
+  it("serves positioned punches to the operations map with an outcome", async () => {
+    const h = await adminHeaders();
+    const ids = await unitChain(h, "MAP");
+    await createFence(h, circleFenceBody("village", ids.village), nextKey());
+    const inside = await activeEmployee(h, { village_id: ids.village });
+    const outside = await activeEmployee(h, { village_id: ids.village });
+
+    expect((await punch(h, checkinBody(inside), nextKey())).statusCode).toBe(201);
+    expect(
+      (await punch(h, checkinBody(outside, { latitude: FAR.lat, longitude: FAR.lng }), nextKey()))
+        .statusCode,
+    ).toBe(202);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/attendance/events/map",
+      headers: h,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      data: Array<{ id: string; lat: number; lng: number; outcome: string }>;
+      truncated: boolean;
+    };
+    expect(body.truncated).toBe(false);
+    expect(body.data.length).toBe(2);
+    // Every marker carries usable coordinates.
+    for (const row of body.data) {
+      expect(typeof row.lat).toBe("number");
+      expect(typeof row.lng).toBe("number");
+    }
+    const outcomes = body.data.map((r) => r.outcome).sort();
+    expect(outcomes).toEqual(["ok", "outside"]);
+  });
+
+  it("omits punches with no coordinates from the map", async () => {
+    const h = await adminHeaders();
+    const ids = await unitChain(h, "NOGPS");
+    const empId = await activeEmployee(h, { village_id: ids.village });
+    const body = checkinBody(empId) as Record<string, unknown>;
+    delete body.latitude;
+    delete body.longitude;
+    delete body.gps_accuracy;
+    expect((await punch(h, body, nextKey())).statusCode).toBe(201);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/attendance/events/map?employee_id=${empId}`,
+      headers: h,
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { data: unknown[] }).data).toEqual([]);
+  });
+
+  it("rejects a map page size above the ceiling", async () => {
+    const h = await adminHeaders();
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/attendance/events/map?limit=99999",
+      headers: h,
+    });
+    expect(res.statusCode).toBe(422);
+  });
+
+  it("accepts a punch inside any active fence for the scope, not just the newest", async () => {
+    const h = await adminHeaders();
+    const ids = await unitChain(h, "MULTI");
+    // Two sites in one village is ordinary — a depot and a site office. The
+    // older fence used to be unreachable because resolution took only the most
+    // recently created one, so anyone standing in it was recorded OUTSIDE.
+    await createFence(h, circleFenceBody("village", ids.village, { name: "Older site" }), nextKey());
+    await createFence(
+      h,
+      circleFenceBody("village", ids.village, {
+        name: "Newer site",
+        geometry: { lat: FAR.lat, lng: FAR.lng, radius_m: 500 },
+      }),
+      nextKey(),
+    );
+    const empId = await activeEmployee(h, { village_id: ids.village });
+
+    // CENTER is inside the OLDER fence only.
+    const res = await punch(h, checkinBody(empId), nextKey());
+    expect(res.statusCode).toBe(201);
+
+    const event = await pool.query(
+      "SELECT geofence_result FROM attendance_events WHERE employee_id = $1::uuid",
+      [empId],
+    );
+    expect((event.rows[0] as { geofence_result: string }).geofence_result).toBe("INSIDE");
+  });
+
+  it("still reviews a punch that is inside none of the scope's fences", async () => {
+    const h = await adminHeaders();
+    const ids = await unitChain(h, "MULTIOUT");
+    await createFence(h, circleFenceBody("village", ids.village, { name: "Site A" }), nextKey());
+    await createFence(
+      h,
+      circleFenceBody("village", ids.village, {
+        name: "Site B",
+        geometry: { lat: CENTER.lat + 0.05, lng: CENTER.lng + 0.05, radius_m: 300 },
+      }),
+      nextKey(),
+    );
+    const empId = await activeEmployee(h, { village_id: ids.village });
+    const res = await punch(
+      h,
+      checkinBody(empId, { latitude: FAR.lat, longitude: FAR.lng }),
+      nextKey(),
+    );
+    expect(res.statusCode).toBe(202);
+    expect((res.json() as { code: string }).code).toBe("OUTSIDE_GEOFENCE");
+  });
+
   it("reviews poor-accuracy punches (202 POOR_ACCURACY)", async () => {
     const h = await adminHeaders();
     const ids = await unitChain(h, "J");
