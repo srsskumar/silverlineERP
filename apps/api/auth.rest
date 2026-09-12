@@ -1,0 +1,90 @@
+@baseUrl = http://localhost:3101
+@username = admin
+@password = ChangeMe123!
+@mfaCode = 000000
+
+### Health check
+GET {{baseUrl}}/health
+
+### Login
+# @name login
+POST {{baseUrl}}/api/v1/auth/login
+Content-Type: application/json
+
+{
+  "username": "{{username}}",
+  "password": "{{password}}"
+}
+
+### Current authenticated user
+GET {{baseUrl}}/api/v1/auth/me
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### Refresh token
+# Uses the refresh token from Login and rotates it.
+# @name refresh
+POST {{baseUrl}}/api/v1/auth/refresh
+Content-Type: application/json
+
+{
+  "refresh_token": "{{login.response.body.$.refresh_token}}"
+}
+
+### Current user with the rotated access token
+GET {{baseUrl}}/api/v1/auth/me
+Authorization: Bearer {{refresh.response.body.$.access_token}}
+
+### Validation error: missing password
+POST {{baseUrl}}/api/v1/auth/login
+Content-Type: application/json
+
+{
+  "username": "{{username}}"
+}
+
+### Invalid credentials
+POST {{baseUrl}}/api/v1/auth/login
+Content-Type: application/json
+
+{
+  "username": "{{username}}",
+  "password": "wrong-password"
+}
+
+### Missing authentication
+GET {{baseUrl}}/api/v1/auth/me
+
+### MFA setup (optional; changes the logged-in user's MFA state)
+# Run this only when you want to enroll MFA. The response contains the secret
+# or otpauth URI needed by an authenticator app.
+# @name mfaSetup
+POST {{baseUrl}}/api/v1/auth/mfa/setup
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+### MFA verification (optional)
+# Replace @mfaCode above with the current six-digit authenticator code.
+POST {{baseUrl}}/api/v1/auth/mfa/verify
+Content-Type: application/json
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+{
+  "code": "{{mfaCode}}"
+}
+
+### Disable MFA (optional; unavailable for required production roles)
+POST {{baseUrl}}/api/v1/auth/mfa/disable
+Content-Type: application/json
+Authorization: Bearer {{login.response.body.$.access_token}}
+
+{
+  "code": "{{mfaCode}}"
+}
+
+### Logout with the rotated refresh token
+POST {{baseUrl}}/api/v1/auth/logout
+Content-Type: application/json
+Authorization: Bearer {{refresh.response.body.$.access_token}}
+
+{
+  "refresh_token": "{{refresh.response.body.$.refresh_token}}"
+}

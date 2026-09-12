@@ -595,6 +595,56 @@ describe("attendance punches", () => {
     expect(res.statusCode).toBe(422);
   });
 
+  it("accepts a punch inside any active fence for the scope, not just the newest", async () => {
+    const h = await adminHeaders();
+    const ids = await unitChain(h, "MULTI");
+    // Two sites in one village is ordinary — a depot and a site office. The
+    // older fence used to be unreachable because resolution took only the most
+    // recently created one, so anyone standing in it was recorded OUTSIDE.
+    await createFence(h, circleFenceBody("village", ids.village, { name: "Older site" }), nextKey());
+    await createFence(
+      h,
+      circleFenceBody("village", ids.village, {
+        name: "Newer site",
+        geometry: { lat: FAR.lat, lng: FAR.lng, radius_m: 500 },
+      }),
+      nextKey(),
+    );
+    const empId = await activeEmployee(h, { village_id: ids.village });
+
+    // CENTER is inside the OLDER fence only.
+    const res = await punch(h, checkinBody(empId), nextKey());
+    expect(res.statusCode).toBe(201);
+
+    const event = await pool.query(
+      "SELECT geofence_result FROM attendance_events WHERE employee_id = $1::uuid",
+      [empId],
+    );
+    expect((event.rows[0] as { geofence_result: string }).geofence_result).toBe("INSIDE");
+  });
+
+  it("still reviews a punch that is inside none of the scope's fences", async () => {
+    const h = await adminHeaders();
+    const ids = await unitChain(h, "MULTIOUT");
+    await createFence(h, circleFenceBody("village", ids.village, { name: "Site A" }), nextKey());
+    await createFence(
+      h,
+      circleFenceBody("village", ids.village, {
+        name: "Site B",
+        geometry: { lat: CENTER.lat + 0.05, lng: CENTER.lng + 0.05, radius_m: 300 },
+      }),
+      nextKey(),
+    );
+    const empId = await activeEmployee(h, { village_id: ids.village });
+    const res = await punch(
+      h,
+      checkinBody(empId, { latitude: FAR.lat, longitude: FAR.lng }),
+      nextKey(),
+    );
+    expect(res.statusCode).toBe(202);
+    expect((res.json() as { code: string }).code).toBe("OUTSIDE_GEOFENCE");
+  });
+
   it("reviews poor-accuracy punches (202 POOR_ACCURACY)", async () => {
     const h = await adminHeaders();
     const ids = await unitChain(h, "J");

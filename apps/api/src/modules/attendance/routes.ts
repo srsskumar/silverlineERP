@@ -24,6 +24,7 @@ import { buildAuthenticate, requirePermission } from "../../common/auth.js";
 import { writeAudit } from "../../common/audit.js";
 import { createRateLimiter } from "../../common/rateLimit.js";
 import { isInsideFence } from "../../common/geo.js";
+import type { FenceShape } from "@silverline/shared";
 import { detectMovementAnomaly } from "@silverline/shared";
 import { sendError } from "../../common/httpErrors.js";
 import { emitNotification } from "../s5/notify.js";
@@ -230,11 +231,20 @@ interface FenceRow {
  * Resolve the applicable ACTIVE fence: employee village → parent mandal →
  * parent district (walked via org_units), falling back to the employee's
  * direct mandal/district refs when the chain is broken. Null = NO_FENCE.
+ *
+ * A scope may hold more than one fence — a village with both a depot and a
+ * site office is ordinary — so when the punch position is known, every active
+ * fence at that level is considered and the one actually containing the punch
+ * wins. Previously only the most recently created fence at a level was ever
+ * evaluated, so a worker standing inside any older fence was recorded OUTSIDE
+ * and sent to review. With no position, or when none contains the punch, the
+ * newest is returned, which preserves the previous reporting behaviour.
  */
 async function resolveFence(
   pool: Pool,
   orgId: string,
   emp: EmployeeLite,
+  at?: { lat: number; lng: number },
 ): Promise<FenceRow | null> {
   const startIds = [emp.village_id, emp.mandal_id, emp.district_id].filter(
     (v): v is string => !!v,
@@ -282,13 +292,33 @@ async function resolveFence(
       `SELECT id, geometry_type, geometry, tolerance_meters, accuracy_threshold_meters
        FROM geo_fences
        WHERE org_id = $1 AND scope_type = $2 AND scope_id = $3::uuid AND status = 'ACTIVE'
-       ORDER BY created_at DESC LIMIT 1`,
+       ORDER BY created_at DESC`,
       [orgId, type, id],
     );
-    const row = fence.rows[0] as FenceRow | undefined;
-    if (row) {
-      return row;
+    const rows = fence.rows as FenceRow[];
+    if (rows.length === 0) {
+      continue;
     }
+    if (at) {
+      const containing = rows.find((row) =>
+        isInsideFence(
+          {
+            geometry_type: row.geometry_type,
+            geometry: row.geometry,
+            tolerance_meters:
+              row.tolerance_meters === null ? null : Number(row.tolerance_meters),
+          } as FenceShape,
+          at.lat,
+          at.lng,
+        ),
+      );
+      if (containing) {
+        return containing;
+      }
+    }
+    // Nothing contains the punch (or there is no position): report against the
+    // newest fence at the finest scope that has one.
+    return rows[0];
   }
   return null;
 }
@@ -660,7 +690,14 @@ export async function registerAttendanceRoutes(
     }
 
     // 8. Resolve the applicable fence (village → mandal → district).
-    const fence = await resolveFence(db, user.orgId, emp);
+    const fence = await resolveFence(
+      db,
+      user.orgId,
+      emp,
+      d.latitude !== undefined && d.longitude !== undefined
+        ? { lat: d.latitude, lng: d.longitude }
+        : undefined,
+    );
     const hasCoords = d.latitude !== undefined && d.longitude !== undefined;
     const inside =
       fence && hasCoords

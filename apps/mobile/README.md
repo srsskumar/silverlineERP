@@ -11,6 +11,39 @@ cd apps/mobile
 npx expo start            # scan QR with Expo Go, or press a/i/w
 ```
 
+### Local Android builds on macOS
+
+`npx expo run:android` needs Java 17, the Android SDK, and `adb`. Install
+Android Studio and select Android SDK, Android SDK Platform-Tools, and Android
+SDK Build-Tools in its SDK Manager. Then configure the shell used by VS Code:
+
+```sh
+brew install --cask temurin@17
+
+export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+export ANDROID_HOME="$HOME/Library/Android/sdk"
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+```
+
+Persist those exports in `~/.zshrc`, open a new terminal, and verify the
+installation before starting Expo:
+
+```sh
+java -version       # must report Java 17
+adb version
+sdkmanager --list
+
+cd apps/mobile
+npx expo run:android
+```
+
+If the SDK was installed somewhere other than the default Android Studio
+location, set `ANDROID_HOME` and `ANDROID_SDK_ROOT` to that directory instead.
+The `spawn adb ENOENT` error means `platform-tools` is missing from `PATH` (or
+has not been installed); the SDK path error means the SDK variables are unset
+or point to a directory that does not exist.
+
 Tests + typecheck (no new deps — `tsx` is resolved from the workspace root):
 
 ```sh
