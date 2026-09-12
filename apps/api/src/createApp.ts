@@ -62,7 +62,7 @@ export async function buildApp(
   await app.register(cors, {
     origin: config.corsOrigin,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-ID'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-ID', 'If-Match'],
     exposedHeaders: ['x-request-id', 'content-disposition', 'retry-after'],
     credentials: true,
   });

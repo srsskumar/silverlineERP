@@ -112,7 +112,8 @@ function AuthInner({ children }: { children: React.ReactNode }) {
       queryClient.clear();
       setTokens(res.access_token, res.refresh_token);
       setHasTokens(true);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.session.all });
+      // Wait for state update to enable query, then refetch
+      await queryClient.refetchQueries({ queryKey: queryKeys.session.me() });
       return { mfaRequired: false };
     },
     [queryClient],
@@ -129,7 +130,7 @@ function AuthInner({ children }: { children: React.ReactNode }) {
       setTokens(res.access_token, res.refresh_token);
       setHasTokens(true);
       setMfaPending(false);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.session.all });
+      await queryClient.refetchQueries({ queryKey: queryKeys.session.me() });
     },
     [queryClient],
   );
