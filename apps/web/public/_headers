@@ -1,0 +1,24 @@
+# Security headers for the static export (Cloudflare Pages / Netlify format).
+#
+# CSP note: a static export cannot use per-request nonces, and Next inlines its
+# own bootstrap plus the pre-paint theme script, so script-src needs
+# 'unsafe-inline'. Tighten to a nonce/hash policy if the app moves to a host
+# that renders per request.
+#
+# connect-src allows any HTTPS origin because the API host is supplied at build
+# time via NEXT_PUBLIC_API_URL. Replace `https:` with that exact origin in a
+# fixed environment for a materially stronger policy.
+
+/*
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Cross-Origin-Opener-Policy: same-origin
+  Permissions-Policy: geolocation=(), camera=(), microphone=(), payment=(), usb=(), interest-cohort=()
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https:; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests
+
+# Hashed build assets are immutable; HTML must always revalidate so a deploy
+# is picked up immediately.
+/_next/static/*
+  Cache-Control: public, max-age=31536000, immutable
