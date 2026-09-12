@@ -2,11 +2,12 @@
 
 import * as React from 'react';
 import Link from '@/components/AppLink';
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { AppShell } from '@/components/AppShell';
 import { RequirePermission } from '@/components/RequirePermission';
 import { AttendanceStatusBadge } from '@/components/AttendanceStatusBadge';
 import { PunchPanel } from '@/components/PunchPanel';
+import { PunchClusterMap } from '@/components/map/PunchClusterMap';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -15,7 +16,7 @@ import { Input } from '@/components/ui/Input';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Spinner } from '@/components/ui/Spinner';
 import { PERMISSIONS } from '@/lib/permissions';
-import { formatHours, listRecords } from '@/lib/attendance';
+import { formatHours, listMapEvents, listRecords } from '@/lib/attendance';
 import { queryKeys } from '@/lib/query-keys';
 
 export const dynamic = 'force-static';
@@ -53,6 +54,14 @@ function RecordsTable() {
   });
 
   const rows = (listQuery.data?.pages ?? []).flatMap((p) => p.data);
+  const [showMap, setShowMap] = React.useState(false);
+  const mapQuery = useQuery({
+    queryKey: queryKeys.attendance.map(filters),
+    queryFn: () => listMapEvents({ employee_id: employeeId || undefined, from: from || undefined, to: to || undefined }),
+    // Only fetched once the user opens the map: it is a second round trip over
+    // a different table, and most visits to this page never need it.
+    enabled: showMap,
+  });
 
   return (
     <div className="flex flex-col gap-4">
@@ -86,6 +95,15 @@ function RecordsTable() {
             <option value="false">No violation</option>
           </select>
         </div>
+        <div className="flex items-end">
+          <Button
+            variant={showMap ? 'primary' : 'secondary'}
+            onClick={() => setShowMap((v) => !v)}
+            aria-pressed={showMap}
+          >
+            {showMap ? 'Hide map' : 'Show map'}
+          </Button>
+        </div>
         <Button variant="secondary" onClick={() => setPunchOpen((v) => !v)}>
           {punchOpen ? 'Hide punch' : 'Manual punch'}
         </Button>
@@ -101,6 +119,34 @@ function RecordsTable() {
           />
         </div>
       )}
+
+      {/* Map view: the table answers "who punched", the map answers "where from",
+          which is the question a geofence violation actually raises. Hidden
+          until there is something positioned to plot. */}
+      {showMap ? (
+        mapQuery.isLoading ? (
+          <Skeleton className="mb-4 h-[420px] w-full" />
+        ) : mapQuery.data && mapQuery.data.data.length > 0 ? (
+          <div className="mb-4">
+            <PunchClusterMap points={mapQuery.data.data} />
+            <p className="mt-1.5 text-xs text-text-muted">
+              {mapQuery.data.data.length} positioned {mapQuery.data.data.length === 1 ? 'punch' : 'punches'}
+              {mapQuery.data.truncated ? ' (showing the most recent — narrow the date range for the full set)' : ''}
+              {' · '}
+              <span className="text-success">green</span> inside a fence,{' '}
+              <span className="text-danger">red</span> outside,{' '}
+              <span className="text-warning">amber</span> flagged for review
+            </p>
+          </div>
+        ) : (
+          <div className="mb-4">
+            <EmptyState
+              title="No positioned punches"
+              description="Punches recorded without GPS do not appear on the map."
+            />
+          </div>
+        )
+      ) : null}
 
       {listQuery.isLoading ? (
         <Skeleton className="h-64 w-full" />

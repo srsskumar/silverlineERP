@@ -36,6 +36,8 @@ export const queryKeys = {
     records: (filters?: Record<string, unknown>) =>
       [...queryKeys.attendance.all, 'records', filters ?? {}] as const,
     record: (id: string) => [...queryKeys.attendance.all, 'record', id] as const,
+    map: (filters?: Record<string, unknown>) =>
+      [...queryKeys.attendance.all, 'map', filters ?? {}] as const,
     // NOTE (S2 contract gap): there is no GET /attendance/exceptions list
     // endpoint, so this key only caches exception objects returned from
     // file/decide/punch-202 flows, keyed by known id. See lib/attendance.ts.

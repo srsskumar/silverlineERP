@@ -12,6 +12,7 @@ import {
 import type { FenceGeometry, GeometryType } from '@/lib/geo';
 import { Button } from './ui/Button';
 import { FormField } from './ui/FormField';
+import { FenceMap } from './map/FenceMap';
 import { Input } from './ui/Input';
 
 const inputClass =
@@ -98,6 +99,30 @@ export function FenceForm({
     });
   };
 
+  // Preview geometry derived from the live form values. Invalid or incomplete
+  // input simply renders nothing rather than throwing inside the map.
+  const lat = Number(watch('circle_lat'));
+  const lng = Number(watch('circle_lng'));
+  const radius = Number(watch('radius_m'));
+  const previewCircle =
+    geometryType === 'circle' && Number.isFinite(lat) && Number.isFinite(lng) && lat !== 0 && lng !== 0
+      ? {
+          id: 'preview',
+          name: watch('name') || 'New fence',
+          lat,
+          lng,
+          radius_m: Number.isFinite(radius) && radius > 0 ? radius : 100,
+        }
+      : null;
+  const previewPolygon =
+    geometryType === 'polygon' && polygonPreview.ok && polygonPreview.points.length >= 3
+      ? {
+          id: 'preview',
+          name: watch('name') || 'New fence',
+          points: polygonPreview.points.map((p) => [p.lat, p.lng] as [number, number]),
+        }
+      : null;
+
   return (
     <form onSubmit={handleSubmit(submit)} className="flex flex-col gap-4" noValidate>
       <FormField label="Name *" htmlFor="fence-name" error={errors.name?.message}>
@@ -139,6 +164,39 @@ export function FenceForm({
           <p role="alert" className="text-xs text-danger">{errors.geometry_type.message}</p>
         )}
       </FormField>
+
+      {/*
+        Live map. Admins previously typed coordinates blind — a circle centre as
+        two decimals, a polygon as a "lat,lng per line" textarea — with no way to
+        see the shape before saving. Clicking the map fills the circle centre;
+        the shape below redraws as the fields change, so a wrong digit is
+        obvious instead of being discovered by a field user failing to punch.
+      */}
+      <FenceMap
+        height={320}
+        circles={previewCircle ? [previewCircle] : []}
+        polygons={previewPolygon ? [previewPolygon] : []}
+        center={previewCircle ? { lat: previewCircle.lat, lng: previewCircle.lng } : null}
+        onMapClick={
+          geometryType === 'circle'
+            ? (pos) => {
+                setValue('circle_lat', pos.lat as never, { shouldValidate: true });
+                setValue('circle_lng', pos.lng as never, { shouldValidate: true });
+              }
+            : (pos) => {
+                // Append the clicked point to the polygon textarea.
+                const current = (polygonText ?? '').trim();
+                setValue('polygon_text', `${current ? `${current}\n` : ''}${pos.lat},${pos.lng}` as never, {
+                  shouldValidate: true,
+                });
+              }
+        }
+      />
+      <p className="-mt-2 text-xs text-text-muted">
+        {geometryType === 'circle'
+          ? 'Click the map to set the centre, then set a radius.'
+          : 'Click the map to add each corner in order. At least three are needed.'}
+      </p>
 
       {geometryType === 'circle' ? (
         <div className="grid gap-4 sm:grid-cols-3">

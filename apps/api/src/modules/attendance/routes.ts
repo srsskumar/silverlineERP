@@ -293,6 +293,17 @@ async function resolveFence(
   return null;
 }
 
+/** Upper bound on markers returned to the map in one request. */
+const MAX_MAP_EVENTS = 5000;
+
+const mapEventsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(MAX_MAP_EVENTS).default(1000),
+  employee_id: z.string().uuid().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  result: z.enum(["INSIDE", "OUTSIDE", "NO_FENCE"]).optional(),
+});
+
 const recordsListQuerySchema = cursorPageQuerySchema.extend({
   employee_id: z.string().uuid().optional(),
   from: z
@@ -928,6 +939,103 @@ export async function registerAttendanceRoutes(
             })
           : null,
       has_more: hasMore,
+    });
+  });
+
+  /*
+   * GET /attendance/events/map — positioned punches for the operations map.
+   *
+   * Separate from the records list because records carry no coordinates: only
+   * events do, and a map needs a flat stream of positions rather than one row
+   * per employee-day. Returns just what a marker needs (position, outcome,
+   * time) so the payload stays small enough to cluster client-side; this is the
+   * endpoint to replace with vector tiles if a deployment ever exceeds the
+   * MAX_MAP_EVENTS ceiling in practice.
+   */
+  app.get("/api/v1/attendance/events/map", { preHandler: canRead }, async (req, reply) => {
+    const parsed = mapEventsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return sendError(reply, req.requestId, {
+        status: 422,
+        code: "VALIDATION_ERROR",
+        message: "Validation failed",
+        fieldErrors: toFieldErrors(parsed.error),
+      });
+    }
+    const user = req.authUser;
+    if (!user) {
+      return sendError(reply, req.requestId, {
+        status: 401,
+        code: "UNAUTHENTICATED",
+        message: "Authentication required",
+      });
+    }
+    const { limit, employee_id, from, to, result } = parsed.data;
+    const values: unknown[] = [user.orgId];
+    // Coordinates are the whole point, so unpositioned events are excluded.
+    const clauses = ["e.org_id = $1", "ev.lat IS NOT NULL", "ev.lng IS NOT NULL"];
+    clauses.push(await employeeRestriction(opts.pool, user, values, "ev.employee_id"));
+    if (employee_id) {
+      values.push(employee_id);
+      clauses.push(`ev.employee_id = $${values.length}::uuid`);
+    }
+    if (from) {
+      values.push(from);
+      clauses.push(`ev.client_timestamp >= $${values.length}::timestamptz`);
+    }
+    if (to) {
+      values.push(to);
+      clauses.push(`ev.client_timestamp <= $${values.length}::timestamptz`);
+    }
+    if (result) {
+      values.push(result);
+      clauses.push(`ev.geofence_result = $${values.length}`);
+    }
+    values.push(limit);
+    const res = await opts.pool.query(
+      `SELECT ev.id, ev.employee_id, ev.event_type, ev.client_timestamp,
+              ev.lat, ev.lng, ev.geofence_result, ev.geofence_id,
+              ev.mock_location, (ev.device_signals->>'flagged')::boolean AS flagged
+         FROM attendance_events ev
+         JOIN employees e ON e.id = ev.employee_id
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY ev.client_timestamp DESC
+        LIMIT $${values.length}`,
+      values as string[],
+    );
+    type MapRow = {
+      id: string;
+      employee_id: string;
+      event_type: string;
+      client_timestamp: Date | string;
+      lat: number;
+      lng: number;
+      geofence_result: string;
+      geofence_id: string | null;
+      mock_location: boolean;
+      flagged: boolean | null;
+    };
+    return reply.status(200).send({
+      data: (res.rows as MapRow[]).map((r) => ({
+        id: r.id,
+        employee_id: r.employee_id,
+        event_type: r.event_type,
+        at: iso(r.client_timestamp),
+        lat: Number(r.lat),
+        lng: Number(r.lng),
+        geofence_result: r.geofence_result,
+        geofence_id: r.geofence_id,
+        // One field the map can colour by, rather than making the client
+        // re-derive precedence from three separate flags.
+        outcome:
+          r.mock_location || r.flagged === true
+            ? "review"
+            : r.geofence_result === "OUTSIDE"
+              ? "outside"
+              : "ok",
+      })),
+      // No cursor: the map draws a bounded working set, not a paged list.
+      truncated: res.rows.length === limit,
     });
   });
 

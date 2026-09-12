@@ -18,6 +18,7 @@ import { Input } from '@/components/ui/Input';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ConflictDialog, useConflict } from '@/components/ConflictDialog';
 import { FenceForm, type FencePayload } from '@/components/FenceForm';
+import { FenceMap } from '@/components/map/FenceMap';
 
 export const dynamic = 'force-static';
 
@@ -124,6 +125,38 @@ function FencesManager() {
   });
 
   const rows = listQuery.data ?? [];
+  const [activeFenceId, setActiveFenceId] = React.useState<string | null>(null);
+
+  // Split the stored geometry into the two shapes the map draws. Rows with
+  // geometry the API did not return in the expected form are skipped rather
+  // than crashing the map.
+  const mapCircles = React.useMemo(
+    () =>
+      rows.flatMap((f) => {
+        if (f.geometry_type !== 'circle') return [];
+        const g = f.geometry as { lat?: number; lng?: number; radius_m?: number } | null;
+        if (!g || typeof g.lat !== 'number' || typeof g.lng !== 'number') return [];
+        return [{
+          id: f.id,
+          name: f.name,
+          lat: g.lat,
+          lng: g.lng,
+          radius_m: (typeof g.radius_m === 'number' ? g.radius_m : 100) + (f.tolerance_meters ?? 0),
+        }];
+      }),
+    [rows],
+  );
+  const mapPolygons = React.useMemo(
+    () =>
+      rows.flatMap((f) => {
+        if (f.geometry_type !== 'polygon') return [];
+        const g = f.geometry as { points?: Array<[number, number]> } | null;
+        if (!g || !Array.isArray(g.points) || g.points.length < 3) return [];
+        return [{ id: f.id, name: f.name, points: g.points }];
+      }),
+    [rows],
+  );
+
 
   return (
     <div className="flex flex-col gap-4">
@@ -143,6 +176,19 @@ function FencesManager() {
         </div>
         {canManage && <Button onClick={() => setCreateOpen(true)}>New fence</Button>}
       </div>
+
+      {/* Overview map: a table of coordinate tuples cannot answer "do these
+          sites overlap" or "is one of them in the wrong district", which is the
+          question an admin actually has when reviewing fences. */}
+      {rows.length > 0 ? (
+        <FenceMap
+          height={340}
+          className="mb-4"
+          circles={mapCircles}
+          polygons={mapPolygons}
+          activeId={activeFenceId}
+        />
+      ) : null}
 
       {listQuery.isLoading ? (
         <Skeleton className="h-64 w-full" />
@@ -166,7 +212,16 @@ function FencesManager() {
             </thead>
             <tbody className="divide-y divide-border">
               {rows.map((f) => (
-                <tr key={f.id}>
+                // Hovering a row highlights that fence on the map above, which
+                // is how an admin connects a coordinate tuple to a place.
+                <tr
+                  key={f.id}
+                  onMouseEnter={() => setActiveFenceId(f.id)}
+                  onMouseLeave={() => setActiveFenceId(null)}
+                  onFocus={() => setActiveFenceId(f.id)}
+                  onBlur={() => setActiveFenceId(null)}
+                  className="row-hover"
+                >
                   <td className="px-3 py-2 font-medium text-text">{f.name}</td>
                   <td className="px-3 py-2 font-mono text-xs text-text-muted">{f.scope_type} · {f.scope_id}</td>
                   <td className="px-3 py-2 text-xs text-text-muted">

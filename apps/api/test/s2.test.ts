@@ -532,6 +532,69 @@ describe("attendance punches", () => {
     expect(row.device_signals.flagged).toBe(false);
   });
 
+  it("serves positioned punches to the operations map with an outcome", async () => {
+    const h = await adminHeaders();
+    const ids = await unitChain(h, "MAP");
+    await createFence(h, circleFenceBody("village", ids.village), nextKey());
+    const inside = await activeEmployee(h, { village_id: ids.village });
+    const outside = await activeEmployee(h, { village_id: ids.village });
+
+    expect((await punch(h, checkinBody(inside), nextKey())).statusCode).toBe(201);
+    expect(
+      (await punch(h, checkinBody(outside, { latitude: FAR.lat, longitude: FAR.lng }), nextKey()))
+        .statusCode,
+    ).toBe(202);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/attendance/events/map",
+      headers: h,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      data: Array<{ id: string; lat: number; lng: number; outcome: string }>;
+      truncated: boolean;
+    };
+    expect(body.truncated).toBe(false);
+    expect(body.data.length).toBe(2);
+    // Every marker carries usable coordinates.
+    for (const row of body.data) {
+      expect(typeof row.lat).toBe("number");
+      expect(typeof row.lng).toBe("number");
+    }
+    const outcomes = body.data.map((r) => r.outcome).sort();
+    expect(outcomes).toEqual(["ok", "outside"]);
+  });
+
+  it("omits punches with no coordinates from the map", async () => {
+    const h = await adminHeaders();
+    const ids = await unitChain(h, "NOGPS");
+    const empId = await activeEmployee(h, { village_id: ids.village });
+    const body = checkinBody(empId) as Record<string, unknown>;
+    delete body.latitude;
+    delete body.longitude;
+    delete body.gps_accuracy;
+    expect((await punch(h, body, nextKey())).statusCode).toBe(201);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/attendance/events/map?employee_id=${empId}`,
+      headers: h,
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { data: unknown[] }).data).toEqual([]);
+  });
+
+  it("rejects a map page size above the ceiling", async () => {
+    const h = await adminHeaders();
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/attendance/events/map?limit=99999",
+      headers: h,
+    });
+    expect(res.statusCode).toBe(422);
+  });
+
   it("reviews poor-accuracy punches (202 POOR_ACCURACY)", async () => {
     const h = await adminHeaders();
     const ids = await unitChain(h, "J");

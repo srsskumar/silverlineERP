@@ -8,6 +8,10 @@
 # connect-src allows any HTTPS origin because the API host is supplied at build
 # time via NEXT_PUBLIC_API_URL. Replace `https:` with that exact origin in a
 # fixed environment for a materially stronger policy.
+#
+# img-src additionally allows tile.openstreetmap.org: the geo-fence and punch
+# maps are raster tiles fetched as images. Point this at your own tile host if
+# you self-host; MapLibre also needs blob: for its web workers.
 
 /*
   Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
@@ -16,7 +20,7 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Cross-Origin-Opener-Policy: same-origin
   Permissions-Policy: geolocation=(), camera=(), microphone=(), payment=(), usb=(), interest-cohort=()
-  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https:; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://tile.openstreetmap.org; font-src 'self' data:; connect-src 'self' https:; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests
 
 # Hashed build assets are immutable; HTML must always revalidate so a deploy
 # is picked up immediately.
