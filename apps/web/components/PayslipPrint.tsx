@@ -7,8 +7,8 @@ import { Button } from './ui/Button';
 function MoneyRow({ label, value, bold }: { label: string; value: unknown; bold?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-4 py-1">
-      <dt className={`text-sm ${bold ? 'font-semibold text-slate-900' : 'text-slate-600'}`}>{label}</dt>
-      <dd className={`font-mono text-sm ${bold ? 'font-semibold text-slate-900' : 'text-slate-800'}`}>
+      <dt className={`text-sm ${bold ? 'font-semibold text-text' : 'text-text-muted'}`}>{label}</dt>
+      <dd className={`font-mono text-sm ${bold ? 'font-semibold text-text' : 'text-text'}`}>
         {inr(value)}
       </dd>
     </div>
@@ -35,21 +35,21 @@ export function PayslipPrint({ slip }: { slip: MyPayslip }) {
         <DownloadButton path={`/api/v1/payroll/payslips/${slip.id}/pdf`} name={`payslip-${slip.id}.pdf`} label="Download PDF" />
       </div>
 
-      <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6 print:rounded-none print:border-0 print:p-0 print:shadow-none">
-        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 pb-3">
+      <div className="rounded-lg border border-border bg-surface p-4 sm:p-6 print:rounded-none print:border-0 print:p-0 print:shadow-none">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-3">
           <div>
-            <h2 className="text-lg font-bold text-slate-900">Payslip</h2>
-            <p className="mt-0.5 font-mono text-xs text-slate-600">
+            <h2 className="text-lg font-bold text-text">Payslip</h2>
+            <p className="mt-0.5 font-mono text-xs text-text-muted">
               {slip.period?.start} → {slip.period?.end}
             </p>
           </div>
           <div className="text-right">
-            <p className="font-mono text-sm font-semibold text-slate-900">{slip.employee?.name}</p>
-            <p className="font-mono text-xs text-slate-600">
+            <p className="font-mono text-sm font-semibold text-text">{slip.employee?.name}</p>
+            <p className="font-mono text-xs text-text-muted">
               {slip.employee?.emp_no}
               {slip.employee?.designation ? ` · ${slip.employee.designation}` : ''}
             </p>
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="mt-1 text-xs text-text-muted">
               Run: {slip.run_status} · v{slip.version}
             </p>
           </div>
@@ -57,18 +57,18 @@ export function PayslipPrint({ slip }: { slip: MyPayslip }) {
 
         <div className="mt-4 grid gap-6 sm:grid-cols-2">
           <div>
-            <h3 className="text-sm font-semibold text-slate-900">Earnings</h3>
-            <dl className="mt-2 divide-y divide-slate-100">
-              {earnings.length === 0 && <p className="py-1 text-sm text-slate-500">—</p>}
+            <h3 className="text-sm font-semibold text-text">Earnings</h3>
+            <dl className="mt-2 divide-y divide-border">
+              {earnings.length === 0 && <p className="py-1 text-sm text-text-muted">—</p>}
               {earnings.map(([k, v]) => (
                 <MoneyRow key={k} label={k} value={v} />
               ))}
             </dl>
           </div>
           <div>
-            <h3 className="text-sm font-semibold text-slate-900">Deductions</h3>
-            <dl className="mt-2 divide-y divide-slate-100">
-              {deductions.length === 0 && <p className="py-1 text-sm text-slate-500">—</p>}
+            <h3 className="text-sm font-semibold text-text">Deductions</h3>
+            <dl className="mt-2 divide-y divide-border">
+              {deductions.length === 0 && <p className="py-1 text-sm text-text-muted">—</p>}
               {deductions.map(([k, v]) => (
                 <MoneyRow key={k} label={k} value={v} />
               ))}
@@ -76,13 +76,13 @@ export function PayslipPrint({ slip }: { slip: MyPayslip }) {
           </div>
         </div>
 
-        <dl className="mt-4 border-t border-slate-200 pt-3">
+        <dl className="mt-4 border-t border-border pt-3">
           <MoneyRow label="Gross" value={slip.gross} />
           <MoneyRow label="Total deductions" value={slip.total_deductions} />
           <MoneyRow label="Net pay" value={slip.net_pay} bold />
         </dl>
 
-        <p className="mt-3 font-mono text-xs text-slate-400">Slip ID: {slip.id}</p>
+        <p className="mt-3 font-mono text-xs text-text-subtle">Slip ID: {slip.id}</p>
       </div>
     </div>
   );

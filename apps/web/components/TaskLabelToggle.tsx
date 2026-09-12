@@ -60,13 +60,13 @@ export function TaskLabelToggle({
   return (
     <div className="flex flex-col gap-3">
       {labelsQuery.isLoading ? (
-        <div className="flex items-center gap-2 text-sm text-slate-500">
+        <div className="flex items-center gap-2 text-sm text-text-muted">
           <Spinner size="sm" /> Loading labels…
         </div>
       ) : labelsQuery.isError ? (
         <ErrorCard title="Could not load labels" error={labelsQuery.error} onRetry={() => labelsQuery.refetch()} />
       ) : rows.length === 0 ? (
-        <p className="text-sm text-slate-500">No labels in this project yet — create one in the Board view.</p>
+        <p className="text-sm text-text-muted">No labels in this project yet — create one in the Board view.</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {rows.map((l) => {
@@ -81,14 +81,14 @@ export function TaskLabelToggle({
                   disabled={pending && pendingId === l.id}
                   onChange={(e) => toggleMutation.mutate({ label: l, on: e.target.checked })}
                 />
-                <label htmlFor={`task-label-${taskId}-${l.id}`} className="flex items-center gap-2 text-slate-800">
+                <label htmlFor={`task-label-${taskId}-${l.id}`} className="flex items-center gap-2 text-text">
                   <span
                     aria-hidden="true"
-                    className="inline-block h-2.5 w-2.5 rounded-full ring-1 ring-slate-300"
+                    className="inline-block h-2.5 w-2.5 rounded-full ring-1 ring-border"
                     style={{ backgroundColor: l.color ?? '#cbd5e1' }}
                   />
                   <span className="font-medium">{l.name}</span>
-                  {l.color ? <span className="font-mono text-xs text-slate-400">{l.color}</span> : null}
+                  {l.color ? <span className="font-mono text-xs text-text-subtle">{l.color}</span> : null}
                 </label>
               </li>
             );

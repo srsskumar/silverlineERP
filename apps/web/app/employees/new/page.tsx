@@ -15,9 +15,9 @@ export default function NewEmployeePage() {
   return (
     <AppShell>
       <RequirePermission code={PERMISSIONS.EMPLOYEE_CREATE}>
-        <h1 className="text-xl font-bold text-slate-900">New employee</h1>
-        <p className="mt-1 text-sm text-slate-500">Creates an employee record, then opens its detail page.</p>
-        <div className="mt-6 max-w-3xl rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
+        <h1 className="text-xl font-bold text-text">New employee</h1>
+        <p className="mt-1 text-sm text-text-muted">Creates an employee record, then opens its detail page.</p>
+        <div className="mt-6 max-w-3xl rounded-lg border border-border bg-surface p-4 sm:p-6">
           <EmployeeForm
             mode="create"
             submitLabel="Create employee"

@@ -24,7 +24,7 @@ import { ConflictDialog } from './ConflictDialog';
 export type EmployeeFormValues = EmployeeCreateInput;
 
 const inputClass =
-  'w-full rounded-md border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 border-slate-300';
+  'w-full rounded-md border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 border-border';
 
 function toDefaults(src?: Partial<Record<string, unknown>>): Partial<EmployeeFormValues> {
   if (!src) return {};
@@ -195,12 +195,12 @@ export function EmployeeForm({
           </FormField>
           <input type="hidden" {...register('reports_to')} />
           {reportsOpen && debouncedQ.length >= 2 && (
-            <div className="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded-md border border-slate-200 bg-white shadow-lg">
+            <div className="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded-md border border-border bg-surface shadow-lg">
               {(reportsSearch.data?.data ?? []).map((e) => (
                 <button
                   key={e.id}
                   type="button"
-                  className="block w-full px-3 py-2 text-left text-sm hover:bg-slate-50"
+                  className="block w-full px-3 py-2 text-left text-sm hover:bg-surface-sunken"
                   onClick={() => {
                     setValue('reports_to', e.id, { shouldDirty: true });
                     setReportsQuery(`${e.emp_no} — ${e.first_name}`);
@@ -211,7 +211,7 @@ export function EmployeeForm({
                 </button>
               ))}
               {reportsSearch.data?.data.length === 0 && (
-                <p className="px-3 py-2 text-sm text-slate-500">No matches</p>
+                <p className="px-3 py-2 text-sm text-text-muted">No matches</p>
               )}
             </div>
           )}
@@ -219,7 +219,7 @@ export function EmployeeForm({
       </div>
 
       <div>
-        <p className="mb-2 text-sm font-medium text-slate-700">Location</p>
+        <p className="mb-2 text-sm font-medium text-text-muted">Location</p>
         <CascadingLocationSelect
           districtId={districtId || undefined}
           mandalId={mandalId || undefined}

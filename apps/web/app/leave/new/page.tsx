@@ -72,10 +72,10 @@ function NewRequestPanel() {
   }
 
   return (
-    <div className="max-w-2xl rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
+    <div className="max-w-2xl rounded-lg border border-border bg-surface p-4 sm:p-6">
       <LeaveRequestForm types={typesQuery.data ?? []} balances={balancesQuery.data ?? []} onSuccess={onSuccess} />
-      <p className="mt-4 text-xs text-slate-500">
-        <Link href="/leave" className="text-brand-600 hover:underline">Back to requests</Link>
+      <p className="mt-4 text-xs text-text-muted">
+        <Link href="/leave" className="text-primary hover:underline">Back to requests</Link>
         {' · '}total days are inclusive and re-computed by the server.
       </p>
     </div>
@@ -86,8 +86,8 @@ export default function NewLeaveRequestPage() {
   return (
     <AppShell>
       <RequirePermission code={PERMISSIONS.LEAVE_REQUEST}>
-        <h1 className="text-xl font-bold text-slate-900">New leave request</h1>
-        <p className="mt-1 text-sm text-slate-500">Pick a type and date range — the server computes days and checks balance.</p>
+        <h1 className="text-xl font-bold text-text">New leave request</h1>
+        <p className="mt-1 text-sm text-text-muted">Pick a type and date range — the server computes days and checks balance.</p>
         <div className="mt-6">
           <NewRequestPanel />
         </div>

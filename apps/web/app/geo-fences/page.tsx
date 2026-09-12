@@ -22,7 +22,7 @@ import { FenceForm, type FencePayload } from '@/components/FenceForm';
 export const dynamic = 'force-static';
 
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 function describeGeometry(fence: GeoFence): string {
   const g = fence.geometry as Record<string, unknown> | null;
@@ -69,9 +69,9 @@ function CreateFenceDialog({ open, onClose }: { open: boolean; onClose: () => vo
 
   if (!open) return null;
   return (
-    <div role="dialog" aria-modal="true" aria-label="Create geo-fence" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg bg-white p-6 shadow-lg">
-        <h2 className="text-base font-semibold text-slate-900">New geo-fence</h2>
+    <div role="dialog" aria-modal="true" aria-label="Create geo-fence" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg bg-surface p-6 shadow-lg">
+        <h2 className="text-base font-semibold text-text">New geo-fence</h2>
         <div className="mt-4">
           <FenceForm key={open ? 'open' : 'closed'} onSubmit={async (p) => { await mutation.mutateAsync(p); }} />
           {submitError ? (
@@ -127,9 +127,9 @@ function FencesManager() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:flex-row sm:items-end">
+      <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4 sm:flex-row sm:items-end">
         <div>
-          <label htmlFor="fence-filter-type" className="text-sm font-medium text-slate-700">Scope type</label>
+          <label htmlFor="fence-filter-type" className="text-sm font-medium text-text-muted">Scope type</label>
           <select id="fence-filter-type" className={`${inputClass} sm:w-44`} value={scopeType} onChange={(e) => setScopeType(e.target.value)}>
             <option value="">All</option>
             {ORG_UNIT_TYPES.map((t) => (
@@ -138,7 +138,7 @@ function FencesManager() {
           </select>
         </div>
         <div className="flex-1">
-          <label htmlFor="fence-filter-id" className="text-sm font-medium text-slate-700">Scope ID</label>
+          <label htmlFor="fence-filter-id" className="text-sm font-medium text-text-muted">Scope ID</label>
           <Input id="fence-filter-id" placeholder="Filter by scope…" value={scopeId} onChange={(e) => setScopeId(e.target.value)} />
         </div>
         {canManage && <Button onClick={() => setCreateOpen(true)}>New fence</Button>}
@@ -151,47 +151,47 @@ function FencesManager() {
       ) : rows.length === 0 ? (
         <EmptyState title="No geo-fences" description="Create the first fence for this scope." />
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="min-w-full divide-y divide-slate-200 bg-white text-sm">
-            <thead className="bg-slate-50">
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="min-w-full divide-y divide-border bg-surface text-sm">
+            <thead className="bg-surface-sunken">
               <tr>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Name</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Scope</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Geometry</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Tol / Acc (m)</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Status</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Version</th>
-                {canManage && <th className="px-3 py-2 text-left font-medium text-slate-600">Action</th>}
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Name</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Scope</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Geometry</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Tol / Acc (m)</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Status</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Version</th>
+                {canManage && <th className="px-3 py-2 text-left font-medium text-text-muted">Action</th>}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-border">
               {rows.map((f) => (
                 <tr key={f.id}>
-                  <td className="px-3 py-2 font-medium text-slate-800">{f.name}</td>
-                  <td className="px-3 py-2 font-mono text-xs text-slate-600">{f.scope_type} · {f.scope_id}</td>
-                  <td className="px-3 py-2 text-xs text-slate-700">
+                  <td className="px-3 py-2 font-medium text-text">{f.name}</td>
+                  <td className="px-3 py-2 font-mono text-xs text-text-muted">{f.scope_type} · {f.scope_id}</td>
+                  <td className="px-3 py-2 text-xs text-text-muted">
                     <Badge tone={f.geometry_type === 'circle' ? 'info' : 'neutral'}>{String(f.geometry_type)}</Badge>{' '}
                     {describeGeometry(f)}
                   </td>
-                  <td className="px-3 py-2 text-xs text-slate-600">
+                  <td className="px-3 py-2 text-xs text-text-muted">
                     {(f.tolerance_meters as number | null) ?? '—'} / {(f.accuracy_threshold_meters as number | null) ?? '—'}
                   </td>
                   <td className="px-3 py-2">
                     <Badge tone={(f.status ?? 'ACTIVE') === 'ACTIVE' ? 'success' : 'neutral'}>{String(f.status ?? 'ACTIVE')}</Badge>
                   </td>
-                  <td className="px-3 py-2 text-slate-500">v{f.version}</td>
+                  <td className="px-3 py-2 text-text-muted">v{f.version}</td>
                   {canManage && (
                     <td className="px-3 py-2">
                       {(f.status ?? 'ACTIVE') === 'ACTIVE' ? (
                         <button
-                          className="text-red-600 hover:underline disabled:opacity-50"
+                          className="text-danger hover:underline disabled:opacity-50"
                           disabled={deactivate.isPending}
                           onClick={() => deactivate.mutate(f)}
                         >
                           Deactivate
                         </button>
                       ) : (
-                        <span className="text-slate-400">—</span>
+                        <span className="text-text-subtle">—</span>
                       )}
                       {rowError?.id === f.id && (
                         <div className="mt-2 max-w-sm">
@@ -223,8 +223,8 @@ export default function GeoFencesPage() {
   return (
     <AppShell>
       <RequirePermission code={PERMISSIONS.GEO_READ}>
-        <h1 className="text-xl font-bold text-slate-900">Geo-fences</h1>
-        <p className="mt-1 text-sm text-slate-500">Circle and polygon perimeters scoped to org units.</p>
+        <h1 className="text-xl font-bold text-text">Geo-fences</h1>
+        <p className="mt-1 text-sm text-text-muted">Circle and polygon perimeters scoped to org units.</p>
         <div className="mt-6">
           <FencesManager />
         </div>

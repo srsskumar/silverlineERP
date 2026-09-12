@@ -37,7 +37,7 @@ function EntityLink({ item }: { item: InboxItem }) {
   const direct = inboxEntityHref(item);
   if (direct) {
     return (
-      <Link href={direct} className="text-brand-600 hover:underline">
+      <Link href={direct} className="text-primary hover:underline">
         Open {String(item.entity_type).toLowerCase()} →
       </Link>
     );
@@ -47,7 +47,7 @@ function EntityLink({ item }: { item: InboxItem }) {
     return <TaskEntityLink taskId={String(item.entity_id)} />;
   }
   if (!item.entity_id) return null;
-  return <span className="font-mono text-xs text-slate-500">{String(item.entity_id)}</span>;
+  return <span className="font-mono text-xs text-text-muted">{String(item.entity_id)}</span>;
 }
 
 /** Resolve a task notification to /projects/:projectId/tasks/:taskId via getTask. */
@@ -60,17 +60,17 @@ function TaskEntityLink({ taskId }: { taskId: string }) {
   });
   if (taskQuery.isLoading) {
     return (
-      <span className="inline-flex items-center gap-1 text-xs text-slate-500">
+      <span className="inline-flex items-center gap-1 text-xs text-text-muted">
         <Spinner size="sm" /> Resolving task…
       </span>
     );
   }
   if (taskQuery.isError || !taskQuery.data) {
-    return <span className="font-mono text-xs text-slate-500" title={taskId}>task:{taskId.slice(0, 8)}…</span>;
+    return <span className="font-mono text-xs text-text-muted" title={taskId}>task:{taskId.slice(0, 8)}…</span>;
   }
   const projectId = String(taskQuery.data.task.project_id);
   return (
-    <Link href={`/projects/${projectId}/tasks/${taskId}`} className="text-brand-600 hover:underline">
+    <Link href={`/projects/${projectId}/tasks/${taskId}`} className="text-primary hover:underline">
       Open task →
     </Link>
   );
@@ -100,26 +100,26 @@ function InboxRow({
   return (
     <li
       className={`flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-start sm:justify-between ${
-        unread ? 'border-brand-200 bg-brand-50' : 'border-slate-200 bg-white'
+        unread ? 'border-primary/30 bg-primary-subtle' : 'border-border bg-surface'
       }`}
     >
       <div className="flex min-w-0 flex-1 gap-3">
         <span
           aria-hidden="true"
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-200 text-sm font-bold text-slate-700"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-border text-sm font-bold text-text-muted"
         >
           {typeGlyph(String(item.type ?? ''))}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={unread ? 'info' : 'neutral'}>{String(item.type)}</Badge>
-            {unread ? <span aria-label="unread" className="text-sm font-bold text-brand-600">•</span> : null}
+            {unread ? <span aria-label="unread" className="text-sm font-bold text-primary">•</span> : null}
             {item.created_at ? (
-              <span className="text-xs text-slate-500">{String(item.created_at)}</span>
+              <span className="text-xs text-text-muted">{String(item.created_at)}</span>
             ) : null}
           </div>
-          <p className="mt-1 text-sm font-medium text-slate-900">{item.title}</p>
-          {item.body ? <p className="mt-1 text-sm text-slate-600">{String(item.body)}</p> : null}
+          <p className="mt-1 text-sm font-medium text-text">{item.title}</p>
+          {item.body ? <p className="mt-1 text-sm text-text-muted">{String(item.body)}</p> : null}
           <div className="mt-2 text-sm">
             <EntityLink item={item} />
           </div>
@@ -136,7 +136,7 @@ function InboxRow({
             Mark read
           </Button>
         ) : (
-          <span className="px-2 py-2 text-xs text-slate-400">Read</span>
+          <span className="px-2 py-2 text-xs text-text-subtle">Read</span>
         )}
       </div>
     </li>
@@ -221,8 +221,8 @@ export function InboxList() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
-        <label className="flex items-center gap-2 text-sm text-slate-700">
+      <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4 sm:flex-row sm:items-center sm:justify-between">
+        <label className="flex items-center gap-2 text-sm text-text-muted">
           <input type="checkbox" checked={unreadOnly} onChange={(e) => setUnreadOnly(e.target.checked)} />
           Unread only
         </label>
@@ -236,7 +236,7 @@ export function InboxList() {
         </div>
       </div>
       {readAllNote ? (
-        <p role="status" className="text-sm text-green-700">
+        <p role="status" className="text-sm text-success">
           {readAllNote}
         </p>
       ) : null}
@@ -268,13 +268,13 @@ export function InboxList() {
                 Load more
               </Button>
             ) : (
-              <p className="text-xs text-slate-500">End of inbox ({accumulated.length} shown).</p>
+              <p className="text-xs text-text-muted">End of inbox ({accumulated.length} shown).</p>
             )}
             {pageQuery.isFetching && <Spinner size="sm" />}
           </div>
         </>
       )}
-      <p className="text-xs text-slate-400">Polls every 60s for new notifications.</p>
+      <p className="text-xs text-text-subtle">Polls every 60s for new notifications.</p>
     </div>
   );
 }

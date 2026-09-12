@@ -39,16 +39,16 @@ export function WorkflowStepper({ status }: { status: string }) {
                 aria-current={current ? 'step' : undefined}
                 className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ${
                   current
-                    ? 'bg-slate-900 text-white ring-slate-900'
+                    ? 'bg-primary text-primary-fg ring-primary'
                     : done
-                      ? 'bg-green-50 text-green-800 ring-green-300'
-                      : 'bg-white text-slate-500 ring-slate-300'
+                      ? 'bg-success-subtle text-success ring-success/40'
+                      : 'bg-surface text-text-muted ring-border'
                 } ${!onTrack ? 'opacity-60' : ''}`}
               >
                 <span
                   aria-hidden="true"
                   className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] ${
-                    current ? 'bg-white text-slate-900' : done ? 'bg-green-600 text-white' : 'bg-slate-200 text-slate-500'
+                    current ? 'bg-surface text-text' : done ? 'bg-success text-white' : 'bg-border text-text-subtle'
                   }`}
                 >
                   {done ? '✓' : i + 1}
@@ -56,7 +56,7 @@ export function WorkflowStepper({ status }: { status: string }) {
                 {stepLabel(step)}
               </span>
               {i < STEPS.length - 1 && (
-                <span aria-hidden="true" className="text-slate-300">
+                <span aria-hidden="true" className="text-text-subtle">
                   →
                 </span>
               )}
@@ -66,13 +66,13 @@ export function WorkflowStepper({ status }: { status: string }) {
       </ol>
       {sideState ? (
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-xs text-slate-500">Side state:</span>
+          <span className="text-xs text-text-muted">Side state:</span>
           <TaskStatusBadge status={sideState} />
           {sideState === 'BLOCKED' && (
-            <span className="text-xs text-amber-800">Resolve the blockers below, then move the task forward.</span>
+            <span className="text-xs text-warning">Resolve the blockers below, then move the task forward.</span>
           )}
           {sideState === 'CANCELLED' && (
-            <span className="text-xs text-slate-500">Cancelled is terminal — no further transitions.</span>
+            <span className="text-xs text-text-muted">Cancelled is terminal — no further transitions.</span>
           )}
         </div>
       ) : null}

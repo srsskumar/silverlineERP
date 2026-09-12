@@ -57,9 +57,9 @@ function CreateHolidayDialog({ open, year, onClose }: { open: boolean; year: num
 
   if (!open) return null;
   return (
-    <div role="dialog" aria-modal="true" aria-label="Create holiday" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-      <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-lg">
-        <h2 className="text-base font-semibold text-slate-900">New holiday</h2>
+    <div role="dialog" aria-modal="true" aria-label="Create holiday" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="w-full max-w-md rounded-lg bg-surface p-6 shadow-lg">
+        <h2 className="text-base font-semibold text-text">New holiday</h2>
         <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="mt-4 flex flex-col gap-4" noValidate>
           <FormField label="Date *" htmlFor="hol-date" error={errors.date?.message}>
             <Input id="hol-date" type="date" invalid={!!errors.date} {...register('date')} />
@@ -72,7 +72,7 @@ function CreateHolidayDialog({ open, year, onClose }: { open: boolean; year: num
           </FormField>
           <div className="grid grid-cols-2 gap-3">
             <FormField label="Scope type" htmlFor="hol-scope-type" error={errors.scope_type?.message}>
-              <select id="hol-scope-type" className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm" {...register('scope_type')}>
+              <select id="hol-scope-type" className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm" {...register('scope_type')}>
                 <option value="">Org-wide</option>
                 {ORG_UNIT_TYPES.map((t) => (
                   <option key={t} value={t}>
@@ -114,7 +114,7 @@ function HolidaysManager() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-white p-4">
+      <div className="flex flex-wrap items-end gap-3 rounded-lg border border-border bg-surface p-4">
         <div>
           <FormField label="Year" htmlFor="hol-year">
             <Input
@@ -137,23 +137,23 @@ function HolidaysManager() {
       ) : (holidaysQuery.data ?? []).length === 0 ? (
         <EmptyState title={`No holidays in ${year}`} description="Add the year's public and festival holidays." />
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="min-w-full divide-y divide-slate-200 bg-white text-sm">
-            <thead className="bg-slate-50">
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="min-w-full divide-y divide-border bg-surface text-sm">
+            <thead className="bg-surface-sunken">
               <tr>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Date</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Name</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Type</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Scope</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Date</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Name</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Type</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Scope</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-border">
               {(holidaysQuery.data ?? []).map((h) => (
                 <tr key={h.id}>
                   <td className="px-3 py-2 font-mono text-xs">{h.date}</td>
                   <td className="px-3 py-2">{h.name}</td>
                   <td className="px-3 py-2">{h.type}</td>
-                  <td className="px-3 py-2 text-slate-600">
+                  <td className="px-3 py-2 text-text-muted">
                     {h.scope_type ? `${h.scope_type}:${String(h.scope_id).slice(0, 8)}…` : 'Org-wide'}
                   </td>
                 </tr>
@@ -171,8 +171,8 @@ export default function HolidaysPage() {
   return (
     <AppShell>
       <RequirePermission code={PERMISSIONS.HOLIDAY_READ}>
-        <h1 className="text-xl font-bold text-slate-900">Holidays</h1>
-        <p className="mt-1 text-sm text-slate-500">Yearly holiday calendar, optionally scoped to a location.</p>
+        <h1 className="text-xl font-bold text-text">Holidays</h1>
+        <p className="mt-1 text-sm text-text-muted">Yearly holiday calendar, optionally scoped to a location.</p>
         <div className="mt-6">
           <HolidaysManager />
         </div>

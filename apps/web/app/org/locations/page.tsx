@@ -46,8 +46,8 @@ function CreateUnitDialog({
   const [submitError, setSubmitError] = React.useState<unknown>(null);
   const parentType = PARENT_OF[type];
   const parentsQuery = useQuery({
-    queryKey: parentType ? queryKeys.orgUnits.list({ type: parentType, limit: 200 }) : ['orgUnits', 'none'],
-    queryFn: () => listOrgUnits({ type: parentType!, limit: 200 }),
+    queryKey: parentType ? queryKeys.orgUnits.list({ type: parentType, limit: 100 }) : ['orgUnits', 'none'],
+    queryFn: () => listOrgUnits({ type: parentType!, limit: 100 }),
     enabled: open && !!parentType,
     staleTime: 10 * 60_000,
   });
@@ -89,9 +89,9 @@ function CreateUnitDialog({
 
   if (!open) return null;
   return (
-    <div role="dialog" aria-modal="true" aria-label={`Create ${type}`} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-      <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-lg">
-        <h2 className="text-base font-semibold text-slate-900">New {type}</h2>
+    <div role="dialog" aria-modal="true" aria-label={`Create ${type}`} className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="w-full max-w-md rounded-lg bg-surface p-6 shadow-lg">
+        <h2 className="text-base font-semibold text-text">New {type}</h2>
         <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="mt-4 flex flex-col gap-4" noValidate>
           <FormField label="Code *" htmlFor="unit-code" error={errors.code?.message}>
             <Input id="unit-code" invalid={!!errors.code} {...register('code')} />
@@ -103,7 +103,7 @@ function CreateUnitDialog({
             <FormField label={`Parent ${parentType}`} htmlFor="unit-parent" error={errors.parent_id?.message}>
               <select
                 id="unit-parent"
-                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm"
                 {...register('parent_id')}
               >
                 <option value="">Select {parentType}</option>
@@ -173,7 +173,7 @@ function LocationsManager() {
             key={t}
             onClick={() => setTab(t)}
             className={`rounded-full px-4 py-1.5 text-sm font-medium ${
-              tab === t ? 'bg-slate-900 text-white' : 'bg-white text-slate-700 ring-1 ring-slate-300'
+              tab === t ? 'bg-primary text-primary-fg' : 'bg-surface text-text-muted ring-1 ring-border'
             }`}
           >
             {t}s
@@ -193,18 +193,18 @@ function LocationsManager() {
         <EmptyState title={`No ${tab}s`} description="Create the first record to build the hierarchy." />
       ) : (
         <>
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
-            <table className="min-w-full divide-y divide-slate-200 bg-white text-sm">
-              <thead className="bg-slate-50">
+          <div className="overflow-x-auto rounded-lg border border-border">
+            <table className="min-w-full divide-y divide-border bg-surface text-sm">
+              <thead className="bg-surface-sunken">
                 <tr>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Code</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Name</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Status</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Version</th>
-                  {canManage && <th className="px-3 py-2 text-left font-medium text-slate-600">Action</th>}
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Code</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Name</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Status</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Version</th>
+                  {canManage && <th className="px-3 py-2 text-left font-medium text-text-muted">Action</th>}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-border">
                 {rows.map((u) => (
                   <tr key={u.id}>
                     <td className="px-3 py-2 font-mono text-xs">{u.code}</td>
@@ -212,19 +212,19 @@ function LocationsManager() {
                     <td className="px-3 py-2">
                       <Badge tone={u.status === 'ACTIVE' ? 'success' : 'neutral'}>{u.status}</Badge>
                     </td>
-                    <td className="px-3 py-2 text-slate-500">v{u.version}</td>
+                    <td className="px-3 py-2 text-text-muted">v{u.version}</td>
                     {canManage && (
                       <td className="px-3 py-2">
                         {u.status === 'ACTIVE' ? (
                           <button
-                            className="text-red-600 hover:underline disabled:opacity-50"
+                            className="text-danger hover:underline disabled:opacity-50"
                             disabled={deactivate.isPending}
                             onClick={() => deactivate.mutate(u)}
                           >
                             Deactivate
                           </button>
                         ) : (
-                          <span className="text-slate-400">—</span>
+                          <span className="text-text-subtle">—</span>
                         )}
                         {rowError?.id === u.id && (
                           <div className="mt-2 max-w-sm">
@@ -262,8 +262,8 @@ export default function LocationsPage() {
   return (
     <AppShell>
       <RequirePermission code={PERMISSIONS.ORG_UNITS_READ}>
-        <h1 className="text-xl font-bold text-slate-900">Locations</h1><Link className="text-sm text-blue-700 underline" href="/org/locations/import">Import locations from CSV</Link>
-        <p className="mt-1 text-sm text-slate-500">District → mandal → village → site hierarchy.</p>
+        <h1 className="text-xl font-bold text-text">Locations</h1><Link className="text-sm text-info underline" href="/org/locations/import">Import locations from CSV</Link>
+        <p className="mt-1 text-sm text-text-muted">District → mandal → village → site hierarchy.</p>
         <div className="mt-6">
           <LocationsManager />
         </div>

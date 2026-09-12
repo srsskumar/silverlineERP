@@ -27,7 +27,7 @@ import { Input } from './ui/Input';
 import { Badge } from './ui/Badge';
 
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 /**
  * File a leave request. Shows a live inclusive-day count, a balance preview
@@ -103,16 +103,16 @@ export function LeaveRequestForm({
       {selectedType && (
         <div className="flex flex-wrap items-center gap-2 text-xs">
           {unpaidSelected ? (
-            <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-500">
+            <span className="rounded-md border border-border bg-surface-sunken px-3 py-2 text-text-muted">
               {selectedType.code} is unpaid — no balance is checked.
             </span>
           ) : balancePreview ? (
-            <span className="rounded-md border border-brand-200 bg-brand-50 px-3 py-2 text-slate-700">
+            <span className="rounded-md border border-primary/30 bg-primary-subtle px-3 py-2 text-text-muted">
               Available balance: <strong>{Number(balancePreview.current_balance) || 0} days</strong>{' '}
-              <span className="font-mono text-slate-500">({balancePreview.leave_code})</span>
+              <span className="font-mono text-text-muted">({balancePreview.leave_code})</span>
             </span>
           ) : balances.length > 0 ? (
-            <span className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+            <span className="rounded-md border border-warning/30 bg-warning-subtle px-3 py-2 text-warning">
               No {selectedType.code} balance row found for this year.
             </span>
           ) : null}
@@ -128,12 +128,12 @@ export function LeaveRequestForm({
         </FormField>
       </div>
 
-      <div className="flex items-center gap-2 text-sm text-slate-600" aria-live="polite">
+      <div className="flex items-center gap-2 text-sm text-text-muted" aria-live="polite">
         <span>Total:</span>
         {dayCount === null ? (
-          <span className="text-slate-400">— pick valid dates</span>
+          <span className="text-text-subtle">— pick valid dates</span>
         ) : dayCount <= 0 ? (
-          <span className="text-red-600">To date must be on or after from date</span>
+          <span className="text-danger">To date must be on or after from date</span>
         ) : (
           <Badge tone="info">{formatDays(dayCount)} (inclusive)</Badge>
         )}
@@ -167,7 +167,7 @@ function LeaveSubmitError({ error }: { error: unknown }) {
   if (code === 'INSUFFICIENT_BALANCE') {
     const available = parseInsufficientBalance(error);
     return (
-      <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <div role="alert" className="rounded-lg border border-warning/30 bg-warning-subtle px-4 py-3 text-sm text-warning">
         <p className="font-medium">Insufficient leave balance{available !== null ? ` (available: ${available} days)` : ''}.</p>
         <p className="mt-1">Shorten the range, pick another leave type, or contact your administrator for a balance adjustment.</p>
         {requestId && <p className="mt-1 text-xs opacity-75">Request ID: {requestId}</p>}
@@ -177,7 +177,7 @@ function LeaveSubmitError({ error }: { error: unknown }) {
   if (code === 'LEAVE_OVERLAP') {
     const ids = parseOverlapIds(error);
     return (
-      <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <div role="alert" className="rounded-lg border border-warning/30 bg-warning-subtle px-4 py-3 text-sm text-warning">
         <p className="font-medium">This range overlaps an existing leave request.</p>
         {ids.length > 0 ? (
           <ul className="mt-1 list-disc pl-5 font-mono text-xs">
@@ -195,7 +195,7 @@ function LeaveSubmitError({ error }: { error: unknown }) {
   if (code === 'ATTENDANCE_CONFLICT') {
     const dates = parseAttendanceConflictDates(error);
     return (
-      <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <div role="alert" className="rounded-lg border border-warning/30 bg-warning-subtle px-4 py-3 text-sm text-warning">
         <p className="font-medium">These dates conflict with attendance records.</p>
         {dates.length > 0 ? (
           <ul className="mt-1 list-disc pl-5 font-mono text-xs">
@@ -212,7 +212,7 @@ function LeaveSubmitError({ error }: { error: unknown }) {
   }
   if (code === 'NO_APPROVER') {
     return (
-      <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <div role="alert" className="rounded-lg border border-warning/30 bg-warning-subtle px-4 py-3 text-sm text-warning">
         <p className="font-medium">No approver is configured for your reporting chain.</p>
         <p className="mt-1">Contact your administrator to set up an approver, then file again.</p>
         {requestId && <p className="mt-1 text-xs opacity-75">Request ID: {requestId}</p>}

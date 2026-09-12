@@ -26,10 +26,10 @@ const PAGE_LIMIT = 20;
 /** Trivially-safe memo: pure row, props are a single stable task object. */
 const TaskRow = React.memo(function TaskRow({ task }: { task: Task }) {
   return (
-    <li className="flex flex-col gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+    <li className="flex flex-col gap-1 rounded-lg border border-border bg-surface px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
-        <p className="truncate text-sm font-medium text-slate-900">{task.title}</p>
-        <p className="mt-0.5 font-mono text-[11px] text-slate-400">
+        <p className="truncate text-sm font-medium text-text">{task.title}</p>
+        <p className="mt-0.5 font-mono text-[11px] text-text-subtle">
           {String(task.project_id).slice(0, 8)}… · {String(task.id).slice(0, 8)}…
         </p>
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
@@ -42,7 +42,7 @@ const TaskRow = React.memo(function TaskRow({ task }: { task: Task }) {
       </div>
       <Link
         href={`/projects/${task.project_id}/tasks/${task.id}`}
-        className="shrink-0 text-sm text-brand-600 hover:underline"
+        className="shrink-0 text-sm text-primary hover:underline"
       >
         Open
       </Link>
@@ -80,8 +80,8 @@ function PagedTaskSection({
   return (
     <section aria-label={title} className="flex flex-col gap-3">
       <div>
-        <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
-        <p className="text-xs text-slate-500">{description}</p>
+        <h2 className="text-sm font-semibold text-text">{title}</h2>
+        <p className="text-xs text-text-muted">{description}</p>
       </div>
       {listQuery.isLoading ? (
         <Skeleton className="h-48 w-full" />
@@ -106,7 +106,7 @@ function PagedTaskSection({
                 Load more
               </Button>
             ) : (
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-text-muted">
                 End of list ({rows.length} shown).
               </p>
             )}
@@ -137,8 +137,8 @@ function PendingApprovals() {
   return (
     <section aria-label="Pending approvals" className="flex flex-col gap-3">
       <div>
-        <h2 className="text-sm font-semibold text-slate-900">Pending approvals</h2>
-        <p className="text-xs text-slate-500">
+        <h2 className="text-sm font-semibold text-text">Pending approvals</h2>
+        <p className="text-xs text-text-muted">
           Leave requests awaiting your decision (from the my-work payload) + attendance exceptions count.
         </p>
       </div>
@@ -162,17 +162,17 @@ function PendingApprovals() {
               {leave.map((l) => (
                 <li
                   key={l.id}
-                  className="flex flex-col gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+                  className="flex flex-col gap-1 rounded-lg border border-border bg-surface px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
                 >
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-slate-900">
+                    <p className="truncate text-sm font-medium text-text">
                       Leave {String(l.id).slice(0, 8)}… · {String(l.from_date)} → {String(l.to_date)}
                     </p>
-                    <p className="mt-0.5 font-mono text-[11px] text-slate-400">
+                    <p className="mt-0.5 font-mono text-[11px] text-text-subtle">
                       employee {String(l.employee_id).slice(0, 8)}…
                     </p>
                   </div>
-                  <Link href={`/leave/${l.id}`} className="shrink-0 text-sm text-brand-600 hover:underline">
+                  <Link href={`/leave/${l.id}`} className="shrink-0 text-sm text-primary hover:underline">
                     Review →
                   </Link>
                 </li>
@@ -180,9 +180,9 @@ function PendingApprovals() {
             </ul>
           ) : null}
           {exceptionsCount > 0 ? (
-            <p className="text-sm text-slate-700">
+            <p className="text-sm text-text-muted">
               {exceptionsCount} attendance exception(s) awaiting decision —{' '}
-              <Link href="/attendance/exceptions" className="text-brand-600 hover:underline">
+              <Link href="/attendance/exceptions" className="text-primary hover:underline">
                 open the exceptions queue →
               </Link>
             </p>
@@ -219,15 +219,15 @@ function UnreadInboxCard() {
   return (
     <section
       aria-label="Unread inbox"
-      className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3"
+      className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface px-4 py-3"
     >
       <div>
-        <h2 className="text-sm font-semibold text-slate-900">Unread inbox</h2>
-        <p className="text-xs text-slate-500">
+        <h2 className="text-sm font-semibold text-text">Unread inbox</h2>
+        <p className="text-xs text-text-muted">
           {unread === 0 ? 'All caught up.' : `${unread} unread notification(s).`}
         </p>
       </div>
-      <Link href="/inbox" className="shrink-0 text-sm text-brand-600 hover:underline">
+      <Link href="/inbox" className="shrink-0 text-sm text-primary hover:underline">
         Open inbox →
       </Link>
     </section>
@@ -260,16 +260,16 @@ function MyWorkInner() {
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">My Work</h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <h1 className="text-xl font-bold text-text">My Work</h1>
+          <p className="mt-1 text-sm text-text-muted">
             Everything assigned to you, with your overdue slice on top. Mentions live in{' '}
-            <Link href="/inbox" className="text-brand-600 hover:underline">
+            <Link href="/inbox" className="text-primary hover:underline">
               Inbox
             </Link>
             .
           </p>
         </div>
-        <Link href="/inbox" className="text-sm text-brand-600 hover:underline">
+        <Link href="/inbox" className="text-sm text-primary hover:underline">
           Go to inbox →
         </Link>
       </div>

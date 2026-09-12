@@ -29,13 +29,13 @@ import { ApiClientError } from '@/lib/apiClient';
 import { isConflictError, requestIdOf } from '@/lib/form-errors';
 
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5 py-2 sm:flex-row sm:gap-4">
-      <dt className="w-40 shrink-0 text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt>
-      <dd className="text-sm text-slate-800">{value}</dd>
+      <dt className="w-40 shrink-0 text-xs font-medium uppercase tracking-wide text-text-muted">{label}</dt>
+      <dd className="text-sm text-text">{value}</dd>
     </div>
   );
 }
@@ -89,34 +89,34 @@ export function ProjectDetailView({ id }: { id: string }) {
     <AppShell>
       <RequirePermission code={PERMISSIONS.PROJECT_READ}>
         <div className="flex flex-col gap-6">
-          <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
+          <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h1 className="text-xl font-bold text-slate-900">
+                <h1 className="text-xl font-bold text-text">
                   <span className="font-mono text-base">{project.code}</span>{' '}
                   <span className="text-lg font-semibold">{project.name}</span>
                 </h1>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <ProjectStatusBadge status={String(project.status)} />
                   {project.priority ? (
-                    <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+                    <span className="rounded-full bg-surface-sunken px-2.5 py-0.5 text-xs font-medium text-text-muted">
                       {String(project.priority)}
                     </span>
                   ) : null}
-                  <span className="text-xs text-slate-500">v{project.version}</span>
+                  <span className="text-xs text-text-muted">v{project.version}</span>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Link href="/projects" className="text-sm text-brand-600 hover:underline">
+                <Link href="/projects" className="text-sm text-primary hover:underline">
                   Back to projects
                 </Link>
                 {canClose && <Button variant="danger" onClick={() => setCloseOpen(true)}>Close project…</Button>}
               </div>
             </div>
-            <div className="mt-4 border-t border-slate-100 pt-4">
+            <div className="mt-4 border-t border-border pt-4">
               <ProjectTabs projectId={project.id} active="overview" />
             </div>
-            <dl className="mt-4 divide-y divide-slate-100">
+            <dl className="mt-4 divide-y divide-border">
               <DetailRow label="Project ID" value={<span className="font-mono text-xs">{project.id}</span>} />
               <DetailRow label="Workspace" value={<span className="font-mono text-xs">{String(project.workspace_id)}</span>} />
               {project.project_type_id ? (
@@ -128,7 +128,7 @@ export function ProjectDetailView({ id }: { id: string }) {
                   project.project_manager_id ? (
                     <span className="font-mono text-xs" title={String(project.project_manager_id)}>
                       {shortUserId(String(project.project_manager_id))}
-                      <span className="ml-2 text-slate-400">(user id — no users directory in S4)</span>
+                      <span className="ml-2 text-text-subtle">(user id — no users directory in S4)</span>
                     </span>
                   ) : (
                     '—'
@@ -155,8 +155,8 @@ export function ProjectDetailView({ id }: { id: string }) {
             />
           )}
 
-          <section aria-label="Tasks" className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
-            <h2 className="text-sm font-semibold text-slate-900">Tasks</h2>
+          <section aria-label="Tasks" className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+            <h2 className="text-sm font-semibold text-text">Tasks</h2>
             <div className="mt-3">
               <ProjectTasksTable projectId={project.id} canCreateTask={canCreateTask} />
             </div>
@@ -182,10 +182,10 @@ export function ProjectDetailView({ id }: { id: string }) {
 }
 
 function CountCard({ label, value, tone = 'neutral' }: { label: string; value: number; tone?: 'neutral' | 'warning' | 'success' }) {
-  const toneClass = tone === 'warning' ? 'text-amber-700' : tone === 'success' ? 'text-green-700' : 'text-slate-900';
+  const toneClass = tone === 'warning' ? 'text-warning' : tone === 'success' ? 'text-success' : 'text-text';
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4">
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <p className="text-xs font-medium uppercase tracking-wide text-text-muted">{label}</p>
       <p className={`mt-1 text-2xl font-bold ${toneClass}`}>{value}</p>
     </div>
   );
@@ -229,9 +229,9 @@ function ProjectStatusPanel({
   });
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
-      <h2 className="text-sm font-semibold text-slate-900">Change status</h2>
-      <p className="mt-1 text-xs text-slate-500">Allowed transitions are enforced by the server (project-type workflow).</p>
+    <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+      <h2 className="text-sm font-semibold text-text">Change status</h2>
+      <p className="mt-1 text-xs text-text-muted">Allowed transitions are enforced by the server (project-type workflow).</p>
       <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
         <select
           aria-label="Project status"
@@ -337,23 +337,23 @@ function ProjectTasksTable({ projectId, canCreateTask }: { projectId: string; ca
       ) : rows.length === 0 ? (
         <EmptyState title="No tasks" description="Use the quick-add bar above to create the first task." />
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="min-w-full divide-y divide-slate-200 bg-white text-sm">
-            <thead className="bg-slate-50">
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="min-w-full divide-y divide-border bg-surface text-sm">
+            <thead className="bg-surface-sunken">
               <tr>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Title</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Status</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">SLA</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Labels</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Assignee</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Action</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Title</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Status</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">SLA</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Labels</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Assignee</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Action</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-border">
               {rows.map((t) => (
                 <tr key={t.id}>
-                  <td className="max-w-xs truncate px-3 py-2 text-slate-800">
-                    {t.parent_id ? <span className="mr-1 text-xs text-slate-400">↳</span> : null}
+                  <td className="max-w-xs truncate px-3 py-2 text-text">
+                    {t.parent_id ? <span className="mr-1 text-xs text-text-subtle">↳</span> : null}
                     {t.title}
                   </td>
                   <td className="px-3 py-2">
@@ -364,7 +364,7 @@ function ProjectTasksTable({ projectId, canCreateTask }: { projectId: string; ca
                   </td>
                   <td className="px-3 py-2">
                     {(t.labels ?? []).length === 0 ? (
-                      <span className="text-slate-400">—</span>
+                      <span className="text-text-subtle">—</span>
                     ) : (
                       <span className="flex flex-wrap gap-1">
                         {(t.labels ?? []).map((l) => (
@@ -373,15 +373,15 @@ function ProjectTasksTable({ projectId, canCreateTask }: { projectId: string; ca
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-2 font-mono text-xs text-slate-700">
+                  <td className="px-3 py-2 font-mono text-xs text-text-muted">
                     {t.assignee_id ? (
                       <span title={String(t.assignee_id)}>{shortUserId(String(t.assignee_id))}</span>
                     ) : (
-                      <span className="text-slate-400">—</span>
+                      <span className="text-text-subtle">—</span>
                     )}
                   </td>
                   <td className="px-3 py-2">
-                    <Link href={`/projects/${projectId}/tasks/${t.id}`} className="text-brand-600 hover:underline">
+                    <Link href={`/projects/${projectId}/tasks/${t.id}`} className="text-primary hover:underline">
                       Open
                     </Link>
                   </td>

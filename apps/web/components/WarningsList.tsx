@@ -8,7 +8,7 @@ import { Badge } from './ui/Badge';
  */
 export function WarningsList({ warnings }: { warnings: PayrollWarning[] }) {
   if (!warnings || warnings.length === 0) {
-    return <p className="text-sm text-slate-500">No warnings — every employee had attendance and salary data.</p>;
+    return <p className="text-sm text-text-muted">No warnings — every employee had attendance and salary data.</p>;
   }
   return (
     <ul className="flex flex-col gap-2">
@@ -16,12 +16,12 @@ export function WarningsList({ warnings }: { warnings: PayrollWarning[] }) {
         <li
           // Warnings carry no stable id — code + employee + index is the best key.
           key={`${w.code}-${w.employee_id ?? 'run'}-${i}`}
-          className="flex flex-wrap items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2"
+          className="flex flex-wrap items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2"
         >
           <Badge tone={warningTone(String(w.code))}>{String(w.code)}</Badge>
-          <span className="min-w-0 flex-1 text-sm text-slate-800">{String(w.message || '—')}</span>
+          <span className="min-w-0 flex-1 text-sm text-text">{String(w.message || '—')}</span>
           {w.employee_id ? (
-            <span className="font-mono text-xs text-slate-500" title={String(w.employee_id)}>
+            <span className="font-mono text-xs text-text-muted" title={String(w.employee_id)}>
               {String(w.employee_id)}
             </span>
           ) : null}

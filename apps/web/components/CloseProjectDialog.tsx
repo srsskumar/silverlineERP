@@ -47,20 +47,20 @@ export function CloseProjectDialog({
   if (!open) return null;
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Close project" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-      <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-lg">
-        <h2 className="text-base font-semibold text-slate-900">Close project</h2>
-        <p className="mt-1 text-xs text-slate-500">
+    <div role="dialog" aria-modal="true" aria-label="Close project" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="w-full max-w-md rounded-lg bg-surface p-6 shadow-lg">
+        <h2 className="text-base font-semibold text-text">Close project</h2>
+        <p className="mt-1 text-xs text-text-muted">
           Closing is final-ish: finish or cancel all open tasks first, or the server will refuse.
         </p>
         <div className="mt-4 flex flex-col gap-1">
-          <label htmlFor="close-reason" className="text-sm font-medium text-slate-700">
+          <label htmlFor="close-reason" className="text-sm font-medium text-text-muted">
             Reason (optional)
           </label>
           <textarea
             id="close-reason"
             rows={2}
-            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1"
+            className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
             placeholder="e.g. All deliverables accepted…"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
@@ -86,7 +86,7 @@ function CloseError({ error }: { error: unknown }) {
   if (code === 'PROJECT_HAS_OPEN_TASKS') {
     const openCount = parseProjectOpenTasks(error);
     return (
-      <div role="alert" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <div role="alert" className="mt-3 rounded-lg border border-warning/30 bg-warning-subtle px-4 py-3 text-sm text-warning">
         <p className="font-medium">
           Cannot close — {openCount !== null ? `${openCount} open task${openCount === 1 ? '' : 's'} remain${openCount === 1 ? 's' : ''}` : 'open tasks remain'}.
         </p>

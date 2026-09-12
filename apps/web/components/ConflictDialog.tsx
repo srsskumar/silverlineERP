@@ -18,13 +18,13 @@ export function ConflictDialog({
 }) {
   if (!open) return null;
   return (
-    <div role="alertdialog" aria-modal="true" aria-label="Version conflict" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-      <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-lg">
-        <h2 className="text-base font-semibold text-slate-900">Someone else changed this record</h2>
-        <p className="mt-2 text-sm text-slate-600">
+    <div role="alertdialog" aria-modal="true" aria-label="Version conflict" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="w-full max-w-md rounded-lg bg-surface p-6 shadow-lg">
+        <h2 className="text-base font-semibold text-text">Someone else changed this record</h2>
+        <p className="mt-2 text-sm text-text-muted">
           {message || 'The record changed since you opened it (version conflict). Reload to get the latest version, then re-apply your changes.'}
         </p>
-        {requestId && <p className="mt-2 text-xs text-slate-500">Request ID: {requestId}</p>}
+        {requestId && <p className="mt-2 text-xs text-text-muted">Request ID: {requestId}</p>}
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>
             Dismiss

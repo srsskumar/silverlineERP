@@ -22,7 +22,7 @@ export const dynamic = 'force-static';
 
 const PAGE_LIMIT = 20;
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 function RecordsTable() {
   const [employeeId, setEmployeeId] = React.useState('');
@@ -56,21 +56,21 @@ function RecordsTable() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 lg:flex-row lg:items-end">
+      <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4 lg:flex-row lg:items-end">
         <div className="flex-1">
-          <label htmlFor="rec-employee" className="text-sm font-medium text-slate-700">Employee ID</label>
+          <label htmlFor="rec-employee" className="text-sm font-medium text-text-muted">Employee ID</label>
           <Input id="rec-employee" placeholder="Filter by employee…" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} />
         </div>
         <div>
-          <label htmlFor="rec-from" className="text-sm font-medium text-slate-700">From</label>
+          <label htmlFor="rec-from" className="text-sm font-medium text-text-muted">From</label>
           <Input id="rec-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
         </div>
         <div>
-          <label htmlFor="rec-to" className="text-sm font-medium text-slate-700">To</label>
+          <label htmlFor="rec-to" className="text-sm font-medium text-text-muted">To</label>
           <Input id="rec-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
         </div>
         <div>
-          <label htmlFor="rec-status" className="text-sm font-medium text-slate-700">Status</label>
+          <label htmlFor="rec-status" className="text-sm font-medium text-text-muted">Status</label>
           <select id="rec-status" className={inputClass} value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All</option>
             {['PRESENT', 'PARTIAL', 'ABSENT', 'VIOLATION'].map((s) => (
@@ -79,7 +79,7 @@ function RecordsTable() {
           </select>
         </div>
         <div>
-          <label htmlFor="rec-violation" className="text-sm font-medium text-slate-700">Geofence</label>
+          <label htmlFor="rec-violation" className="text-sm font-medium text-text-muted">Geofence</label>
           <select id="rec-violation" className={inputClass} value={violation} onChange={(e) => setViolation(e.target.value)}>
             <option value="">All</option>
             <option value="true">Violation only</option>
@@ -92,8 +92,8 @@ function RecordsTable() {
       </div>
 
       {punchOpen && (
-        <div className="rounded-lg border border-slate-200 bg-white p-4">
-          <h2 className="mb-3 text-sm font-semibold text-slate-900">Manual punch (testing / admin)</h2>
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <h2 className="mb-3 text-sm font-semibold text-text">Manual punch (testing / admin)</h2>
           <PunchPanel
             onPunched={() => {
               listQuery.refetch();
@@ -110,32 +110,32 @@ function RecordsTable() {
         <EmptyState title="No attendance records" description="Adjust filters or record a punch above." />
       ) : (
         <>
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
-            <table className="min-w-full divide-y divide-slate-200 bg-white text-sm">
-              <thead className="bg-slate-50">
+          <div className="overflow-x-auto rounded-lg border border-border">
+            <table className="min-w-full divide-y divide-border bg-surface text-sm">
+              <thead className="bg-surface-sunken">
                 <tr>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Date</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Employee</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Status</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Check in</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Check out</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Hours</th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600">Action</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Date</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Employee</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Status</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Check in</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Check out</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Hours</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-border">
                 {rows.map((r) => (
                   <tr key={r.id}>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-800">{r.work_date}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-700">{r.employee_id}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-text">{r.work_date}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-text-muted">{r.employee_id}</td>
                     <td className="px-3 py-2">
                       <AttendanceStatusBadge status={String(r.status)} violation={!!r.geofence_violation} />
                     </td>
-                    <td className="px-3 py-2 text-xs text-slate-700">{r.check_in_at ? String(r.check_in_at) : '—'}</td>
-                    <td className="px-3 py-2 text-xs text-slate-700">{r.check_out_at ? String(r.check_out_at) : '—'}</td>
-                    <td className="px-3 py-2 text-slate-800">{formatHours(r.total_hours)}</td>
+                    <td className="px-3 py-2 text-xs text-text-muted">{r.check_in_at ? String(r.check_in_at) : '—'}</td>
+                    <td className="px-3 py-2 text-xs text-text-muted">{r.check_out_at ? String(r.check_out_at) : '—'}</td>
+                    <td className="px-3 py-2 text-text">{formatHours(r.total_hours)}</td>
                     <td className="px-3 py-2">
-                      <Link href={`/attendance/records/${r.id}`} className="text-brand-600 hover:underline">
+                      <Link href={`/attendance/records/${r.id}`} className="text-primary hover:underline">
                         View
                       </Link>
                       {r.geofence_violation ? (
@@ -155,7 +155,7 @@ function RecordsTable() {
                 Load more
               </Button>
             ) : (
-              <p className="text-xs text-slate-500">End of list ({rows.length} shown).</p>
+              <p className="text-xs text-text-muted">End of list ({rows.length} shown).</p>
             )}
             {listQuery.isFetching && !listQuery.isFetchingNextPage && <Spinner size="sm" />}
           </div>
@@ -169,8 +169,8 @@ export default function AttendancePage() {
   return (
     <AppShell>
       <RequirePermission code={PERMISSIONS.ATTENDANCE_READ}>
-        <h1 className="text-xl font-bold text-slate-900">Attendance records</h1>
-        <p className="mt-1 text-sm text-slate-500">Daily records with punch status, hours and geofence flags.</p>
+        <h1 className="text-xl font-bold text-text">Attendance records</h1>
+        <p className="mt-1 text-sm text-text-muted">Daily records with punch status, hours and geofence flags.</p>
         <div className="mt-6">
           <RecordsTable />
         </div>

@@ -14,7 +14,7 @@ import { Input } from './ui/Input';
 import { Badge } from './ui/Badge';
 
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 /**
  * File an attendance exception (type + reason + optional record link).
@@ -90,17 +90,17 @@ export function ExceptionDialog({
 
   if (!open) return null;
   return (
-    <div role="dialog" aria-modal="true" aria-label="File exception" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-white p-6 shadow-lg">
-        <h2 className="text-base font-semibold text-slate-900">File exception</h2>
+    <div role="dialog" aria-modal="true" aria-label="File exception" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-surface p-6 shadow-lg">
+        <h2 className="text-base font-semibold text-text">File exception</h2>
         {filed ? (
           <div className="mt-4 flex flex-col gap-3">
-            <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+            <div className="rounded-md border border-success/30 bg-success-subtle px-3 py-2 text-sm text-success">
               Exception filed. Use this id in the decide step (there is no server-side
               exceptions list in S2).
             </div>
             <div className="flex items-center gap-2 text-sm">
-              <span className="font-mono text-xs text-slate-800">{filed.id}</span>
+              <span className="font-mono text-xs text-text">{filed.id}</span>
               <Badge tone="info">v{filed.version}</Badge>
               <Badge>{String((filed as { status?: unknown }).status ?? 'PENDING')}</Badge>
             </div>

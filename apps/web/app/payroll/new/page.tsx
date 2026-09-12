@@ -77,7 +77,7 @@ function NewRunForm() {
         setSubmitError(null);
         mutation.mutate(v);
       })}
-      className="flex max-w-2xl flex-col gap-4 rounded-lg border border-slate-200 bg-white p-4 sm:p-6"
+      className="flex max-w-2xl flex-col gap-4 rounded-lg border border-border bg-surface p-4 sm:p-6"
       noValidate
     >
       <PeriodPicker
@@ -90,26 +90,26 @@ function NewRunForm() {
       />
 
       {overlapping && (
-        <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-          <p className="text-sm font-medium text-amber-800">Overlapping run (OVERLAPPING_RUN)</p>
-          <p className="mt-1 text-sm text-amber-700">
+        <div role="alert" className="rounded-lg border border-warning/30 bg-warning-subtle px-4 py-3">
+          <p className="text-sm font-medium text-warning">Overlapping run (OVERLAPPING_RUN)</p>
+          <p className="mt-1 text-sm text-warning">
             This period overlaps an existing run. Pick a non-overlapping period or open the existing run from the
             runs list.
           </p>
           {requestIdOf(submitError) && (
-            <p className="mt-1 text-xs text-amber-600">Request ID: {requestIdOf(submitError)}</p>
+            <p className="mt-1 text-xs text-warning">Request ID: {requestIdOf(submitError)}</p>
           )}
         </div>
       )}
       {tooLong && !overlapping && (
-        <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-          <p className="text-sm font-medium text-amber-800">Period too long (PERIOD_TOO_LONG)</p>
-          <p className="mt-1 text-sm text-amber-700">
+        <div role="alert" className="rounded-lg border border-warning/30 bg-warning-subtle px-4 py-3">
+          <p className="text-sm font-medium text-warning">Period too long (PERIOD_TOO_LONG)</p>
+          <p className="mt-1 text-sm text-warning">
             The server caps a run at 62 days{span ? ` — this range spans ${span} days` : ''}. Split it into
             shorter runs.
           </p>
           {requestIdOf(submitError) && (
-            <p className="mt-1 text-xs text-amber-600">Request ID: {requestIdOf(submitError)}</p>
+            <p className="mt-1 text-xs text-warning">Request ID: {requestIdOf(submitError)}</p>
           )}
         </div>
       )}
@@ -121,7 +121,7 @@ function NewRunForm() {
         <Button type="submit" loading={isSubmitting || mutation.isPending}>
           Create run
         </Button>
-        <Link href="/payroll" className="text-sm text-brand-600 hover:underline">
+        <Link href="/payroll" className="text-sm text-primary hover:underline">
           Back to runs
         </Link>
       </div>
@@ -133,8 +133,8 @@ export default function NewPayrollRunPage() {
   return (
     <AppShell>
       <RequirePermission code={PERMISSIONS.PAYROLL_GENERATE}>
-        <h1 className="text-xl font-bold text-slate-900">New payroll run</h1>
-        <p className="mt-1 text-sm text-slate-500">
+        <h1 className="text-xl font-bold text-text">New payroll run</h1>
+        <p className="mt-1 text-sm text-text-muted">
           Pick a pay period (≤ 62 days) — the run opens in OPEN and is calculated on its detail page.
         </p>
         <div className="mt-6">

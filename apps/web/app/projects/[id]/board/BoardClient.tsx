@@ -38,7 +38,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { applyFieldErrors, isConflictError, requestIdOf } from '@/lib/form-errors';
 
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 export function BoardView({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
@@ -93,8 +93,8 @@ export function BoardView({ projectId }: { projectId: string }) {
       <RequirePermission code={PERMISSIONS.BOARD_READ}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl font-bold text-slate-900">Board</h1>
-            <p className="mt-1 text-sm text-slate-500">
+            <h1 className="text-xl font-bold text-text">Board</h1>
+            <p className="mt-1 text-sm text-text-muted">
               Kanban grouped by status — dragging across columns changes task status; reordering saves position.
             </p>
           </div>
@@ -131,7 +131,7 @@ export function BoardView({ projectId }: { projectId: string }) {
             />
           ) : (
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <label htmlFor="board-select" className="text-sm font-medium text-slate-700">
+              <label htmlFor="board-select" className="text-sm font-medium text-text-muted">
                 Board
               </label>
               <select
@@ -155,10 +155,10 @@ export function BoardView({ projectId }: { projectId: string }) {
           ) : null}
           {selectedId && boardQuery.data ? (
             <>
-              <label className="mb-2 flex items-center gap-2 text-sm font-medium text-slate-700">
+              <label className="mb-2 flex items-center gap-2 text-sm font-medium text-text-muted">
                 <input
                   type="checkbox"
-                  className="h-4 w-4 rounded border-slate-300"
+                  className="h-4 w-4 rounded border-border"
                   checked={mineOnly}
                   onChange={(e) => setMineOnly(e.target.checked)}
                 />
@@ -273,9 +273,9 @@ function NewBoardDialog({
 
   if (!open) return null;
   return (
-    <div role="dialog" aria-modal="true" aria-label="New board" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-      <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-lg">
-        <h2 className="text-base font-semibold text-slate-900">New board</h2>
+    <div role="dialog" aria-modal="true" aria-label="New board" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="w-full max-w-md rounded-lg bg-surface p-6 shadow-lg">
+        <h2 className="text-base font-semibold text-text">New board</h2>
         <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="mt-4 flex flex-col gap-4" noValidate>
           <FormField label="Name" htmlFor="new-board-name" error={errors.name?.message}>
             <Input id="new-board-name" placeholder="e.g. Sprint board" invalid={!!errors.name} {...register('name')} />
@@ -408,25 +408,25 @@ function ManageColumnsDialog({
 
   if (!open) return null;
   return (
-    <div role="dialog" aria-modal="true" aria-label="Manage columns" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-6 shadow-lg">
-        <h2 className="text-base font-semibold text-slate-900">Manage columns (v{version})</h2>
-        <p className="mt-1 text-xs text-slate-500">
+    <div role="dialog" aria-modal="true" aria-label="Manage columns" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-surface p-6 shadow-lg">
+        <h2 className="text-base font-semibold text-text">Manage columns (v{version})</h2>
+        <p className="mt-1 text-xs text-text-muted">
           Config only — editing columns never changes tasks. Add/remove status columns from the project workflow list.
         </p>
         <div className="mt-4 flex flex-col gap-3">
           {draft.map((d, i) => (
-            <div key={d.status_code} className="grid gap-2 rounded-lg border border-slate-200 p-3 sm:grid-cols-4">
+            <div key={d.status_code} className="grid gap-2 rounded-lg border border-border p-3 sm:grid-cols-4">
               <div>
-                <span className="text-xs font-medium text-slate-500">Status</span>
-                <p className="font-mono text-sm text-slate-900">{d.status_code}</p>
+                <span className="text-xs font-medium text-text-muted">Status</span>
+                <p className="font-mono text-sm text-text">{d.status_code}</p>
               </div>
               <div>
-                <label htmlFor={`col-name-${i}`} className="text-xs font-medium text-slate-500">Display name</label>
+                <label htmlFor={`col-name-${i}`} className="text-xs font-medium text-text-muted">Display name</label>
                 <Input id={`col-name-${i}`} value={d.name} onChange={(e) => setRow(i, { name: e.target.value })} />
               </div>
               <div>
-                <label htmlFor={`col-wip-${i}`} className="text-xs font-medium text-slate-500">WIP limit</label>
+                <label htmlFor={`col-wip-${i}`} className="text-xs font-medium text-text-muted">WIP limit</label>
                 <Input
                   id={`col-wip-${i}`}
                   inputMode="numeric"
@@ -436,7 +436,7 @@ function ManageColumnsDialog({
                 />
               </div>
               <div>
-                <label htmlFor={`col-color-${i}`} className="text-xs font-medium text-slate-500">Color</label>
+                <label htmlFor={`col-color-${i}`} className="text-xs font-medium text-text-muted">Color</label>
                 <div className="flex gap-2">
                   <Input
                     id={`col-color-${i}`}
@@ -448,7 +448,7 @@ function ManageColumnsDialog({
                   <button
                     type="button"
                     onClick={() => setDraft((prev) => prev.filter((_, j) => j !== i))}
-                    className="shrink-0 text-xs text-red-600 hover:underline"
+                    className="shrink-0 text-xs text-danger hover:underline"
                     aria-label={`Remove column ${d.status_code}`}
                   >
                     Remove
@@ -457,11 +457,11 @@ function ManageColumnsDialog({
               </div>
             </div>
           ))}
-          {draft.length === 0 ? <p className="text-sm text-slate-500">No columns — add at least one.</p> : null}
+          {draft.length === 0 ? <p className="text-sm text-text-muted">No columns — add at least one.</p> : null}
           {available.length > 0 ? (
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
               <div className="flex-1">
-                <label htmlFor="col-add" className="text-sm font-medium text-slate-700">Add status column</label>
+                <label htmlFor="col-add" className="text-sm font-medium text-text-muted">Add status column</label>
                 <select id="col-add" className={inputClass} value={addStatus} onChange={(e) => setAddStatus(e.target.value)}>
                   <option value="">Pick a workflow status…</option>
                   {available.map((s) => (
@@ -485,7 +485,7 @@ function ManageColumnsDialog({
               </Button>
             </div>
           ) : (
-            <p className="text-xs text-slate-500">All workflow statuses are already columns.</p>
+            <p className="text-xs text-text-muted">All workflow statuses are already columns.</p>
           )}
         </div>
         {submitError ? (

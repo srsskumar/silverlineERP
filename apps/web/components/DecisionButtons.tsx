@@ -13,7 +13,7 @@ import { FormField } from './ui/FormField';
 import { ConflictDialog, useConflict } from './ConflictDialog';
 
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 /**
  * Approve / reject a pending leave request with If-Match versioning.
@@ -87,7 +87,7 @@ export function DecisionButtons({
               aria-checked={decision === d}
               onClick={() => setValue('decision', d, { shouldValidate: true })}
               className={`flex-1 rounded-md px-3 py-2 text-sm font-medium ring-1 ${
-                decision === d ? 'bg-slate-900 text-white ring-slate-900' : 'bg-white text-slate-700 ring-slate-300'
+                decision === d ? 'bg-primary text-primary-fg ring-primary' : 'bg-surface text-text-muted ring-border'
               }`}
             >
               {d}
@@ -108,13 +108,13 @@ export function DecisionButtons({
           />
         </FormField>
         {errors.decision?.message ? (
-          <p role="alert" className="text-xs text-red-600">
+          <p role="alert" className="text-xs text-danger">
             {errors.decision.message}
           </p>
         ) : null}
         {submitError ? <ErrorCard title="Could not record decision" error={submitError} /> : null}
         {done ? (
-          <p role="status" className="text-sm text-green-700">
+          <p role="status" className="text-sm text-success">
             Decision recorded ({done}).
           </p>
         ) : null}

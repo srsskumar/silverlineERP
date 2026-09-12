@@ -69,10 +69,10 @@ export function DocumentList({
   };
 
   return (
-    <section aria-label="Documents" className="rounded-lg border border-slate-200 bg-white p-4">
-      <h2 className="text-sm font-semibold text-slate-900">Documents</h2>
+    <section aria-label="Documents" className="rounded-lg border border-border bg-surface p-4">
+      <h2 className="text-sm font-semibold text-text">Documents</h2>
       {docsQuery.isLoading ? (
-        <div className="flex items-center gap-2 py-6 text-sm text-slate-500">
+        <div className="flex items-center gap-2 py-6 text-sm text-text-muted">
           <Spinner size="sm" /> Loading documents…
         </div>
       ) : docsQuery.isError ? (
@@ -84,12 +84,12 @@ export function DocumentList({
           <EmptyState title="No documents" description="Upload identity or joining documents for this employee." />
         </div>
       ) : (
-        <ul className="mt-3 divide-y divide-slate-100">
+        <ul className="mt-3 divide-y divide-border">
           {(docsQuery.data ?? []).map((d) => (
             <li key={d.id} className="flex items-center justify-between gap-3 py-2 text-sm">
               <div className="min-w-0">
-                <p className="truncate font-medium text-slate-800">{d.file_name}</p>
-                <p className="text-xs text-slate-500">
+                <p className="truncate font-medium text-text">{d.file_name}</p>
+                <p className="text-xs text-text-muted">
                   {d.doc_type} · sha {String(d.checksum).slice(0, 12)}…
                 </p>
               </div><DownloadButton path={`/api/v1/employees/${employeeId}/documents/${d.id}/download`} name={d.file_name} label="Download"/>
@@ -98,7 +98,7 @@ export function DocumentList({
         </ul>
       )}
       {canUpload && (
-        <div className="mt-4 flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-end">
+        <div className="mt-4 flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-end">
           <div className="w-full sm:w-48">
             <FormField label="Document type" htmlFor="doc-type">
               <Input id="doc-type" value={docType} onChange={(e) => setDocType(e.target.value)} />

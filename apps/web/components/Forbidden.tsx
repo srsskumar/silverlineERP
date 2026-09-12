@@ -7,14 +7,14 @@ import { Button } from './ui/Button';
 export function Forbidden({ required }: { required?: string }) {
   return (
     <div className="mx-auto flex max-w-md flex-col items-center gap-3 px-6 py-16 text-center">
-      <p className="text-5xl font-bold text-slate-300">403</p>
-      <h1 className="text-lg font-semibold text-slate-900">Access denied</h1>
-      <p className="text-sm text-slate-500">
+      <p className="text-5xl font-bold text-text-subtle">403</p>
+      <h1 className="text-lg font-semibold text-text">Access denied</h1>
+      <p className="text-sm text-text-muted">
         You don&apos;t have permission to view this page.
         {required && (
           <>
             {' '}
-            Required permission: <code className="rounded bg-slate-100 px-1">{required}</code>
+            Required permission: <code className="rounded bg-surface-sunken px-1">{required}</code>
           </>
         )}
       </p>

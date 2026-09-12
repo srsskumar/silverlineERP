@@ -20,7 +20,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 export const dynamic = 'force-static';
 
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 export default function ProjectsPage() {
   return (
@@ -28,8 +28,8 @@ export default function ProjectsPage() {
       <RequirePermission code={PERMISSIONS.PROJECT_READ}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl font-bold text-slate-900">Projects</h1>
-            <p className="mt-1 text-sm text-slate-500">Delivery projects grouped by workspace.</p>
+            <h1 className="text-xl font-bold text-text">Projects</h1>
+            <p className="mt-1 text-sm text-text-muted">Delivery projects grouped by workspace.</p>
           </div>
           <NewProjectLink />
         </div>
@@ -85,9 +85,9 @@ function ProjectsTable() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:flex-row sm:items-end">
+      <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4 sm:flex-row sm:items-end">
         <div>
-          <label htmlFor="projects-status" className="text-sm font-medium text-slate-700">Status</label>
+          <label htmlFor="projects-status" className="text-sm font-medium text-text-muted">Status</label>
           <select id="projects-status" className={inputClass} value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All</option>
             {PROJECT_STATUSES.map((s) => (
@@ -97,7 +97,7 @@ function ProjectsTable() {
         </div>
         {canReadWorkspaces && (
           <div>
-            <label htmlFor="projects-workspace" className="text-sm font-medium text-slate-700">Workspace</label>
+            <label htmlFor="projects-workspace" className="text-sm font-medium text-text-muted">Workspace</label>
             <select
               id="projects-workspace"
               className={inputClass}
@@ -112,7 +112,7 @@ function ProjectsTable() {
           </div>
         )}
         <div className="flex-1">
-          <label htmlFor="projects-q" className="text-sm font-medium text-slate-700">Search</label>
+          <label htmlFor="projects-q" className="text-sm font-medium text-text-muted">Search</label>
           <input
             id="projects-q"
             className={inputClass}
@@ -130,28 +130,28 @@ function ProjectsTable() {
       ) : rows.length === 0 ? (
         <EmptyState title="No projects" description="Nothing matches these filters yet — create the first project to get started." />
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="min-w-full divide-y divide-slate-200 bg-white text-sm">
-            <thead className="bg-slate-50">
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="min-w-full divide-y divide-border bg-surface text-sm">
+            <thead className="bg-surface-sunken">
               <tr>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Code</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Name</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Status</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Priority</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Action</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Code</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Name</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Status</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Priority</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Action</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-border">
               {rows.map((p) => (
                 <tr key={p.id}>
-                  <td className="px-3 py-2 font-mono text-xs text-slate-800">{p.code}</td>
-                  <td className="px-3 py-2 text-slate-800">{p.name}</td>
+                  <td className="px-3 py-2 font-mono text-xs text-text">{p.code}</td>
+                  <td className="px-3 py-2 text-text">{p.name}</td>
                   <td className="px-3 py-2">
                     <ProjectStatusBadge status={String(p.status)} />
                   </td>
-                  <td className="px-3 py-2 text-slate-700">{p.priority ? String(p.priority) : '—'}</td>
+                  <td className="px-3 py-2 text-text-muted">{p.priority ? String(p.priority) : '—'}</td>
                   <td className="px-3 py-2">
-                    <Link href={`/projects/${p.id}`} className="text-brand-600 hover:underline">
+                    <Link href={`/projects/${p.id}`} className="text-primary hover:underline">
                       View
                     </Link>
                   </td>
@@ -162,7 +162,7 @@ function ProjectsTable() {
         </div>
       )}
       {!listQuery.isLoading && !listQuery.isError && (
-        <p className="text-xs text-slate-500">{rows.length} project{rows.length === 1 ? '' : 's'} shown.</p>
+        <p className="text-xs text-text-muted">{rows.length} project{rows.length === 1 ? '' : 's'} shown.</p>
       )}
     </div>
   );

@@ -11,7 +11,7 @@ export function DecisionBadge({ result }: { result: PunchResult }) {
   return (
     <span className="inline-flex items-center gap-1.5">
       <Badge tone="warning">REQUIRES_REVIEW</Badge>
-      <span className="font-mono text-xs text-slate-600">{result.code}</span>
+      <span className="font-mono text-xs text-text-muted">{result.code}</span>
     </span>
   );
 }

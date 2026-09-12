@@ -34,14 +34,14 @@ export function LabelPill({
           style={{ backgroundColor: color as string }}
         />
       ) : null}
-      <span className={colored ? '' : 'rounded-full bg-slate-100 px-0 text-slate-700'}>{label.name}</span>
+      <span className={colored ? '' : 'rounded-full bg-surface-sunken px-0 text-text-muted'}>{label.name}</span>
       {onRemove ? (
         <button
           type="button"
           onClick={onRemove}
           disabled={removing}
           aria-label={`Remove label ${label.name}`}
-          className="ml-1 text-slate-500 hover:text-red-600 disabled:opacity-50"
+          className="ml-1 text-text-muted hover:text-danger disabled:opacity-50"
         >
           ×
         </button>

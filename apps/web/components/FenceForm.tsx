@@ -15,7 +15,7 @@ import { FormField } from './ui/FormField';
 import { Input } from './ui/Input';
 
 const inputClass =
-  'w-full rounded-md border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 border-slate-300';
+  'w-full rounded-md border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 border-border';
 
 export interface FencePayload {
   name: string;
@@ -127,7 +127,7 @@ export function FenceForm({
               aria-checked={geometryType === t}
               onClick={() => setValue('geometry_type', t, { shouldValidate: true })}
               className={`flex-1 rounded-md px-3 py-2 text-sm font-medium ring-1 ${
-                geometryType === t ? 'bg-slate-900 text-white ring-slate-900' : 'bg-white text-slate-700 ring-slate-300'
+                geometryType === t ? 'bg-primary text-primary-fg ring-primary' : 'bg-surface text-text-muted ring-border'
               }`}
             >
               {t}
@@ -136,7 +136,7 @@ export function FenceForm({
         </div>
         <input id="fence-geo-type-hidden" type="hidden" value={geometryType} {...register('geometry_type')} />
         {errors.geometry_type?.message && (
-          <p role="alert" className="text-xs text-red-600">{errors.geometry_type.message}</p>
+          <p role="alert" className="text-xs text-danger">{errors.geometry_type.message}</p>
         )}
       </FormField>
 
@@ -161,7 +161,7 @@ export function FenceForm({
             placeholder={'17.44,78.34\n17.45,78.35\n17.43,78.36'}
             {...register('polygon_text')}
           />
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-xs text-text-muted">
             {polygonText.trim()
               ? polygonPreview.ok
                 ? `${polygonPreview.points.length} points parsed — ready.`

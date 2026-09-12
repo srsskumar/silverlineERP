@@ -22,8 +22,8 @@ import { Skeleton } from '@/components/ui/Skeleton';
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5 py-2 sm:flex-row sm:gap-4">
-      <dt className="w-40 shrink-0 text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt>
-      <dd className="text-sm text-slate-800">{value}</dd>
+      <dt className="w-40 shrink-0 text-xs font-medium uppercase tracking-wide text-text-muted">{label}</dt>
+      <dd className="text-sm text-text">{value}</dd>
     </div>
   );
 }
@@ -96,33 +96,33 @@ export function LeaveDetailView({ id }: { id: string }) {
       <RequirePermission code={PERMISSIONS.LEAVE_REQUEST}>
         <div className="flex flex-col gap-6">
           {replayNotice && (
-            <div role="status" className="rounded-lg border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-slate-800">
+            <div role="status" className="rounded-lg border border-primary/30 bg-primary-subtle px-4 py-3 text-sm text-text">
               This request was already filed — your retry was de-duplicated (same idempotency key), no duplicate was created.
             </div>
           )}
 
-          <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
+          <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h1 className="text-xl font-bold text-slate-900">
+                <h1 className="text-xl font-bold text-text">
                   <span className="font-mono">{req.leave_code}</span>{' '}
-                  <span className="text-base font-normal text-slate-500">
+                  <span className="text-base font-normal text-text-muted">
                     {req.from_date} → {req.to_date}
                   </span>
                 </h1>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <LeaveStatusBadge status={String(req.status)} />
                   <Badge tone="info">{formatDays(req.total_days)}</Badge>
-                  <span className="text-xs text-slate-500">v{req.version}</span>
+                  <span className="text-xs text-text-muted">v{req.version}</span>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Link href="/leave" className="text-sm text-brand-600 hover:underline">
+                <Link href="/leave" className="text-sm text-primary hover:underline">
                   Back to requests
                 </Link>
               </div>
             </div>
-            <dl className="mt-4 divide-y divide-slate-100">
+            <dl className="mt-4 divide-y divide-border">
               <DetailRow label="Request ID" value={<span className="font-mono text-xs">{req.id}</span>} />
               <DetailRow label="Employee" value={<span className="font-mono text-xs">{req.employee_id}</span>} />
               <DetailRow
@@ -131,7 +131,7 @@ export function LeaveDetailView({ id }: { id: string }) {
                   req.current_approver_id ? (
                     <span className="font-mono text-xs" title={String(req.current_approver_id)}>
                       {shortUserId(String(req.current_approver_id))}
-                      <span className="ml-2 text-slate-400">(user id — names are not provided by the API)</span>
+                      <span className="ml-2 text-text-subtle">(user id — names are not provided by the API)</span>
                     </span>
                   ) : (
                     '—'
@@ -143,18 +143,18 @@ export function LeaveDetailView({ id }: { id: string }) {
             </dl>
           </div>
 
-          <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
-            <h2 className="text-sm font-semibold text-slate-900">Approval chain ({chain.length})</h2>
-            <p className="mt-1 text-xs text-slate-500">Approvers are shown as user ids — the API does not return approver names.</p>
+          <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+            <h2 className="text-sm font-semibold text-text">Approval chain ({chain.length})</h2>
+            <p className="mt-1 text-xs text-text-muted">Approvers are shown as user ids — the API does not return approver names.</p>
             <div className="mt-3">
               <ApprovalTimeline chain={chain} />
             </div>
           </div>
 
           {isMyApproval && (
-            <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
-              <h2 className="text-sm font-semibold text-slate-900">Your decision</h2>
-              <p className="mt-1 text-xs text-slate-500">You are the current approver. Rejecting requires a note.</p>
+            <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+              <h2 className="text-sm font-semibold text-text">Your decision</h2>
+              <p className="mt-1 text-xs text-text-muted">You are the current approver. Rejecting requires a note.</p>
               <div className="mt-3 max-w-xl">
                 <DecisionButtons
                   requestId={req.id}
@@ -167,9 +167,9 @@ export function LeaveDetailView({ id }: { id: string }) {
           )}
 
           {isMine && isPending && (
-            <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
-              <h2 className="text-sm font-semibold text-slate-900">Cancel</h2>
-              <p className="mt-1 text-xs text-slate-500">You filed this request and it is still pending.</p>
+            <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+              <h2 className="text-sm font-semibold text-text">Cancel</h2>
+              <p className="mt-1 text-xs text-text-muted">You filed this request and it is still pending.</p>
               <div className="mt-3 max-w-xl">
                 <CancelButton requestId={req.id} onCancelled={refetchAll} />
               </div>

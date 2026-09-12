@@ -17,7 +17,7 @@ import { Input } from './ui/Input';
 import { DecisionBadge } from './DecisionBadge';
 
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 function nowLocalInput(): string {
   const d = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000);
@@ -76,7 +76,7 @@ export function PunchPanel({ onPunched }: { onPunched?: (r: PunchResult) => void
 
   if (!canPunch) {
     return (
-      <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+      <p className="rounded-md border border-border bg-surface-sunken px-3 py-2 text-xs text-text-muted">
         Manual punch needs the <span className="font-mono">attendance.punch</span> permission.
       </p>
     );
@@ -103,27 +103,27 @@ export function PunchPanel({ onPunched }: { onPunched?: (r: PunchResult) => void
                 onFocus={() => setPickerOpen(true)}
               />
               {pickerOpen && empSearch.trim().length > 0 && (
-                <div className="rounded-md border border-slate-200 bg-white shadow-sm">
+                <div className="rounded-md border border-border bg-surface shadow-sm">
                   {searchQuery.isLoading ? (
-                    <p className="px-3 py-2 text-xs text-slate-500">Searching…</p>
+                    <p className="px-3 py-2 text-xs text-text-muted">Searching…</p>
                   ) : candidates.length === 0 ? (
-                    <p className="px-3 py-2 text-xs text-slate-500">No matches — you can still punch a raw ID.</p>
+                    <p className="px-3 py-2 text-xs text-text-muted">No matches — you can still punch a raw ID.</p>
                   ) : (
                     candidates.map((c) => (
                       <button
                         key={c.id}
                         type="button"
-                        className="block w-full px-3 py-1.5 text-left text-xs hover:bg-slate-50"
+                        className="block w-full px-3 py-1.5 text-left text-xs hover:bg-surface-sunken"
                         onClick={() => {
                           setValue('employee_id', c.id, { shouldValidate: true });
                           setEmpSearch('');
                           setPickerOpen(false);
                         }}
                       >
-                        <span className="font-medium text-slate-800">
+                        <span className="font-medium text-text">
                           {String(c.first_name)} {c.last_name ? String(c.last_name) : ''}
                         </span>{' '}
-                        <span className="font-mono text-slate-500">{c.emp_no}</span>
+                        <span className="font-mono text-text-muted">{c.emp_no}</span>
                       </button>
                     ))
                   )}
@@ -141,7 +141,7 @@ export function PunchPanel({ onPunched }: { onPunched?: (r: PunchResult) => void
                   aria-checked={eventType === t}
                   onClick={() => setValue('event_type', t)}
                   className={`flex-1 rounded-md px-3 py-2 text-sm font-medium ring-1 ${
-                    eventType === t ? 'bg-slate-900 text-white ring-slate-900' : 'bg-white text-slate-700 ring-slate-300'
+                    eventType === t ? 'bg-primary text-primary-fg ring-primary' : 'bg-surface text-text-muted ring-border'
                   }`}
                 >
                   {t}
@@ -165,7 +165,7 @@ export function PunchPanel({ onPunched }: { onPunched?: (r: PunchResult) => void
           <Button type="submit" loading={isSubmitting || mutation.isPending}>
             Punch {eventType === 'CHECK_IN' ? 'in' : 'out'} now
           </Button>
-          <span className="text-xs text-slate-500">Client time {nowLocalInput()} · fresh Idempotency-Key per attempt</span>
+          <span className="text-xs text-text-muted">Client time {nowLocalInput()} · fresh Idempotency-Key per attempt</span>
         </div>
       </form>
 
@@ -185,10 +185,10 @@ export function PunchPanel({ onPunched }: { onPunched?: (r: PunchResult) => void
           role="status"
           className={`rounded-lg border px-4 py-3 text-sm ${
             result.kind === 'accepted'
-              ? 'border-green-200 bg-green-50 text-green-900'
+              ? 'border-success/30 bg-success-subtle text-success'
               : result.kind === 'applied'
-                ? 'border-brand-200 bg-brand-50 text-slate-900'
-                : 'border-amber-200 bg-amber-50 text-amber-900'
+                ? 'border-primary/30 bg-primary-subtle text-text'
+                : 'border-warning/30 bg-warning-subtle text-warning'
           }`}
         >
           <div className="flex flex-wrap items-center gap-2">

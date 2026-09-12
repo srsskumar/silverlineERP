@@ -9,7 +9,7 @@ import { FormField } from './ui/FormField';
 import { Input } from './ui/Input';
 
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 /** Cancel your own PENDING request (confirm + optional reason). */
 export function CancelButton({
@@ -42,8 +42,8 @@ export function CancelButton({
   }
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-red-200 bg-red-50 p-4">
-      <p className="text-sm font-medium text-red-900">Cancel this pending request?</p>
+    <div className="flex flex-col gap-3 rounded-lg border border-danger/30 bg-danger-subtle p-4">
+      <p className="text-sm font-medium text-danger">Cancel this pending request?</p>
       <FormField label="Reason (optional)" htmlFor="leave-cancel-reason">
         <Input
           id="leave-cancel-reason"

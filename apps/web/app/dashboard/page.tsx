@@ -19,7 +19,7 @@ import { queryKeys } from '@/lib/query-keys';
 export const dynamic = 'force-static';
 
 const selectClass =
-  'rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 /**
  * Board-first landing page (Jira-style): pick a project, pick one of its
@@ -86,8 +86,8 @@ export default function DashboardPage() {
     <AppShell>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">Board</h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <h1 className="text-xl font-bold text-text">Board</h1>
+          <p className="mt-1 text-sm text-text-muted">
             Pick a project and work its Kanban — drag cards across columns to change status.
           </p>
         </div>
@@ -95,7 +95,7 @@ export default function DashboardPage() {
           {projectsQuery.isLoading ? (
             <Skeleton className="h-9 w-56" />
           ) : (
-            <label className="flex items-center gap-2 text-sm text-slate-700">
+            <label className="flex items-center gap-2 text-sm text-text-muted">
               Project
               <select
                 aria-label="Project"
@@ -119,7 +119,7 @@ export default function DashboardPage() {
           {boardsQuery.isLoading ? (
             <Skeleton className="h-9 w-44" />
           ) : boards.length > 0 ? (
-            <label className="flex items-center gap-2 text-sm text-slate-700">
+            <label className="flex items-center gap-2 text-sm text-text-muted">
               Board
               <select
                 aria-label="Board"
@@ -136,14 +136,14 @@ export default function DashboardPage() {
             </label>
           ) : null}
           {projectId ? (
-            <Link href={`/projects/${projectId}`} className="text-sm text-brand-600 hover:underline">
+            <Link href={`/projects/${projectId}`} className="text-sm text-primary hover:underline">
               Project overview →
             </Link>
           ) : null}
-          <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+          <label className="flex items-center gap-2 text-sm font-medium text-text-muted">
             <input
               type="checkbox"
-              className="h-4 w-4 rounded border-slate-300"
+              className="h-4 w-4 rounded border-border"
               checked={mineOnly}
               onChange={(e) => setMineOnly(e.target.checked)}
             />
@@ -178,7 +178,7 @@ export default function DashboardPage() {
               projectId ? (
                 <Link
                   href={`/projects/${projectId}/board`}
-                  className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+                  className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-fg hover:bg-primary-hover"
                 >
                   Open Board tab
                 </Link>
@@ -192,7 +192,7 @@ export default function DashboardPage() {
         ) : boardQuery.data ? (
           <RequirePermission code={PERMISSIONS.BOARD_READ}>
             {mineOnly ? (
-              <p className="mb-2 text-xs text-slate-500">
+              <p className="mb-2 text-xs text-text-muted">
                 Showing only tasks assigned to you — managers still see everything on their own boards.
               </p>
             ) : null}

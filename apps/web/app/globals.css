@@ -118,6 +118,61 @@
     outline: 2px solid hsl(var(--ring));
     outline-offset: 2px;
   }
+
+  /**
+   * Native form controls.
+   *
+   * 46 raw <select>/<input> elements are used directly across 26 route files
+   * rather than through the primitives. Styling them in the base layer keeps
+   * them on-theme (and legible in dark mode) without touching every call site;
+   * anything that opts out can still override with a utility class.
+   */
+  select,
+  input:not([type='checkbox']):not([type='radio']):not([type='file']),
+  textarea {
+    background-color: hsl(var(--surface));
+    color: hsl(var(--text));
+    border: 1px solid hsl(var(--border));
+    border-radius: calc(var(--radius) - 2px);
+    font-size: 0.8125rem;
+    line-height: 1.25rem;
+  }
+  select,
+  input:not([type='checkbox']):not([type='radio']):not([type='file']) {
+    height: 2rem;
+    padding-inline: 0.625rem;
+  }
+  textarea {
+    padding: 0.375rem 0.625rem;
+  }
+  select {
+    /* Room for the chevron the UA draws on the right. */
+    padding-inline-end: 1.75rem;
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: hsl(var(--text-subtle));
+  }
+  input:disabled,
+  select:disabled,
+  textarea:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  /* Checkboxes and radios follow the brand rather than the UA default blue. */
+  input[type='checkbox'],
+  input[type='radio'] {
+    accent-color: hsl(var(--primary));
+    width: 0.875rem;
+    height: 0.875rem;
+  }
+  /* The UA calendar/clock glyphs are near-invisible on a dark surface. */
+  .dark input[type='date']::-webkit-calendar-picker-indicator,
+  .dark input[type='month']::-webkit-calendar-picker-indicator,
+  .dark input[type='time']::-webkit-calendar-picker-indicator,
+  .dark input[type='datetime-local']::-webkit-calendar-picker-indicator {
+    filter: invert(1) opacity(0.65);
+  }
 }
 
 @layer utilities {

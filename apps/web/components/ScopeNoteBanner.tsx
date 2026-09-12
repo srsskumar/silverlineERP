@@ -4,7 +4,7 @@
 export function ScopeNoteBanner({ note }: { note?: string | null }) {
   if (!note) return null;
   return (
-    <div role="note" className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+    <div role="note" className="rounded-lg border border-info/30 bg-info-subtle px-4 py-3 text-sm text-info">
       <p className="font-medium">Scope note</p>
       <p className="mt-1">{note}</p>
     </div>

@@ -25,7 +25,7 @@ import { RUN_STATUSES } from '@/lib/payroll';
 export const dynamic = 'force-static';
 
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 /**
  * Policy read + edit card (folded into /payroll — simpler than a route).
@@ -45,11 +45,11 @@ function PolicyCard() {
   });
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6">
+    <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-slate-900">Payroll policy</h2>
-          <p className="mt-0.5 text-xs text-slate-500">
+          <h2 className="text-sm font-semibold text-text">Payroll policy</h2>
+          <p className="mt-0.5 text-xs text-text-muted">
             Per-day divisor and PF % applied to gross (display semantics in README).
           </p>
         </div>
@@ -68,17 +68,17 @@ function PolicyCard() {
       ) : policyQuery.data ? (
         <dl className="mt-3 flex flex-wrap gap-x-8 gap-y-2">
           <div>
-            <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Per-day divisor</dt>
-            <dd className="font-mono text-sm text-slate-900">{String(policyQuery.data.per_day_divisor)}</dd>
+            <dt className="text-xs font-medium uppercase tracking-wide text-text-muted">Per-day divisor</dt>
+            <dd className="font-mono text-sm text-text">{String(policyQuery.data.per_day_divisor)}</dd>
           </div>
           <div>
-            <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">PF %</dt>
-            <dd className="font-mono text-sm text-slate-900">{String(policyQuery.data.pf_pct)}%</dd>
+            <dt className="text-xs font-medium uppercase tracking-wide text-text-muted">PF %</dt>
+            <dd className="font-mono text-sm text-text">{String(policyQuery.data.pf_pct)}%</dd>
           </div>
         </dl>
       ) : null}
       {!canConfigure && (
-        <p className="mt-2 text-xs text-slate-400">Policy edits need payroll.configure.</p>
+        <p className="mt-2 text-xs text-text-subtle">Policy edits need payroll.configure.</p>
       )}
       <PolicyDialog
         open={editOpen}
@@ -142,12 +142,12 @@ function PolicyDialog({
 
   if (!open) return null;
   return (
-    <div role="dialog" aria-modal="true" aria-label="Edit payroll policy" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-white p-6 shadow-lg">
-        <h2 className="text-base font-semibold text-slate-900">Edit payroll policy</h2>
+    <div role="dialog" aria-modal="true" aria-label="Edit payroll policy" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-surface p-6 shadow-lg">
+        <h2 className="text-base font-semibold text-text">Edit payroll policy</h2>
         {saved ? (
           <div className="mt-4 flex flex-col gap-3">
-            <div role="status" className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+            <div role="status" className="rounded-md border border-success/30 bg-success-subtle px-3 py-2 text-sm text-success">
               Policy updated.
             </div>
             <div className="flex justify-end">
@@ -188,9 +188,9 @@ function RunsPanel() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:flex-row sm:items-end">
+      <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4 sm:flex-row sm:items-end">
         <div>
-          <label htmlFor="payroll-status" className="text-sm font-medium text-slate-700">Status</label>
+          <label htmlFor="payroll-status" className="text-sm font-medium text-text-muted">Status</label>
           <select id="payroll-status" className={inputClass} value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All</option>
             {RUN_STATUSES.map((s) => (
@@ -200,7 +200,7 @@ function RunsPanel() {
         </div>
         <div className="flex-1" />
         {canGenerate && (
-          <Link href="/payroll/new" className="text-sm font-medium text-brand-600 hover:underline">
+          <Link href="/payroll/new" className="text-sm font-medium text-primary hover:underline">
             + New run
           </Link>
         )}
@@ -216,35 +216,35 @@ function RunsPanel() {
           description="Nothing matches this filter yet. Create the first run for a pay period."
           action={
             canGenerate ? (
-              <Link href="/payroll/new" className="text-sm font-medium text-brand-600 hover:underline">
+              <Link href="/payroll/new" className="text-sm font-medium text-primary hover:underline">
                 + New run
               </Link>
             ) : undefined
           }
         />
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="min-w-full divide-y divide-slate-200 bg-white text-sm">
-            <thead className="bg-slate-50">
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="min-w-full divide-y divide-border bg-surface text-sm">
+            <thead className="bg-surface-sunken">
               <tr>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Period</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Status</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Run ID</th>
-                <th className="px-3 py-2 text-left font-medium text-slate-600">Action</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Period</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Status</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Run ID</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Action</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-border">
               {rows.map((r) => (
                 <tr key={r.id}>
-                  <td className="px-3 py-2 font-mono text-xs text-slate-800">
+                  <td className="px-3 py-2 font-mono text-xs text-text">
                     {formatPeriod(r.period_start, r.period_end)}
                   </td>
                   <td className="px-3 py-2">
                     <RunStatusBadge status={String(r.status)} />
                   </td>
-                  <td className="px-3 py-2 font-mono text-xs text-slate-500">{r.id}</td>
+                  <td className="px-3 py-2 font-mono text-xs text-text-muted">{r.id}</td>
                   <td className="px-3 py-2">
-                    <Link href={`/payroll/${r.id}`} className="text-brand-600 hover:underline">
+                    <Link href={`/payroll/${r.id}`} className="text-primary hover:underline">
                       View
                     </Link>
                   </td>
@@ -262,8 +262,8 @@ export default function PayrollPage() {
   return (
     <AppShell>
       <RequirePermission code={PERMISSIONS.PAYROLL_READ}>
-        <h1 className="text-xl font-bold text-slate-900">Payroll runs</h1>
-        <p className="mt-1 text-sm text-slate-500">Pay periods, calculation state, and the payroll policy.</p>
+        <h1 className="text-xl font-bold text-text">Payroll runs</h1>
+        <p className="mt-1 text-sm text-text-muted">Pay periods, calculation state, and the payroll policy.</p>
         <div className="mt-6 flex flex-col gap-6">
           <PolicyCard />
           <RunsPanel />

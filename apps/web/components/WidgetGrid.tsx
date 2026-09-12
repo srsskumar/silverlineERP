@@ -6,11 +6,11 @@ import { ErrorCard } from './ui/ErrorCard';
 import { Skeleton } from './ui/Skeleton';
 
 const toneValueClass: Record<string, string> = {
-  danger: 'text-red-700',
-  info: 'text-brand-700',
-  success: 'text-green-700',
-  warning: 'text-amber-700',
-  neutral: 'text-slate-900',
+  danger: 'text-danger',
+  info: 'text-primary',
+  success: 'text-success',
+  warning: 'text-warning',
+  neutral: 'text-text',
 };
 
 function formatValue(value: string | number): string {
@@ -25,17 +25,17 @@ export function WidgetCard({ widget }: { widget: DashboardWidget }) {
   const tone = widgetTone(widget.key);
   const body = (
     <>
-      <p className="text-sm font-medium text-slate-500">{widget.title}</p>
+      <p className="text-sm font-medium text-text-muted">{widget.title}</p>
       <p className={`mt-2 text-2xl font-bold ${toneValueClass[tone] ?? toneValueClass.neutral}`}>
         {formatValue(widget.value)}
       </p>
     </>
   );
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4">
+    <div className="rounded-lg border border-border bg-surface p-4">
       {body}
       {widget.link ? (
-        <Link href={widget.link} className="mt-2 inline-block text-sm text-brand-600 hover:underline">
+        <Link href={widget.link} className="mt-2 inline-block text-sm text-primary hover:underline">
           View →
         </Link>
       ) : null}
@@ -47,11 +47,11 @@ function WidgetErrorCard({ index }: { index: number }) {
   return (
     <div
       role="alert"
-      className="rounded-lg border border-amber-200 bg-amber-50 p-4"
+      className="rounded-lg border border-warning/30 bg-warning-subtle p-4"
       title={`Widget at index ${index} was missing its title/key and was skipped`}
     >
-      <p className="text-sm font-medium text-amber-800">Widget unavailable</p>
-      <p className="mt-1 text-xs text-amber-700">This widget was missing its title and was skipped.</p>
+      <p className="text-sm font-medium text-warning">Widget unavailable</p>
+      <p className="mt-1 text-xs text-warning">This widget was missing its title and was skipped.</p>
     </div>
   );
 }
@@ -79,7 +79,7 @@ export function WidgetGrid({
     return (
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4" aria-label="Loading widgets">
         {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="rounded-lg border border-slate-200 bg-white p-4">
+          <div key={i} className="rounded-lg border border-border bg-surface p-4">
             <Skeleton className="h-4 w-24" />
             <Skeleton className="mt-3 h-8 w-16" />
           </div>
@@ -92,7 +92,7 @@ export function WidgetGrid({
     <div className="flex flex-col gap-4">
       {error ? <ErrorCard title="Could not load dashboard widgets" error={error} onRetry={onRetry} /> : null}
       {widgets.length === 0 && !error ? (
-        <p className="text-sm text-slate-500">No widgets in this template.</p>
+        <p className="text-sm text-text-muted">No widgets in this template.</p>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {widgets.map((w) => (

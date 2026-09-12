@@ -80,7 +80,7 @@ export function QuickAddTask({
             {...register('title')}
           />
           {errors.title?.message ? (
-            <p role="alert" className="mt-1 text-xs text-red-600">
+            <p role="alert" className="mt-1 text-xs text-danger">
               {errors.title.message}
             </p>
           ) : null}

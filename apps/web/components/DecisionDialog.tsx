@@ -13,7 +13,7 @@ import { FormField } from './ui/FormField';
 import { ConflictDialog, useConflict } from './ConflictDialog';
 
 const inputClass =
-  'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1';
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 /**
  * Single-transition exception decision (APPROVE/REJECT + optional note),
@@ -77,10 +77,10 @@ export function DecisionDialog({
 
   if (!open) return null;
   return (
-    <div role="dialog" aria-modal="true" aria-label="Decide exception" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-      <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-lg">
-        <h2 className="text-base font-semibold text-slate-900">Decide exception</h2>
-        <p className="mt-1 font-mono text-xs text-slate-500">
+    <div role="dialog" aria-modal="true" aria-label="Decide exception" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="w-full max-w-md rounded-lg bg-surface p-6 shadow-lg">
+        <h2 className="text-base font-semibold text-text">Decide exception</h2>
+        <p className="mt-1 font-mono text-xs text-text-muted">
           {exceptionId} · v{String(version)}
         </p>
         <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="mt-4 flex flex-col gap-4" noValidate>

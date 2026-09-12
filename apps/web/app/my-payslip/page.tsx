@@ -46,7 +46,7 @@ function MyPayslipPanel() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-6 print:hidden">
+      <div className="rounded-lg border border-border bg-surface p-4 sm:p-6 print:hidden">
         <PeriodPicker
           start={start}
           end={end}
@@ -91,8 +91,8 @@ export default function MyPayslipPage() {
   return (
     <AppShell>
       <RequirePermission code={PERMISSIONS.PAYSLIP_READ}>
-        <h1 className="text-xl font-bold text-slate-900 print:hidden">My payslip</h1>
-        <p className="mt-1 text-sm text-slate-500 print:hidden">
+        <h1 className="text-xl font-bold text-text print:hidden">My payslip</h1>
+        <p className="mt-1 text-sm text-text-muted print:hidden">
           Your full slip for a pay period — printable via the browser.
         </p>
         <div className="mt-6">

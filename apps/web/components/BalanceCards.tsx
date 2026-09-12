@@ -29,12 +29,12 @@ export function BalanceCards({
         );
         if (unpaid) {
           return (
-            <div key={b.id} className="rounded-lg border border-slate-200 bg-white p-4">
+            <div key={b.id} className="rounded-lg border border-border bg-surface p-4">
               <div className="flex items-center justify-between gap-2">
-                <p className="font-mono text-sm font-semibold text-slate-900">{b.leave_code}</p>
+                <p className="font-mono text-sm font-semibold text-text">{b.leave_code}</p>
                 <Badge tone="neutral">unpaid</Badge>
               </div>
-              <p className="mt-2 text-xs text-slate-500">
+              <p className="mt-2 text-xs text-text-muted">
                 Unpaid leave — no balance is tracked or checked.
               </p>
             </div>
@@ -45,24 +45,24 @@ export function BalanceCards({
         const used = Math.max(0, total - current);
         const pct = total > 0 ? Math.min(100, Math.max(0, (used / total) * 100)) : 0;
         return (
-          <div key={b.id} className="rounded-lg border border-slate-200 bg-white p-4">
+          <div key={b.id} className="rounded-lg border border-border bg-surface p-4">
             <div className="flex items-center justify-between gap-2">
-              <p className="font-mono text-sm font-semibold text-slate-900">{b.leave_code}</p>
+              <p className="font-mono text-sm font-semibold text-text">{b.leave_code}</p>
               <Badge tone={current <= 0 ? 'danger' : current <= 2 ? 'warning' : 'success'}>
                 {current} / {total} days
               </Badge>
             </div>
             <div
-              className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-100"
+              className="mt-3 h-2 w-full overflow-hidden rounded-full bg-surface-sunken"
               role="progressbar"
               aria-valuenow={Math.round(pct)}
               aria-valuemin={0}
               aria-valuemax={100}
               aria-label={`${b.leave_code} used ${used} of ${total} days`}
             >
-              <div className="h-full rounded-full bg-brand-500" style={{ width: `${pct}%` }} />
+              <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
             </div>
-            <p className="mt-2 text-xs text-slate-500">
+            <p className="mt-2 text-xs text-text-muted">
               Used {used} of {total} · opening {Number(b.opening_balance) || 0}, credits{' '}
               {Number(b.credits) || 0}, consumed {Number(b.consumed) || 0}, adjustments{' '}
               {Number(b.adjustments) || 0}
