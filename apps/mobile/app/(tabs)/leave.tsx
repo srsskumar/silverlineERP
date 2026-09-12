@@ -1,33 +1,49 @@
-import { submitQueued } from "../../src/sync/engine";
 /**
- * Leave: balances + request form + approvals inbox (gated by leave.decide /
- * leave.admin / leave.manage — others see their own requests only).
+ * Leave: balances, a request form, and the approvals inbox (gated by
+ * leave.decide / leave.admin / leave.manage — everyone else sees only their own
+ * requests).
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  Pressable,
-  ScrollView,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { View } from "react-native";
 import { ApiError } from "../../src/api/client";
 import {
   getLeaveBalances,
   getLeaveRequests,
   getLeaveTypes,
   postLeaveDecision,
-  postLeaveRequest,
 } from "../../src/api/endpoints";
 import { useAuth } from "../../src/auth/AuthContext";
 import { LEAVE_APPROVER_PERMISSIONS, canAny } from "../../src/rbac";
-import { enqueueOp } from "../../src/sync/queue";
+import { submitQueued } from "../../src/sync/engine";
 import { validateLeaveRequest } from "../../src/validators";
-import { Card, Pill, useStyles } from "../../src/ui";
+import {
+  Badge,
+  Banner,
+  Button,
+  Card,
+  EmptyState,
+  Input,
+  ListRow,
+  Loading,
+  Muted,
+  Row,
+  Screen,
+  SectionLabel,
+  Subtle,
+  Title,
+} from "../../src/ui/primitives";
+import { radius, space, useTheme } from "../../src/theme";
+
+function statusTone(status: string): "success" | "warning" | "danger" | "neutral" {
+  if (status === "APPROVED") return "success";
+  if (status === "PENDING") return "warning";
+  if (status === "REJECTED" || status === "CANCELLED") return "danger";
+  return "neutral";
+}
 
 export default function LeaveScreen() {
-  const S=useStyles();
+  const t = useTheme();
   const { permissions } = useAuth();
   const isApprover = canAny(permissions, LEAVE_APPROVER_PERMISSIONS);
 
@@ -36,47 +52,59 @@ export default function LeaveScreen() {
   const [to, setTo] = useState("");
   const [reason, setReason] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
+  const [msgTone, setMsgTone] = useState<"success" | "danger">("success");
+  const [busy, setBusy] = useState(false);
 
-  const balances = useQuery({
-    queryKey: ["leave", "balances"],
-    queryFn: getLeaveBalances,
-  });
+  const balances = useQuery({ queryKey: ["leave", "balances"], queryFn: getLeaveBalances });
   const types = useQuery({ queryKey: ["leave", "types"], queryFn: getLeaveTypes });
-  const mine = useQuery({
-    queryKey: ["leave", "mine"],
-    queryFn: () => getLeaveRequests(),
-  });
+  const mine = useQuery({ queryKey: ["leave", "mine"], queryFn: () => getLeaveRequests() });
   const inbox = useQuery({
     queryKey: ["leave", "inbox"],
     queryFn: () => getLeaveRequests({ status: "PENDING" }),
     enabled: isApprover,
   });
 
+  // The form previously asked the user to type a leave-type UUID. Selecting
+  // from the real list is the only workable version of this on a phone.
+  const leaveTypes = useMemo(() => types.data ?? [], [types.data]);
+  const selectedType = typeId || (leaveTypes[0]?.id ?? "");
+
   const submit = async () => {
     setMsg(null);
     const v = validateLeaveRequest({
-      leave_type_id: typeId || (types.data?.[0]?.id ?? ""),
+      leave_type_id: selectedType,
       from_date: from.trim(),
       to_date: to.trim(),
     });
     if (!v.ok) {
       setMsg(v.errors.map((e) => `${e.field}: ${e.message}`).join("\n"));
+      setMsgTone("danger");
       return;
     }
-    const payload = {
-      leave_type_id: typeId || (types.data?.[0]?.id as string),
-      from_date: from.trim(),
-      to_date: to.trim(),
-      ...(reason.trim() ? { reason: reason.trim() } : {}),
-    };
+    setBusy(true);
     try {
-      setMsg(await submitQueued({entity:'leave_request',op:`leave:${Date.now()}`,payload}));
+      setMsg(
+        await submitQueued({
+          entity: "leave_request",
+          op: `leave:${Date.now()}`,
+          payload: {
+            leave_type_id: selectedType,
+            from_date: from.trim(),
+            to_date: to.trim(),
+            ...(reason.trim() ? { reason: reason.trim() } : {}),
+          },
+        }),
+      );
+      setMsgTone("success");
       setFrom("");
       setTo("");
       setReason("");
       void mine.refetch();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Submit failed");
+      setMsgTone("danger");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -85,106 +113,172 @@ export default function LeaveScreen() {
     try {
       await postLeaveDecision(id, d, version ?? 0);
       setMsg(`Request ${d === "APPROVE" ? "approved" : "rejected"}.`);
+      setMsgTone("success");
       void inbox.refetch();
     } catch (e) {
       setMsg(
         e instanceof ApiError && e.status === 409
-          ? "Conflict: request changed — refresh and retry."
+          ? "This request changed while you were looking at it. Refresh and try again."
           : e instanceof Error
             ? e.message
             : "Decision failed",
       );
+      setMsgTone("danger");
     }
   };
 
   return (
-    <ScrollView style={S.screen}>
+    <Screen>
+      <Title>Leave</Title>
+      <Muted style={{ marginTop: 2, marginBottom: space.lg }}>
+        Check your balance and request time off.
+      </Muted>
+
+      {msg ? (
+        <Banner
+          tone={msgTone === "success" ? "success" : "danger"}
+          icon={msgTone === "success" ? "checkmark-circle-outline" : "alert-circle-outline"}
+          title={msg}
+        />
+      ) : null}
+
       <Card title="Balances">
-        {(balances.data ?? []).map((b, i) => (
-          <View key={String(b.leave_type_id ?? i)} style={[S.row, { paddingVertical: 4 }]}>
-            <Text style={[S.body, { flex: 1 }]}>
-              {String(b.leave_type_code ?? b.code ?? b.leave_type_id ?? "?")}
-            </Text>
-            <Text style={S.body}>
-              {String(b.available ?? b.opening_balance ?? "?")}
-            </Text>
-          </View>
-        ))}
-        {balances.isLoading ? <Text style={S.muted}>Loading…</Text> : null}
+        {balances.isLoading ? (
+          <Loading />
+        ) : (balances.data ?? []).length === 0 ? (
+          <EmptyState icon="calendar-outline" title="No balances yet" />
+        ) : (
+          (balances.data ?? []).map((b, i, arr) => (
+            <ListRow
+              key={String(b.leave_type_id ?? i)}
+              title={String(b.leave_type_code ?? b.code ?? b.leave_type_id ?? "?")}
+              right={
+                <Muted style={{ color: t.text, fontWeight: "700" }}>
+                  {String(b.available ?? b.opening_balance ?? "?")}
+                </Muted>
+              }
+              last={i === arr.length - 1}
+            />
+          ))
+        )}
       </Card>
 
-      <Card title="New request">
-        <Text style={S.muted}>Leave type (UUID, default: first)</Text>
-        <TextInput
-          style={S.input}
-          placeholder={types.data?.[0]?.code ?? "leave_type_id"}
-          value={typeId}
-          onChangeText={setTypeId}
-        />
-        <TextInput
-          style={S.input}
-          placeholder="From YYYY-MM-DD"
+      <SectionLabel>New request</SectionLabel>
+      <Card>
+        <Subtle style={{ marginBottom: space.xs }}>Leave type</Subtle>
+        {leaveTypes.length === 0 ? (
+          <Subtle>Loading leave types…</Subtle>
+        ) : (
+          <Row gap={space.sm} style={{ flexWrap: "wrap", marginBottom: space.md }}>
+            {leaveTypes.map((lt) => {
+              const active = selectedType === lt.id;
+              return (
+                <Button
+                  key={lt.id}
+                  title={String(lt.code ?? lt.name ?? "Type")}
+                  variant={active ? "primary" : "secondary"}
+                  onPress={() => setTypeId(lt.id)}
+                  style={{ paddingHorizontal: space.md, borderRadius: radius.pill, minHeight: 36 }}
+                />
+              );
+            })}
+          </Row>
+        )}
+        <Input
+          label="From"
+          placeholder="YYYY-MM-DD"
+          keyboardType="numbers-and-punctuation"
+          autoCapitalize="none"
           value={from}
           onChangeText={setFrom}
         />
-        <TextInput
-          style={S.input}
-          placeholder="To YYYY-MM-DD"
+        <Input
+          label="To"
+          placeholder="YYYY-MM-DD"
+          keyboardType="numbers-and-punctuation"
+          autoCapitalize="none"
           value={to}
           onChangeText={setTo}
         />
-        <TextInput
-          style={S.input}
-          placeholder="Reason (optional)"
+        <Input
+          label="Reason"
+          hint="Optional, but helps your approver decide."
+          placeholder="Why are you away?"
           value={reason}
           onChangeText={setReason}
         />
-        <Pressable style={S.btn} onPress={() => void submit()}>
-          <Text style={S.btnText}>Submit</Text>
-        </Pressable>
-        {msg ? <Text style={S.muted}>{msg}</Text> : null}
+        <Button
+          title="Submit request"
+          icon="send-outline"
+          loading={busy}
+          disabled={busy || !from.trim() || !to.trim() || !selectedType}
+          onPress={() => void submit()}
+        />
       </Card>
 
-      <Card title="My requests">
-        {(mine.data ?? []).map((r) => (
-          <View key={r.id} style={[S.row, { paddingVertical: 4 }]}>
-            <Text style={[S.body, { flex: 1 }]} numberOfLines={1}>
-              {r.id.slice(0, 8)}
-            </Text>
-            <Pill
-              text={r.status}
-              tone={r.status === "APPROVED" ? "ok" : r.status === "PENDING" ? "warn" : "bad"}
+      <SectionLabel>My requests</SectionLabel>
+      <Card>
+        {mine.isLoading ? (
+          <Loading />
+        ) : (mine.data ?? []).length === 0 ? (
+          <EmptyState icon="document-text-outline" title="No requests yet" />
+        ) : (
+          (mine.data ?? []).map((r, i, arr) => (
+            <ListRow
+              key={r.id}
+              title={
+                r.from_date && r.to_date ? `${r.from_date} → ${r.to_date}` : r.id.slice(0, 8)
+              }
+              subtitle={r.reason ? String(r.reason) : undefined}
+              right={<Badge text={r.status} tone={statusTone(r.status)} />}
+              last={i === arr.length - 1}
             />
-          </View>
-        ))}
+          ))
+        )}
       </Card>
 
-      {isApprover ? (
-        <Card title="Approvals inbox">
-          {(inbox.data ?? []).map((r) => (
-            <View key={r.id} style={[S.row, { paddingVertical: 6 }]}>
-              <Text style={[S.body, { flex: 1 }]} numberOfLines={1}>
-                {r.id.slice(0, 8)} · {r.status}
-              </Text>
-              <Pressable onPress={() => void decide(r.id, "APPROVE", r.version)}>
-                <Pill text="Approve" tone="ok" />
-              </Pressable>
-              <Pressable onPress={() => void decide(r.id, "REJECT", r.version)}>
-                <Pill text="Reject" tone="bad" />
-              </Pressable>
+      <SectionLabel>Approvals</SectionLabel>
+      <Card>
+        {!isApprover ? (
+          <EmptyState
+            icon="lock-closed-outline"
+            title="No approval rights"
+            message="Approving leave needs the leave.decide or leave.admin permission."
+          />
+        ) : inbox.isLoading ? (
+          <Loading />
+        ) : (inbox.data ?? []).length === 0 ? (
+          <EmptyState icon="checkmark-done-outline" title="Nothing pending" />
+        ) : (
+          (inbox.data ?? []).map((r) => (
+            <View key={r.id} style={{ paddingVertical: space.sm }}>
+              <Muted style={{ color: t.text, fontWeight: "600" }}>
+                {r.from_date && r.to_date
+                  ? `${r.from_date} → ${r.to_date}`
+                  : r.id.slice(0, 8)}
+              </Muted>
+              {r.reason ? <Subtle>{String(r.reason)}</Subtle> : null}
+              <Row gap={space.sm} style={{ marginTop: space.sm }}>
+                <Button
+                  title="Approve"
+                  icon="checkmark-outline"
+                  tone="success"
+                  onPress={() => void decide(r.id, "APPROVE", r.version)}
+                  style={{ flex: 1 }}
+                />
+                <Button
+                  title="Reject"
+                  icon="close-outline"
+                  variant="secondary"
+                  tone="danger"
+                  onPress={() => void decide(r.id, "REJECT", r.version)}
+                  style={{ flex: 1 }}
+                />
+              </Row>
             </View>
-          ))}
-          {(inbox.data ?? []).length === 0 && !inbox.isLoading ? (
-            <Text style={S.muted}>Nothing pending.</Text>
-          ) : null}
-        </Card>
-      ) : (
-        <Card title="Approvals inbox">
-          <Text style={S.muted}>
-            Locked — needs leave.decide / leave.admin rights.
-          </Text>
-        </Card>
-      )}
-    </ScrollView>
+          ))
+        )}
+      </Card>
+    </Screen>
   );
 }

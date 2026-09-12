@@ -431,6 +431,107 @@ describe("attendance punches", () => {
     expect(row.status).toBe("PENDING");
   });
 
+  it("flags an emulator device for review (202 DEVICE_SIGNAL)", async () => {
+    const h = await adminHeaders();
+    const ids = await unitChain(h, "EMU");
+    await createFence(h, circleFenceBody("village", ids.village), nextKey());
+    const empId = await activeEmployee(h, { village_id: ids.village });
+    const res = await punch(
+      h,
+      checkinBody(empId, {
+        device_signals: {
+          device: { is_physical_device: false, suspected_emulator: true, model_name: "sdk_gphone64_arm64" },
+          review_suggested: true,
+        },
+      }),
+      nextKey(),
+    );
+    expect(res.statusCode).toBe(202);
+    const body = res.json() as { review: string; code: string; exception_id: string };
+    expect(body.review).toBe("REQUIRES_REVIEW");
+    expect(body.code).toBe("DEVICE_SIGNAL");
+    const stored = await pool.query(
+      "SELECT device_signals FROM attendance_events WHERE employee_id = $1::uuid",
+      [empId],
+    );
+    const signals = stored.rows[0] as { device_signals: { flagged: boolean } };
+    expect(signals.device_signals.flagged).toBe(true);
+  });
+
+  it("derives impossible travel from its own history, not the client's claim", async () => {
+    const h = await adminHeaders();
+    const ids = await unitChain(h, "TRV");
+    await createFence(h, circleFenceBody("village", ids.village), nextKey());
+    const empId = await activeEmployee(h, { village_id: ids.village });
+
+    // First punch establishes the reference position, backdated 30s so the
+    // second one is still in the past (future timestamps are rejected as 422).
+    const first = await punch(
+      h,
+      checkinBody(empId, { client_timestamp: new Date(Date.now() - 30_000).toISOString() }),
+      nextKey(),
+    );
+    expect(first.statusCode).toBe(201);
+
+    // Second punch ~550 km away 30s later. The client claims everything is
+    // fine; the server must reach its own conclusion from the stored history.
+    const res = await punch(
+      h,
+      checkinBody(empId, {
+        event_type: "CHECK_OUT",
+        latitude: FAR.lat,
+        longitude: FAR.lng,
+        device_signals: { movement: { impossible_travel: false }, review_suggested: false },
+      }),
+      nextKey(),
+    );
+    expect(res.statusCode).toBe(202);
+    const body = res.json() as { code: string };
+    expect(body.code).toBe("DEVICE_SIGNAL");
+
+    const stored = await pool.query(
+      `SELECT device_signals FROM attendance_events
+        WHERE employee_id = $1::uuid AND event_type = 'CHECK_OUT'`,
+      [empId],
+    );
+    const row = stored.rows[0] as {
+      device_signals: {
+        flagged: boolean;
+        server_movement: { impossible_travel: boolean };
+        client_movement: { impossible_travel: boolean };
+      };
+    };
+    expect(row.device_signals.server_movement.impossible_travel).toBe(true);
+    // The client's contradicting claim is retained for the reviewer.
+    expect(row.device_signals.client_movement.impossible_travel).toBe(false);
+    expect(row.device_signals.flagged).toBe(true);
+  });
+
+  it("accepts a clean punch from a physical device without flagging", async () => {
+    const h = await adminHeaders();
+    const ids = await unitChain(h, "OK");
+    await createFence(h, circleFenceBody("village", ids.village), nextKey());
+    const empId = await activeEmployee(h, { village_id: ids.village });
+    const res = await punch(
+      h,
+      checkinBody(empId, {
+        device_signals: {
+          device: { is_physical_device: true, suspected_emulator: false, model_name: "Pixel 7a" },
+          movement: null,
+          review_suggested: false,
+        },
+      }),
+      nextKey(),
+    );
+    expect(res.statusCode).toBe(201);
+    const stored = await pool.query(
+      "SELECT device_signals FROM attendance_events WHERE employee_id = $1::uuid",
+      [empId],
+    );
+    const row = stored.rows[0] as { device_signals: { flagged: boolean } };
+    expect(row.device_signals.flagged).toBe(false);
+  });
+
   it("reviews poor-accuracy punches (202 POOR_ACCURACY)", async () => {
     const h = await adminHeaders();
     const ids = await unitChain(h, "J");

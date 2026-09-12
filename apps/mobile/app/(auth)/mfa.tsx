@@ -1,12 +1,14 @@
 import { useState } from "react";
-import { Pressable, ScrollView, Text, TextInput } from "react-native";
+import { View } from "react-native";
 import { router } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../src/auth/AuthContext";
 import { validateMfaCode } from "../../src/validators";
-import { useStyles } from "../../src/ui";
+import { Banner, Button, Input, Muted, Screen, Title } from "../../src/ui/primitives";
+import { font, radius, space, useTheme } from "../../src/theme";
 
 export default function MfaScreen() {
-  const S=useStyles();
+  const t = useTheme();
   const { verifyMfa } = useAuth();
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -31,23 +33,48 @@ export default function MfaScreen() {
   };
 
   return (
-    <ScrollView contentContainerStyle={S.screen}>
-      <Text style={[S.h1, { marginTop: 48 }]}>Two-factor check</Text>
-      <Text style={S.muted}>
-        Enter the 6-digit code from your authenticator app.
-      </Text>
-      <TextInput
-        style={[S.input, { marginTop: 16 }]}
-        placeholder="123456"
+    <Screen>
+      <View style={{ alignItems: "center", marginTop: space.xxl * 2, marginBottom: space.xl }}>
+        <View
+          style={{
+            width: 52,
+            height: 52,
+            borderRadius: radius.xl,
+            backgroundColor: t.primarySubtle,
+            alignItems: "center",
+            justifyContent: "center",
+            marginBottom: space.md,
+          }}
+        >
+          <Ionicons name="shield-checkmark-outline" size={26} color={t.primary} />
+        </View>
+        <Title>Two-factor check</Title>
+        <Muted style={{ marginTop: 4, textAlign: "center" }}>
+          Enter the 6-digit code from your authenticator app
+        </Muted>
+      </View>
+
+      <Input
+        placeholder="000000"
         keyboardType="number-pad"
         maxLength={6}
+        autoFocus
+        textContentType="oneTimeCode"
         value={code}
         onChangeText={setCode}
+        onSubmitEditing={() => void submit()}
+        // Wide tracking makes a 6-digit code readable at a glance on a phone.
+        style={{ textAlign: "center", fontSize: font.xxl, letterSpacing: 8, minHeight: 56 }}
       />
-      {error ? <Text style={S.error}>{error}</Text> : null}
-      <Pressable style={S.btn} onPress={submit} disabled={busy}>
-        <Text style={S.btnText}>{busy ? "Verifying…" : "Verify"}</Text>
-      </Pressable>
-    </ScrollView>
+
+      {error ? <Banner tone="danger" icon="alert-circle-outline" title={error} /> : null}
+
+      <Button
+        title={busy ? "Verifying…" : "Verify"}
+        loading={busy}
+        disabled={code.trim().length !== 6}
+        onPress={() => void submit()}
+      />
+    </Screen>
   );
 }

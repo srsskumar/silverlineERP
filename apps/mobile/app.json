@@ -12,9 +12,19 @@
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Your location is attached to attendance punches for geo-fence verification.",
         "NSCameraUsageDescription": "Camera is used to capture task evidence photos.",
-        "NSFaceIDUsageDescription": "Biometrics unlock the app without re-entering your password."
+        "NSFaceIDUsageDescription": "Biometrics unlock the app without re-entering your password.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Background location lets Silverline confirm you entered or left a work site without opening the app.",
+        "NSLocationAlwaysUsageDescription": "Background location lets Silverline confirm you entered or left a work site without opening the app.",
+        "UIBackgroundModes": [
+          "location",
+          "fetch",
+          "remote-notification"
+        ]
       },
-      "bundleIdentifier": "com.silverline.erp"
+      "bundleIdentifier": "com.silverline.erp",
+      "config": {
+        "googleMapsApiKey": "$GOOGLE_MAPS_IOS_KEY"
+      }
     },
     "android": {
       "permissions": [
@@ -22,7 +32,10 @@
         "ACCESS_COARSE_LOCATION",
         "CAMERA",
         "USE_BIOMETRIC",
-        "RECEIVE_BOOT_COMPLETED"
+        "RECEIVE_BOOT_COMPLETED",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
@@ -31,7 +44,12 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.silverline.erp"
+      "package": "com.silverline.erp",
+      "config": {
+        "googleMaps": {
+          "apiKey": "$GOOGLE_MAPS_ANDROID_KEY"
+        }
+      }
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -44,7 +62,10 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Your location is attached to attendance punches for geo-fence verification."
+          "locationAlwaysAndWhenInUsePermission": "Your location is attached to attendance punches for geo-fence verification.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true,
+          "isIosBackgroundLocationEnabled": true
         }
       ],
       [
@@ -62,7 +83,8 @@
       ],
       "expo-splash-screen",
       "expo-background-task",
-      "expo-sharing"
+      "expo-sharing",
+      "expo-maps"
     ]
   }
 }

@@ -24,6 +24,7 @@ import { buildAuthenticate, requirePermission } from "../../common/auth.js";
 import { writeAudit } from "../../common/audit.js";
 import { createRateLimiter } from "../../common/rateLimit.js";
 import { isInsideFence } from "../../common/geo.js";
+import { detectMovementAnomaly } from "@silverline/shared";
 import { sendError } from "../../common/httpErrors.js";
 import { emitNotification } from "../s5/notify.js";
 
@@ -165,7 +166,7 @@ function toExceptionShape(row: ExceptionRow) {
 
 const EVENT_COLS = `id, employee_id, event_type, client_timestamp,
   server_timestamp, lat, lng, gps_accuracy, geofence_result, geofence_id,
-  mock_location, device_id, app_version, idempotency_key`;
+  mock_location, device_id, app_version, idempotency_key, device_signals`;
 
 const RECORD_COLS = `id, employee_id, work_date, check_in_event_id,
   check_out_event_id, check_in_at, check_out_at, total_hours, status,
@@ -401,7 +402,7 @@ export async function registerAttendanceRoutes(
 
   function review(
     reply: Parameters<typeof sendError>[0],
-    code: "TIMESTAMP_SKEW" | "POOR_ACCURACY" | "MOCK_LOCATION" | "OUTSIDE_GEOFENCE",
+    code: "TIMESTAMP_SKEW" | "POOR_ACCURACY" | "MOCK_LOCATION" | "OUTSIDE_GEOFENCE" | "DEVICE_SIGNAL",
     exceptionId: string,
     message: string,
   ) {
@@ -489,6 +490,56 @@ export async function registerAttendanceRoutes(
       });
     }
 
+    /*
+     * Anti-fraud signals (§9.3).
+     *
+     * The client sends what it can observe about its own device, but a client
+     * can lie about all of it, so the movement half is re-derived here from the
+     * employee's own last positioned punch. `client_movement` is kept alongside
+     * for comparison — a client claiming "no anomaly" while the server sees one
+     * is itself interesting during a review.
+     */
+    let serverMovement: ReturnType<typeof detectMovementAnomaly> = null;
+    if (d.latitude !== undefined && d.longitude !== undefined) {
+      const prior = await db.query(
+        `SELECT lat, lng, gps_accuracy, client_timestamp
+           FROM attendance_events
+          WHERE employee_id = $1::uuid AND lat IS NOT NULL AND lng IS NOT NULL
+          ORDER BY client_timestamp DESC
+          LIMIT 1`,
+        [emp.id],
+      );
+      const previous = prior.rows[0] as
+        | { lat: number; lng: number; gps_accuracy: number | null; client_timestamp: Date | string }
+        | undefined;
+      if (previous) {
+        serverMovement = detectMovementAnomaly(
+          {
+            latitude: Number(previous.lat),
+            longitude: Number(previous.lng),
+            accuracy: previous.gps_accuracy === null ? null : Number(previous.gps_accuracy),
+            timestamp: new Date(previous.client_timestamp).getTime(),
+          },
+          {
+            latitude: d.latitude,
+            longitude: d.longitude,
+            accuracy: d.gps_accuracy ?? null,
+            timestamp: clientTime.getTime(),
+          },
+        );
+      }
+    }
+    const suspectedEmulator = d.device_signals?.device?.suspected_emulator === true;
+    const storedSignals =
+      d.device_signals || serverMovement
+        ? {
+            device: d.device_signals?.device ?? null,
+            client_movement: d.device_signals?.movement ?? null,
+            server_movement: serverMovement,
+            flagged: suspectedEmulator || serverMovement?.impossible_travel === true,
+          }
+        : null;
+
     // 2. Skew vs server clock > 15 min → review + SYSTEM exception.
     if (Math.abs(clientTime.getTime() - serverNow.getTime()) > SKEW_MS) {
       const workDate = workDateFor(serverNow);
@@ -497,8 +548,8 @@ export async function registerAttendanceRoutes(
         `INSERT INTO attendance_events
            (employee_id, event_type, client_timestamp, server_timestamp,
             lat, lng, gps_accuracy, geofence_result, geofence_id,
-            mock_location, device_id, app_version, idempotency_key)
-         VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,'NO_FENCE',NULL,$8,$9,$10,$11)
+            mock_location, device_id, app_version, idempotency_key, device_signals)
+         VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,'NO_FENCE',NULL,$8,$9,$10,$11,$12::jsonb)
          RETURNING ${EVENT_COLS}`,
         [
           emp.id,
@@ -512,6 +563,7 @@ export async function registerAttendanceRoutes(
           d.device_id ?? null,
           d.app_version ?? null,
           idemKey,
+          storedSignals ? JSON.stringify(storedSignals) : null,
         ],
       );
       void ins;
@@ -620,8 +672,8 @@ export async function registerAttendanceRoutes(
         `INSERT INTO attendance_events
            (employee_id, event_type, client_timestamp, server_timestamp,
             lat, lng, gps_accuracy, geofence_result, geofence_id,
-            mock_location, device_id, app_version, idempotency_key)
-         VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9::uuid,$10,$11,$12,$13)
+            mock_location, device_id, app_version, idempotency_key, device_signals)
+         VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9::uuid,$10,$11,$12,$13,$14::jsonb)
          RETURNING ${EVENT_COLS}`,
         [
           emp!.id,
@@ -637,6 +689,7 @@ export async function registerAttendanceRoutes(
           d.device_id ?? null,
           d.app_version ?? null,
           idemKey,
+          storedSignals ? JSON.stringify(storedSignals) : null,
         ],
       );
       return ins.rows[0] as EventRow;
@@ -672,6 +725,25 @@ export async function registerAttendanceRoutes(
         reason: message,
       });
       return review(reply, "MOCK_LOCATION", exceptionId, message);
+    }
+
+    // 10b. Emulator or impossible travel → review. Placed after mock_location
+    // so the more specific MOCK_LOCATION code still wins when both apply.
+    if (suspectedEmulator || serverMovement?.impossible_travel === true) {
+      const event = await storeEvent(geoResult);
+      void event;
+      const message = serverMovement?.impossible_travel
+        ? `Punch is ${serverMovement.distance_m}m from the previous one after ` +
+          `${Math.round(serverMovement.elapsed_ms / 1000)}s (${serverMovement.implied_speed_mps}m/s); ` +
+          "queued for review"
+        : "Punch came from a device that appears to be an emulator; queued for review";
+      const exceptionId = await createSystemException(db, {
+        employeeId: emp.id,
+        recordId: record?.id ?? null,
+        type: "SYSTEM_FLAG",
+        reason: message,
+      });
+      return review(reply, "DEVICE_SIGNAL", exceptionId, message);
     }
 
     // 11. Outside boundary + tolerance → review.

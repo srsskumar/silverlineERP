@@ -25,6 +25,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "017_advisory_reviews", file: "017_advisory_reviews.sql" },
   { version: "018_provider_jobs", file: "018_provider_jobs.sql" },
   { version: "019_planning_policies", file: "019_planning_policies.sql" },
+  { version: "020_device_signals", file: "020_device_signals.sql" },
 ];
 
 function migrationSql(file: string): string {
