@@ -18,8 +18,12 @@ export interface PunchPoint {
   id: string;
   lat: number;
   lng: number;
-  /** Drives the dot colour: clean punches vs ones sent for review. */
-  status?: 'ok' | 'review' | 'outside';
+  /**
+   * Drives the dot colour. Named to match the API's field and REQUIRED on
+   * purpose: as an optional `status?` this silently accepted the server's
+   * `outcome` objects and coloured every punch as clean.
+   */
+  outcome: 'ok' | 'review' | 'outside';
 }
 
 export interface PunchClusterMapProps {
@@ -54,7 +58,7 @@ export function PunchClusterMap({ points, height = 420, className, onSelect }: P
       type: 'FeatureCollection' as const,
       features: points.map((p) => ({
         type: 'Feature' as const,
-        properties: { id: p.id, status: p.status ?? 'ok' },
+        properties: { id: p.id, outcome: p.outcome },
         geometry: { type: 'Point' as const, coordinates: [p.lng, p.lat] },
       })),
     }),
@@ -143,7 +147,7 @@ export function PunchClusterMap({ points, height = 420, className, onSelect }: P
       paint: {
         'circle-color': [
           'match',
-          ['get', 'status'],
+          ['get', 'outcome'],
           'review', warning,
           'outside', danger,
           success,
@@ -200,7 +204,12 @@ export function PunchClusterMap({ points, height = 420, className, onSelect }: P
         className={className}
         items={points.map((p) => ({
           id: p.id,
-          label: p.status === 'ok' ? 'Inside fence' : p.status === 'outside' ? 'Outside fence' : 'Flagged',
+          label:
+            p.outcome === 'ok'
+              ? 'Inside fence'
+              : p.outcome === 'outside'
+                ? 'Outside fence'
+                : 'Flagged for review',
           detail: `${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}`,
         }))}
       />

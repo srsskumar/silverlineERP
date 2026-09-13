@@ -1,4 +1,4 @@
-import { apiRequest } from './apiClient';
+import { apiRequest, apiRequestRaw } from './apiClient';
 import type { CursorPage } from './employees';
 
 /**
@@ -307,8 +307,13 @@ export async function listMapEvents(params: {
   if (params.from) search.set('from', params.from);
   if (params.to) search.set('to', params.to);
   search.set('limit', String(params.limit ?? 1000));
-  const { data } = await apiRequest<{ data: AttendanceMapEvent[]; truncated: boolean }>(
-    `/api/v1/attendance/events/map?${search.toString()}`,
-  );
-  return { data: data?.data ?? [], truncated: Boolean(data?.truncated) };
+  // apiRequestRaw, not apiRequest: the unwrap in apiRequest strips the `data`
+  // envelope and discards its siblings, which would drop `truncated` — the one
+  // signal telling the user the map is showing a partial set.
+  const { body } = await apiRequestRaw(`/api/v1/attendance/events/map?${search.toString()}`);
+  const envelope = (body ?? {}) as { data?: AttendanceMapEvent[]; truncated?: boolean };
+  return {
+    data: Array.isArray(envelope.data) ? envelope.data : [],
+    truncated: envelope.truncated === true,
+  };
 }
