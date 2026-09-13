@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSslOption,
+  describeConnectionError,
   isLoopbackHost,
   resolveSslMode,
 } from "../src/database/db.js";
@@ -83,5 +84,39 @@ describe("buildSslOption", () => {
   });
   it("only skips verification for no-verify", () => {
     expect(buildSslOption("no-verify", {})).toEqual({ rejectUnauthorized: false });
+  });
+});
+
+describe("describeConnectionError", () => {
+  // Supabase's pooler (and several other managed providers) front connections
+  // with a self-signed chain, so verify-full fails against them. The raw driver
+  // message does not say what to do, which is how this surfaced as an opaque
+  // "degraded" health check.
+  it("explains how to resolve a certificate failure", () => {
+    const out = describeConnectionError(
+      new Error("self-signed certificate in certificate chain"),
+    );
+    expect(out).toContain("DATABASE_CA_CERT");
+    expect(out).toContain("DATABASE_SSL=no-verify");
+    expect(out).toContain("self-signed certificate in certificate chain");
+  });
+
+  it("recognises the other certificate failure spellings", () => {
+    for (const message of [
+      "unable to verify the first certificate",
+      "CERT_HAS_EXPIRED",
+      "DEPTH_ZERO_SELF_SIGNED_CERT",
+    ]) {
+      expect(describeConnectionError(new Error(message)), message).toContain("DATABASE_SSL");
+    }
+  });
+
+  it("passes unrelated failures through untouched", () => {
+    const out = describeConnectionError(new Error("ECONNREFUSED 127.0.0.1:5432"));
+    expect(out).toBe("ECONNREFUSED 127.0.0.1:5432");
+  });
+
+  it("handles a non-Error rejection", () => {
+    expect(describeConnectionError("boom")).toBe("boom");
   });
 });

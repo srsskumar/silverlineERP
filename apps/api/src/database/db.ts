@@ -107,3 +107,28 @@ export function createPool(
     connectionTimeoutMillis: 10_000,
   });
 }
+
+/**
+ * Turns a connection failure into something actionable.
+ *
+ * Certificate errors are the likely first contact with TLS configuration, and
+ * the raw message ("self-signed certificate in certificate chain") does not say
+ * what to do about it. Several managed providers — Supabase's pooler among them
+ * — front connections with a self-signed chain that Node's bundled CAs do not
+ * validate, so verify-full fails against them until a CA is supplied.
+ */
+export function describeConnectionError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    /self.signed certificate|unable to verify|certificate chain|CERT_|DEPTH_ZERO/i.test(message)
+  ) {
+    return (
+      `${message}. TLS certificate verification failed. Either supply the ` +
+      "provider's CA with DATABASE_CA_CERT / DATABASE_CA_CERT_FILE, or set " +
+      "DATABASE_SSL=no-verify to encrypt without verifying the server " +
+      "(acceptable for local development, and refused in production unless " +
+      "DATABASE_SSL_ALLOW_NO_VERIFY=true)."
+    );
+  }
+  return message;
+}

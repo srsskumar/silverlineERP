@@ -15,7 +15,7 @@ import type { Pool } from "pg";
 import { getConfig, type ApiConfigOverrides } from "./config.js";
 import { registerRequestId } from "./common/requestId.js";
 import { registerErrorHandler } from "./common/httpErrors.js";
-import { createPool } from "./database/db.js";
+import { createPool, describeConnectionError } from "./database/db.js";
 import { registerAuthRoutes } from "./modules/auth/routes.js";
 import { registerAuditRoutes } from "./modules/audit/routes.js";
 import { registerOrgUnitRoutes } from "./modules/org/routes.js";
@@ -74,7 +74,11 @@ export async function buildApp(
     try {
       await pool.query("SELECT 1");
       return reply.status(200).send({ status: "ok" });
-    } catch {
+    } catch (error) {
+      // A bare "degraded" gives an operator nothing to act on; the reason is
+      // logged (never returned, since it can name internal hosts) and the most
+      // common cause — TLS configuration — is spelled out there.
+      app.log.error({ err: describeConnectionError(error) }, "health check failed");
       return reply.status(503).send({ status: "degraded" });
     }
   });
