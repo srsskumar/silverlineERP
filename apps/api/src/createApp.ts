@@ -6,6 +6,7 @@ import {registerJobRoutes} from "./modules/jobs/routes.js";
 import { registerCrmRoutes } from "./modules/crm/routes.js";
 import { registerTenderRoutes } from "./modules/tender/routes.js";
 import { registerBillingRoutes } from "./modules/billing/routes.js";
+import { registerApprovalRoutes } from "./modules/approvals/routes.js";
 import { registerAutomationRoutes } from "./modules/automation/routes.js";
 import { registerInventoryRoutes } from "./modules/inventory/routes.js";
 import { registerPlanningRoutes } from "./modules/planning/routes.js";
@@ -185,6 +186,7 @@ export async function buildApp(
   await registerCrmRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerTenderRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerBillingRoutes(app, { pool, jwtSecret: config.jwtSecret });
+  await registerApprovalRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerAdminRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerPayrollDocuments(app, { pool, jwtSecret: config.jwtSecret });
   await registerOrgImport(app,{pool,jwtSecret:config.jwtSecret});

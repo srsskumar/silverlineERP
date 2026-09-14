@@ -32,7 +32,9 @@ export async function inOrg(db:Pool|PoolClient,table:string,id:string,orgId:stri
   // Commercial spine (§6.3-6.5, §8).
   'clients','contacts','leads','opportunities','tenders','private_proposals','bank_guarantee_instruments','workspaces','party_gst_registrations',
   // Running-account billing (§15).
-  'boq_items','ra_bills','project_advances'];
+  'boq_items','ra_bills','project_advances',
+  // Approvals (§41).
+  'approval_policies','approval_instances','approval_delegations'];
  if(!allowed.includes(table)) throw new Error('Unknown domain table');
  const r=await db.query(`SELECT * FROM ${table} WHERE id=$1 AND org_id=$2${lock?' FOR UPDATE':''}`,[id,orgId]);
  if(!r.rowCount) fail('NOT_FOUND','Record not found',404);

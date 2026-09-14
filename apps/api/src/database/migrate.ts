@@ -40,6 +40,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "032_india_statutory", file: "032_india_statutory.sql" },
   { version: "033_indian_tender_practice", file: "033_indian_tender_practice.sql" },
   { version: "034_ra_billing", file: "034_ra_billing.sql" },
+  { version: "035_approvals", file: "035_approvals.sql" },
 ];
 
 /**
