@@ -10,6 +10,8 @@ import {
   BILLING_ROLE_GRANTS,
   APPROVAL_PERMISSIONS,
   APPROVAL_ROLE_GRANTS,
+  PROCUREMENT_PERMISSIONS,
+  PROCUREMENT_ROLE_GRANTS,
   ROLE_CODES,
   ROLE_PERMISSIONS,
   S1_ALL_PERMISSIONS,
@@ -103,7 +105,7 @@ export async function seedDatabase(
     orgId = (org.rows[0] as { id: string }).id;
   }
 
-  for (const code of [...ALL_PERMISSIONS, ...S1_ALL_PERMISSIONS, ...S2_ALL_PERMISSIONS, ...S3_ALL_PERMISSIONS, ...S4_ALL_PERMISSIONS, ...S5_ALL_PERMISSIONS, ...S6_ALL_PERMISSIONS, ...P1_ALL_PERMISSIONS, ...V2_PERMISSIONS, ...CRM_PERMISSIONS, ...BILLING_PERMISSIONS, ...APPROVAL_PERMISSIONS]) {
+  for (const code of [...ALL_PERMISSIONS, ...S1_ALL_PERMISSIONS, ...S2_ALL_PERMISSIONS, ...S3_ALL_PERMISSIONS, ...S4_ALL_PERMISSIONS, ...S5_ALL_PERMISSIONS, ...S6_ALL_PERMISSIONS, ...P1_ALL_PERMISSIONS, ...V2_PERMISSIONS, ...CRM_PERMISSIONS, ...BILLING_PERMISSIONS, ...APPROVAL_PERMISSIONS, ...PROCUREMENT_PERMISSIONS]) {
     await pool.query(
       `INSERT INTO permissions (code, description, module)
        VALUES ($1, $2, $3) ON CONFLICT (code) DO NOTHING`,
@@ -140,6 +142,7 @@ export async function seedDatabase(
       ...(CRM_ROLE_GRANTS[code as RoleCode] ?? []),
       ...(BILLING_ROLE_GRANTS[code as RoleCode] ?? []),
       ...(APPROVAL_ROLE_GRANTS[code as RoleCode] ?? []),
+      ...(PROCUREMENT_ROLE_GRANTS[code as RoleCode] ?? []),
     ]);
     for (const perm of grants) {
       await pool.query(
