@@ -9,6 +9,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { gstinCheckDigit } from "@silverline/shared";
 import {
   buildWorld,
   idem,
@@ -16,6 +17,25 @@ import {
   type CatalogueWorld,
   type Headers,
 } from "./fixture.js";
+
+/**
+ * A GSTIN with a correct check digit.
+ *
+ * An earlier version of this file used a hand-written "29ABCDE1234F1Z5", which
+ * the check-digit validator rightly rejects — the fixture was invalid data, not
+ * the validator being strict. Deriving it keeps the fixture honest.
+ */
+let panSeq = 0;
+/** A distinct, well-formed PAN per fixture party (GSTINs are unique nationally). */
+function uniqPan(): string {
+  panSeq += 1;
+  return `AAAC${String.fromCharCode(65 + (panSeq % 26))}${String(1000 + panSeq).slice(0, 4)}K`;
+}
+
+function gstinFor(stateCode: string, pan = "AAACR5055K", entity = "1"): string {
+  const first14 = `${stateCode}${pan}${entity}Z`;
+  return first14 + gstinCheckDigit(first14);
+}
 
 let w: CatalogueWorld;
 
@@ -456,7 +476,7 @@ describe("§6.4 instruments", () => {
 
 describe("§7.1/§51.3 duplicate detection", () => {
   it("rejects a second client sharing a GSTIN", async () => {
-    const gstin = "29ABCDE1234F1Z5";
+    const gstin = gstinFor("29", uniqPan());
     await makeClient({ gstin });
     const second = await post(w.admin, "/api/v1/clients",
       { code: uniq("CL"), name: `Other ${uniq()}`, client_type: "PRIVATE", gstin });
@@ -470,6 +490,93 @@ describe("§7.1/§51.3 duplicate detection", () => {
       { code: uniq("CL"), name, client_type: "PRIVATE" });
     expect(second.status).toBe(201);
     expect(second.data.duplicate_warnings.length).toBeGreaterThan(0);
+  });
+});
+
+describe("India statutory identifiers", () => {
+  it("refuses a GSTIN that fails its check digit", async () => {
+    const good = gstinFor("27");
+    const typo = good.slice(0, 14) + (good[14] === "A" ? "B" : "A");
+    const res = await post(w.admin, "/api/v1/clients",
+      { code: uniq("CL"), name: `Typo ${uniq()}`, client_type: "PRIVATE", gstin: typo });
+    expect(res.status).toBe(422);
+  });
+
+  it("holds one registration per state for a single party", async () => {
+    // The case a single gstin column could not express: one company, three
+    // states, three GSTINs, one PAN.
+    const pan = uniqPan();
+    const client = await makeClient({ pan });
+    for (const state of ["27", "29", "36"]) {
+      const res = await post(w.admin, `/api/v1/parties/client/${client.id}/gst-registrations`,
+        { gstin: gstinFor(state, pan) });
+      expect(res.status, `state ${state}: ${JSON.stringify(res.body)}`).toBe(201);
+    }
+    const listed = (await get(w.admin, `/api/v1/parties/client/${client.id}/gst-registrations`)).data;
+    expect(listed).toHaveLength(3);
+    expect(new Set(listed.map((r: any) => r.state_code))).toEqual(new Set(["27", "29", "36"]));
+  });
+
+  it("refuses a second live registration in the same state", async () => {
+    const pan = uniqPan();
+    const client = await makeClient({ pan });
+    expect((await post(w.admin, `/api/v1/parties/client/${client.id}/gst-registrations`,
+      { gstin: gstinFor("27", pan, "1") })).status).toBe(201);
+    // A second registration in one state is a data error, not a second office.
+    const again = await post(w.admin, `/api/v1/parties/client/${client.id}/gst-registrations`,
+      { gstin: gstinFor("27", pan, "2") });
+    expect(again.status).toBe(409);
+    expect(again.body.code).toBe("DUPLICATE_REGISTRATION");
+  });
+
+  it("refuses a GSTIN whose embedded PAN contradicts the party", async () => {
+    const client = await makeClient({ pan: uniqPan() });
+    const res = await post(w.admin, `/api/v1/parties/client/${client.id}/gst-registrations`,
+      { gstin: gstinFor("27", uniqPan()) });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("GSTIN_PAN_MISMATCH");
+  });
+
+  it("names the national collision when a vendor already holds the GSTIN", async () => {
+    // uk_clients_pan already stops two client records sharing a PAN, so the
+    // cross-party collision is the client-and-vendor case — one firm that both
+    // buys from us and supplies to us, which is ordinary in construction.
+    const pan = uniqPan();
+    const client = await makeClient({ pan });
+    const gstin = gstinFor("27", pan);
+
+    const vendor = await w.pool.query(
+      `INSERT INTO vendors(org_id, code, name, pan, status) VALUES($1,$2,$3,$4,'ACTIVE') RETURNING id`,
+      [w.orgId, uniq("VN"), `Same firm ${uniq()}`, pan]);
+
+    const onVendor = await post(w.admin, `/api/v1/parties/vendor/${vendor.rows[0].id}/gst-registrations`, { gstin });
+    expect(onVendor.status, JSON.stringify(onVendor.body)).toBe(201);
+
+    // Same GSTIN on the client record. Reporting "already registered in
+    // Maharashtra" would send the operator hunting through client records
+    // when the conflicting row is a vendor.
+    const clash = await post(w.admin, `/api/v1/parties/client/${client.id}/gst-registrations`, { gstin });
+    expect(clash.status).toBe(409);
+    expect(clash.body.code).toBe("GSTIN_ALREADY_REGISTERED");
+    expect(clash.body.message).toContain("another party");
+  });
+
+  it("records a percentage-rate bid against its estimate", async () => {
+    const c = await makeClient();
+    const res = await post(w.admin, "/api/v1/tenders", {
+      tender_no: uniq("TN"), tender_type: "OPEN", client_id: c.id,
+      bid_type: "PERCENTAGE_RATE", quoted_percentage: -4.75, ecv: "10000000",
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(Number(res.data.quoted_percentage)).toBe(-4.75);
+  });
+
+  it("refuses an EMD exemption with no registration behind it", async () => {
+    const c = await makeClient();
+    const res = await post(w.admin, "/api/v1/tenders", {
+      tender_no: uniq("TN"), tender_type: "OPEN", client_id: c.id, emd_exempt: true,
+    });
+    expect(res.status).toBe(422);
   });
 });
 

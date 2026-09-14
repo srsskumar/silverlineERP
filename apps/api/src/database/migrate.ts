@@ -37,6 +37,8 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "029_tender_bid", file: "029_tender_bid.sql" },
   { version: "030_conversion_lineage", file: "030_conversion_lineage.sql" },
   { version: "031_commercial_permissions", file: "031_commercial_permissions.sql" },
+  { version: "032_india_statutory", file: "032_india_statutory.sql" },
+  { version: "033_indian_tender_practice", file: "033_indian_tender_practice.sql" },
 ];
 
 /**

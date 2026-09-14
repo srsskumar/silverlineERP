@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { dateStringSchema } from './s1.js';
 import type { RoleCode } from './rbac.js';
+import { isValidGstin, isValidPan, isValidUdyam } from './india.js';
 
 /**
  * Commercial spine — CRM, tender and bid management (§6.3–6.5, §7, §8).
@@ -69,8 +70,18 @@ export const clientSchema = z.object({
   website: optionalText(255),
   // Format-checked, not merely length-checked: a malformed GSTIN silently
   // breaks the duplicate-detection index it participates in.
-  gstin: z.string().trim().regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]{3}$/, 'Enter a valid 15-character GSTIN').optional(),
-  pan: z.string().trim().regex(/^[A-Z]{5}[0-9]{4}[A-Z]$/, 'Enter a valid 10-character PAN').optional(),
+  // Validated against the GSTN check digit and state code, not merely the
+  // shape: a transposed character passes a regex and then travels onto every
+  // invoice raised for this party.
+  gstin: z.string().trim().toUpperCase().refine(isValidGstin,
+    'That GSTIN fails its check digit or names an unknown state').optional(),
+  pan: z.string().trim().toUpperCase().refine(isValidPan,
+    'That PAN is malformed or names an unknown holder type').optional(),
+  udyam_number: z.string().trim().toUpperCase().refine(isValidUdyam,
+    'Enter a Udyam number in the form UDYAM-XX-00-0000000').optional(),
+  msme_category: z.enum(['MICRO','SMALL','MEDIUM']).optional(),
+  // MSMED Act s.15 sets 45 days where an agreement fixes a period, 15 without.
+  has_written_agreement: z.boolean().default(true),
   credit_limit: money.optional(),
   payment_terms: optionalText(100),
   notes: optionalText(),
@@ -192,6 +203,21 @@ export const tenderBaseSchema = z.object({
   portal: optionalText(150),
   portal_url: z.string().trim().url().max(2000).optional(),
   dsc_used_by: uuid.nullable().optional(),
+  // §8: item-rate prices a BOQ line by line, percentage-rate quotes a single
+  // figure against the estimate (the CPWD/PWD norm), lump-sum quotes one price.
+  bid_type: z.enum(['ITEM_RATE','PERCENTAGE_RATE','LUMP_SUM']).default('ITEM_RATE'),
+  /** Signed: negative is below the estimate, which is the common winning case. */
+  quoted_percentage: z.coerce.number().min(-99.999).max(200).optional(),
+  /** Estimated Contract Value — what a percentage bid is applied to. */
+  ecv: money.optional(),
+  cover_system: z.enum(['SINGLE','TWO_COVER','THREE_COVER']).default('SINGLE'),
+  tender_fee: money.optional(),
+  emd_amount: money.optional(),
+  emd_exempt: z.boolean().default(false),
+  emd_exemption_basis: z.enum(['MSME','NSIC','STARTUP','OTHER']).optional(),
+  emd_exemption_ref: optionalText(50),
+  pre_bid_meeting_at: z.string().datetime({ offset: true }).optional(),
+  clarification_due_at: dateStringSchema.optional(),
   jv_flag: z.boolean().default(false),
   jv_partners: z.array(z.object({ name: text, scope_pct: z.coerce.number().min(0).max(100) })).max(20).default([]),
   notes: optionalText(),
@@ -206,7 +232,57 @@ export const tenderSchema = tenderBaseSchema
   .refine(v => !v.jv_flag || v.jv_partners.length > 0, {
     message: 'A joint venture needs at least one partner firm',
     path: ['jv_partners'],
+  })
+  // A percentage quote is meaningless without the estimate it applies to.
+  .refine(v => v.bid_type !== 'PERCENTAGE_RATE' || v.quoted_percentage === undefined || v.ecv !== undefined, {
+    message: 'A percentage-rate bid needs the estimated contract value it is quoted against',
+    path: ['ecv'],
+  })
+  // The authority asks for the registration number, not the claim.
+  .refine(v => !v.emd_exempt || (v.emd_exemption_basis && v.emd_exemption_ref), {
+    message: 'An EMD exemption must name its basis and the registration number that proves it',
+    path: ['emd_exemption_ref'],
+  })
+  // A JV's partner shares must account for the whole scope.
+  .refine(v => !v.jv_flag || Math.abs(v.jv_partners.reduce((t, p) => t + Number(p.scope_pct), 0) - 100) < 0.01, {
+    message: 'Joint-venture partner shares must total 100%',
+    path: ['jv_partners'],
   });
+
+/**
+ * What a bid is actually worth in rupees.
+ *
+ * A percentage-rate bid stores a signed percentage against the estimate rather
+ * than an amount, so every comparison, ranking and profitability figure has to
+ * resolve it first. Returning null rather than guessing keeps an unpriced
+ * tender out of a total instead of silently contributing zero.
+ */
+export function effectiveBidValue(t: {
+  bid_type?: string | null;
+  quoted_percentage?: number | string | null;
+  ecv?: number | string | null;
+  bid_value?: number | string | null;
+}): number | null {
+  if (t.bid_type === 'PERCENTAGE_RATE') {
+    const pct = Number(t.quoted_percentage), ecv = Number(t.ecv);
+    if (!Number.isFinite(pct) || !Number.isFinite(ecv)) return null;
+    return Math.round(ecv * (1 + pct / 100) * 100) / 100;
+  }
+  const value = Number(t.bid_value);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** A GST registration for a party — one per state it operates in (§6.5). */
+export const gstRegistrationSchema = z.object({
+  party_type: z.enum(['CLIENT','VENDOR']),
+  party_id: uuid,
+  gstin: z.string().trim().toUpperCase().refine(isValidGstin,
+    'That GSTIN fails its check digit or names an unknown state'),
+  registration_type: z.enum(['REGULAR','COMPOSITION','UNREGISTERED','SEZ','SEZ_DEVELOPER','UIN','NON_RESIDENT']).default('REGULAR'),
+  address_line: optionalText(),
+  is_primary: z.boolean().default(false),
+  effective_from: dateStringSchema.optional(),
+});
 
 export const tenderStatusSchema = z.object({
   status: z.enum(TENDER_STATUSES),

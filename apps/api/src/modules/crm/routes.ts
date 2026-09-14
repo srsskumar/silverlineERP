@@ -2,8 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import {
   clientSchema, contactSchema, contactBaseSchema, leadSchema, leadStageSchema,
-  opportunitySchema, interactionSchema,
-  LEAD_STAGE_TRANSITIONS, type LeadStage,
+  opportunitySchema, interactionSchema, gstRegistrationSchema,
+  LEAD_STAGE_TRANSITIONS, type LeadStage, parseGstin,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
@@ -74,6 +74,18 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
       const created = (await db.query(
         `INSERT INTO clients(org_id, created_by, ${keys.join(',')})
          VALUES(${values.map((_, i) => `$${i + 1}`).join(',')}) RETURNING *`, values)).rows[0];
+      // A party holds one GSTIN per state (§6.5). The one given at creation
+      // becomes the primary registration; further states are added through the
+      // registrations endpoint rather than by overwriting a column.
+      if (input.gstin) {
+        const parsed = parseGstin(String(input.gstin));
+        if (parsed) {
+          await db.query(
+            `INSERT INTO party_gst_registrations(org_id, created_by, party_type, party_id, gstin, state_code, is_primary)
+             VALUES($1,$2,'CLIENT',$3,$4,$5,TRUE) ON CONFLICT DO NOTHING`,
+            [u.orgId, u.id, created.id, parsed.stateCode + String(input.gstin).slice(2), parsed.stateCode]);
+        }
+      }
       return { ...created, duplicate_warnings: warnings };
     });
     return reply.code(201).send({ data: row });
@@ -94,6 +106,61 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
            WHERE id = $1 RETURNING *`, [id, u.id, ...Object.values(input)])).rows[0];
       }),
     };
+  });
+
+  /* --------------------------------------------------- GST registrations */
+
+  app.get('/api/v1/parties/:type/:id/gst-registrations', { preHandler: guard('client.read') }, async req => {
+    const u = actor(req), { type, id } = req.params as { type: string; id: string };
+    const partyType = type.toUpperCase();
+    if (!['CLIENT', 'VENDOR'].includes(partyType)) fail('VALIDATION_ERROR', 'Party type must be client or vendor');
+    await inOrg(pool, partyType === 'CLIENT' ? 'clients' : 'vendors', id, u.orgId);
+    const rows = (await pool.query(
+      `SELECT * FROM party_gst_registrations
+       WHERE org_id = $1 AND party_type = $2 AND party_id = $3
+       ORDER BY is_primary DESC, state_code`, [u.orgId, partyType, id])).rows;
+    return { data: rows };
+  });
+
+  app.post('/api/v1/parties/:type/:id/gst-registrations', { preHandler: guard('client.manage') }, async (req, reply) => {
+    const u = actor(req), { type, id } = req.params as { type: string; id: string };
+    const partyType = type.toUpperCase();
+    const input = parse(gstRegistrationSchema.omit({ party_type: true, party_id: true }), req.body);
+    const parsed = parseGstin(input.gstin);
+    if (!parsed) fail('VALIDATION_ERROR', 'That GSTIN fails its check digit or names an unknown state');
+    const row = await mutate(pool, req, 'party.gst_registration', 'client', async db => {
+      if (!['CLIENT', 'VENDOR'].includes(partyType)) fail('VALIDATION_ERROR', 'Party type must be client or vendor');
+      const party = await inOrg(db, partyType === 'CLIENT' ? 'clients' : 'vendors', id, u.orgId, true);
+      // The GSTIN embeds its holder's PAN; a mismatch means one of the two
+      // records is wrong, and silently accepting it corrupts the tax identity.
+      if (party.pan && parsed!.pan !== String(party.pan).toUpperCase()) {
+        fail('GSTIN_PAN_MISMATCH',
+          `This GSTIN belongs to PAN ${parsed!.pan}, but the party is recorded under ${String(party.pan).toUpperCase()}`);
+      }
+      try {
+        return (await db.query(
+          `INSERT INTO party_gst_registrations(org_id, created_by, party_type, party_id, gstin,
+             state_code, registration_type, address_line, is_primary, effective_from)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+          [u.orgId, u.id, partyType, id, input.gstin, parsed!.stateCode,
+           input.registration_type, input.address_line ?? null, input.is_primary, input.effective_from ?? null])).rows[0];
+      } catch (error) {
+        // Two different unique indexes can fire here and they mean opposite
+        // things. Reporting the per-party message for a national collision
+        // sends the operator to look at the wrong record entirely.
+        const violation = error as { code?: string; constraint?: string };
+        if (violation.code === '23505') {
+          if (violation.constraint === 'uk_pgr_gstin') {
+            fail('GSTIN_ALREADY_REGISTERED',
+              'That GSTIN is already recorded against another party. A GSTIN identifies one registration nationally, so check whether the two records are the same business.', 409);
+          }
+          fail('DUPLICATE_REGISTRATION',
+            `This party already holds a live registration in ${parsed!.stateName}`, 409);
+        }
+        throw error;
+      }
+    });
+    return reply.code(201).send({ data: row });
   });
 
   /* ------------------------------------------------------------- contacts */
