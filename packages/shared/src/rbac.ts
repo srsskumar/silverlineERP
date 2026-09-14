@@ -15,6 +15,11 @@ export const ROLE_CODES = [
   "EMPLOYEE",
   "CLIENT_VIEWER",
   "AUDITOR",
+  // §4 adds four roles for the tender domain; these two own the
+  // commercial spine. Procurement Officer and Finance User arrive with
+  // their own modules rather than as unused codes.
+  "SALES_BD_EXECUTIVE",
+  "BID_TENDER_MANAGER",
 ] as const;
 
 export type RoleCode = (typeof ROLE_CODES)[number];
@@ -111,6 +116,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     PERMISSIONS.USERS_READ,
     PERMISSIONS.EMPLOYEES_READ,
   ],
+ SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[],
 };
 
 /**

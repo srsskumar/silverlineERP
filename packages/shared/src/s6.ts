@@ -44,6 +44,7 @@ export const S6_ROLE_GRANTS: Record<RoleCode, string[]> = {
   AUDITOR: [...S6_ALL_PERMISSIONS],
   PAYROLL_OFFICER: [...S6_ALL_PERMISSIONS],
   INVENTORY_MANAGER: [...S6_ALL_PERMISSIONS],
+ SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[],
 };
 
 // ---------------------------------------------------------------------------

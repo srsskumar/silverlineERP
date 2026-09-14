@@ -9,6 +9,7 @@ export const V2_ROLE_GRANTS: Record<RoleCode,string[]> = {
  PROJECT_MANAGER:[...planning,'inventory.read','asset.read'], TEAM_LEAD:['cycle.read','analytics.read','asset.read'],
  EMPLOYEE:['cycle.read','asset.read'], CLIENT_VIEWER:['cycle.read'], AUDITOR:['inventory.read','asset.read','cycle.read','analytics.read','automation.read'],
  INVENTORY_MANAGER:['inventory.read','inventory.manage','asset.read','asset.manage'], HR_MANAGER:['asset.read','analytics.read'], PAYROLL_OFFICER:[],
+ SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[],
 };
 const text = z.string().trim().min(1).max(255);
 const uuid = z.string().uuid();

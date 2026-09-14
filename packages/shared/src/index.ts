@@ -12,5 +12,6 @@ export * from "./s6.js";
 export * from "./p1.js";
 
 export * from "./v2.js";
+export * from "./crm.js";
 export * from "./geo.js";
 export * from "./antifraud.js";

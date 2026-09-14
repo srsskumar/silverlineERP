@@ -32,6 +32,11 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "024_employee_pii_uniqueness", file: "024_employee_pii_uniqueness.sql" },
   { version: "025_attendance_fence_version", file: "025_attendance_fence_version.sql" },
   { version: "026_blob_storage", file: "026_blob_storage.sql" },
+  { version: "027_client_contact_master", file: "027_client_contact_master.sql" },
+  { version: "028_crm_leads", file: "028_crm_leads.sql" },
+  { version: "029_tender_bid", file: "029_tender_bid.sql" },
+  { version: "030_conversion_lineage", file: "030_conversion_lineage.sql" },
+  { version: "031_commercial_permissions", file: "031_commercial_permissions.sql" },
 ];
 
 /**

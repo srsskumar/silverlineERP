@@ -4,6 +4,8 @@ import { Pool } from "pg";
 import {
   ALL_PERMISSIONS,
   V2_PERMISSIONS, V2_ROLE_GRANTS,
+  CRM_PERMISSIONS,
+  CRM_ROLE_GRANTS,
   ROLE_CODES,
   ROLE_PERMISSIONS,
   S1_ALL_PERMISSIONS,
@@ -97,7 +99,7 @@ export async function seedDatabase(
     orgId = (org.rows[0] as { id: string }).id;
   }
 
-  for (const code of [...ALL_PERMISSIONS, ...S1_ALL_PERMISSIONS, ...S2_ALL_PERMISSIONS, ...S3_ALL_PERMISSIONS, ...S4_ALL_PERMISSIONS, ...S5_ALL_PERMISSIONS, ...S6_ALL_PERMISSIONS, ...P1_ALL_PERMISSIONS, ...V2_PERMISSIONS]) {
+  for (const code of [...ALL_PERMISSIONS, ...S1_ALL_PERMISSIONS, ...S2_ALL_PERMISSIONS, ...S3_ALL_PERMISSIONS, ...S4_ALL_PERMISSIONS, ...S5_ALL_PERMISSIONS, ...S6_ALL_PERMISSIONS, ...P1_ALL_PERMISSIONS, ...V2_PERMISSIONS, ...CRM_PERMISSIONS]) {
     await pool.query(
       `INSERT INTO permissions (code, description, module)
        VALUES ($1, $2, $3) ON CONFLICT (code) DO NOTHING`,
@@ -131,6 +133,7 @@ export async function seedDatabase(
       ...(S6_ROLE_GRANTS[code as RoleCode] ?? []),
       ...(P1_ROLE_GRANTS[code as RoleCode] ?? []),
       ...(V2_ROLE_GRANTS[code as RoleCode] ?? []),
+      ...(CRM_ROLE_GRANTS[code as RoleCode] ?? []),
     ]);
     for (const perm of grants) {
       await pool.query(
