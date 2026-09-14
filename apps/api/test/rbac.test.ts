@@ -38,7 +38,7 @@ function tag(prefix: string): string {
 
 async function truncateAll(): Promise<void> {
   await pool.query(
-    `TRUNCATE TABLE provider_jobs, advisory_cases, payslip_revisions, project_workflow_overrides, notification_deliveries, report_registry, report_schedules, payslip_documents, vendors, inventory_items, invoices, stock_transactions, assets, asset_assignments, asset_audits, cycles, custom_field_definitions, domain_events, automation_rules, automation_executions, webhook_subscriptions, webhook_deliveries, insight_feedback, v2_operations, geo_fence_employee_assignments, device_registrations, audit_events, sessions, idempotency_keys, user_roles,
+    `TRUNCATE TABLE record_conversions, bank_guarantee_instruments, competitor_bids, tender_eligibility_items, tender_corrigenda, private_proposals, tenders, interactions, opportunities, leads, contacts, clients, provider_jobs, advisory_cases, payslip_revisions, project_workflow_overrides, notification_deliveries, report_registry, report_schedules, payslip_documents, vendors, inventory_items, invoices, stock_transactions, assets, asset_assignments, asset_audits, cycles, custom_field_definitions, domain_events, automation_rules, automation_executions, webhook_subscriptions, webhook_deliveries, insight_feedback, v2_operations, geo_fence_employee_assignments, device_registrations, audit_events, sessions, idempotency_keys, user_roles,
       users, employee_documents, employees, org_units, holidays,
       attendance_exceptions, attendance_records, attendance_events, geo_fences,
       leave_requests, leave_balances, leave_types,
@@ -624,7 +624,20 @@ describe("RBAC matrix", () => {
     const permRow = await pool.query("SELECT COUNT(*) AS n FROM permissions");
     const total = Number((permRow.rows[0] as { n: string }).n);
     expect(Number((superRow.rows[0] as { n: string }).n)).toBe(total);
-    expect(Number((adminRow.rows[0] as { n: string }).n)).toBe(total);
+
+    // Admin is full apart from the permissions §4.1 reserves for Super Admin as
+    // "final escalation / exceptional overrides". Admin's own row in §4 is
+    // "operational/admin approvals", which is a different authority — so this
+    // asserts the reserved set explicitly rather than asserting parity and
+    // quietly handing Admin every escape hatch a future module adds.
+    const reserved = await pool.query(
+      `SELECT code FROM permissions WHERE code NOT IN (
+         SELECT permission_code FROM role_permissions rp
+         JOIN roles r ON r.id = rp.role_id WHERE r.code = 'ADMIN')
+       ORDER BY code`,
+    );
+    expect(reserved.rows.map((r: { code: string }) => r.code)).toEqual(["tender.override"]);
+    expect(Number((adminRow.rows[0] as { n: string }).n)).toBe(total - reserved.rowCount);
     // Spot-check: admin still passes a write gate in every module.
     const ws = await app.inject({
       method: "POST",

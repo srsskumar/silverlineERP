@@ -76,7 +76,7 @@ export const clientSchema = z.object({
   notes: optionalText(),
 });
 
-export const contactSchema = z.object({
+export const contactBaseSchema = z.object({
   client_id: uuid.nullable().optional(),
   name: text,
   designation: optionalText(150),
@@ -88,7 +88,10 @@ export const contactSchema = z.object({
   address_line: optionalText(),
   do_not_contact: z.boolean().default(false),
   notes: optionalText(),
-}).refine(v => v.phone || v.email, {
+});
+
+/** Refined form for create; PATCH uses contactBaseSchema.partial(). */
+export const contactSchema = contactBaseSchema.refine(v => v.phone || v.email, {
   message: 'Give at least a phone number or an email address',
   path: ['phone'],
 });
@@ -170,7 +173,7 @@ export const TENDER_STATUS_TRANSITIONS: Record<TenderStatus, TenderStatus[]> = {
   CANCELLED: [],
 };
 
-export const tenderSchema = z.object({
+export const tenderBaseSchema = z.object({
   tender_no: text.max(50),
   tender_type: z.enum(['OPEN','LIMITED','SINGLE','EOI','RFP']),
   category: optionalText(150),
@@ -192,13 +195,18 @@ export const tenderSchema = z.object({
   jv_flag: z.boolean().default(false),
   jv_partners: z.array(z.object({ name: text, scope_pct: z.coerce.number().min(0).max(100) })).max(20).default([]),
   notes: optionalText(),
-}).refine(v => !v.closing_date || !v.start_date || v.closing_date >= v.start_date, {
-  message: 'Closing date cannot precede the start date',
-  path: ['closing_date'],
-}).refine(v => !v.jv_flag || v.jv_partners.length > 0, {
-  message: 'A joint venture needs at least one partner firm',
-  path: ['jv_partners'],
 });
+
+/** Refined form for create; PATCH uses tenderBaseSchema.partial(). */
+export const tenderSchema = tenderBaseSchema
+  .refine(v => !v.closing_date || !v.start_date || v.closing_date >= v.start_date, {
+    message: 'Closing date cannot precede the start date',
+    path: ['closing_date'],
+  })
+  .refine(v => !v.jv_flag || v.jv_partners.length > 0, {
+    message: 'A joint venture needs at least one partner firm',
+    path: ['jv_partners'],
+  });
 
 export const tenderStatusSchema = z.object({
   status: z.enum(TENDER_STATUSES),
