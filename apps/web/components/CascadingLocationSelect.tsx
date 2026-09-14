@@ -8,6 +8,7 @@ export interface LocationSelection {
   district_id?: string;
   mandal_id?: string;
   village_id?: string;
+  site_id?: string;
 }
 
 const selectClass =
@@ -21,12 +22,14 @@ export function CascadingLocationSelect({
   districtId,
   mandalId,
   villageId,
+  siteId,
   onChange,
   disabled = false,
 }: {
   districtId?: string;
   mandalId?: string;
   villageId?: string;
+  siteId?: string;
   onChange: (v: LocationSelection) => void;
   disabled?: boolean;
 }) {
@@ -47,9 +50,15 @@ export function CascadingLocationSelect({
     enabled: !!mandalId,
     staleTime: 10 * 60_000,
   });
+  const sitesQuery = useQuery({
+    queryKey: queryKeys.orgUnits.list({ type: 'site', parent_id: villageId ?? '', limit: 100 }),
+    queryFn: () => listOrgUnits({ type: 'site', parent_id: villageId, limit: 100 }),
+    enabled: !!villageId,
+    staleTime: 10 * 60_000,
+  });
 
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
       <div className="flex flex-col gap-1">
         <label htmlFor="loc-district" className="text-sm font-medium text-text-muted">
           District
@@ -60,7 +69,7 @@ export function CascadingLocationSelect({
           disabled={disabled}
           value={districtId ?? ''}
           onChange={(e) =>
-            onChange({ district_id: e.target.value || undefined, mandal_id: undefined, village_id: undefined })
+            onChange({ district_id: e.target.value || undefined, mandal_id: undefined, village_id: undefined, site_id: undefined })
           }
         >
           <option value="">Select district</option>
@@ -82,7 +91,7 @@ export function CascadingLocationSelect({
           disabled={disabled || !districtId}
           value={mandalId ?? ''}
           onChange={(e) =>
-            onChange({ district_id: districtId, mandal_id: e.target.value || undefined, village_id: undefined })
+            onChange({ district_id: districtId, mandal_id: e.target.value || undefined, village_id: undefined, site_id: undefined })
           }
         >
           <option value="">{districtId ? 'Select mandal' : 'Pick a district first'}</option>
@@ -103,7 +112,7 @@ export function CascadingLocationSelect({
           className={selectClass}
           disabled={disabled || !mandalId}
           value={villageId ?? ''}
-          onChange={(e) => onChange({ district_id: districtId, mandal_id: mandalId, village_id: e.target.value || undefined })}
+          onChange={(e) => onChange({ district_id: districtId, mandal_id: mandalId, village_id: e.target.value || undefined, site_id: undefined })}
         >
           <option value="">{mandalId ? 'Select village' : 'Pick a mandal first'}</option>
           {(villagesQuery.data?.data ?? []).map((u) => (
@@ -113,6 +122,31 @@ export function CascadingLocationSelect({
           ))}
         </select>
         {villagesQuery.isFetching && mandalId && <p className="text-xs text-text-subtle">Loading villages…</p>}
+      </div>
+      <div className="flex flex-col gap-1">
+        <label htmlFor="loc-site" className="text-sm font-medium text-text-muted">
+          Assigned site
+        </label>
+        <select
+          id="loc-site"
+          className={selectClass}
+          disabled={disabled || !villageId}
+          value={siteId ?? ''}
+          onChange={(e) => onChange({
+            district_id: districtId,
+            mandal_id: mandalId,
+            village_id: villageId,
+            site_id: e.target.value || undefined,
+          })}
+        >
+          <option value="">{villageId ? 'Select site' : 'Pick a village first'}</option>
+          {(sitesQuery.data?.data ?? []).map((u) => (
+            <option key={u.id} value={u.id}>
+              {u.name}
+            </option>
+          ))}
+        </select>
+        {sitesQuery.isFetching && villageId && <p className="text-xs text-text-subtle">Loading sites…</p>}
       </div>
     </div>
   );

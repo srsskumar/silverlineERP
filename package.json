@@ -17,9 +17,11 @@
     "dev:api": "npm run dev --workspace=apps/api",
     "dev:web": "npm run dev --workspace=apps/web",
     "dev:mobile": "npm run start --workspace=apps/mobile",
-    "check": "npm run lint && npm test && npm run build",
+    "check": "npm run lint && npm test && npm run catalogue && npm run build",
     "db:migrate": "npm run migrate --workspace=apps/api",
-    "db:seed": "npm run seed --workspace=apps/api"
+    "db:seed": "npm run seed --workspace=apps/api",
+    "catalogue": "node scripts/catalogue-coverage.mjs",
+    "catalogue:json": "node scripts/catalogue-coverage.mjs --json"
   },
   "devDependencies": {
     "turbo": "^2.5.4",

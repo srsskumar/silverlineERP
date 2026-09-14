@@ -1,6 +1,6 @@
-@baseUrl = http://localhost:3101
+@baseUrl = https://silverline-api.vercel.app/
 @username = admin
-@password = ChangeMe123!
+@password = Silverline!161d448ed4bc
 @mfaCode = 000000
 
 ### Health check

@@ -10,7 +10,8 @@
     "seed": "tsx src/database/seed.ts",
     "test": "vitest run",
     "lint": "tsc --noEmit -p tsconfig.json",
-    "worker": "tsx src/jobs.ts"
+    "worker": "tsx src/jobs.ts",
+    "backfill:pii-hashes": "tsx src/scripts/backfill-pii-hashes.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

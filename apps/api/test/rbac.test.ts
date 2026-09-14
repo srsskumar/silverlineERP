@@ -38,7 +38,7 @@ function tag(prefix: string): string {
 
 async function truncateAll(): Promise<void> {
   await pool.query(
-    `TRUNCATE TABLE provider_jobs, advisory_cases, payslip_revisions, project_workflow_overrides, notification_deliveries, report_registry, report_schedules, payslip_documents, vendors, inventory_items, invoices, stock_transactions, assets, asset_assignments, asset_audits, cycles, custom_field_definitions, domain_events, automation_rules, automation_executions, webhook_subscriptions, webhook_deliveries, insight_feedback, v2_operations, device_registrations, audit_events, sessions, idempotency_keys, user_roles,
+    `TRUNCATE TABLE provider_jobs, advisory_cases, payslip_revisions, project_workflow_overrides, notification_deliveries, report_registry, report_schedules, payslip_documents, vendors, inventory_items, invoices, stock_transactions, assets, asset_assignments, asset_audits, cycles, custom_field_definitions, domain_events, automation_rules, automation_executions, webhook_subscriptions, webhook_deliveries, insight_feedback, v2_operations, geo_fence_employee_assignments, device_registrations, audit_events, sessions, idempotency_keys, user_roles,
       users, employee_documents, employees, org_units, holidays,
       attendance_exceptions, attendance_records, attendance_events, geo_fences,
       leave_requests, leave_balances, leave_types,

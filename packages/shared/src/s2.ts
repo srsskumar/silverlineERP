@@ -112,6 +112,7 @@ const fenceBase = {
   name: z.string().min(1, "Name is required").max(255),
   scope_type: geoScopeTypeSchema,
   scope_id: z.string().uuid("scope_id must be a UUID"),
+  employee_ids: z.array(z.string().uuid("employee_id must be a UUID")).max(500).default([]),
   tolerance_meters: z.number().min(0).max(100000).default(0),
   accuracy_threshold_meters: z.number().positive().max(100000).optional(),
 };
@@ -229,6 +230,14 @@ export const attendanceEventSchema = z
     // rather than trusting the client's copy. Loose by design — platforms keep
     // adding fields, and a strict shape would reject punches from a newer app.
     device_signals: deviceSignalsSchema.optional(),
+    /**
+     * Reason for writing attendance into a LOCKED payroll period (BR-05).
+     *
+     * Ignored unless the caller also holds payroll.lock. Present so an
+     * authorized correction can be made without reopening the whole run, and so
+     * the audit trail records *why* the lock was overridden.
+     */
+    payroll_override_reason: z.string().trim().min(1).max(2000).optional(),
   })
   .refine(
     (v) =>
@@ -307,6 +316,8 @@ export const attendanceRegularizeSchema = z.object({
     .refine((s) => !Number.isNaN(Date.parse(s)), "Invalid ISO timestamp")
     .optional(),
   reason: z.string().min(1, "Reason is required").max(2000),
+  /** See attendanceEventSchema.payroll_override_reason (BR-05). */
+  payroll_override_reason: z.string().trim().min(1).max(2000).optional(),
 });
 
 export type AttendanceRegularizeInput = z.infer<

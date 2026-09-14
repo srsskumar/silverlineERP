@@ -16,7 +16,8 @@ function resolvePolicy(env) {
     throw new Error('EXPO_PUBLIC_API_URL must be an HTTP(S) origin without credentials, path, query, or fragment.');
   }
   const host = url.hostname;
-  if (['preview', 'production'].includes(profile) && (host === 'localhost' || host.endsWith('.localhost') || host.startsWith('127.') || host === '[::1]' || host === '0.0.0.0')) {
+  const loopback = host === 'localhost' || host.endsWith('.localhost') || host.startsWith('127.') || host === '[::1]' || host === '0.0.0.0';
+  if (['preview', 'production'].includes(profile) && loopback) {
     throw new Error('Device builds cannot use localhost; use the API server LAN address or HTTPS hostname.');
   }
   if (url.protocol === 'https:') return { cleartextHost: null };
@@ -26,7 +27,13 @@ function resolvePolicy(env) {
   if (profile === 'production' || (profile === 'preview' && !privateIp)) {
     throw new Error('Production requires HTTPS; preview HTTP is limited to a private LAN IP.');
   }
-  return { cleartextHost: profile === 'preview' && privateIp ? host : null };
+  if (!privateIp && !loopback) {
+    throw new Error('Development HTTP is limited to localhost, an emulator host, or a private LAN IP.');
+  }
+  // Debug manifests still reference this XML. Android gives an explicit
+  // network-security config precedence over android:usesCleartextTraffic, so
+  // the development host must be present here as well as in preview builds.
+  return { cleartextHost: host };
 }
 
 function networkXml({ cleartextHost }) {

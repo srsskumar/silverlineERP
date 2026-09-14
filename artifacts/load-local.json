@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-12T17:39:45.095Z",
+  "generated_at": "2026-09-13T10:27:30.718Z",
   "environment": "Local loopback HTTP, PostgreSQL, one API process; excludes UI rendering and native startup",
   "concurrent_users": 200,
   "requests": 1600,
@@ -7,10 +7,10 @@
   "fixture_tasks": 4000,
   "errors": 0,
   "statuses": [],
-  "duration_ms": 514,
-  "requests_per_second": 3113.6,
-  "p50_ms": 62,
-  "p95_ms": 84,
-  "p99_ms": 99,
+  "duration_ms": 581,
+  "requests_per_second": 2755.8,
+  "p50_ms": 66,
+  "p95_ms": 95,
+  "p99_ms": 141,
   "node": "v26.3.0"
 }

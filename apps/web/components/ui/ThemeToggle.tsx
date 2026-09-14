@@ -13,6 +13,16 @@ import {
 type Theme = 'light' | 'dark' | 'system';
 const STORAGE_KEY = 'silverline.theme';
 
+/** Reads the stored preference, falling back to "system" when unset or unreadable. */
+export function readStoredTheme(): Theme {
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY) as Theme | null;
+    return stored === 'dark' || stored === 'light' ? stored : 'system';
+  } catch {
+    return 'system';
+  }
+}
+
 /** Applies the resolved theme to <html>, which is what the token layer keys off. */
 export function applyTheme(theme: Theme): void {
   const dark =
@@ -25,16 +35,13 @@ export function ThemeToggle() {
   const [theme, setTheme] = React.useState<Theme>('system');
 
   React.useEffect(() => {
-    const stored = (window.localStorage.getItem(STORAGE_KEY) as Theme | null) ?? 'system';
+    const stored = readStoredTheme();
     setTheme(stored);
     applyTheme(stored);
     // Follow the OS while the preference is "system".
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
     const onChange = () => {
-      if ((window.localStorage.getItem(STORAGE_KEY) as Theme | null) !== 'dark' &&
-          (window.localStorage.getItem(STORAGE_KEY) as Theme | null) !== 'light') {
-        applyTheme('system');
-      }
+      if (readStoredTheme() === 'system') applyTheme('system');
     };
     mq.addEventListener('change', onChange);
     return () => mq.removeEventListener('change', onChange);

@@ -21,10 +21,7 @@
           "remote-notification"
         ]
       },
-      "bundleIdentifier": "com.silverline.erp",
-      "config": {
-        "googleMapsApiKey": "$GOOGLE_MAPS_IOS_KEY"
-      }
+      "bundleIdentifier": "com.silverline.erp"
     },
     "android": {
       "permissions": [
@@ -44,12 +41,7 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.silverline.erp",
-      "config": {
-        "googleMaps": {
-          "apiKey": "$GOOGLE_MAPS_ANDROID_KEY"
-        }
-      }
+      "package": "com.silverline.erp"
     },
     "web": {
       "favicon": "./assets/favicon.png"

@@ -144,6 +144,7 @@ export const employeeCreateSchema = z.object({
   district_id: z.string().uuid().optional(),
   mandal_id: z.string().uuid().optional(),
   village_id: z.string().uuid().optional(),
+  site_id: z.string().uuid().optional(),
   designation: z.string().max(100).optional(),
   department: z.string().max(100).optional(),
   date_of_joining: dateStringSchema,
@@ -177,6 +178,26 @@ export const employeeExitSchema = z.object({
 });
 
 export type EmployeeExitInput = z.infer<typeof employeeExitSchema>;
+
+/**
+ * POST /api/v1/employees/:id/activate — DRAFT → ACTIVE.
+ *
+ * Creation deliberately lands an employee in DRAFT so a half-entered record
+ * cannot punch, hold a fence or be paid. Activation is the explicit, audited
+ * step that puts them on the roster once the record is complete.
+ */
+export const employeeActivateSchema = z.object({
+  reason: z.string().min(1, "Reason is required").max(2000),
+});
+
+export type EmployeeActivateInput = z.infer<typeof employeeActivateSchema>;
+
+/** POST /api/v1/employees/:id/suspend — ACTIVE → SUSPENDED. */
+export const employeeSuspendSchema = z.object({
+  reason: z.string().min(1, "Reason is required").max(2000),
+});
+
+export type EmployeeSuspendInput = z.infer<typeof employeeSuspendSchema>;
 
 /** POST /api/v1/employees/:id/reactivate */
 export const employeeReactivateSchema = z.object({
@@ -252,3 +273,72 @@ export const holidayCreateSchema = z.object({
 });
 
 export type HolidayCreateInput = z.infer<typeof holidayCreateSchema>;
+
+// ---------------------------------------------------------------------------
+// Holiday precedence (§8.2)
+// ---------------------------------------------------------------------------
+
+/** A holiday row as far as precedence is concerned. */
+export interface HolidayCandidate {
+  id: string;
+  /** YYYY-MM-DD. */
+  date: string;
+  name: string;
+  type: string;
+  /** null for an organization-wide holiday. */
+  scope_type: string | null;
+  scope_id: string | null;
+}
+
+/**
+ * Scope precedence, finest first. An explicitly scoped holiday describes the
+ * place an employee actually works, so it outranks the organization-wide
+ * default; among scopes, the narrowest description of that place wins.
+ */
+const HOLIDAY_SCOPE_RANK: Record<string, number> = {
+  site: 0,
+  village: 1,
+  mandal: 2,
+  district: 3,
+};
+
+/** Organization-wide (unscoped) holidays rank last. */
+const ORG_WIDE_RANK = 4;
+
+function holidayRank(holiday: HolidayCandidate): number {
+  if (!holiday.scope_type || !holiday.scope_id) return ORG_WIDE_RANK;
+  return HOLIDAY_SCOPE_RANK[holiday.scope_type] ?? ORG_WIDE_RANK - 1;
+}
+
+/**
+ * The single holiday in effect on each date for one employee.
+ *
+ * An organization can declare a generic national holiday and a district can
+ * declare a local one on the same date; both rows are legitimate and both are
+ * stored. Payroll and attendance need one answer per date, and picking it by
+ * insertion order would make the result depend on data-entry order.
+ *
+ * `scopeIds` is the employee's own location chain (site, village, mandal,
+ * district, in any order). A scoped holiday only applies when its scope is in
+ * that chain — a holiday declared for another district is simply not this
+ * employee's holiday.
+ *
+ * Returns one entry per date, keyed by date, sorted by date.
+ */
+export function resolveEffectiveHolidays(
+  holidays: readonly HolidayCandidate[],
+  scopeIds: readonly (string | null | undefined)[],
+): HolidayCandidate[] {
+  const chain = new Set(scopeIds.filter((id): id is string => typeof id === "string"));
+  const best = new Map<string, HolidayCandidate>();
+  for (const holiday of holidays) {
+    const scoped = Boolean(holiday.scope_type && holiday.scope_id);
+    // A holiday scoped to somewhere this employee does not work is not theirs.
+    if (scoped && !chain.has(holiday.scope_id as string)) continue;
+    const current = best.get(holiday.date);
+    if (!current || holidayRank(holiday) < holidayRank(current)) {
+      best.set(holiday.date, holiday);
+    }
+  }
+  return [...best.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}

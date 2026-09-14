@@ -9,7 +9,10 @@ const app = await buildApp({ pool });
 
 try {
   await app.listen({ port: config.port, host: "0.0.0.0" });
-  console.log(`api listening on :${config.port}`);
+  app.log.info(
+    { host: "0.0.0.0", port: config.port, node_env: config.nodeEnv },
+    "api listening",
+  );
 } catch (err) {
   app.log.error(err);
   await pool.end();

@@ -1,4 +1,4 @@
-import { ApiClientError, apiRequest } from './apiClient';
+import { ApiClientError, apiRequest, apiRequestRaw } from './apiClient';
 
 /**
  * S4 workspaces + projects client (frozen contract).
@@ -182,6 +182,8 @@ export interface ListProjectsParams {
   status?: string;
   workspace_id?: string;
   q?: string;
+  limit?: number;
+  cursor?: string;
 }
 
 export function buildProjectsQuery(params: ListProjectsParams = {}): string {
@@ -189,13 +191,46 @@ export function buildProjectsQuery(params: ListProjectsParams = {}): string {
   if (params.status) search.set('status', params.status);
   if (params.workspace_id) search.set('workspace_id', params.workspace_id);
   if (params.q) search.set('q', params.q);
+  if (params.limit) search.set('limit', String(params.limit));
+  if (params.cursor) search.set('cursor', params.cursor);
   const qs = search.toString();
   return `/api/v1/projects${qs ? `?${qs}` : ''}`;
 }
 
+/** The API caps a page at 100 and defaults to 20 when no limit is sent. */
+const PROJECTS_PAGE_SIZE = 100;
+/** 100 requests x 100 rows. A guard against a cursor that never terminates. */
+const PROJECTS_MAX_PAGES = 100;
+
+/**
+ * List every project the caller can see, following `next_cursor` to the end.
+ *
+ * Sending no limit used to take the server default of 20, and nothing followed
+ * the cursor, so the dashboard board picker and the projects page silently
+ * showed only the 20 most recently created projects with no hint that more
+ * existed. Pass an explicit `limit` or `cursor` to fetch a single page instead.
+ *
+ * apiRequestRaw, not apiRequest: unwrap() keeps only `data` and discards the
+ * `next_cursor`/`has_more` siblings this loop reads.
+ */
 export async function listProjects(params: ListProjectsParams = {}): Promise<Project[]> {
-  const { data } = await apiRequest<unknown>(buildProjectsQuery(params), { method: 'GET' });
-  return normalizeProjectsPage(data);
+  const singlePage = params.limit !== undefined || params.cursor !== undefined;
+  const all: Project[] = [];
+  let cursor = params.cursor;
+  for (let fetched = 0; fetched < PROJECTS_MAX_PAGES; fetched += 1) {
+    const path = buildProjectsQuery({
+      ...params,
+      limit: params.limit ?? PROJECTS_PAGE_SIZE,
+      cursor,
+    });
+    const { body } = await apiRequestRaw(path, { method: 'GET' });
+    all.push(...normalizeProjectsPage(body));
+    if (singlePage) break;
+    const page = body as { has_more?: boolean; next_cursor?: string | null };
+    if (!page?.has_more || !page.next_cursor) break;
+    cursor = page.next_cursor;
+  }
+  return all;
 }
 
 export async function createProject(input: Record<string, unknown>): Promise<Project> {

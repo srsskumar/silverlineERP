@@ -16,8 +16,10 @@ export async function saveTokens(
   accessToken: string,
   refreshToken: string,
 ): Promise<void> {
-  await SecureStore.setItemAsync(ACCESS_KEY, accessToken);
-  await SecureStore.setItemAsync(REFRESH_KEY, refreshToken);
+  await Promise.all([
+    SecureStore.setItemAsync(ACCESS_KEY, accessToken),
+    SecureStore.setItemAsync(REFRESH_KEY, refreshToken),
+  ]);
 }
 
 export async function getAccessToken(): Promise<string | null> {

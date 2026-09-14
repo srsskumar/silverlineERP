@@ -34,7 +34,7 @@ function nextKey(): string {
 
 async function truncateAll(): Promise<void> {
   await pool.query(
-    `TRUNCATE TABLE provider_jobs, advisory_cases, payslip_revisions, project_workflow_overrides, notification_deliveries, report_registry, report_schedules, payslip_documents, vendors, inventory_items, invoices, stock_transactions, assets, asset_assignments, asset_audits, cycles, custom_field_definitions, domain_events, automation_rules, automation_executions, webhook_subscriptions, webhook_deliveries, insight_feedback, v2_operations, device_registrations, audit_events, sessions, idempotency_keys, user_roles,
+    `TRUNCATE TABLE provider_jobs, advisory_cases, payslip_revisions, project_workflow_overrides, notification_deliveries, report_registry, report_schedules, payslip_documents, vendors, inventory_items, invoices, stock_transactions, assets, asset_assignments, asset_audits, cycles, custom_field_definitions, domain_events, automation_rules, automation_executions, webhook_subscriptions, webhook_deliveries, insight_feedback, v2_operations, geo_fence_employee_assignments, device_registrations, audit_events, sessions, idempotency_keys, user_roles,
       users, employee_documents, employees, org_units, holidays,
       attendance_exceptions, attendance_records, attendance_events, geo_fences,
       leave_requests, leave_balances, leave_types,
@@ -121,7 +121,14 @@ async function unitChain(headers: Record<string, string>, tag: string) {
     parent_id: mandal,
   });
   const village = (v.json() as { id: string }).id;
-  return { district, mandal, village };
+  const s = await createUnit(headers, {
+    type: "site",
+    code: `SS${tag}${seq}`,
+    name: "S",
+    parent_id: village,
+  });
+  const site = (s.json() as { id: string }).id;
+  return { district, mandal, village, site };
 }
 
 async function activeEmployee(headers: Record<string, string>, over: Record<string, unknown> = {}) {
@@ -225,6 +232,39 @@ beforeEach(async () => {
 // ------------------------------------------------------------------ fences
 
 describe("geo-fences", () => {
+  it("lets an employee read only fences in their assigned location chain", async () => {
+    const admin = await adminHeaders();
+    const assigned = await unitChain(admin, "SELF");
+    const other = await unitChain(admin, "OTHER");
+    const assignedFence = await createFence(
+      admin,
+      circleFenceBody("site", assigned.site, { name: "Assigned site" }),
+      nextKey(),
+    );
+    await createFence(admin, circleFenceBody("site", other.site, { name: "Other site" }), nextKey());
+    const employeeId = await activeEmployee(admin, {
+      district_id: assigned.district,
+      mandal_id: assigned.mandal,
+      village_id: assigned.village,
+      site_id: assigned.site,
+    });
+    const username = `effective_${Date.now()}`;
+    const userId = await createUser({ username, password: "Pass1234!", roles: ["EMPLOYEE"] });
+    await pool.query("UPDATE users SET employee_id=$1::uuid WHERE id=$2::uuid", [employeeId, userId]);
+    const employeeHeaders = await headersFor(username, "Pass1234!");
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/geo-fences/effective",
+      headers: employeeHeaders,
+    });
+    expect(res.statusCode).toBe(200);
+    const rows = (res.json() as { data: Array<{ id: string }> }).data;
+    expect(rows.map((row) => row.id)).toEqual([
+      (assignedFence.json() as { id: string }).id,
+    ]);
+  });
+
   it("creates a circle fence (201, version 1, ACTIVE)", async () => {
     const h = await adminHeaders();
     const ids = await unitChain(h, "A");
@@ -366,6 +406,24 @@ describe("geo-fences", () => {
 // ------------------------------------------------------------------ punches
 
 describe("attendance punches", () => {
+  it("uses the assigned site fence before broader village fences", async () => {
+    const h = await adminHeaders();
+    const ids = await unitChain(h, "SITE");
+    await createFence(h, circleFenceBody("village", ids.village), nextKey());
+    const siteFence = await createFence(h, circleFenceBody("site", ids.site), nextKey());
+    const empId = await activeEmployee(h, {
+      district_id: ids.district,
+      mandal_id: ids.mandal,
+      village_id: ids.village,
+      site_id: ids.site,
+    });
+    const res = await punch(h, checkinBody(empId), nextKey());
+    expect(res.statusCode).toBe(201);
+    expect((res.json() as { event: { geofence_id: string } }).event.geofence_id).toBe(
+      (siteFence.json() as { id: string }).id,
+    );
+  });
+
   it("accepts an inside check-in (201 ACCEPTED + PARTIAL record)", async () => {
     const h = await adminHeaders();
     const ids = await unitChain(h, "F");

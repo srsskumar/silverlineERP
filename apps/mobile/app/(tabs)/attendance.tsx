@@ -67,6 +67,7 @@ export default function AttendanceScreen() {
     monitored,
     backgroundGranted,
     refreshBackgroundPermission,
+    refreshFences,
     isLoading: fencesLoading,
   } = useFences(fix);
 
@@ -79,14 +80,15 @@ export default function AttendanceScreen() {
   const locate = useCallback(async () => {
     setBusy("locating");
     try {
-      setFix(await getPunchFix());
+      const [nextFix] = await Promise.all([getPunchFix(), refreshFences()]);
+      setFix(nextFix);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Could not get a location");
       setMsgTone("danger");
     } finally {
       setBusy(null);
     }
-  }, []);
+  }, [refreshFences]);
 
   useEffect(() => {
     void locate();
@@ -196,6 +198,8 @@ export default function AttendanceScreen() {
         right={
           currentFence ? (
             <StatusDot text="Inside fence" tone="success" />
+          ) : fix && fences.length === 0 ? (
+            <StatusDot text="No fence assigned" tone="neutral" />
           ) : fix ? (
             <StatusDot text="Outside fence" tone="warning" />
           ) : null

@@ -33,6 +33,7 @@
     "react-dom": "19.2.3",
     "react-hook-form": "^7.87.0",
     "react-native": "0.86.3",
+    "react-native-maps": "1.27.2",
     "react-native-reanimated": "4.5.1",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "~4.26.0",
@@ -48,13 +49,19 @@
   },
   "scripts": {
     "start": "expo start",
+    "check:android": "node scripts/check-android-env.mjs",
+    "preandroid": "npm run shared && npm run check:android",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "build": "expo export --platform android --platform ios",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "shared": "npm run build --workspace=@silverline/shared",
+    "prestart": "npm run shared",
+    "prebuild": "npm run shared",
+    "preios": "npm run shared"
   },
   "private": true
 }

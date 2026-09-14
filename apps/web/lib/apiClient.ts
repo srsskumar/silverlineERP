@@ -64,6 +64,41 @@ export function getBaseUrl(): string {
   return raw.replace(/\/+$/, '');
 }
 
+const DEV_API_LOGS = process.env.NODE_ENV === 'development';
+
+function safeLogPath(path: string): string {
+  return path.split(/[?#]/, 1)[0] || '/';
+}
+
+async function fetchWithApiTiming(
+  method: string,
+  path: string,
+  attempt: number,
+  request: () => Promise<Response>,
+): Promise<Response> {
+  if (!DEV_API_LOGS) return request();
+  const startedAt = performance.now();
+  const route = safeLogPath(path);
+  console.debug(`[api] request ${method} ${route}`, { attempt });
+  try {
+    const response = await request();
+    console.info(`[api] response ${method} ${route}`, {
+      attempt,
+      status: response.status,
+      duration_ms: Math.round(performance.now() - startedAt),
+      request_id: response.headers.get('x-request-id') ?? undefined,
+    });
+    return response;
+  } catch (error) {
+    console.warn(`[api] network error ${method} ${route}`, {
+      attempt,
+      duration_ms: Math.round(performance.now() - startedAt),
+      error: error instanceof Error ? error.message : 'Network request failed',
+    });
+    throw error;
+  }
+}
+
 const ACCESS_KEY = 'silverline.access_token';
 const REFRESH_KEY = 'silverline.refresh_token';
 
@@ -111,12 +146,14 @@ export async function logout(): Promise<void> {
   const refreshToken = getRefreshToken();
   clearTokens();
   if (refreshToken) {
-    await fetch(`${getBaseUrl()}/api/v1/auth/logout`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-      signal: AbortSignal.timeout(5000),
-    }).catch(() => undefined);
+    await fetchWithApiTiming('POST', '/api/v1/auth/logout', 1, () =>
+      fetch(`${getBaseUrl()}/api/v1/auth/logout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+        signal: AbortSignal.timeout(5000),
+      }),
+    ).catch(() => undefined);
   }
   redirectToLogin();
 }
@@ -184,11 +221,14 @@ async function tryRefresh(): Promise<boolean> {
     const refreshToken = getRefreshToken();
     if (!refreshToken) return false;
     try {
-      const res = await fetch(`${getBaseUrl()}/api/v1/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      });
+      const res = await fetchWithApiTiming('POST', '/api/v1/auth/refresh', 1, () =>
+        fetch(`${getBaseUrl()}/api/v1/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: refreshToken }),
+          signal: AbortSignal.timeout(15_000),
+        }),
+      );
       if (res.status === 429 || res.status >= 500) throw new ApiClientError(res.status,{code:'REFRESH_UNAVAILABLE',message:'Session refresh is temporarily unavailable. Please retry.'});
       if (!res.ok) return false;
       const json: unknown = await res.json().catch(() => null);
@@ -231,7 +271,9 @@ export async function apiRequestRaw(
     stableHeaders.set('Idempotency-Key', newIdempotencyKey());
   }
 
+  let attempt = 0;
   const doFetch = async (): Promise<Response> => {
+    attempt += 1;
     const reqHeaders: Record<string, string> = {
       'Content-Type': 'application/json',
       ...Object.fromEntries(stableHeaders.entries()),
@@ -239,13 +281,15 @@ export async function apiRequestRaw(
     if (stableHeaders.has('Idempotency-Key')) { delete reqHeaders['idempotency-key']; reqHeaders['Idempotency-Key'] = stableHeaders.get('Idempotency-Key')!; }
     const token = getAccessToken();
     if (token) reqHeaders.Authorization = `Bearer ${token}`;
-    return fetch(`${getBaseUrl()}${path}`, {
-      ...rest,
-      signal:rest.signal??AbortSignal.timeout(30000),
-      method,
-      headers: reqHeaders,
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    return fetchWithApiTiming(method, path, attempt, () =>
+      fetch(`${getBaseUrl()}${path}`, {
+        ...rest,
+        signal:rest.signal??AbortSignal.timeout(30000),
+        method,
+        headers: reqHeaders,
+        body: body === undefined ? undefined : JSON.stringify(body),
+      }),
+    );
   };
 
   let res = await doFetch();
@@ -335,7 +379,7 @@ export function __resetAuthStateForTests(): void {
 /** Authenticated binary download; bearer tokens are sent only to our API origin. */
 export async function downloadFile(path:string,fileName:string):Promise<void>{
  const target=new URL(path,getBaseUrl());if(target.origin!==new URL(getBaseUrl()).origin)throw new Error('Invalid download destination');
- const fetchFile=()=>fetch(target,{headers:{Authorization:`Bearer ${getAccessToken()??''}`},signal:AbortSignal.timeout(30000)});
+ let attempt=0;const fetchFile=()=>{attempt++;return fetchWithApiTiming('GET',path,attempt,()=>fetch(target,{headers:{Authorization:`Bearer ${getAccessToken()??''}`},signal:AbortSignal.timeout(30000)}));};
  let response=await fetchFile();if(response.status===401&&await tryRefresh())response=await fetchFile();
  if(!response.ok)throw new ApiClientError(response.status,toEnvelope(await response.json().catch(()=>null),response.headers.get('x-request-id')));
  const url=URL.createObjectURL(await response.blob()),anchor=document.createElement('a');anchor.href=url;anchor.download=fileName;document.body.appendChild(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);

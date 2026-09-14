@@ -73,6 +73,7 @@ export function EmployeeForm({
   const districtId = watch('district_id' as keyof EmployeeFormValues) as unknown as string | undefined;
   const mandalId = watch('mandal_id' as keyof EmployeeFormValues) as unknown as string | undefined;
   const villageId = watch('village_id' as keyof EmployeeFormValues) as unknown as string | undefined;
+  const siteId = watch('site_id' as keyof EmployeeFormValues) as unknown as string | undefined;
 
   const debouncedQ = React.useMemo(() => reportsQuery.trim(), [reportsQuery]);
   const reportsSearch = useQuery({
@@ -224,16 +225,16 @@ export function EmployeeForm({
           districtId={districtId || undefined}
           mandalId={mandalId || undefined}
           villageId={villageId || undefined}
+          siteId={siteId || undefined}
           onChange={(v) => {
             setValue('district_id', (v.district_id ?? '') as never, { shouldDirty: true });
             setValue('mandal_id', (v.mandal_id ?? '') as never, { shouldDirty: true });
             setValue('village_id', (v.village_id ?? '') as never, { shouldDirty: true });
+            setValue('site_id', (v.site_id ?? '') as never, { shouldDirty: true });
           }}
         />
-        <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <FormField label="Site ID" htmlFor="site_id" error={err('site_id')}>
-            <Input id="site_id" {...register('site_id')} />
-          </FormField>
+        <input type="hidden" {...register('site_id')} />
+        <div className="mt-3 grid grid-cols-1 gap-4">
           <FormField label="Address" htmlFor="address" error={err('address')}>
             <Input id="address" {...register('address')} />
           </FormField>

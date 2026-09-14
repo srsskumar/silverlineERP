@@ -1,0 +1,32 @@
+# Local artifacts and test output — never part of a deployment.
+#
+# Patterns are anchored with a leading slash on purpose. An unanchored
+# `projects` also matches apps/web/app/projects/, which silently removes
+# application source from the upload and fails the build with a
+# "Module not found" that points at a file which plainly exists locally.
+node_modules
+.git
+.turbo
+*.log
+
+/exports
+/uploads
+/backups
+/coverage
+/artifacts
+/projects
+/docs
+/certs
+
+/apps/mobile
+/apps/api/exports
+/apps/api/uploads
+/apps/api/dist
+/apps/web/.next
+/apps/web/.next-verify
+/apps/web/out
+/packages/shared/dist
+
+*.docx
+*.apk
+*.aab

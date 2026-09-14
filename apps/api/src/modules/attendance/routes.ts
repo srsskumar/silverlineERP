@@ -8,6 +8,7 @@ import {
   ApiError,
   DUP_WINDOW_MIN,
   PERMISSIONS,
+  P1_PERMISSIONS,
   S2_PERMISSIONS,
   SKEW_WINDOW_MIN,
   attendanceEventSchema,
@@ -46,6 +47,7 @@ const SKEW_MS = SKEW_WINDOW_MIN * 60 * 1000;
 interface EmployeeLite {
   id: string;
   status: string;
+  site_id: string | null;
   village_id: string | null;
   mandal_id: string | null;
   district_id: string | null;
@@ -62,6 +64,7 @@ interface EventRow {
   gps_accuracy: number | null;
   geofence_result: string;
   geofence_id: string | null;
+  geofence_version: number | null;
   mock_location: boolean;
   device_id: string | null;
   app_version: string | null;
@@ -118,6 +121,7 @@ function toEventShape(row: EventRow) {
     gps_accuracy: row.gps_accuracy === null ? null : Number(row.gps_accuracy),
     geofence_result: row.geofence_result,
     geofence_id: row.geofence_id,
+    geofence_version: row.geofence_version === null ? null : Number(row.geofence_version),
     mock_location: row.mock_location,
     device_id: row.device_id,
     app_version: row.app_version,
@@ -167,7 +171,8 @@ function toExceptionShape(row: ExceptionRow) {
 
 const EVENT_COLS = `id, employee_id, event_type, client_timestamp,
   server_timestamp, lat, lng, gps_accuracy, geofence_result, geofence_id,
-  mock_location, device_id, app_version, idempotency_key, device_signals`;
+  geofence_version, mock_location, device_id, app_version, idempotency_key,
+  device_signals`;
 
 const RECORD_COLS = `id, employee_id, work_date, check_in_event_id,
   check_out_event_id, check_in_at, check_out_at, total_hours, status,
@@ -221,6 +226,7 @@ function idemKeyOr422(
 
 interface FenceRow {
   id: string;
+  version: number;
   geometry_type: string;
   geometry: { lat: number; lng: number; radius_m: number } | { points: Array<[number, number]> };
   tolerance_meters: number | null;
@@ -228,9 +234,9 @@ interface FenceRow {
 }
 
 /**
- * Resolve the applicable ACTIVE fence: employee village → parent mandal →
- * parent district (walked via org_units), falling back to the employee's
- * direct mandal/district refs when the chain is broken. Null = NO_FENCE.
+ * Resolve the applicable ACTIVE fence: explicit employee assignment → site →
+ * village → mandal → district. The location chain is walked via org_units and
+ * falls back to the employee's direct location refs when broken. Null = NO_FENCE.
  *
  * A scope may hold more than one fence — a village with both a depot and a
  * site office is ordinary — so when the punch position is known, every active
@@ -246,14 +252,39 @@ async function resolveFence(
   emp: EmployeeLite,
   at?: { lat: number; lng: number },
 ): Promise<FenceRow | null> {
-  const startIds = [emp.village_id, emp.mandal_id, emp.district_id].filter(
+  const direct = await pool.query(
+    `SELECT fence.id, fence.version, fence.geometry_type, fence.geometry,
+            fence.tolerance_meters, fence.accuracy_threshold_meters
+       FROM geo_fence_employee_assignments assignment
+       JOIN geo_fences fence ON fence.id = assignment.geo_fence_id
+        AND fence.org_id = assignment.org_id
+      WHERE assignment.org_id = $1 AND assignment.employee_id = $2::uuid
+        AND assignment.status = 'ACTIVE' AND fence.status = 'ACTIVE'
+      ORDER BY assignment.updated_at DESC, assignment.id DESC
+      LIMIT 1`,
+    [orgId, emp.id],
+  );
+  const directFence = direct.rows[0] as FenceRow | undefined;
+  if (directFence) return directFence;
+
+  const startIds = [emp.site_id, emp.village_id, emp.mandal_id, emp.district_id].filter(
     (v): v is string => !!v,
   );
   if (startIds.length === 0) {
     return null;
   }
   const units = await pool.query(
-    "SELECT id, type, parent_id FROM org_units WHERE org_id = $1 AND id = ANY($2::uuid[])",
+    `WITH RECURSIVE assigned_units AS (
+       SELECT id, type, parent_id
+         FROM org_units
+        WHERE org_id = $1 AND id = ANY($2::uuid[])
+       UNION
+       SELECT parent.id, parent.type, parent.parent_id
+         FROM org_units parent
+         JOIN assigned_units child ON child.parent_id = parent.id
+        WHERE parent.org_id = $1
+     )
+     SELECT id, type, parent_id FROM assigned_units`,
     [orgId, startIds],
   );
   const byId = new Map(
@@ -261,7 +292,7 @@ async function resolveFence(
       (u) => [u.id, u],
     ),
   );
-  // Build the village → mandal → district chain, tolerating broken links by
+  // Build the site → village → mandal → district chain, tolerating broken links by
   // falling back to the employee's direct refs.
   const chain: Array<{ type: string; id: string }> = [];
   const push = (type: string, id: string | null) => {
@@ -269,9 +300,17 @@ async function resolveFence(
       chain.push({ type, id });
     }
   };
-  const village = emp.village_id ? byId.get(emp.village_id) : undefined;
-  if (emp.village_id && (!village || village.type === "village")) {
-    push("village", emp.village_id);
+  const site = emp.site_id ? byId.get(emp.site_id) : undefined;
+  const villageId =
+    emp.site_id && (!site || site.type === "site")
+      ? site?.parent_id ?? emp.village_id
+      : emp.village_id;
+  if (emp.site_id && (!site || site.type === "site")) {
+    push("site", emp.site_id);
+  }
+  const village = villageId ? byId.get(villageId) : undefined;
+  if (villageId && (!village || village.type === "village")) {
+    push("village", villageId);
     const mandalId = village?.parent_id ?? emp.mandal_id;
     const mandal = mandalId ? byId.get(mandalId) : undefined;
     if (mandalId && (!mandal || mandal.type === "mandal")) {
@@ -289,7 +328,7 @@ async function resolveFence(
   }
   for (const { type, id } of chain) {
     const fence = await pool.query(
-      `SELECT id, geometry_type, geometry, tolerance_meters, accuracy_threshold_meters
+      `SELECT id, version, geometry_type, geometry, tolerance_meters, accuracy_threshold_meters
        FROM geo_fences
        WHERE org_id = $1 AND scope_type = $2 AND scope_id = $3::uuid AND status = 'ACTIVE'
        ORDER BY created_at DESC`,
@@ -321,6 +360,60 @@ async function resolveFence(
     return rows[0];
   }
   return null;
+}
+
+/**
+ * The LOCKED payroll run covering a work date, if any (BR-05).
+ *
+ * Once a run is locked its attendance inputs are frozen: adding a punch or a
+ * regularization afterwards would silently change a period that has already
+ * been paid out and signed off.
+ */
+async function lockedPayrollRun(
+  db: Pool,
+  orgId: string,
+  workDate: string,
+): Promise<{ id: string; period_start: string; period_end: string } | null> {
+  const res = await db.query(
+    `SELECT id, period_start, period_end FROM payroll_runs
+      WHERE org_id = $1 AND status = 'LOCKED'
+        AND period_start <= $2::date AND period_end >= $2::date
+      LIMIT 1`,
+    [orgId, workDate],
+  );
+  return (res.rows[0] as { id: string; period_start: string; period_end: string } | undefined) ?? null;
+}
+
+/**
+ * Decides whether a write into a locked period may proceed.
+ *
+ * Returns null to allow, or the error to send. An override is only available to
+ * a holder of payroll.lock — the same authority that locked the run — and only
+ * with a reason, which is then audited.
+ */
+function payrollLockDecision(
+  locked: { id: string } | null,
+  user: { permissions: string[] },
+  overrideReason: string | undefined,
+): { status: number; code: string; message: string; fieldErrors?: Array<{ field: string; message: string }> } | null {
+  if (!locked) return null;
+  const mayOverride = user.permissions.includes(P1_PERMISSIONS.PAYROLL_LOCK);
+  if (mayOverride && overrideReason) return null;
+  return {
+    status: 422,
+    code: "PAYROLL_LOCKED",
+    message: mayOverride
+      ? "This work date falls in a locked payroll period; supply payroll_override_reason to record the correction"
+      : "This work date falls in a locked payroll period — contact payroll",
+    fieldErrors: mayOverride
+      ? [
+          {
+            field: "payroll_override_reason",
+            message: "A reason is required to write into a locked payroll period",
+          },
+        ]
+      : undefined,
+  };
 }
 
 /** Upper bound on markers returned to the map in one request. */
@@ -484,7 +577,7 @@ export async function registerAttendanceRoutes(
 
     // 1. Employee must exist in-org and be ACTIVE.
     const empRes = await db.query(
-      `SELECT id, status, village_id, mandal_id, district_id FROM employees
+      `SELECT id, status, site_id, village_id, mandal_id, district_id FROM employees
        WHERE id = $1::uuid AND org_id = $2 FOR UPDATE`,
       [d.employee_id, user.orgId],
     );
@@ -507,8 +600,14 @@ export async function registerAttendanceRoutes(
       });
     }
 
-    const settings=(await db.query('SELECT settings FROM organizations WHERE id=$1',[user.orgId])).rows[0]?.settings??{};
-    const workDateFor=(date:Date)=>new Intl.DateTimeFormat('en-CA',{timeZone:settings.timezone??'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
+    // The organization's zone lives in two places: the `timezone` column set
+    // when the tenant is created, and a `settings.timezone` override an admin
+    // can edit. Reading only the override ignored the column entirely, so a
+    // tenant outside IST had its work dates computed in IST.
+    const orgRow=(await db.query('SELECT timezone, settings FROM organizations WHERE id=$1',[user.orgId])).rows[0];
+    const settings=orgRow?.settings??{};
+    const timeZone=settings.timezone??orgRow?.timezone??'Asia/Kolkata';
+    const workDateFor=(date:Date)=>new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
     const clientTime = new Date(d.client_timestamp);
     const serverNow = new Date();
 
@@ -650,6 +749,33 @@ export async function registerAttendanceRoutes(
     }
 
     const workDate = workDateFor(serverNow);
+
+    // 5b. BR-05: a locked payroll period does not accept new attendance.
+    //     An authorized correction may still be made, with a recorded reason.
+    const locked = await lockedPayrollRun(db, user.orgId, workDate);
+    const lockError = payrollLockDecision(locked, user, d.payroll_override_reason);
+    if (lockError) {
+      return sendError(reply, req.requestId, lockError);
+    }
+
+    if (locked && d.payroll_override_reason) {
+      await writeAudit(db, {
+        orgId: user.orgId,
+        actorId: user.id,
+        actorIp: req.ip,
+        actorUserAgent:
+          typeof req.headers["user-agent"] === "string"
+            ? (req.headers["user-agent"] as string)
+            : null,
+        action: "attendance.payroll_lock_override",
+        entityType: "payroll_run",
+        entityId: locked.id,
+        afterState: { employee_id: emp.id, work_date: workDate, event_type: d.event_type },
+        reason: d.payroll_override_reason,
+        requestId: req.requestId,
+      });
+    }
+
     const record = await todayRecord(db, emp.id, workDate);
 
     // 6. CHECK_OUT needs an open check-in for the same work_date.
@@ -689,7 +815,7 @@ export async function registerAttendanceRoutes(
       });
     }
 
-    // 8. Resolve the applicable fence (village → mandal → district).
+    // 8. Resolve the applicable fence (site → village → mandal → district).
     const fence = await resolveFence(
       db,
       user.orgId,
@@ -720,8 +846,9 @@ export async function registerAttendanceRoutes(
         `INSERT INTO attendance_events
            (employee_id, event_type, client_timestamp, server_timestamp,
             lat, lng, gps_accuracy, geofence_result, geofence_id,
-            mock_location, device_id, app_version, idempotency_key, device_signals)
-         VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9::uuid,$10,$11,$12,$13,$14::jsonb)
+            mock_location, device_id, app_version, idempotency_key, device_signals,
+            geofence_version)
+         VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9::uuid,$10,$11,$12,$13,$14::jsonb,$15)
          RETURNING ${EVENT_COLS}`,
         [
           emp!.id,
@@ -738,6 +865,7 @@ export async function registerAttendanceRoutes(
           d.app_version ?? null,
           idemKey,
           storedSignals ? JSON.stringify(storedSignals) : null,
+          fence?.version ?? null,
         ],
       );
       return ins.rows[0] as EventRow;
@@ -1407,6 +1535,35 @@ export async function registerAttendanceRoutes(
         message: "Insufficient permissions",
       });
     }
+    // BR-05: the same lock applies to a regularization, which is a request to
+    // change attendance for a specific work date.
+    const lockedRun = await lockedPayrollRun(db, user.orgId, d.work_date);
+    const regularizeLockError = payrollLockDecision(
+      lockedRun,
+      user,
+      d.payroll_override_reason,
+    );
+    if (regularizeLockError) {
+      return sendError(reply, req.requestId, regularizeLockError);
+    }
+    if (lockedRun && d.payroll_override_reason) {
+      await writeAudit(db, {
+        orgId: user.orgId,
+        actorId: user.id,
+        actorIp: req.ip,
+        actorUserAgent:
+          typeof req.headers["user-agent"] === "string"
+            ? (req.headers["user-agent"] as string)
+            : null,
+        action: "attendance.payroll_lock_override",
+        entityType: "payroll_run",
+        entityId: lockedRun.id,
+        afterState: { employee_id: d.employee_id, work_date: d.work_date },
+        reason: d.payroll_override_reason,
+        requestId: req.requestId,
+      });
+    }
+
     // Claimed punches ride along in the reason (the S2 exception table has no
     // dedicated columns; a history/regularization table is deferred with fence history).
     const claimed: string[] = [];

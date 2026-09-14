@@ -17,7 +17,7 @@ import {
 } from "../api/endpoints";
 import { enqueueOp, flushQueue, type OpExecutor } from "./queue";
 import { getRefreshToken } from "../device/auth";
-import { countPendingOps, getAccount, getDb, type PendingOpRow } from "./db";
+import { countPendingOps, countReadyOps, getAccount, getDb, type PendingOpRow } from "./db";
 
 export type EngineStatus = "idle" | "syncing" | "offline" | "error";
 
@@ -122,10 +122,18 @@ export const defaultExecutor: OpExecutor = async (op) => {
 
 /** Manual "Sync now" + post-login entry point. Safe to call concurrently. */
 export async function syncNow(): Promise<boolean> {
-  if (syncing || !(await getRefreshToken()) || !(await getAccount())) return false;
+  if (syncing) return false;
+  const [refreshToken, account] = await Promise.all([getRefreshToken(), getAccount()]);
+  if (!refreshToken || !account || syncing) return false;
   syncing = true;
-  emit("syncing");
   try {
+    // Most foreground/interval ticks have no work. Avoid a connectivity probe
+    // and a queue scan in that common case, including rows still in backoff.
+    if ((await countReadyOps()) === 0) {
+      emit("idle");
+      return true;
+    }
+    emit("syncing");
     const online = await probeOnline();
     if (!online) {
       emit("offline");
@@ -147,16 +155,38 @@ export async function syncNow(): Promise<boolean> {
 }
 
 /** Foreground trigger: flush whenever the app becomes active. */
+let engineUsers = 0;
+let stopSharedEngine: (() => void) | null = null;
+
 export function startEngine(): () => void {
-  const sub = AppState.addEventListener(
-    "change",
-    (state: AppStateStatus) => {
-      if (state === "active") void syncNow();
-    },
-  );
-  const timer=setInterval(()=>{ if(AppState.currentState === "active") void syncNow(); },15000);
-  void syncNow();
-  return () => {sub.remove();clearInterval(timer);};
+  engineUsers += 1;
+  if (!stopSharedEngine) {
+    const sub = AppState.addEventListener(
+      "change",
+      (state: AppStateStatus) => {
+        if (state === "active") void syncNow();
+      },
+    );
+    const timer = setInterval(() => {
+      if (AppState.currentState === "active") void syncNow();
+    }, 15_000);
+    stopSharedEngine = () => {
+      sub.remove();
+      clearInterval(timer);
+    };
+    void syncNow();
+  }
+
+  let stopped = false;
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    engineUsers = Math.max(0, engineUsers - 1);
+    if (engineUsers === 0) {
+      stopSharedEngine?.();
+      stopSharedEngine = null;
+    }
+  };
 }
 
 /** Sync pill state for Home/More screens. */

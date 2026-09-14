@@ -83,7 +83,14 @@ async function enqueueOp(args: {
   );
   if (existing && (await unseal(account,existing.payload)) === JSON.stringify(args.payload)) return existing;
   const now = Date.now();
+  // Monotonic within the outbox: two operations enqueued in the same
+  // millisecond still have a defined order, which FIFO flush depends on.
+  const last = await db.getFirstAsync<{ seq: number }>(
+    "SELECT COALESCE(MAX(seq), 0) AS seq FROM pending_ops",
+    [],
+  );
   const row: PendingOpRow = {
+    seq: (last?.seq ?? 0) + 1,
     client_uuid: newUuid(),
     entity: args.entity,
     op: args.op,
@@ -100,12 +107,12 @@ async function enqueueOp(args: {
     updated_at: now,
   };
   await db.runAsync(
-    `INSERT INTO pending_ops (client_uuid, entity, op, dedupe_key, payload,
+    `INSERT INTO pending_ops (seq, client_uuid, entity, op, dedupe_key, payload,
       idempotency_key, base_version, state, decision, retry_count,
       next_retry_at, error, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      row.client_uuid, row.entity, row.op, row.dedupe_key, row.payload,
+      row.seq, row.client_uuid, row.entity, row.op, row.dedupe_key, row.payload,
       row.idempotency_key, row.base_version, row.state, row.decision,
       row.retry_count, row.next_retry_at, row.error, row.created_at,
       row.updated_at,
@@ -140,7 +147,7 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
   const update=(id:string,patch:Parameters<typeof setOp>[1])=>setOp(id,patch,db);
   const now = Date.now();
   const rows = await db.getAllAsync<PendingOpRow>(
-    "SELECT * FROM pending_ops WHERE state='QUEUED' OR (state='BACKOFF' AND (next_retry_at IS NULL OR next_retry_at<=?)) ORDER BY created_at ASC, client_uuid ASC LIMIT 50", [now],
+    "SELECT * FROM pending_ops WHERE state='QUEUED' OR (state='BACKOFF' AND (next_retry_at IS NULL OR next_retry_at<=?)) ORDER BY seq ASC, created_at ASC, client_uuid ASC LIMIT 50", [now],
   );
   const result: FlushResult = { attempted: 0, succeeded: 0, failed: 0, deferred: 0 };
   for (const op of rows) {
@@ -151,8 +158,23 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
     }
     result.attempted += 1;
     await update(op.client_uuid, { state: "SENDING", error: null });
+    // Decryption is not a network step: a payload this account's key cannot
+    // open never will be, so it fails immediately rather than burning the whole
+    // retry budget on a request that can never be built.
+    let payload: string;
     try {
-      const { status, body } = await executor({...op,payload:await unseal(account,op.payload)});
+      payload = await unseal(account, op.payload);
+    } catch {
+      result.failed += 1;
+      await update(op.client_uuid, {
+        state: "FAILED",
+        decision: "REJECTED",
+        error: "payload could not be decrypted for the signed-in account",
+      });
+      continue;
+    }
+    try {
+      const { status, body } = await executor({ ...op, payload });
       const decision = classifySyncResponse(status, body);
       const outcome = resolveOutcome(decision);
       if (outcome.state === "SUCCEEDED") {

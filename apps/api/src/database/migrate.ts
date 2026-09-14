@@ -26,7 +26,22 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "018_provider_jobs", file: "018_provider_jobs.sql" },
   { version: "019_planning_policies", file: "019_planning_policies.sql" },
   { version: "020_device_signals", file: "020_device_signals.sql" },
+  { version: "021_employee_site", file: "021_employee_site.sql" },
+  { version: "022_geo_fence_employee_assignments", file: "022_geo_fence_employee_assignments.sql" },
+  { version: "023_mfa_replay", file: "023_mfa_replay.sql" },
+  { version: "024_employee_pii_uniqueness", file: "024_employee_pii_uniqueness.sql" },
+  { version: "025_attendance_fence_version", file: "025_attendance_fence_version.sql" },
+  { version: "026_blob_storage", file: "026_blob_storage.sql" },
 ];
+
+/**
+ * The versions this build expects the database to have applied, in order.
+ * Exported so a running API can compare itself against `schema_migrations`
+ * instead of discovering the drift as a column-not-found 500 in one route.
+ */
+export const MIGRATION_VERSIONS: readonly string[] = MIGRATIONS.map(
+  (m) => m.version,
+);
 
 function migrationSql(file: string): string {
   const here = dirname(fileURLToPath(import.meta.url));

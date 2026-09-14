@@ -32,12 +32,27 @@ import {
   type KanbanGroups,
 } from '@/lib/boards';
 import { isConflictError, requestIdOf } from '@/lib/form-errors';
-import { listTasksPage, patchTaskBoardPosition, parseInvalidTransition, transitionTask, type Task } from '@/lib/tasks';
-import {TaskFilters} from './v2/TaskFilters';
+import { canMoveTaskTo, listTasksPage, patchTaskBoardPosition, parseInvalidTransition, transitionTask, type Task } from '@/lib/tasks';
+import {BoardToolbar} from './board/BoardToolbar';
+import {useRows} from './v2/Workbench';
+import {useAuth} from './AuthProvider';
+import {hasPermission,PERMISSIONS} from '@/lib/permissions';
+import {
+  avatarHue,
+  checklistProgress,
+  columnColor,
+  dueState,
+  initialsOf,
+  isDoneLike,
+  priorityPips,
+  priorityTone,
+  relativeTime,
+  shortRef,
+  statusLabel,
+} from '@/lib/board-visuals';
 import type {ListTasksParams} from '@/lib/tasks';
 import {applySavedFilter,normalizeFilterQuery} from '@/lib/filters';
 import { queryKeys } from '@/lib/query-keys';
-import { shortUserId } from './ApprovalTimeline';
 import { LabelPill } from './LabelPill';
 import { SlaBadge } from './SlaBadge';
 import { Button } from './ui/Button';
@@ -74,6 +89,23 @@ export function KanbanBoard({
   assigneeMe?: boolean;
 }) {
   const queryClient = useQueryClient();
+  // Terminal columns are collapsed away by default on a busy board; DONE
+  // accumulates without bound and pushes the live columns off-screen.
+  // Task rows carry only assignee_id, so avatars would otherwise be initialled
+  // from a UUID. One lookup per board beats one request per card.
+  const people = useRows(`projects/${projectId}/people?limit=100`, !!projectId);
+  const nameById = React.useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of people.data?.rows ?? []) {
+      if (row?.id) map.set(String(row.id), String(row.username ?? ''));
+    }
+    return map;
+  }, [people.data]);
+  // Task creation lives on the project page; the board links there rather than
+  // duplicating the form.
+  const { session } = useAuth();
+  const canCreateTask = hasPermission({ permissions: session?.permissions }, PERMISSIONS.TASK_CREATE);
+  const [hideDone, setHideDone] = React.useState(false);
   const [filters,setFilters]=React.useState<ListTasksParams>(()=>({...applySavedFilter({id:board.board.id,name:'',version:1,query:normalizeFilterQuery(board.board.filter_config)}),...(assigneeMe?{assignee_me:'true'}:{})}));
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -119,6 +151,12 @@ export function KanbanBoard({
     message: string;
     allowed: string[];
     requestId?: string;
+    /**
+     * False when the board refused the move locally, so nothing was sent and
+     * nothing moved. Saying "rolled back" in that case describes an undo the
+     * user never saw.
+     */
+    rolledBack: boolean;
   } | null>(null);
   const [reorderError, setReorderError] = React.useState<unknown>(null);
   const [shakeId, setShakeId] = React.useState<string | null>(null);
@@ -153,6 +191,7 @@ export function KanbanBoard({
           message: err.message || 'That transition is not allowed from the current status.',
           allowed,
           requestId: requestIdOf(err),
+          rolledBack: true,
         });
         return;
       }
@@ -160,6 +199,7 @@ export function KanbanBoard({
         message: err instanceof Error ? err.message : 'Could not move task.',
         allowed: [],
         requestId: requestIdOf(err),
+        rolledBack: true,
       });
     },
   });
@@ -240,11 +280,25 @@ export function KanbanBoard({
       return;
     }
 
+    const moving = (groups[fromStatus] ?? []).find((t) => t.id === activeTaskId);
+
+    // Refuse a transition the workflow forbids before touching the server.
+    // See canMoveTaskTo for why the board cannot rely on the server alone.
+    const check = moving ? canMoveTaskTo(moving, overStatus) : ({ allowed: true } as const);
+    if (!check.allowed) {
+      setShakeId(activeTaskId);
+      setTransitionError({
+        message: check.reason,
+        allowed: check.allowedNext,
+        rolledBack: false,
+      });
+      return;
+    }
+
     // Move across columns → status transition (optimistic + rollback).
     const snapshot = snapshotGroups(groups);
     setGroups(optimisticMoveTask(groups, activeTaskId, overStatus));
     setTransitionError(null);
-    const moving = (groups[fromStatus] ?? []).find((t) => t.id === activeTaskId);
     transitionMutation.mutate({ taskId: activeTaskId, toStatus: overStatus, version: moving?.version, snapshot });
   };
 
@@ -261,14 +315,40 @@ export function KanbanBoard({
   // Extra statuses present on tasks but missing from the column config render
   // as trailing read-only-ish columns (still droppable) so no card is hidden.
   const extraStatuses = Object.keys(groups).filter((s) => !statusCodes.includes(s));
-  const renderCodes = [...statusCodes, ...extraStatuses];
+  // Plain computation, not useMemo: this sits after the loading/error early
+  // returns above, so a hook here would be called conditionally.
+  const allCodes = [...statusCodes, ...extraStatuses];
+  const renderCodes = hideDone ? allCodes.filter((code) => !isDoneLike(code)) : allCodes;
 
   return (
     <div className="flex flex-col gap-4">
-      <TaskFilters project={projectId} value={filters} onChange={setFilters}/>
+      <BoardToolbar
+        projectId={projectId}
+        value={filters}
+        onChange={setFilters}
+        view="board"
+        onViewChange={(v) => {
+          if (v === 'list') window.location.assign(`/projects/${projectId}/tasks`);
+        }}
+        hideDone={hideDone}
+        onHideDoneChange={setHideDone}
+        taskCount={allTasks.length}
+        right={
+          canCreateTask ? (
+            <Link
+              href={`/projects/${projectId}`}
+              className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-fg hover:bg-primary-hover"
+            >
+              <span aria-hidden="true">+</span> New task
+            </Link>
+          ) : null
+        }
+      />
       {transitionError ? (
         <div role="alert" className="rounded-lg border border-warning/30 bg-warning-subtle px-4 py-3 text-sm text-warning">
-          <p className="font-medium">Could not move task — rolled back.</p>
+          <p className="font-medium">
+            {transitionError.rolledBack ? 'Could not move task — rolled back.' : 'That move is not allowed.'}
+          </p>
           <p className="mt-1">{transitionError.message}</p>
           {transitionError.allowed.length > 0 ? (
             <p className="mt-1">
@@ -315,7 +395,10 @@ export function KanbanBoard({
               <KanbanColumn
                 key={code}
                 statusCode={code}
-                name={col?.name ?? code}
+                // A column whose configured name is just its status code has no
+                // real name — that is the code leaking through, so render it as
+                // prose. A genuinely named column is left exactly as authored.
+                name={col?.name && col.name !== code ? col.name : statusLabel(code)}
                 color={col?.color ?? null}
                 count={rows.length}
                 wipLimit={col?.wip_limit ?? null}
@@ -327,6 +410,7 @@ export function KanbanBoard({
                     task={t}
                     projectId={projectId}
                     shake={shakeId === t.id}
+                    assigneeName={t.assignee_id ? (nameById.get(String(t.assignee_id)) ?? null) : null}
                   />
                 ))}
                 {rows.length === 0 ? (
@@ -397,37 +481,100 @@ function KanbanColumn({
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: statusCode, data: { status: statusCode } });
   const tone = wipTone(count, wipLimit);
-  const badgeClass =
-    tone === 'danger'
-      ? 'bg-danger-subtle text-danger'
-      : tone === 'warning'
-        ? 'bg-warning-subtle text-warning'
-        : 'bg-surface-sunken text-text-muted';
+  // The column hue is published as a custom property so the header dot, the
+  // count pill and every card rail inside read from one source.
+  const style = { '--col': columnColor(statusCode, color) } as React.CSSProperties;
+  const overLimit = tone === 'danger' || tone === 'warning';
   return (
     <section
       aria-label={`Column ${name}`}
       data-column={statusCode}
       ref={setNodeRef}
-      className={`flex min-h-[200px] flex-col gap-2 rounded-lg border bg-surface-sunken p-3 ${
-        isOver ? 'border-primary ring-2 ring-primary-subtle' : 'border-border'
+      style={style}
+      className={`flex min-h-[140px] flex-col rounded-xl border bg-surface-sunken/70 transition-colors ${
+        isOver ? 'border-primary ring-2 ring-primary/20' : 'border-border'
       }`}
     >
-      <header className="flex items-center justify-between gap-2">
-        <h3 className="flex min-w-0 items-center gap-2 text-sm font-semibold text-text">
-          {color ? (
-            <span aria-hidden="true" className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
-          ) : null}
-          <span className="truncate">{name}</span>
+      <header className="flex items-center gap-2 px-3 pb-2 pt-2.5">
+        <span
+          aria-hidden="true"
+          className="h-2 w-2 shrink-0 rounded-full"
+          style={{ backgroundColor: 'var(--col)' }}
+        />
+        <h3 className="min-w-0 flex-1 truncate text-sm font-semibold text-text">
+          {name}
         </h3>
-        <span className={`rounded-full px-2 py-0.5 font-mono text-xs ${badgeClass}`} title={wipLimit ? `WIP ${count}/${wipLimit}` : `${count} tasks`}>
+        <span
+          className={`rounded-full px-1.5 py-0.5 text-2xs font-semibold tabular-nums ${
+            overLimit
+              ? tone === 'danger'
+                ? 'bg-danger-subtle text-danger'
+                : 'bg-warning-subtle text-warning'
+              : 'bg-surface text-text-muted'
+          }`}
+          title={wipLimit ? `WIP ${count}/${wipLimit}` : `${count} tasks`}
+        >
           {wipLimit ? `${count}/${wipLimit}` : count}
         </span>
       </header>
-      <p className="font-mono text-[11px] text-text-subtle">{statusCode}</p>
+      {/* The hue reads as a rule under the header rather than a full border,
+          so a row of columns stays calm while each keeps its identity. */}
+      <div aria-hidden="true" className="mx-3 h-px" style={{ backgroundColor: 'var(--col)', opacity: 0.45 }} />
       <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
-        <div className="flex flex-col gap-2">{children}</div>
+        <div className="flex flex-col gap-2 p-2">{children}</div>
       </SortableContext>
     </section>
+  );
+}
+
+/** Assignee bubble: deterministic hue from the id, initials from any label. */
+function Avatar({ id, label }: { id: string | null | undefined; label?: string | null }) {
+  if (!id) {
+    return (
+      <span
+        title="Unassigned"
+        aria-label="Unassigned"
+        className="flex h-5 w-5 items-center justify-center rounded-full border border-dashed border-border-strong text-2xs text-text-subtle"
+      >
+        ?
+      </span>
+    );
+  }
+  const hue = avatarHue(id);
+  const named = Boolean(label && String(label).trim());
+  return (
+    <span
+      title={named ? String(label) : `Assignee ${shortRef(id)}`}
+      aria-label={named ? `Assigned to ${label}` : 'Assigned'}
+      className="flex h-5 w-5 items-center justify-center rounded-full text-2xs font-semibold"
+      style={{ backgroundColor: `hsl(${hue} 58% 42%)`, color: 'hsl(0 0% 100%)' }}
+    >
+      {/* Initialling a raw UUID reads as noise ("69"), so an unresolved
+          assignee keeps the identifying hue but drops the fake initials. */}
+      {named ? initialsOf(label) : <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-white/80" />}
+    </span>
+  );
+}
+
+/** Priority as pips — three slots, filled left to right. LOW fills none. */
+function PriorityPips({ priority }: { priority: unknown }) {
+  const filled = priorityPips(priority as string);
+  if (filled === 0) return null;
+  const tone = priorityTone(priority as string);
+  const color =
+    tone === 'danger' ? 'hsl(var(--danger))' : tone === 'warning' ? 'hsl(var(--warning))' : 'hsl(var(--text-subtle))';
+  return (
+    <span className="flex items-center gap-0.5" title={`Priority: ${statusLabel(String(priority))}`}>
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          aria-hidden="true"
+          className="h-1.5 w-1.5 rounded-full"
+          style={{ backgroundColor: i < filled ? color : 'hsl(var(--border-strong))' }}
+        />
+      ))}
+      <span className="sr-only">Priority {String(priority)}</span>
+    </span>
   );
 }
 
@@ -435,10 +582,13 @@ const TaskCard = React.memo(function TaskCard({
   task,
   projectId,
   shake,
+  assigneeName,
 }: {
   task: Task;
   projectId: string;
   shake: boolean;
+  /** Resolved from the board's people lookup; null when unknown. */
+  assigneeName?: string | null;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
@@ -449,6 +599,12 @@ const TaskCard = React.memo(function TaskCard({
     transition,
     opacity: isDragging ? 0.5 : undefined,
   };
+  const done = isDoneLike(String(task.status));
+  const due = dueState(task.planned_end_date as string | null, String(task.status));
+  const checklist = checklistProgress(task.checklist);
+  const labels = task.labels ?? [];
+  const assigneeLabel = assigneeName ?? null;
+
   return (
     <article
       ref={setNodeRef}
@@ -456,33 +612,60 @@ const TaskCard = React.memo(function TaskCard({
       data-task-id={task.id}
       {...attributes}
       {...listeners}
-      className={`rounded-lg border bg-surface px-3 py-2 shadow-sm ${
+      className={`group relative overflow-hidden rounded-lg border bg-surface shadow-sm transition-colors hover:border-border-strong ${
         shake ? 'border-danger ring-2 ring-danger/30' : 'border-border'
       }`}
     >
-      <p className="text-sm font-medium text-text">{task.title}</p>
-      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-        <SlaBadge status={task.sla_status} />
-        {(task.labels ?? []).slice(0, 4).map((l) => (
-          <LabelPill key={l.id} label={l} />
-        ))}
-        {(task.labels ?? []).length > 4 ? (
-          <span className="text-[11px] text-text-subtle">+{(task.labels ?? []).length - 4}</span>
-        ) : null}
-      </div>
-      <div className="mt-1.5 flex items-center justify-between gap-2 text-xs">
-        <span className="font-mono text-text-muted" title={task.assignee_id ? String(task.assignee_id) : undefined}>
-          {task.assignee_id ? shortUserId(String(task.assignee_id)) : 'unassigned'}
-        </span>
+      {/* Column hue as a rail along the card's top edge. */}
+      <span aria-hidden="true" className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: 'var(--col)' }} />
+
+      <div className="px-2.5 pb-2 pt-2.5">
         <Link
           href={`/projects/${projectId}/tasks/${task.id}`}
-          className="text-primary hover:underline"
           onClick={(e: React.MouseEvent) => e.stopPropagation()}
           onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
+          className={`block text-sm font-medium leading-snug hover:underline ${
+            done ? 'text-text-muted line-through decoration-text-subtle' : 'text-text'
+          }`}
         >
-          Open
+          {task.title}
         </Link>
+
+        <p className="mt-1 text-2xs text-text-subtle">{relativeTime(task.created_at as string)}</p>
+
+        {labels.length > 0 || task.sla_status ? (
+          <div className="mt-2 flex flex-wrap items-center gap-1">
+            <SlaBadge status={task.sla_status} />
+            {labels.slice(0, 3).map((l) => (
+              <LabelPill key={l.id} label={l} />
+            ))}
+            {labels.length > 3 ? (
+              <span className="text-2xs text-text-subtle">+{labels.length - 3}</span>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="mt-2 flex items-center gap-2 text-2xs text-text-subtle">
+          <PriorityPips priority={task.priority} />
+          <span className="font-mono tracking-tight" title={String(task.id)}>
+            {shortRef(task.id)}
+          </span>
+          {checklist ? (
+            <span className="tabular-nums" title={`${checklist.done} of ${checklist.total} checklist items done`}>
+              {checklist.done}/{checklist.total}
+            </span>
+          ) : null}
+          {due ? (
+            <span className={due.overdue ? 'font-medium text-danger' : ''} title={due.overdue ? 'Overdue' : 'Due'}>
+              {due.overdue ? `Overdue · ${due.label}` : due.label}
+            </span>
+          ) : null}
+          <span className="ml-auto">
+            <Avatar id={task.assignee_id as string | null} label={assigneeLabel} />
+          </span>
+        </div>
       </div>
     </article>
   );
 });
+

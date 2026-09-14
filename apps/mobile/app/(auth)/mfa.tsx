@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { View } from "react-native";
-import { router } from "expo-router";
+import { Redirect, router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../src/auth/AuthContext";
 import { validateMfaCode } from "../../src/validators";
@@ -9,7 +9,7 @@ import { font, radius, space, useTheme } from "../../src/theme";
 
 export default function MfaScreen() {
   const t = useTheme();
-  const { verifyMfa } = useAuth();
+  const { mfaPending, verifyMfa } = useAuth();
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -31,6 +31,11 @@ export default function MfaScreen() {
       setBusy(false);
     }
   };
+
+  // Expo Go can restore the last development route after a reload. An MFA
+  // challenge is valid only while AuthProvider still holds the credentials
+  // from a login response that explicitly requested MFA.
+  if (!mfaPending) return <Redirect href="/(auth)/login" />;
 
   return (
     <Screen>

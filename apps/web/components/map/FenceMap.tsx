@@ -105,6 +105,14 @@ export function FenceMap({
     };
   }, [initialCenter, zoom, interactive, supported]);
 
+  // Place search and coordinate edits intentionally move the viewport. User
+  // panning does not change the prop, so it remains undisturbed otherwise.
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !center) return;
+    map.easeTo({ center: [center.lng, center.lat], zoom: Math.max(map.getZoom(), zoom), duration: 500 });
+  }, [center, zoom]);
+
   // Re-style on theme change rather than rebuilding the map, so the viewport
   // and any drawn geometry survive a light/dark toggle.
   React.useEffect(() => {

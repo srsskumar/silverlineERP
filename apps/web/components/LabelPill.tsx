@@ -22,7 +22,14 @@ export function LabelPill({
       className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ring-1"
       style={
         colored
-          ? { backgroundColor: `${color}1a`, borderColor: `${color}66`, color: '#1e293b' }
+          ? {
+              backgroundColor: `${color}1a`,
+              borderColor: `${color}66`,
+              // The chip fill is the label colour at 10% alpha, so the surface
+              // behind it shows through and the text has to follow the theme.
+              // A hardcoded slate (#1e293b) vanished on every dark card.
+              color: 'hsl(var(--text))',
+            }
           : undefined
       }
       title={colored ? `${label.name} (${color})` : label.name}

@@ -22,7 +22,7 @@ let seq = 0;
 
 async function truncateAll(): Promise<void> {
   await pool.query(
-    `TRUNCATE TABLE provider_jobs, advisory_cases, payslip_revisions, project_workflow_overrides, notification_deliveries, report_registry, report_schedules, payslip_documents, vendors, inventory_items, invoices, stock_transactions, assets, asset_assignments, asset_audits, cycles, custom_field_definitions, domain_events, automation_rules, automation_executions, webhook_subscriptions, webhook_deliveries, insight_feedback, v2_operations, device_registrations, audit_events, sessions, idempotency_keys, user_roles,
+    `TRUNCATE TABLE provider_jobs, advisory_cases, payslip_revisions, project_workflow_overrides, notification_deliveries, report_registry, report_schedules, payslip_documents, vendors, inventory_items, invoices, stock_transactions, assets, asset_assignments, asset_audits, cycles, custom_field_definitions, domain_events, automation_rules, automation_executions, webhook_subscriptions, webhook_deliveries, insight_feedback, v2_operations, geo_fence_employee_assignments, device_registrations, audit_events, sessions, idempotency_keys, user_roles,
       users, employee_documents, employees, org_units, holidays,
       attendance_exceptions, attendance_records, attendance_events, geo_fences,
       leave_requests, leave_balances, leave_types,
@@ -793,6 +793,70 @@ describe("task status machine", () => {
     const body = res.json() as { code: string; allowed_next: string[] };
     expect(body.code).toBe("INVALID_TRANSITION");
     expect(body.allowed_next).toEqual(["IN_PROGRESS", "CANCELLED"]);
+  });
+
+  // DONE and CANCELLED are terminal by design: DEFAULT_TASK_WORKFLOW maps both
+  // to [], the override validator refuses outgoing edges from either, and the
+  // date trigger stamps actual_end_at on entry to DONE. Reopening finished work
+  // means a new task, not a backwards edge.
+  it("keeps DONE terminal (no DONE→BLOCKED, no DONE→CANCELLED)", async () => {
+    const h = await adminHeaders();
+    const p = await mkProject(h);
+    const t = await mkTask(h, p.id);
+    const version = await finishTask(h, t.id, t.version);
+    for (const target of ["BLOCKED", "CANCELLED", "IN_PROGRESS", "TO_DO"]) {
+      const res = await stepTask(h, t.id, target, version);
+      expect(res.statusCode, target).toBe(422);
+      const body = res.json() as { code: string; allowed_next: string[] };
+      expect(body.code).toBe("INVALID_TRANSITION");
+      expect(body.allowed_next).toEqual([]);
+    }
+  });
+
+  it("keeps CANCELLED terminal", async () => {
+    const h = await adminHeaders();
+    const p = await mkProject(h);
+    const t = await mkTask(h, p.id);
+    const cancelled = await stepTask(h, t.id, "CANCELLED", t.version);
+    expect(cancelled.statusCode).toBe(200);
+    const version = (cancelled.json() as { version: number }).version;
+    const res = await stepTask(h, t.id, "IN_PROGRESS", version);
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { allowed_next: string[] }).allowed_next).toEqual([]);
+  });
+
+  // The kanban board picks drop targets from list rows, so a list that omits
+  // allowed_next lets the UI offer DONE→BLOCKED and eat a 422 rollback. Every
+  // list row must advertise exactly what the status endpoint will accept.
+  it("advertises allowed_next on list rows, matching what the server enforces", async () => {
+    const h = await adminHeaders();
+    const p = await mkProject(h);
+    const open = await mkTask(h, p.id, { title: "Open one" });
+    const done = await mkTask(h, p.id, { title: "Done one" });
+    await finishTask(h, done.id, done.version);
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/tasks?project_id=${p.id}`,
+      headers: h,
+    });
+    expect(res.statusCode).toBe(200);
+    const rows = (res.json() as {
+      data: Array<{ id: string; status: string; allowed_next: string[] }>;
+    }).data;
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    expect(byId.get(open.id)?.allowed_next).toEqual(["IN_PROGRESS", "CANCELLED"]);
+    expect(byId.get(done.id)?.allowed_next).toEqual([]);
+    // Contract check: the detail endpoint and the list agree row for row.
+    for (const row of rows) {
+      const detail = await app.inject({
+        method: "GET",
+        url: `/api/v1/tasks/${row.id}`,
+        headers: h,
+      });
+      expect((detail.json() as { allowed_next: string[] }).allowed_next).toEqual(
+        row.allowed_next,
+      );
+    }
   });
 
   it("blocks DONE with open subtasks (422 SUBTASKS_OPEN), then allows it", async () => {

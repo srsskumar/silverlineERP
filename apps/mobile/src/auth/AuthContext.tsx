@@ -92,6 +92,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => onAuthLogout(null);
   }, []);
 
+  const completeSignIn = useCallback(async (accessToken: string, refreshToken: string) => {
+    try {
+      await saveTokens(accessToken, refreshToken);
+      const me = await getMe();
+      queryClient.clear();
+      await Promise.all([
+        setActiveAccount(me.user.id),
+        SecureStore.setItemAsync('silverline.session', JSON.stringify(me)),
+        SecureStore.setItemAsync('silverline.session_at', String(Date.now())),
+      ]);
+      setSession(me);
+      // Registration is useful metadata, but login must not remain blocked if
+      // this non-critical follow-up is slow. Revoked devices are already
+      // rejected by /auth/login using the same device_id.
+      void registerDevice().catch((error) => {
+        console.warn('[auth] device registration failed', error instanceof Error ? error.message : error);
+      });
+    } catch (error) {
+      await clearTokens();
+      throw error;
+    }
+  }, [queryClient]);
+
   const login = useCallback(async (username: string, password: string) => {
     const res = await postLogin(username, password);
     if (res.mfa_required) {
@@ -100,17 +123,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return "mfa" as const;
     }
     pendingCreds = null;
-    await saveTokens(res.access_token, res.refresh_token);
     setMfaPending(false);
-    const me=await getMe();
-    queryClient.clear();
-    await setActiveAccount(me.user.id);
-    await SecureStore.setItemAsync('silverline.session',JSON.stringify(me));
-    await SecureStore.setItemAsync('silverline.session_at',String(Date.now()));
-    await registerDevice();
-    setSession(me);
+    await completeSignIn(res.access_token, res.refresh_token);
     return "ok" as const;
-  }, []);
+  }, [completeSignIn]);
 
   const verifyMfa = useCallback(async (code: string) => {
     if (!pendingCreds) throw new Error("MFA session expired — sign in again");
@@ -121,16 +137,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     );
     if (res.mfa_required) throw new Error("Code not accepted — try again");
     pendingCreds = null;
-    await saveTokens(res.access_token, res.refresh_token);
     setMfaPending(false);
-    const me=await getMe();
-    queryClient.clear();
-    await setActiveAccount(me.user.id);
-    await SecureStore.setItemAsync('silverline.session',JSON.stringify(me));
-    await SecureStore.setItemAsync('silverline.session_at',String(Date.now()));
-    await registerDevice();
-    setSession(me);
-  }, []);
+    await completeSignIn(res.access_token, res.refresh_token);
+  }, [completeSignIn]);
 
   const logout = useCallback(async () => {
     pendingCreds = null;

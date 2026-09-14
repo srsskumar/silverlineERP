@@ -29,6 +29,75 @@ export function apiBaseUrl(): string {
   return baseUrl();
 }
 
+const DEV_API_LOGS = typeof __DEV__ !== "undefined" && __DEV__;
+const DEFAULT_REQUEST_TIMEOUT_MS = 12_000;
+
+class ApiTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`API request timed out after ${Math.round(timeoutMs / 1000)} seconds`);
+    this.name = "ApiTimeoutError";
+  }
+}
+
+function safeLogPath(path: string): string {
+  return path.split(/[?#]/, 1)[0] || "/";
+}
+
+async function fetchWithApiTiming(
+  method: string,
+  path: string,
+  attempt: number,
+  request: () => Promise<Response>,
+): Promise<Response> {
+  if (!DEV_API_LOGS) return request();
+  const startedAt = Date.now();
+  const route = safeLogPath(path);
+  console.debug(`[api] request ${method} ${route}`, { attempt });
+  try {
+    const response = await request();
+    console.info(`[api] response ${method} ${route}`, {
+      attempt,
+      status: response.status,
+      duration_ms: Date.now() - startedAt,
+      request_id: response.headers.get("x-request-id") ?? undefined,
+    });
+    return response;
+  } catch (error) {
+    console.warn(`[api] network error ${method} ${route}`, {
+      attempt,
+      duration_ms: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : "Network request failed",
+    });
+    throw error;
+  }
+}
+
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  timeoutMs: number,
+  upstreamSignal?: AbortSignal | null,
+): Promise<Response> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort();
+  if (upstreamSignal?.aborted) controller.abort();
+  else upstreamSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (timedOut) throw new ApiTimeoutError(timeoutMs);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    upstreamSignal?.removeEventListener("abort", abortFromCaller);
+  }
+}
+
 export interface ApiFieldError {
   field: string;
   message: string;
@@ -67,6 +136,8 @@ export interface RequestOptions extends Omit<RequestInit, "body" | "headers"> {
   idempotencyKey?: string;
   /** Skip the 401→refresh→retry cycle (used by the refresh call itself). */
   noAuthRetry?: boolean;
+  /** Hard transport deadline. Defaults to 12 seconds. */
+  timeoutMs?: number;
 }
 
 type LogoutHook = (reason?:string) => void | Promise<void>;
@@ -86,12 +157,13 @@ async function tryRefresh(): Promise<boolean> {
       if (!rt) return false;
       // NOTE: actual backend path is /api/v1/auth/refresh (the brief's
       // "/auth/refresh" shorthand omits the /api/v1 prefix — assumed same).
-      const res = await fetch(`${baseUrl()}/api/v1/auth/refresh`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_token: rt }),
-        signal:AbortSignal.timeout(15000),
-      });
+      const res = await fetchWithApiTiming("POST", "/api/v1/auth/refresh", 1, () =>
+        fetchWithTimeout(`${baseUrl()}/api/v1/auth/refresh`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: rt }),
+        }, DEFAULT_REQUEST_TIMEOUT_MS),
+      );
       if (res.status === 429 || res.status >= 500) throw new ApiError({ status: res.status, code: "REFRESH_UNAVAILABLE", message: "Connection unavailable. Retry when online.", retryable: true });
       if (!res.ok) {
         const error=await res.json().catch(()=>({})) as {code?:string};
@@ -121,26 +193,38 @@ export async function apiFetch<T>(
   path: string,
   opts: RequestOptions = {},
 ): Promise<{ data: T; requestId: string | null; status: number }> {
-  const method = (opts.method ?? "GET").toUpperCase();
+  const {
+    body,
+    headers: optionHeaders,
+    idempotencyKey,
+    noAuthRetry = false,
+    signal,
+    timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    ...requestInit
+  } = opts;
+  const method = (requestInit.method ?? "GET").toUpperCase();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    ...(opts.headers ?? {}),
+    ...(optionHeaders ?? {}),
   };
   if ((method === "POST" || method === "PATCH" || method === "PUT") && !headers["Idempotency-Key"]) {
-    headers["Idempotency-Key"] = opts.idempotencyKey ?? newIdempotencyKey();
+    headers["Idempotency-Key"] = idempotencyKey ?? newIdempotencyKey();
   }
 
+  let attempt = 0;
   const doFetch = async (): Promise<Response> => {
+    attempt += 1;
     const token = await getAccessToken();
     const h: Record<string, string> = { ...headers };
     if (token) h.Authorization = `Bearer ${token}`;
-    return fetch(`${baseUrl()}${path}`, {
-      ...opts,
-      signal:opts.signal??AbortSignal.timeout(30000),
-      method,
-      headers: h,
-      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-    });
+    return fetchWithApiTiming(method, path, attempt, () =>
+      fetchWithTimeout(`${baseUrl()}${path}`, {
+        ...requestInit,
+        method,
+        headers: h,
+        body: body === undefined ? undefined : JSON.stringify(body),
+      }, timeoutMs, signal),
+    );
   };
 
   let res: Response;
@@ -149,13 +233,15 @@ export async function apiFetch<T>(
   } catch (err) {
     throw new ApiError({
       status: 0,
-      code: "NETWORK_ERROR",
-      message: err instanceof Error ? err.message : "Network request failed",
+      code: err instanceof ApiTimeoutError ? "REQUEST_TIMEOUT" : "NETWORK_ERROR",
+      message: err instanceof ApiTimeoutError
+        ? `Cannot reach ${baseUrl()}. Check that the API is running and this device is on the same network.`
+        : err instanceof Error ? err.message : "Network request failed",
       retryable: true,
     });
   }
 
-  if (res.status === 401 && !opts.noAuthRetry) {
+  if (res.status === 401 && !noAuthRetry) {
     const refreshed = await tryRefresh();
     if (refreshed) {
       try {
@@ -163,8 +249,10 @@ export async function apiFetch<T>(
       } catch (err) {
         throw new ApiError({
           status: 0,
-          code: "NETWORK_ERROR",
-          message: err instanceof Error ? err.message : "Network request failed",
+          code: err instanceof ApiTimeoutError ? "REQUEST_TIMEOUT" : "NETWORK_ERROR",
+          message: err instanceof ApiTimeoutError
+            ? `Cannot reach ${baseUrl()}. Check that the API is running and this device is on the same network.`
+            : err instanceof Error ? err.message : "Network request failed",
           retryable: true,
         });
       }

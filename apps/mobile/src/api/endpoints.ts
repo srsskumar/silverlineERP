@@ -460,13 +460,12 @@ export interface GeoFence {
 }
 
 /**
- * Fences for this org, cached so a field user out of signal can still be told
- * which site they are standing in. Needs the geo.read permission; callers
- * should gate on it (see rbac.ts) rather than relying on a 403.
+ * Active fences for the signed-in employee's assigned site/location chain,
+ * cached so a field user out of signal can still see the applicable boundary.
  */
 export async function getGeoFences(limit = 100): Promise<GeoFence[]> {
   return cachedRead("geo-fences", async () => {
-    const { data } = await apiFetch<unknown>(`/api/v1/geo-fences?limit=${limit}`, {
+    const { data } = await apiFetch<unknown>(`/api/v1/geo-fences/effective?limit=${limit}`, {
       method: "GET",
     });
     return asPage<GeoFence>(data).items;
