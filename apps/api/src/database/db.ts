@@ -100,10 +100,62 @@ export function createPool(
   databaseUrl: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Pool {
+  // A long-lived server wants a warm connection and room to fan out. A
+  // serverless instance wants neither: it may be one of hundreds, each holding
+  // its own pool against the same database, so PGPOOL_MAX=1 there keeps the
+  // total inside the provider's connection budget.
+  const size = (name: string, fallback: number): number => {
+    const raw = Number(env[name]);
+    return Number.isInteger(raw) && raw >= 0 ? raw : fallback;
+  };
+  const max = size("PGPOOL_MAX", 10);
   return new Pool({
     connectionString: databaseUrl,
-    max: 10,
+    // Keep one established connection for interactive traffic. The default
+    // pool minimum is zero and its 10s idle eviction makes the first request
+    // after a quiet period pay the full remote TLS/database handshake.
+    min: Math.min(size("PGPOOL_MIN", 1), max),
+    max,
+    idleTimeoutMillis: 60_000,
     ssl: buildSslOption(resolveSslMode(databaseUrl, env), env),
     connectionTimeoutMillis: 10_000,
   });
+}
+
+/**
+ * Turns a connection failure into something actionable.
+ *
+ * Certificate errors are the likely first contact with TLS configuration, and
+ * the raw message ("self-signed certificate in certificate chain") does not say
+ * what to do about it. Several managed providers — Supabase's pooler among them
+ * — front connections with a self-signed chain that Node's bundled CAs do not
+ * validate, so verify-full fails against them until a CA is supplied.
+ */
+export function describeConnectionError(error: unknown, databaseUrl?: string): string {
+  const message = error instanceof Error ? error.message : String(error);
+  // TLS demanded against a server that does not speak it. The usual cause is a
+  // DATABASE_SSL set for a managed provider in .env while DATABASE_URL has been
+  // pointed at a local Postgres, which typically has no TLS: the env var is
+  // global but the URL it applies to is not.
+  if (/does not support SSL/i.test(message)) {
+    const local = databaseUrl ? isLoopbackHost(new URL(databaseUrl).hostname) : false;
+    return (
+      `${message}. TLS was requested but this server has none` +
+      (local
+        ? ", and the host is loopback. An explicit DATABASE_SSL applies to whatever DATABASE_URL is set, so a value meant for a managed database also applies to a local one. Set DATABASE_SSL=disable for local Postgres."
+        : ". Set DATABASE_SSL=disable, or point DATABASE_URL at a server with TLS enabled.")
+    );
+  }
+  if (
+    /self.signed certificate|unable to verify|certificate chain|CERT_|DEPTH_ZERO/i.test(message)
+  ) {
+    return (
+      `${message}. TLS certificate verification failed. Either supply the ` +
+      "provider's CA with DATABASE_CA_CERT / DATABASE_CA_CERT_FILE, or set " +
+      "DATABASE_SSL=no-verify to encrypt without verifying the server " +
+      "(acceptable for local development, and refused in production unless " +
+      "DATABASE_SSL_ALLOW_NO_VERIFY=true)."
+    );
+  }
+  return message;
 }

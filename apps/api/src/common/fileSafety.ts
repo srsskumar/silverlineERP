@@ -6,9 +6,26 @@ export function validateFileSignature(bytes:Buffer,extension:string):void {
  const valid=extension==='pdf'?bytes.subarray(0,5).toString()==='%PDF-':extension==='png'?starts('89504e470d0a1a0a'):['jpg','jpeg'].includes(extension)?starts('ffd8ff'):['doc','xls'].includes(extension)?starts('d0cf11e0a1b11e1'):['docx','xlsx'].includes(extension)?starts('504b0304'):false;
  if(!valid)throw new ApiError({status:422,code:'FILE_TYPE_MISMATCH',message:'The file content does not match its allowed extension'});
 }
-/** ClamAV INSTREAM: scan memory before persisting any document or metadata. */
+/**
+ * True when the deployment has explicitly accepted running without a virus
+ * scanner. Serverless hosts cannot run a ClamAV sidecar, so the choice has to
+ * be expressible — but it has to be *stated*, not inferred from the absence of
+ * configuration, or a missing env var silently becomes a security decision.
+ */
+export function scanningDisabled(env:NodeJS.ProcessEnv=process.env):boolean{
+ return env.MALWARE_SCANNER_DISABLED==='true';
+}
+
+/**
+ * ClamAV INSTREAM: scan memory before persisting any document or metadata.
+ *
+ * The signature check always runs. Scanning is skipped only when the operator
+ * has set MALWARE_SCANNER_DISABLED=true; without it, production still fails
+ * closed rather than storing an unscanned file.
+ */
 export async function scanUpload(bytes:Buffer,extension:string,production:boolean):Promise<void>{
  validateFileSignature(bytes,extension);
+ if(scanningDisabled())return;
  const host=process.env.MALWARE_SCANNER_HOST;
  if(!host){if(production)throw unavailable();return;}
  await scanWithClamAv(bytes,host,Number(process.env.MALWARE_SCANNER_PORT??3310));

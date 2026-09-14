@@ -4,6 +4,7 @@
  * Ordered by what a field user opens the app to find out, in order: is my work
  * saved, am I punched in, what am I doing today.
  */
+import { withScreenBoundary } from "../../src/ui/ErrorBoundary";
 import { useQuery } from "@tanstack/react-query";
 import { View } from "react-native";
 import { router } from "expo-router";
@@ -29,7 +30,7 @@ import {
 } from "../../src/ui/primitives";
 import { space, useTheme } from "../../src/theme";
 
-export default function HomeScreen() {
+function HomeScreen() {
   const t = useTheme();
   const sync = useSyncEngine();
   const { user } = useAuth();
@@ -190,3 +191,8 @@ function taskTone(status: string): "success" | "warning" | "info" | "neutral" {
   if (status === "IN_PROGRESS" || status === "IN_REVIEW") return "info";
   return "neutral";
 }
+
+// Contained per screen: a render error here shows the recovery card in the
+// content area while the tab bar and navigation stay usable, instead of
+// unmounting the navigator and dropping the user back on Home.
+export default withScreenBoundary(HomeScreen);

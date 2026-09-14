@@ -414,7 +414,7 @@ export async function registerOrgUnitRoutes(
         const refs = await db.query(
           `SELECT id FROM employees
            WHERE org_id = $2 AND status = 'ACTIVE'
-             AND (district_id = $1::uuid OR mandal_id = $1::uuid OR village_id = $1::uuid)
+             AND (district_id = $1::uuid OR mandal_id = $1::uuid OR village_id = $1::uuid OR site_id = $1::uuid)
            LIMIT 1`,
           [id, user.orgId],
         );

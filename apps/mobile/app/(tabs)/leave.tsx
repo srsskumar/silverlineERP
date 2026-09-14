@@ -3,6 +3,7 @@
  * leave.decide / leave.admin / leave.manage — everyone else sees only their own
  * requests).
  */
+import { withScreenBoundary } from "../../src/ui/ErrorBoundary";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { View } from "react-native";
@@ -42,7 +43,7 @@ function statusTone(status: string): "success" | "warning" | "danger" | "neutral
   return "neutral";
 }
 
-export default function LeaveScreen() {
+function LeaveScreen() {
   const t = useTheme();
   const { permissions } = useAuth();
   const isApprover = canAny(permissions, LEAVE_APPROVER_PERMISSIONS);
@@ -282,3 +283,8 @@ export default function LeaveScreen() {
     </Screen>
   );
 }
+
+// Contained per screen: a render error here shows the recovery card in the
+// content area while the tab bar and navigation stay usable, instead of
+// unmounting the navigator and dropping the user back on Home.
+export default withScreenBoundary(LeaveScreen);

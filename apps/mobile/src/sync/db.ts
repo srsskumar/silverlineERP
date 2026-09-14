@@ -1,4 +1,4 @@
-import {SCHEMA_SQL,RECOVER_INTERRUPTED_SQL} from "./schema";
+import {SCHEMA_SQL,RECOVER_INTERRUPTED_SQL,applyMigrations} from "./schema";
 import {seal,unseal,destroyVault} from "../device/vault";
 /**
  * expo-sqlite schema for the offline-first MVP.
@@ -30,6 +30,7 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) dbPromise = (async () => {
     const db = await SQLite.openDatabaseAsync(`silverline-${account}.db`);
     await db.execAsync(SCHEMA_SQL);
+    await applyMigrations(async (sql) => db.execAsync(sql));
     await db.runAsync(RECOVER_INTERRUPTED_SQL);
     return db;
   })().catch(error => { dbPromise=null; throw error; });
@@ -51,6 +52,8 @@ export async function cachedRead<T>(key:string,fetcher:()=>Promise<T>):Promise<T
 
 
 export type PendingOpRow = {
+  /** Monotonic enqueue order; the FIFO key the flush sorts on. */
+  seq: number;
   client_uuid: string;
   entity: string;
   op: string;
@@ -75,10 +78,19 @@ export async function countPendingOps(): Promise<number> {
   return row?.n ?? 0;
 }
 
+/** Operations that can be sent now; future backoff rows should not wake the network. */
+export async function countReadyOps(now = Date.now()): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM pending_ops WHERE state='QUEUED' OR (state='BACKOFF' AND (next_retry_at IS NULL OR next_retry_at<=?))",
+    [now],
+  );
+  return row?.n ?? 0;
+}
+
 export async function listPendingOps(): Promise<PendingOpRow[]> {
   const db = await getDb();
   return db.getAllAsync<PendingOpRow>(
     "SELECT * FROM pending_ops ORDER BY created_at ASC, client_uuid ASC LIMIT 100",
   );
 }
-

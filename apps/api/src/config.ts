@@ -7,6 +7,8 @@ export interface ApiConfig {
   /** Allowed browser origins (CORS). Comma-separated in CORS_ORIGIN env. */
   corsOrigin: string[];
   nodeEnv: string;
+  /** Pino log threshold. Request logs default to info in development. */
+  logLevel: ApiLogLevel;
   bcryptRounds: number;
   /** Max login attempts per IP per window (S0: 10/min/IP). */
   loginRateLimitMax: number;
@@ -21,6 +23,13 @@ export interface ApiConfig {
   encryptionKey: string;
   /** Local document storage root (S1 driver; R2 presigned deferred). */
   uploadsDir: string;
+  /**
+   * Refuse to boot when migrations are pending (REQUIRE_CURRENT_SCHEMA).
+   * Off by default: an instance one migration behind still serves every
+   * route that migration does not touch, and a hard stop would take the
+   * whole API down instead of the routes actually affected.
+   */
+  requireCurrentSchema: boolean;
 }
 
 export interface ApiConfigOverrides {
@@ -29,6 +38,7 @@ export interface ApiConfigOverrides {
   port?: number;
   corsOrigin?: string[];
   nodeEnv?: string;
+  logLevel?: ApiLogLevel;
   bcryptRounds?: number;
   loginRateLimitMax?: number;
   loginRateLimitWindowMs?: number;
@@ -36,6 +46,36 @@ export interface ApiConfigOverrides {
   punchRateLimitWindowMs?: number;
   encryptionKey?: string;
   uploadsDir?: string;
+  requireCurrentSchema?: boolean;
+}
+
+export type ApiLogLevel =
+  | "fatal"
+  | "error"
+  | "warn"
+  | "info"
+  | "debug"
+  | "trace"
+  | "silent";
+
+const API_LOG_LEVELS = new Set<ApiLogLevel>([
+  "fatal",
+  "error",
+  "warn",
+  "info",
+  "debug",
+  "trace",
+  "silent",
+]);
+
+function parseLogLevel(raw: string | undefined): ApiLogLevel {
+  const level = (raw ?? "info").toLowerCase() as ApiLogLevel;
+  if (!API_LOG_LEVELS.has(level)) {
+    throw new Error(
+      `Invalid LOG_LEVEL ${JSON.stringify(raw)}; expected fatal, error, warn, info, debug, trace, or silent`,
+    );
+  }
+  return level;
 }
 
 function required(name: string, fallback?: string): string {
@@ -74,7 +114,8 @@ export function getConfig(overrides: ApiConfigOverrides = {}): ApiConfig {
       "http://localhost:3000",
       "http://localhost:3002",
     ],
-    nodeEnv: overrides.nodeEnv ?? process.env["NODE_ENV"] ?? "development",
+    nodeEnv,
+    logLevel: overrides.logLevel ?? parseLogLevel(process.env["LOG_LEVEL"]),
     bcryptRounds: overrides.bcryptRounds ?? Number(process.env["BCRYPT_ROUNDS"] ?? 10),
     loginRateLimitMax:
       overrides.loginRateLimitMax ??
@@ -91,5 +132,8 @@ export function getConfig(overrides: ApiConfigOverrides = {}): ApiConfig {
       required("ENCRYPTION_KEY", DEV_DEFAULT_ENCRYPTION_KEY),
     uploadsDir:
       overrides.uploadsDir ?? process.env["UPLOADS_DIR"] ?? "./uploads",
+    requireCurrentSchema:
+      overrides.requireCurrentSchema ??
+      process.env["REQUIRE_CURRENT_SCHEMA"] === "true",
   };
 }

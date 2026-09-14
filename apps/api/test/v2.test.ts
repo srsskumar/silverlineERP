@@ -13,7 +13,7 @@ async function truncateVolatile(): Promise<void> {
   // S1 tables included: employees/org_units reference users and vice versa
   // (users.employee_id), so every FK pair must be truncated together.
   await pool.query(
-    `TRUNCATE TABLE provider_jobs, advisory_cases, payslip_revisions, project_workflow_overrides, notification_deliveries, report_registry, report_schedules, payslip_documents, vendors, inventory_items, invoices, stock_transactions, assets, asset_assignments, asset_audits, cycles, custom_field_definitions, domain_events, automation_rules, automation_executions, webhook_subscriptions, webhook_deliveries, insight_feedback, v2_operations, device_registrations, audit_events, sessions, user_roles, idempotency_keys,
+    `TRUNCATE TABLE provider_jobs, advisory_cases, payslip_revisions, project_workflow_overrides, notification_deliveries, report_registry, report_schedules, payslip_documents, vendors, inventory_items, invoices, stock_transactions, assets, asset_assignments, asset_audits, cycles, custom_field_definitions, domain_events, automation_rules, automation_executions, webhook_subscriptions, webhook_deliveries, insight_feedback, v2_operations, geo_fence_employee_assignments, device_registrations, audit_events, sessions, user_roles, idempotency_keys,
       users, employee_documents, employees, org_units, holidays,
       attendance_exceptions, attendance_records, attendance_events, geo_fences,
       leave_requests, leave_balances, leave_types,
@@ -188,13 +188,20 @@ describe('security and recovery acceptance',()=>{
   await pool.query("UPDATE organizations SET settings=settings||'{\"session_timeout_minutes\":5}'::jsonb WHERE id=$1",[orgId]);await pool.query("UPDATE sessions SET last_used_at=now()-interval '6 minutes' WHERE user_id=$1",[adminId]);
   const response=await call('POST','auth/refresh',{refresh_token:login.refresh_token});expect(response.statusCode).toBe(401);
  });
+ // Content lives in the database rather than on local disk (migration 026), so
+ // the API can run on a host with an ephemeral filesystem. What is asserted is
+ // unchanged: bytes are encrypted at rest, the download is authorized, and the
+ // round trip is byte-identical.
  it('stores encrypted document and evidence bytes and authorizes every download',async()=>{
-  const {readFile}=await import('node:fs/promises'),p=await project(),t=(await call('POST','tasks',{project_id:p.id,title:'Evidence'})).json(),bytes=Buffer.from('%PDF-1.4 Private evidence');
+  const p=await project(),t=(await call('POST','tasks',{project_id:p.id,title:'Evidence'})).json(),bytes=Buffer.from('%PDF-1.4 Private evidence');
   const upload=await call('POST',`tasks/${t.id}/evidence`,{evidence_type:'document',file_name:'evidence.pdf',content_base64:bytes.toString('base64')});expect(upload.statusCode).toBe(201);
-  const row=(await pool.query('SELECT file_path FROM task_evidence WHERE id=$1',[upload.json().id])).rows[0];expect((await readFile(row.file_path,'utf8')).startsWith('gcm1.')).toBe(true);
+  const row=(await pool.query('SELECT file_path,content_encrypted FROM task_evidence WHERE id=$1',[upload.json().id])).rows[0];
+  expect(row.file_path).toBeNull();expect(String(row.content_encrypted).startsWith('gcm1.')).toBe(true);
+  expect(String(row.content_encrypted)).not.toContain('Private evidence');
   const download=await call('GET',`tasks/${t.id}/evidence/${upload.json().id}/download`);expect(download.rawPayload.equals(bytes)).toBe(true);
   const e=await employee('DOC'),doc=await call('POST',`employees/${e}/documents`,{doc_type:'id_proof',file_name:'proof.pdf',content_base64:bytes.toString('base64')});expect(doc.statusCode).toBe(201);
-  const stored=(await pool.query('SELECT file_path FROM employee_documents WHERE id=$1',[doc.json().id])).rows[0];expect((await readFile(stored.file_path,'utf8')).startsWith('gcm1.')).toBe(true);
+  const stored=(await pool.query('SELECT file_path,content_encrypted FROM employee_documents WHERE id=$1',[doc.json().id])).rows[0];
+  expect(stored.file_path).toBeNull();expect(String(stored.content_encrypted).startsWith('gcm1.')).toBe(true);
   expect((await call('GET',`employees/${e}/documents/${doc.json().id}/download`)).rawPayload.equals(bytes)).toBe(true);
   expect((await call('POST',`tasks/${t.id}/evidence`,{evidence_type:'photo',file_name:'fake.jpg',content_base64:bytes.toString('base64')})).json().code).toBe('FILE_TYPE_MISMATCH');
  });

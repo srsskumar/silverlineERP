@@ -84,11 +84,11 @@ export default function DashboardPage() {
 
   return (
     <AppShell>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-text">Board</h1>
-          <p className="mt-1 text-sm text-text-muted">
-            Pick a project and work its Kanban — drag cards across columns to change status.
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-lg font-semibold text-text">Board</h1>
+          <p className="hidden text-xs text-text-subtle sm:block">
+            Drag cards across columns to change status.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -152,11 +152,11 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="mt-4">
-        <WorkforceStrip />
+      <div className="mt-3">
+        <WorkforceStrip dense />
       </div>
 
-      <div className="mt-4">
+      <div className="mt-3">
         {projectsQuery.isLoading ? (
           <Skeleton className="h-96 w-full" />
         ) : projectsQuery.isError ? (

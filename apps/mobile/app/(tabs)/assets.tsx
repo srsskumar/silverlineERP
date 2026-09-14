@@ -5,6 +5,7 @@
  * Everything is queue-backed, so a scan or a transition made in a warehouse
  * with no signal is saved locally and sent on reconnect.
  */
+import { withScreenBoundary } from "../../src/ui/ErrorBoundary";
 import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Modal, View } from "react-native";
@@ -62,7 +63,7 @@ function statusTone(status: string): "success" | "warning" | "danger" | "info" |
   return "neutral";
 }
 
-export default function Assets() {
+function Assets() {
   const t = useTheme();
   const { canDo } = useAuth();
   const [search, setSearch] = useState("");
@@ -435,3 +436,8 @@ export default function Assets() {
     </Screen>
   );
 }
+
+// Contained per screen: a render error here shows the recovery card in the
+// content area while the tab bar and navigation stay usable, instead of
+// unmounting the navigator and dropping the user back on Home.
+export default withScreenBoundary(Assets);

@@ -15,9 +15,11 @@ import {
 } from '../lib/projects';
 import {
   buildTasksQuery,
+  canMoveTaskTo,
   dependencyEdgeKey,
   dependencyEdgeLabel,
   isTerminalTaskStatus,
+  type Task,
   normalizeComments,
   normalizeEvidenceList,
   normalizePostCommentResponse,
@@ -361,5 +363,51 @@ describe('S4 permission gating codes (exact values)', () => {
     expect(PERMISSIONS.TASK_ASSIGN).toBe('task.assign');
     expect(PERMISSIONS.TASK_COMMENT).toBe('task.comment');
     expect(PERMISSIONS.TASK_REORDER).toBe('task.reorder');
+  });
+});
+
+describe('canMoveTaskTo (board drop guard)', () => {
+  const task = (over: Partial<Task> = {}): Task =>
+    ({ id: 't1', project_id: 'p1', title: 'T', status: 'TO_DO', version: 1, ...over }) as Task;
+
+  it('allows a move the workflow permits', () => {
+    const out = canMoveTaskTo(task({ status: 'TO_DO', allowed_next: ['IN_PROGRESS'] }), 'IN_PROGRESS');
+    expect(out.allowed).toBe(true);
+  });
+
+  // The two transitions the user hit: DONE is terminal by design, and the
+  // server refuses both. The board must refuse them before sending.
+  it('refuses moving out of DONE', () => {
+    for (const to of ['BLOCKED', 'CANCELLED', 'IN_PROGRESS', 'TO_DO']) {
+      const out = canMoveTaskTo(task({ status: 'DONE', allowed_next: [] }), to);
+      expect(out.allowed, to).toBe(false);
+      if (!out.allowed) {
+        expect(out.reason).toContain('final status');
+        expect(out.allowedNext).toEqual([]);
+      }
+    }
+  });
+
+  it('refuses moving out of CANCELLED', () => {
+    const out = canMoveTaskTo(task({ status: 'CANCELLED', allowed_next: [] }), 'TO_DO');
+    expect(out.allowed).toBe(false);
+  });
+
+  it('names both statuses when a non-terminal transition is not permitted', () => {
+    const out = canMoveTaskTo(task({ status: 'TO_DO', allowed_next: ['IN_PROGRESS'] }), 'DONE');
+    expect(out.allowed).toBe(false);
+    if (!out.allowed) {
+      expect(out.reason).toContain('TO_DO');
+      expect(out.reason).toContain('DONE');
+      // The banner lists these, so the user learns what IS possible.
+      expect(out.allowedNext).toEqual(['IN_PROGRESS']);
+    }
+  });
+
+  // Absence must not block a legitimate move: an older API build, or a page
+  // cached from before allowed_next was added to list rows, omits the field.
+  it('defers to the server when allowed_next is absent', () => {
+    expect(canMoveTaskTo(task({ status: 'DONE' }), 'BLOCKED').allowed).toBe(true);
+    expect(canMoveTaskTo(task({ status: 'TO_DO', allowed_next: undefined }), 'DONE').allowed).toBe(true);
   });
 });

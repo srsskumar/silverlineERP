@@ -22,9 +22,19 @@ async function deliver(url:string,secret:string,body:string,id:string):Promise<n
  return new Promise((resolve,reject)=>{const req=request(target,{method:'POST',lookup:(_host,_options,cb)=>cb(null,resolved[0].address,4),headers:{'content-type':'application/json','content-length':Buffer.byteLength(body),'x-silverline-event':id,'x-silverline-timestamp':timestamp,'x-silverline-signature':`sha256=${signature}`}},res=>{res.resume();resolve(res.statusCode??500);});req.setTimeout(10000,()=>req.destroy(new Error('Webhook timeout')));req.on('error',reject);req.end(body);});
 }
 export async function runJobs(app:FastifyInstance,pool:Pool,jwtSecret:string):Promise<{events:number;deliveries:number}> {
+ // The run holds one connection for its exclusivity lock and issues every
+ // other query alongside it, so a pool of one deadlocks against itself and
+ // surfaces ten seconds later as an opaque 500. Say so instead.
+ if(pool.options?.max!==undefined&&pool.options.max<2)throw new Error('Background processing needs PGPOOL_MAX>=2 (it holds one connection for its lock while working); got '+pool.options.max);
  const lock=await pool.connect(),count={events:0,deliveries:0};
  try {
-  const acquired=await lock.query('SELECT pg_try_advisory_lock(7814239) AS ok');if(!acquired.rows[0].ok)return count;
+  // A session-level lock is not usable through a transaction-mode connection
+  // pooler, which hands the same backend to a different client between
+  // statements. Holding it inside an explicit transaction keeps the mutual
+  // exclusion (one worker at a time) and releases it on COMMIT no matter how
+  // the run ends — including a serverless invocation that is simply frozen.
+  await lock.query('BEGIN');
+  const acquired=await lock.query('SELECT pg_try_advisory_xact_lock(7814239) AS ok');if(!acquired.rows[0].ok){await lock.query('COMMIT');return count;}
   await runScheduledJobs(app,pool,jwtSecret);
   await runReportJobs(app,pool,jwtSecret);
   const events=await pool.query('SELECT * FROM domain_events WHERE processed_at IS NULL AND attempts<8 AND next_attempt_at<=now() ORDER BY created_at LIMIT 25');
@@ -80,5 +90,5 @@ export async function runJobs(app:FastifyInstance,pool:Pool,jwtSecret:string):Pr
   await runPushDelivery(pool);
   await runProviderJobs(pool);
   return count;
- }finally{await lock.query('SELECT pg_advisory_unlock(7814239)');lock.release();}
+ }finally{await lock.query('COMMIT').catch(()=>lock.query('ROLLBACK').catch(()=>{}));lock.release();}
 }

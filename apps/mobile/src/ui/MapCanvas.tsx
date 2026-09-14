@@ -6,20 +6,62 @@
  * wrapper takes one Silverline-shaped description of what to draw and renders
  * whichever view the platform provides, so screens never branch on Platform.OS.
  *
- * Both views need a native build: they are unavailable in Expo Go and on web.
- * Rather than crashing the screen, an unsupported platform renders an explicit
- * "map unavailable" panel — a field user seeing a blank rectangle would not
- * know whether the map failed or there was nothing to show.
+ * expo-maps needs a development/store build. Expo Go instead ships
+ * react-native-maps, so this wrapper uses that compatible renderer as a
+ * fallback. Web still receives an explicit unsupported panel.
  */
 
 import { useMemo } from "react";
 import { Platform, StyleSheet, View } from "react-native";
-import { AppleMaps, GoogleMaps } from "expo-maps";
+import { requireOptionalNativeModule } from "expo";
 import { Ionicons } from "@expo/vector-icons";
 import type { CircleGeometry, PolygonGeometry } from "@silverline/shared";
 import { font, radius, space, useIsDark, useTheme } from "../theme";
 import { Muted } from "./primitives";
 import type { GeoFence } from "../api/endpoints";
+
+type ExpoMapsModule = typeof import("expo-maps");
+type ReactNativeMapsModule = typeof import("react-native-maps");
+
+/**
+ * Importing `expo-maps` eagerly calls `requireNativeModule('ExpoMaps')` inside
+ * the package. Expo Go and development clients built before expo-maps was
+ * added do not contain that native module, so the import throws while Expo
+ * Router is evaluating the attendance route. Router then reports the
+ * misleading secondary warning that the route has no default export.
+ *
+ * Probe first and only evaluate the package in a binary that actually contains
+ * ExpoMaps. This keeps attendance and punching usable in an old client while a
+ * purpose-built Silverline development client still renders the native map.
+ */
+function loadExpoMaps(): ExpoMapsModule | null {
+  if (Platform.OS !== "android" && Platform.OS !== "ios") return null;
+  if (!requireOptionalNativeModule("ExpoMaps")) return null;
+  try {
+    // Metro needs a statically discoverable literal; the call remains runtime
+    // conditional, after the optional native-module probe above.
+    return require("expo-maps") as ExpoMapsModule;
+  } catch {
+    return null;
+  }
+}
+
+const expoMaps = loadExpoMaps();
+
+function loadReactNativeMaps(): ReactNativeMapsModule | null {
+  if (Platform.OS !== "android" && Platform.OS !== "ios") return null;
+  try {
+    return require("react-native-maps") as ReactNativeMapsModule;
+  } catch {
+    return null;
+  }
+}
+
+// Prefer expo-maps in a Silverline native build. Expo Go does not contain
+// ExpoMaps, but SDK 57 includes react-native-maps and can render it immediately.
+const reactNativeMaps = expoMaps ? null : loadReactNativeMaps();
+const fallbackTileUrl =
+  process.env.EXPO_PUBLIC_MAP_TILE_URL ?? "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 
 export interface MapPoint {
   id: string;
@@ -61,7 +103,7 @@ export function MapCanvas({
   const circles = useMemo(
     () =>
       fences
-        .filter((f) => f.geometry_type === "circle")
+        .filter((f) => f.geometry_type === "circle" && (!f.status || f.status === "ACTIVE"))
         .map((f) => {
           const g = f.geometry as CircleGeometry;
           const active = f.id === activeFenceId;
@@ -82,7 +124,7 @@ export function MapCanvas({
   const polygons = useMemo(
     () =>
       fences
-        .filter((f) => f.geometry_type === "polygon")
+        .filter((f) => f.geometry_type === "polygon" && (!f.status || f.status === "ACTIVE"))
         .map((f) => {
           const g = f.geometry as PolygonGeometry;
           const active = f.id === activeFenceId;
@@ -142,7 +184,8 @@ export function MapCanvas({
   const cameraPosition = { coordinates: resolvedCenter, zoom };
   const uiSettings = { myLocationButtonEnabled: false } as const;
 
-  if (Platform.OS === "android") {
+  if (Platform.OS === "android" && expoMaps) {
+    const { GoogleMaps } = expoMaps;
     return (
       <View style={frame}>
         <GoogleMaps.View
@@ -159,7 +202,8 @@ export function MapCanvas({
     );
   }
 
-  if (Platform.OS === "ios") {
+  if (Platform.OS === "ios" && expoMaps) {
+    const { AppleMaps } = expoMaps;
     return (
       <View style={frame}>
         <AppleMaps.View
@@ -176,11 +220,94 @@ export function MapCanvas({
     );
   }
 
+  if (reactNativeMaps) {
+    const NativeMapView = reactNativeMaps.default;
+    const NativeCircle = reactNativeMaps.Circle;
+    const NativePolygon = reactNativeMaps.Polygon;
+    const NativeMarker = reactNativeMaps.Marker;
+    const NativeUrlTile = reactNativeMaps.UrlTile;
+    // Region deltas are a portable approximation of the native zoom level.
+    // The longitude delta is wider to match the landscape map card.
+    const latitudeDelta = 360 / 2 ** zoom;
+    const initialRegion = {
+      ...resolvedCenter,
+      latitudeDelta,
+      longitudeDelta: latitudeDelta * 1.6,
+    };
+    return (
+      <View style={frame}>
+        <NativeMapView
+          key={`${resolvedCenter.latitude.toFixed(5)}:${resolvedCenter.longitude.toFixed(5)}:${zoom}`}
+          style={{ flex: 1 }}
+          initialRegion={initialRegion}
+          mapType={Platform.OS === "android" ? "none" : "standard"}
+          userInterfaceStyle="light"
+          loadingEnabled
+          loadingBackgroundColor="#eef1f5"
+          showsUserLocation
+          showsMyLocationButton={false}
+          toolbarEnabled={false}
+        >
+          <NativeUrlTile
+            urlTemplate={fallbackTileUrl}
+            maximumNativeZ={19}
+            maximumZ={19}
+            tileSize={256}
+            tileCacheMaxAge={7 * 24 * 60 * 60}
+            shouldReplaceMapContent={Platform.OS === "ios"}
+            zIndex={0}
+          />
+          {circles.map((circle) => (
+            <NativeCircle
+              key={circle.id}
+              center={circle.center}
+              radius={circle.radius}
+              fillColor={circle.color}
+              strokeColor={circle.lineColor}
+              strokeWidth={circle.lineWidth}
+            />
+          ))}
+          {polygons.map((polygon) => (
+            <NativePolygon
+              key={polygon.id}
+              coordinates={polygon.coordinates}
+              fillColor={polygon.color}
+              strokeColor={polygon.lineColor}
+              strokeWidth={polygon.lineWidth}
+            />
+          ))}
+          {markers.map((marker) => (
+            <NativeMarker
+              key={marker.id}
+              coordinate={marker.coordinates}
+              title={marker.title}
+              pinColor={marker.tintColor}
+            />
+          ))}
+        </NativeMapView>
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            right: 4,
+            bottom: 3,
+            borderRadius: 3,
+            backgroundColor: "rgba(255,255,255,0.88)",
+            paddingHorizontal: 4,
+            paddingVertical: 2,
+          }}
+        >
+          <Muted style={{ color: "#334155", fontSize: 9 }}>© OpenStreetMap contributors</Muted>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={[frame, { alignItems: "center", justifyContent: "center", gap: space.sm, padding: space.lg }]}>
       <Ionicons name="map-outline" size={22} color={t.textSubtle} />
       <Muted style={{ textAlign: "center", fontSize: font.sm }}>
-        Maps need the Android or iOS build of the app.
+        Map preview is unavailable on this platform. Attendance and punching still work.
       </Muted>
     </View>
   );

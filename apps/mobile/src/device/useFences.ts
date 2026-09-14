@@ -73,6 +73,7 @@ export function useFences(fix: PunchFix | null, enabled = true) {
     monitored,
     backgroundGranted,
     refreshBackgroundPermission,
+    refreshFences: query.refetch,
     isLoading: query.isLoading,
     error: query.error,
   };

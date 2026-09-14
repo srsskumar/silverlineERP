@@ -46,6 +46,23 @@
     --neutral-status: 217 12% 46%;
     --neutral-subtle: 214 22% 95%;
 
+    /**
+     * Board status hues.
+     *
+     * A column's identity colour: its header dot, count pill, and the rail
+     * across the top of every card in it. Kept separate from the --success /
+     * --warning / --danger state tokens because a column hue is an *identity*
+     * (which stage is this), not a judgement (is this bad) — DONE being green
+     * and BLOCKED red is a coincidence of convention, not the same signal.
+     * A board column with its own configured colour overrides these.
+     */
+    --status-neutral: 220 9% 46%;
+    --status-todo: 217 85% 55%;
+    --status-progress: 33 92% 46%;
+    --status-review: 262 72% 58%;
+    --status-done: 152 55% 38%;
+    --status-blocked: 358 68% 52%;
+
     --radius: 0.5rem;
 
     /* Flat, tight shadows — depth reads as a hairline, not a glow. */
@@ -85,6 +102,14 @@
     --info-subtle: 205 50% 16%;
     --neutral-status: 216 12% 62%;
     --neutral-subtle: 220 14% 19%;
+
+    /* Lifted and desaturated so each hue holds its identity on a dark ground. */
+    --status-neutral: 220 10% 58%;
+    --status-todo: 213 92% 66%;
+    --status-progress: 36 94% 60%;
+    --status-review: 262 88% 74%;
+    --status-done: 152 55% 55%;
+    --status-blocked: 358 78% 66%;
 
     --shadow-sm: 0 1px 2px 0 hsl(0 0% 0% / 0.4);
     --shadow-md: 0 2px 4px -1px hsl(0 0% 0% / 0.5), 0 1px 2px -1px hsl(0 0% 0% / 0.4);

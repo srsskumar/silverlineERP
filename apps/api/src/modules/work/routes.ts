@@ -1,10 +1,10 @@
 import {dateStringSchema} from "@silverline/shared";
 import {validateCustomFields} from "../../common/customFields.js";
+import {encodeBlob, readBlob} from "../../common/blobStore.js";
 import {scanUpload} from "../../common/fileSafety.js";
 import {mutationRoute} from "../../common/mutationRoute.js";
 import {projectRestriction} from "../../common/scopedReads.js";
 import { createHash } from "node:crypto";
-import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { Pool } from "pg";
@@ -578,6 +578,57 @@ export async function registerWorkRoutes(
       return fromMap;
     }
     return DEFAULT_TASK_WORKFLOW[status as TaskStatus] ?? [];
+  }
+
+  /**
+   * `allowed_next` for a page of tasks. The kanban board picks its drop
+   * targets from list rows, so a list that omits `allowed_next` leaves the
+   * client guessing and it offers moves the status endpoint then refuses
+   * (DONE and CANCELLED are terminal — see TASK_TERMINAL_STATUSES). One
+   * lookup for the whole page, not one per task: the override row wins over
+   * the project type's workflow, and the frozen default fills in for both.
+   */
+  async function allowedNextForTasks(
+    rows: TaskRow[],
+  ): Promise<Map<string, TaskStatus[]>> {
+    const byTask = new Map<string, TaskStatus[]>();
+    const projectIds = [...new Set(rows.map((r) => r.project_id))];
+    if (projectIds.length === 0) {
+      return byTask;
+    }
+    const res = await opts.pool.query(
+      `SELECT p.id,
+              COALESCE(o.statuses, w.statuses) AS statuses,
+              COALESCE(o.allowed_transitions, w.allowed_transitions) AS allowed_transitions
+       FROM projects p
+       LEFT JOIN project_workflow_overrides o ON o.project_id = p.id
+       LEFT JOIN project_workflows w ON w.project_type_id = p.project_type_id
+       WHERE p.id = ANY($1::uuid[])`,
+      [projectIds],
+    );
+    const fallback = defaultTaskWorkflow();
+    const byProject = new Map<string, TaskWorkflow>();
+    for (const r of res.rows as Array<{
+      id: string;
+      statuses: unknown;
+      allowed_transitions: unknown;
+    }>) {
+      byProject.set(r.id, {
+        statuses: Array.isArray(r.statuses)
+          ? (r.statuses as TaskStatus[])
+          : [...fallback.statuses],
+        allowed_transitions: (r.allowed_transitions ?? {
+          ...fallback.allowed_transitions,
+        }) as Record<string, TaskStatus[]>,
+      });
+    }
+    for (const row of rows) {
+      byTask.set(
+        row.id,
+        allowedNext(byProject.get(row.project_id) ?? fallback, row.status),
+      );
+    }
+    return byTask;
   }
 
   /**
@@ -1456,8 +1507,12 @@ export async function registerWorkRoutes(
       opts.pool,
       page.map((r) => r.id),
     );
+    const nextByTask = await allowedNextForTasks(page);
     return reply.status(200).send({
-      data: page.map((r) => toTaskShape(r, labelsByTask.get(r.id) ?? [])),
+      data: page.map((r) => ({
+        ...toTaskShape(r, labelsByTask.get(r.id) ?? []),
+        allowed_next: nextByTask.get(r.id) ?? [],
+      })),
       next_cursor:
         hasMore && last
           ? encodeCursor(sort==='created_desc'?{created_at:iso(last.created_at),id:last.id}:{sort,key:last.sort_key,id:last.id})
@@ -2269,14 +2324,9 @@ export async function registerWorkRoutes(
       const checksum = createHash("sha256").update(binary).digest("hex");
       const docIdRes = await db.query("SELECT gen_random_uuid() AS id");
       const docId = (docIdRes.rows[0] as { id: string }).id;
-      const safeName = file_name.replace(/[/\\]/g, "_");
-      const dir = join(uploadsDir(), "tasks", id);
-      await mkdir(dir, { recursive: true });
-      const filePath = join(dir, `${docId}_${safeName}`);
-      await writeFile(filePath, encryptPii(binary.toString("base64")), {mode:0o600});
       const ins = await db.query(
         `INSERT INTO task_evidence
-           (id, org_id, task_id, evidence_type, file_name, file_path,
+           (id, org_id, task_id, evidence_type, file_name, content_encrypted,
             file_size, mime_type, checksum, created_by)
          VALUES ($1::uuid, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10::uuid)
          RETURNING id, evidence_type, file_name, file_size, checksum, created_at`,
@@ -2286,7 +2336,7 @@ export async function registerWorkRoutes(
           id,
           evidence_type,
           file_name,
-          filePath,
+          encodeBlob(binary),
           binary.length,
           MIME_BY_EXT[ext] ?? "application/octet-stream",
           checksum,
@@ -2316,7 +2366,8 @@ export async function registerWorkRoutes(
     const {id,evidenceId}=req.params as {id:string;evidenceId:string},user=req.authUser!;
     const result=await opts.pool.query('SELECT * FROM task_evidence WHERE id=$1 AND task_id=$2 AND org_id=$3',[evidenceId,id,user.orgId]);
     const row=result.rows[0];if(!row)throw new ApiError({status:404,code:'NOT_FOUND',message:'Evidence not found'});
-    const stored=await readFile(row.file_path);const content=stored.subarray(0,5).toString()==='gcm1.'?Buffer.from(decryptPii(stored.toString()),'base64'):stored;
+    const content=await readBlob(row);
+    if(!content)throw new ApiError({status:404,code:'NOT_FOUND',message:'Evidence content is no longer available'});
     await writeAudit(opts.pool,{orgId:user.orgId,actorId:user.id,action:'task.evidence.download',entityType:'task_evidence',entityId:evidenceId,requestId:req.requestId});
     return reply.header('Content-Type',row.mime_type).header('X-Content-Type-Options','nosniff').header('Content-Disposition',"attachment; filename*=UTF-8''"+encodeURIComponent(row.file_name)).send(content);
   });

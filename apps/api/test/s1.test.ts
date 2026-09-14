@@ -26,7 +26,7 @@ let seq = 0;
 
 async function truncateAll(): Promise<void> {
   await pool.query(
-    `TRUNCATE TABLE provider_jobs, advisory_cases, payslip_revisions, project_workflow_overrides, notification_deliveries, report_registry, report_schedules, payslip_documents, vendors, inventory_items, invoices, stock_transactions, assets, asset_assignments, asset_audits, cycles, custom_field_definitions, domain_events, automation_rules, automation_executions, webhook_subscriptions, webhook_deliveries, insight_feedback, v2_operations, device_registrations, audit_events, sessions, idempotency_keys, user_roles,
+    `TRUNCATE TABLE provider_jobs, advisory_cases, payslip_revisions, project_workflow_overrides, notification_deliveries, report_registry, report_schedules, payslip_documents, vendors, inventory_items, invoices, stock_transactions, assets, asset_assignments, asset_audits, cycles, custom_field_definitions, domain_events, automation_rules, automation_executions, webhook_subscriptions, webhook_deliveries, insight_feedback, v2_operations, geo_fence_employee_assignments, device_registrations, audit_events, sessions, idempotency_keys, user_roles,
       users, employee_documents, employees, org_units, holidays,
       attendance_exceptions, attendance_records, attendance_events, geo_fences,
       leave_requests, leave_balances, leave_types,
@@ -406,6 +406,32 @@ describe("org units", () => {
 // ------------------------------------------------------------- employees
 
 describe("employees", () => {
+  it("persists an assigned site and validates that it is a site unit", async () => {
+    const admin = await adminHeaders();
+    const ids = await unitChain(admin);
+    const siteRes = await createUnit(admin, {
+      type: "site",
+      code: "SITE-EMP",
+      name: "Employee Site",
+      parent_id: ids.village,
+    });
+    const siteId = (siteRes.json() as { id: string }).id;
+    const created = await createEmployee(admin, { ...empPayload(), site_id: siteId });
+    expect(created.statusCode).toBe(201);
+    expect((created.json() as { site_id: string }).site_id).toBe(siteId);
+
+    const wrongType = await createEmployee(admin, {
+      ...empPayload(),
+      site_id: ids.village,
+    });
+    expect(wrongType.statusCode).toBe(422);
+    expect(
+      (wrongType.json() as { field_errors: Array<{ field: string }> }).field_errors.map(
+        (error) => error.field,
+      ),
+    ).toContain("site_id");
+  });
+
   it("creates with status DRAFT and masks PII without pii.read", async () => {
     const admin = await adminHeaders();
     const auditor = await roleHeaders("AUDITOR");

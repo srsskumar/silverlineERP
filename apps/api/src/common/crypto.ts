@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
 
 /**
  * AES-256-GCM field encryption for PII at rest (aadhaar / pan / bank_account).
@@ -44,6 +44,41 @@ export function decryptPii(blob: string): string {
     decipher.update(Buffer.from(ctHex, "hex")).toString("utf8") +
     decipher.final().toString("utf8")
   );
+}
+
+/**
+ * Deterministic blind index over an encrypted field.
+ *
+ * `encryptPii` uses a random IV, so two rows holding the same Aadhaar produce
+ * different ciphertext and a UNIQUE index over the column finds nothing. That
+ * left Aadhaar, PAN, bank account and PhonePe with no duplicate detection at
+ * all, which §7's acceptance criteria require.
+ *
+ * An HMAC keyed with the same secret as the encryption gives a stable value per
+ * plaintext that can carry a UNIQUE index, without being reversible the way a
+ * bare hash of a 12-digit Aadhaar would be (that space is small enough to
+ * enumerate in seconds). The value is an index only — never returned, never
+ * logged.
+ */
+export function blindIndex(value: string): string {
+  return createHmac("sha256", keyBytes())
+    .update(`silverline-blind-index:${value}`)
+    .digest("hex");
+}
+
+/**
+ * Canonical form for comparison, so "1234 5678 9012" and "123456789012" are
+ * recognised as the same Aadhaar and "abcde1234f" as the same PAN.
+ */
+export function normalizeForIndex(value: string): string {
+  return value.replace(/[\s-]/g, "").toUpperCase();
+}
+
+/** Blind index over the canonical form; null for empty input. */
+export function piiIndex(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const normalized = normalizeForIndex(value);
+  return normalized === "" ? null : blindIndex(normalized);
 }
 
 /** Last-4 mask (`••••1234`) for masked PII responses; null when empty. */

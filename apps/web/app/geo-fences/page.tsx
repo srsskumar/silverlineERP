@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppShell } from '@/components/AppShell';
 import { RequirePermission } from '@/components/RequirePermission';
@@ -14,11 +15,12 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
-import { Input } from '@/components/ui/Input';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ConflictDialog, useConflict } from '@/components/ConflictDialog';
 import { FenceForm, type FencePayload } from '@/components/FenceForm';
 import { FenceMap } from '@/components/map/FenceMap';
+import { fetchAllOrgUnits } from '@/lib/org';
+import { fetchAllEmployees } from '@/lib/employees';
 
 export const dynamic = 'force-static';
 
@@ -97,6 +99,22 @@ function FencesManager() {
   const [createOpen, setCreateOpen] = React.useState(false);
   const [rowError, setRowError] = React.useState<{ id: string; error: unknown } | null>(null);
   const conflict = useConflict();
+  const unitsQuery = useQuery({
+    queryKey: [...queryKeys.orgUnits.all, 'fence-picker'],
+    queryFn: () => fetchAllOrgUnits({ limit: 100 }),
+    staleTime: 10 * 60_000,
+  });
+  const units = unitsQuery.data ?? [];
+  const unitById = React.useMemo(() => new Map(units.map((unit) => [unit.id, unit])), [units]);
+  const employeesQuery = useQuery({
+    queryKey: ['employees', 'fence-assignment-labels'],
+    queryFn: () => fetchAllEmployees({ limit: 100 }),
+    staleTime: 10 * 60_000,
+  });
+  const employeeById = React.useMemo(
+    () => new Map((employeesQuery.data ?? []).map((employee) => [employee.id, employee])),
+    [employeesQuery.data],
+  );
 
   const filters = React.useMemo(
     () => ({ scope_type: scopeType || undefined, scope_id: scopeId.trim() || undefined }),
@@ -163,7 +181,7 @@ function FencesManager() {
       <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4 sm:flex-row sm:items-end">
         <div>
           <label htmlFor="fence-filter-type" className="text-sm font-medium text-text-muted">Scope type</label>
-          <select id="fence-filter-type" className={`${inputClass} sm:w-44`} value={scopeType} onChange={(e) => setScopeType(e.target.value)}>
+          <select id="fence-filter-type" className={`${inputClass} sm:w-44`} value={scopeType} onChange={(e) => { setScopeType(e.target.value); setScopeId(''); }}>
             <option value="">All</option>
             {ORG_UNIT_TYPES.map((t) => (
               <option key={t} value={t}>{t}</option>
@@ -171,8 +189,13 @@ function FencesManager() {
           </select>
         </div>
         <div className="flex-1">
-          <label htmlFor="fence-filter-id" className="text-sm font-medium text-text-muted">Scope ID</label>
-          <Input id="fence-filter-id" placeholder="Filter by scope…" value={scopeId} onChange={(e) => setScopeId(e.target.value)} />
+          <label htmlFor="fence-filter-id" className="text-sm font-medium text-text-muted">Location / site</label>
+          <select id="fence-filter-id" className={inputClass} value={scopeId} disabled={!scopeType || unitsQuery.isLoading} onChange={(e) => setScopeId(e.target.value)}>
+            <option value="">{scopeType ? `All ${scopeType}s` : 'Choose a scope type first'}</option>
+            {units.filter((unit) => unit.type === scopeType && unit.status === 'ACTIVE').map((unit) => (
+              <option key={unit.id} value={unit.id}>{unit.name} ({unit.code})</option>
+            ))}
+          </select>
         </div>
         {canManage && <Button onClick={() => setCreateOpen(true)}>New fence</Button>}
       </div>
@@ -203,6 +226,7 @@ function FencesManager() {
               <tr>
                 <th className="px-3 py-2 text-left font-medium text-text-muted">Name</th>
                 <th className="px-3 py-2 text-left font-medium text-text-muted">Scope</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Direct employees</th>
                 <th className="px-3 py-2 text-left font-medium text-text-muted">Geometry</th>
                 <th className="px-3 py-2 text-left font-medium text-text-muted">Tol / Acc (m)</th>
                 <th className="px-3 py-2 text-left font-medium text-text-muted">Status</th>
@@ -223,7 +247,17 @@ function FencesManager() {
                   className="row-hover"
                 >
                   <td className="px-3 py-2 font-medium text-text">{f.name}</td>
-                  <td className="px-3 py-2 font-mono text-xs text-text-muted">{f.scope_type} · {f.scope_id}</td>
+                  <td className="px-3 py-2 text-xs text-text-muted">
+                    {f.scope_type} · {unitById.get(f.scope_id)?.name ?? f.scope_id}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-text-muted">
+                    {(f.employee_ids ?? []).length > 0
+                      ? (f.employee_ids ?? []).map((id) => {
+                          const employee = employeeById.get(id);
+                          return employee ? `${employee.emp_no} · ${employee.first_name}` : id;
+                        }).join(', ')
+                      : 'Site/location fallback'}
+                  </td>
                   <td className="px-3 py-2 text-xs text-text-muted">
                     <Badge tone={f.geometry_type === 'circle' ? 'info' : 'neutral'}>{String(f.geometry_type)}</Badge>{' '}
                     {describeGeometry(f)}
@@ -279,7 +313,12 @@ export default function GeoFencesPage() {
     <AppShell>
       <RequirePermission code={PERMISSIONS.GEO_READ}>
         <h1 className="text-xl font-bold text-text">Geo-fences</h1>
-        <p className="mt-1 text-sm text-text-muted">Circle and polygon perimeters scoped to org units.</p>
+        <p className="mt-1 text-sm text-text-muted">Circle and polygon perimeters scoped to employee work locations.</p>
+        <div className="mt-4 rounded-lg border border-info/30 bg-info/5 p-4 text-sm text-text-muted">
+          Assign the employee to a site under <Link href="/employees" className="font-medium text-info underline">Employees</Link>,
+          then create an active fence for that same site here. Site fences take priority over village, mandal and district fences;
+          punches outside the effective boundary are sent for review.
+        </div>
         <div className="mt-6">
           <FencesManager />
         </div>

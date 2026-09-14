@@ -1,48 +1,58 @@
 # Silverline ERP — Mobile (Expo SDK 57 + React 19 + TS)
 
 Offline-first field companion to the same single API the web client uses.
-Metro workspace linking is **deferred**: this package never imports
-`@silverline/shared` — contracts are mirrored locally (drift risk noted below).
+
+API *contracts* are still mirrored locally rather than imported (drift risk noted
+below), but the geofencing work does import `@silverline/shared` for the geometry
+and signal helpers the server shares (`src/device/geofencing.ts`,
+`src/device/signals.ts`, `src/ui/MapCanvas.tsx`, `src/api/endpoints.ts`). That
+package resolves to its gitignored `dist/`, so build it once per clone:
+
+```sh
+npm run build --workspace=@silverline/shared    # from the repository root
+```
 
 ## Run
 
+**Expo Go cannot run this app.** It depends on native modules that are not
+bundled into the Expo Go client: `expo-maps`, background geofencing via
+`expo-location` + `expo-task-manager`, `expo-background-task`,
+`expo-secure-store`, `expo-local-authentication`, and `expo-notifications`.
+Scanning the QR code with Expo Go gets you a red screen on the first import, not
+a degraded experience. The app depends on `expo-dev-client` precisely because a
+native build is mandatory.
+
+Two supported paths:
+
 ```sh
 cd apps/mobile
-npx expo start            # scan QR with Expo Go, or press a/i/w
+npm run check:android     # preflight: names every missing prerequisite at once
+npm run android           # local dev build (runs the preflight first)
 ```
 
-### Local Android builds on macOS
-
-`npx expo run:android` needs Java 17, the Android SDK, and `adb`. Install
-Android Studio and select Android SDK, Android SDK Platform-Tools, and Android
-SDK Build-Tools in its SDK Manager. Then configure the shell used by VS Code:
+or an EAS cloud build, which needs no local Android SDK:
 
 ```sh
-brew install --cask temurin@17
-
-export JAVA_HOME=$(/usr/libexec/java_home -v 17)
-export ANDROID_HOME="$HOME/Library/Android/sdk"
-export ANDROID_SDK_ROOT="$ANDROID_HOME"
-export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+eas build --platform android --profile development
 ```
 
-Persist those exports in `~/.zshrc`, open a new terminal, and verify the
-installation before starting Expo:
+Either way, Metro then attaches to the installed build with
+`npx expo start --dev-client` (plain `npx expo start` targets Expo Go).
 
-```sh
-java -version       # must report Java 17
-adb version
-sdkmanager --list
+### Setting up Android on macOS
 
-cd apps/mobile
-npx expo run:android
-```
+Full guide, verified against this repo's pinned toolchain (JDK 17, Gradle 9.3.1,
+compileSdk 36, NDK 27.1.12297006): **[docs/ANDROID_SETUP.md](docs/ANDROID_SETUP.md)**.
 
-If the SDK was installed somewhere other than the default Android Studio
-location, set `ANDROID_HOME` and `ANDROID_SDK_ROOT` to that directory instead.
-The `spawn adb ENOENT` error means `platform-tools` is missing from `PATH` (or
-has not been installed); the SDK path error means the SDK variables are unset
-or point to a directory that does not exist.
+It covers both the Android Studio and the command-line-tools-only install, the
+exact `~/.zshrc` exports, the arm64 system image to use on Apple Silicon, the
+`GOOGLE_MAPS_ANDROID_KEY` requirement, and a troubleshooting section keyed to the
+error messages Expo actually prints.
+
+`npm run check:android` (`scripts/check-android-env.mjs`) checks `ANDROID_HOME`,
+the required SDK packages, `adb`, the JDK major version, whether any device or
+emulator is attached, and the Maps key. It exits non-zero on anything that would
+break the build and prints the fix next to each failure.
 
 Tests + typecheck (no new deps — `tsx` is resolved from the workspace root):
 
@@ -60,9 +70,15 @@ npx expo export -p web    # bundling smoke test (no server needed)
 3. Launch Metro with the device-visible URL (Expo bakes env at bundle time,
    so restart Metro after changing it):
    ```sh
-   EXPO_PUBLIC_API_URL=http://192.168.1.20:3101 npx expo start
+   EXPO_PUBLIC_API_URL=http://192.168.1.20:3101 npx expo start --dev-client
    ```
-   Default when unset: `http://localhost:3101` (simulator only).
+   Default when unset: `http://localhost:3101` (emulator only, via `10.0.2.2`).
+
+The generated Android network policy permits plain `http://` only to the exact
+local host in `EXPO_PUBLIC_API_URL`; all other cleartext hosts remain blocked.
+Changing that host requires rebuilding the development client as well as
+restarting Metro. See
+[docs/ANDROID_SETUP.md](docs/ANDROID_SETUP.md#development-cleartext-http-policy).
 
 ## Installable Android LAN preview
 
@@ -93,9 +109,17 @@ eas build --platform ios --profile preview
 ```
 
 Configure `EXPO_PUBLIC_API_URL` in the selected EAS build environment before
-building. Preview and production builds fail when it is missing. EAS cloud builds
-have not been run here; the local Gradle preview build is supported by the script
-above. Installing successfully does not establish end-to-end device verification.
+building (`eas env:set --environment preview --name EXPO_PUBLIC_API_URL --value ...`).
+Preview and production builds fail when it is missing. Use
+`--profile development` instead for a dev-client build you can attach Metro to.
+EAS cloud builds have not been run here; the local Gradle preview build is
+supported by the script above. Installing successfully does not establish
+end-to-end device verification.
+
+Silverline development/store builds need `GOOGLE_MAPS_ANDROID_KEY` in the build
+environment. Expo Go uses the `react-native-maps` fallback with the configurable
+`EXPO_PUBLIC_MAP_TILE_URL`. See
+[docs/ANDROID_SETUP.md](docs/ANDROID_SETUP.md#the-google-maps-api-key).
 
 ## API contract assumptions (verified vs apps/api + packages/shared)
 

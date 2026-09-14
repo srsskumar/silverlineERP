@@ -163,9 +163,7 @@ export async function login(
         body: { mfa_required: true as const },
       };
     }
-    const codeOk =
-      user.mfa_secret !== null &&
-      authenticator.check(input.totp_code, mfaSecret(user.mfa_secret));
+    const codeOk = await consumeTotp(ctx, user.id, user.mfa_secret, input.totp_code);
     if (!codeOk) {
       await recordFailedAttempt(ctx,user.id);
       throw new ApiError({
@@ -367,7 +365,7 @@ export async function setupMfa(
   const secret = authenticator.generateSecret();
   if (row.mfa_enabled) throw new ApiError({ status: 409, code: 'MFA_ALREADY_ENABLED', message: 'Disable the existing authenticator before replacing it' });
   await ctx.pool.query(
-    "UPDATE users SET mfa_secret = $1, updated_at = NOW() WHERE id = $2",
+    "UPDATE users SET mfa_secret = $1, mfa_last_counter = NULL, updated_at = NOW() WHERE id = $2",
     [encryptPii(secret), userId],
   );
   return {
@@ -386,7 +384,7 @@ export async function verifyMfa(
     [userId],
   );
   const row = userRes.rows[0] as { mfa_secret: string | null } | undefined;
-  if (!row?.mfa_secret || !authenticator.check(code, mfaSecret(row.mfa_secret))) {
+  if (!(await consumeTotp(ctx, userId, row?.mfa_secret ?? null, code))) {
     throw new ApiError({
       status: 401,
       code: "INVALID_MFA_CODE",
@@ -404,7 +402,10 @@ export async function disableMfa(ctx: ServiceContext, userId: string, code: stri
   await verifyMfa(ctx,userId,code);
 
   await ctx.pool.query(
-    "UPDATE users SET mfa_enabled = false, mfa_secret = NULL, updated_at = NOW() WHERE id = $1",
+    // The spent-counter is cleared with the secret: a later re-enrolment gets a
+    // new secret, and a counter inherited from the old one would reject its
+    // first codes until wall-clock time caught up.
+    "UPDATE users SET mfa_enabled = false, mfa_secret = NULL, mfa_last_counter = NULL, updated_at = NOW() WHERE id = $1",
     [userId],
   );
 }
@@ -417,6 +418,60 @@ export async function revokeFamily(ctx: ServiceContext, family: string): Promise
 }
 
 function mfaSecret(value:string):string { return value.startsWith('gcm1.') ? decryptPii(value) : value; }
+
+/** TOTP step length in seconds — otplib's default, restated so the counter math is explicit. */
+const TOTP_STEP_SECONDS = 30;
+
+/**
+ * How many steps on either side of "now" a code may come from.
+ *
+ * Zero — a code is valid only for its own 30-second step — is both otplib's
+ * default and this deployment's policy. It is stated explicitly because the
+ * clock-skew window is a security decision rather than an incidental library
+ * default, and because §14.1 requires the accepted window to be deterministic.
+ */
+export const TOTP_SKEW_STEPS = 0;
+authenticator.options = { window: TOTP_SKEW_STEPS };
+
+/** The step counter a TOTP code belongs to, or null when it matches none. */
+function totpCounter(code: string, secret: string, at: number = Date.now()): number | null {
+  // checkDelta answers "how many steps away from now", honouring the window
+  // configured above, so the counter stays correct if that window ever widens.
+  const delta = authenticator.checkDelta(code, secret);
+  if (delta === null || delta === undefined) return null;
+  return Math.floor(at / 1000 / TOTP_STEP_SECONDS) + delta;
+}
+
+/**
+ * Verifies a TOTP code and spends it.
+ *
+ * `authenticator.check` alone leaves a code replayable for the rest of its
+ * step: anyone who observes it — in transit, over a shoulder, in a screenshot —
+ * can present it again within the same window. Recording the highest counter a
+ * user has spent makes each code single-use, which is what §14.1's replay
+ * policy asks for. The compare-and-set is done in the UPDATE's WHERE clause, so
+ * two concurrent logins racing with the same code cannot both win.
+ */
+async function consumeTotp(
+  ctx: ServiceContext,
+  userId: string,
+  encryptedSecret: string | null,
+  code: string,
+): Promise<boolean> {
+  if (!encryptedSecret) return false;
+  const secret = mfaSecret(encryptedSecret);
+  if (!authenticator.check(code, secret)) return false;
+  const counter = totpCounter(code, secret);
+  // A code that checks out but cannot be placed in a step is not something we
+  // can protect against replay, so refuse it rather than accept it blindly.
+  if (counter === null) return false;
+  const spent = await ctx.pool.query(
+    `UPDATE users SET mfa_last_counter = $2, updated_at = NOW()
+      WHERE id = $1 AND (mfa_last_counter IS NULL OR mfa_last_counter < $2)`,
+    [userId, counter],
+  );
+  return (spent.rowCount ?? 0) > 0;
+}
 async function recordFailedAttempt(ctx:ServiceContext,id:string):Promise<void> {
  const result=await ctx.pool.query("UPDATE users SET failed_login_attempts=CASE WHEN locked_until<now() THEN 1 ELSE failed_login_attempts+1 END,locked_until=CASE WHEN (CASE WHEN locked_until<now() THEN 1 ELSE failed_login_attempts+1 END)>=$2 THEN now()+($3||' milliseconds')::interval ELSE NULL END,updated_at=now() WHERE id=$1 RETURNING failed_login_attempts",[id,MAX_FAILED_ATTEMPTS,String(LOCKOUT_MS)]);
  if(result.rows[0].failed_login_attempts>=MAX_FAILED_ATTEMPTS)throw new ApiError({status:423,code:'ACCOUNT_LOCKED',message:'Account is temporarily locked due to failed login attempts',retryable:true});

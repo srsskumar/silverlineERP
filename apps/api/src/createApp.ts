@@ -10,12 +10,14 @@ import { registerAnalyticsRoutes } from "./modules/analytics/routes.js";
 import { registerAdminRoutes } from "./modules/admin/routes.js";
 import { registerPayrollDocuments } from "./modules/payroll/documents.js";
 import cors from "@fastify/cors";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { LogController, type FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import { getConfig, type ApiConfigOverrides } from "./config.js";
 import { registerRequestId } from "./common/requestId.js";
 import { registerErrorHandler } from "./common/httpErrors.js";
-import { createPool } from "./database/db.js";
+import { createPool, describeConnectionError } from "./database/db.js";
+import { verifySchemaCurrent } from "./database/schemaGuard.js";
+import { scanningDisabled } from "./common/fileSafety.js";
 import { registerAuthRoutes } from "./modules/auth/routes.js";
 import { registerAuditRoutes } from "./modules/audit/routes.js";
 import { registerOrgUnitRoutes } from "./modules/org/routes.js";
@@ -41,12 +43,42 @@ export async function buildApp(
 
   // 8 MiB: large enough for the S1 5 MiB document cap to be enforced by
   // the route (422) instead of the framework (413).
-  const app = Fastify({ logger: config.nodeEnv==='production'?{level:'info',redact:['req.headers.authorization','req.headers.cookie','res.headers.set-cookie']}:false,disableRequestLogging:true,bodyLimit:8*1024*1024 });
+  const logger = config.nodeEnv === "test"
+    ? false
+    : {
+        level: config.logLevel,
+        redact: [
+          "req.headers.authorization",
+          "req.headers.cookie",
+          "res.headers.set-cookie",
+        ],
+      };
+  const app = Fastify({
+    logger,
+    // We emit a smaller, stable request/response pair below. This also avoids
+    // Fastify's deprecated top-level disableRequestLogging option.
+    logController: new LogController({ disableRequestLogging: true }),
+    bodyLimit: 8 * 1024 * 1024,
+  });
+  await registerRequestId(app);
+  await registerErrorHandler(app);
   const counters=new Map<string,{requests:number;errors:number;total_ms:number}>();
+  app.addHook("onRequest", async (req) => {
+    req.log.info(
+      {
+        request_id: req.requestId,
+        method: req.method,
+        route: req.routeOptions.url ?? req.url.split("?", 1)[0],
+      },
+      "request received",
+    );
+  });
   app.addHook('onResponse',async(req,reply)=>{
     const route=req.routeOptions.url??'unmatched',key=req.method+' '+route,m=counters.get(key)??{requests:0,errors:0,total_ms:0};
     m.requests++;if(reply.statusCode>=500)m.errors++;m.total_ms+=reply.elapsedTime;counters.set(key,m);
-    req.log.info({request_id:req.requestId,method:req.method,route,status:reply.statusCode,duration_ms:Math.round(reply.elapsedTime)},'request completed');
+    const details={request_id:req.requestId,method:req.method,route,status:reply.statusCode,duration_ms:Math.round(reply.elapsedTime)};
+    if(reply.statusCode>=500)req.log.error(details,'response sent');
+    else req.log.info(details,'response sent');
   });
   app.get('/api/v1/operations/metrics',{preHandler:async req=>{await requirePermission(buildAuthenticate({pool,jwtSecret:config.jwtSecret}),'admin.configure')(req);}},async()=>({uptime_seconds:Math.floor(process.uptime()),database:{total:pool.totalCount,idle:pool.idleCount,waiting:pool.waitingCount},routes:[...counters].map(([route,m])=>({route,...m,mean_ms:Number((m.total_ms/m.requests).toFixed(2))}))}));
   app.addHook('preSerialization',async(req,_reply,payload)=>{
@@ -67,14 +99,55 @@ export async function buildApp(
     credentials: true,
   });
   if (!options.pool) app.addHook('onClose', async () => { await pool.end(); });
-  await registerRequestId(app);
-  await registerErrorHandler(app);
+
+  // An un-migrated database does not fail at boot, it fails one route at a
+  // time with an opaque 500 the first time a SELECT names a column the
+  // database lacks. Name the pending migration once, here, where an operator
+  // looks. Boot continues by default (every untouched route still works);
+  // REQUIRE_CURRENT_SCHEMA=true turns it into a hard stop for deployments
+  // that would rather not serve at all than serve partially broken.
+  let schemaOutOfDate = false;
+  try {
+    const drift = await verifySchemaCurrent(pool, {
+      fatal: config.requireCurrentSchema,
+      report: (message) => {
+        app.log.error({ schema: "out_of_date" }, message);
+      },
+    });
+    schemaOutOfDate = drift.pending.length > 0;
+  } catch (error) {
+    if (config.requireCurrentSchema) throw error;
+    // Unreachable database at boot is the health check's problem, not this
+    // check's: report and keep going so /health can explain it properly.
+    app.log.error(
+      { err: describeConnectionError(error, config.databaseUrl) },
+      "could not read schema_migrations at startup",
+    );
+  }
+
+  // A deployment running without a virus scanner says so once, at boot, where
+  // an operator reviewing logs will see it — not silently, and not per upload.
+  if (scanningDisabled()) {
+    app.log.warn(
+      { malware_scanning: "disabled" },
+      "MALWARE_SCANNER_DISABLED=true: uploads are checked for a valid file " +
+        "signature, extension and size, but are NOT scanned for malware.",
+    );
+  }
 
   app.get("/health", async (_req, reply) => {
     try {
       await pool.query("SELECT 1");
-      return reply.status(200).send({ status: "ok" });
-    } catch {
+      // Connectivity is fine but the build is ahead of the database: surfaced
+      // as a field rather than a 503 so liveness probes do not restart-loop.
+      return reply
+        .status(200)
+        .send(schemaOutOfDate ? { status: "ok", schema: "out_of_date" } : { status: "ok" });
+    } catch (error) {
+      // A bare "degraded" gives an operator nothing to act on; the reason is
+      // logged (never returned, since it can name internal hosts) and the most
+      // common cause — TLS configuration — is spelled out there.
+      app.log.error({ err: describeConnectionError(error, config.databaseUrl) }, "health check failed");
       return reply.status(503).send({ status: "degraded" });
     }
   });

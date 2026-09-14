@@ -8,6 +8,7 @@ import {
   decodeCursor,
   encodeCursor,
   holidayCreateSchema,
+  resolveEffectiveHolidays,
   toFieldErrors,
 } from "@silverline/shared";
 import { buildAuthenticate, requirePermission } from "../../common/auth.js";
@@ -23,6 +24,15 @@ const listQuerySchema = cursorPageQuerySchema.extend({
   year: z.coerce.number().int().min(1900).max(2100).optional(),
   scope_type: z.string().max(50).optional(),
   scope_id: z.string().uuid().optional(),
+  /**
+   * Resolve to the holidays actually in effect for one employee (§8.2).
+   *
+   * Without it the list is every row, including a district's local holiday and
+   * the organization-wide default that falls on the same date — two answers for
+   * one day. With it, each date yields the single holiday that applies to this
+   * employee's own location chain, finest scope winning.
+   */
+  employee_id: z.string().uuid().optional(),
 });
 
 interface HolidayCursor {
@@ -117,6 +127,52 @@ export async function registerHolidayRoutes(
         `(date, id) > ($${values.length - 1}::date, $${values.length}::uuid)`,
       );
     }
+    if (parsed.data.employee_id) {
+      const employee = await opts.pool.query(
+        `SELECT site_id, village_id, mandal_id, district_id FROM employees
+          WHERE id = $1::uuid AND org_id = $2`,
+        [parsed.data.employee_id, user.orgId],
+      );
+      const row = employee.rows[0] as
+        | {
+            site_id: string | null;
+            village_id: string | null;
+            mandal_id: string | null;
+            district_id: string | null;
+          }
+        | undefined;
+      if (!row) {
+        return sendError(reply, req.requestId, {
+          status: 404,
+          code: "NOT_FOUND",
+          message: "Employee not found",
+        });
+      }
+      // Resolution needs every candidate for the period, so this branch does
+      // not paginate; a year of holidays is a short list by construction.
+      const all = await opts.pool.query(
+        `SELECT id, date, name, type, scope_type, scope_id, created_at
+           FROM holidays WHERE ${clauses.join(" AND ")}
+          ORDER BY date ASC, id ASC LIMIT 1000`,
+        values as string[],
+      );
+      const candidates = (all.rows as HolidayRow[]).map((holiday) => ({
+        ...toShape(holiday),
+        date: toShape(holiday).date,
+      }));
+      const effective = resolveEffectiveHolidays(candidates, [
+        row.site_id,
+        row.village_id,
+        row.mandal_id,
+        row.district_id,
+      ]);
+      return reply.status(200).send({
+        data: effective,
+        next_cursor: null,
+        has_more: false,
+      });
+    }
+
     values.push(limit + 1);
     const res = await opts.pool.query(
       `SELECT id, date, name, type, scope_type, scope_id, created_at

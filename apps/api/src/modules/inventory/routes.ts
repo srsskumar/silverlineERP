@@ -69,7 +69,12 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    const r=await db.query('INSERT INTO stock_transactions(org_id,item_id,direction,quantity,reference,project_id,invoice_id,reason,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',[u.orgId,input.item_id,input.direction,input.quantity,input.reference,input.project_id??null,input.invoice_id??null,input.reason??null,u.id]);
    const stock=await db.query(`SELECT COALESCE(sum(CASE WHEN direction='IN' THEN quantity ELSE -quantity END),0)::text AS available FROM stock_transactions WHERE item_id=$1`,[input.item_id]);
    const low=Number(stock.rows[0].available)<=Number(item.low_stock_threshold);
-   if(low&&input.direction==='OUT')await db.query("INSERT INTO notifications(org_id,recipient_id,type,title,body,entity_type,entity_id,event_key) SELECT DISTINCT $1,u.id,'LOW_STOCK','Stock needs replenishment','Open Inventory to review stock levels','inventory_item',$2,$3 FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN role_permissions rp ON rp.role_id=ur.role_id WHERE u.org_id=$1 AND u.auth_status='ACTIVE' AND rp.permission_code='inventory.manage' ON CONFLICT DO NOTHING",[u.orgId,item.id,`low-stock:${r.rows[0].id}`]);
+   // $1 and $2 carry explicit casts: a bare parameter in an INSERT ... SELECT
+   // list is inferred from the select expression, not the target column, so
+   // reusing $1 in the uuid-typed WHERE made Postgres deduce two different
+   // types for it and reject the statement (42P08). Every OUT posting that
+   // reached the low-stock threshold failed with a 500 because of it.
+   if(low&&input.direction==='OUT')await db.query("INSERT INTO notifications(org_id,recipient_id,type,title,body,entity_type,entity_id,event_key) SELECT DISTINCT $1::uuid,u.id,'LOW_STOCK','Stock needs replenishment','Open Inventory to review stock levels','inventory_item',$2::uuid,$3::text FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN role_permissions rp ON rp.role_id=ur.role_id WHERE u.org_id=$1 AND u.auth_status='ACTIVE' AND rp.permission_code='inventory.manage' ON CONFLICT DO NOTHING",[u.orgId,item.id,`low-stock:${r.rows[0].id}`]);
    return {...r.rows[0],available:stock.rows[0].available,low_stock:low};
   });return reply.code(201).send(row);
  });

@@ -22,3 +22,5 @@ ios/
 *.aab
 *.ipa
 .gstack/
+.env.supabase
+.env.deploy

@@ -1,9 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSslOption,
+  createPool,
+  describeConnectionError,
   isLoopbackHost,
   resolveSslMode,
 } from "../src/database/db.js";
+
+describe("createPool", () => {
+  it("retains one warm connection for interactive API traffic", async () => {
+    const pool = createPool("postgresql://localhost:5432/silverline_test", {});
+    expect(pool.options.min).toBe(1);
+    expect(pool.options.max).toBe(10);
+    expect(pool.options.idleTimeoutMillis).toBe(60_000);
+    await pool.end();
+  });
+});
 
 describe("isLoopbackHost", () => {
   it("recognises every loopback spelling", () => {
@@ -83,5 +95,65 @@ describe("buildSslOption", () => {
   });
   it("only skips verification for no-verify", () => {
     expect(buildSslOption("no-verify", {})).toEqual({ rejectUnauthorized: false });
+  });
+});
+
+describe("describeConnectionError", () => {
+  // Supabase's pooler (and several other managed providers) front connections
+  // with a self-signed chain, so verify-full fails against them. The raw driver
+  // message does not say what to do, which is how this surfaced as an opaque
+  // "degraded" health check.
+  it("explains how to resolve a certificate failure", () => {
+    const out = describeConnectionError(
+      new Error("self-signed certificate in certificate chain"),
+    );
+    expect(out).toContain("DATABASE_CA_CERT");
+    expect(out).toContain("DATABASE_SSL=no-verify");
+    expect(out).toContain("self-signed certificate in certificate chain");
+  });
+
+  it("recognises the other certificate failure spellings", () => {
+    for (const message of [
+      "unable to verify the first certificate",
+      "CERT_HAS_EXPIRED",
+      "DEPTH_ZERO_SELF_SIGNED_CERT",
+    ]) {
+      expect(describeConnectionError(new Error(message)), message).toContain("DATABASE_SSL");
+    }
+  });
+
+  it("passes unrelated failures through untouched", () => {
+    const out = describeConnectionError(new Error("ECONNREFUSED 127.0.0.1:5432"));
+    expect(out).toBe("ECONNREFUSED 127.0.0.1:5432");
+  });
+
+  it("handles a non-Error rejection", () => {
+    expect(describeConnectionError("boom")).toBe("boom");
+  });
+
+  // An explicit DATABASE_SSL applies to whatever DATABASE_URL happens to be
+  // set, so a value chosen for a managed provider also hits a local Postgres
+  // that has no TLS at all. The bare driver message does not hint at that.
+  it("explains a TLS demand against a local server with no TLS", () => {
+    const out = describeConnectionError(
+      new Error("The server does not support SSL connections"),
+      "postgresql://localhost:5432/silverline_dev",
+    );
+    expect(out).toContain("loopback");
+    expect(out).toContain("DATABASE_SSL=disable");
+  });
+
+  it("gives the remote-host wording when the host is not loopback", () => {
+    const out = describeConnectionError(
+      new Error("The server does not support SSL connections"),
+      "postgresql://u:p@db.example.com:5432/x",
+    );
+    expect(out).not.toContain("loopback");
+    expect(out).toContain("DATABASE_SSL=disable");
+  });
+
+  it("still works when no URL is supplied", () => {
+    const out = describeConnectionError(new Error("The server does not support SSL connections"));
+    expect(out).toContain("DATABASE_SSL=disable");
   });
 });

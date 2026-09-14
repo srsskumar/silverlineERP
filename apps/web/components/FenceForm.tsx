@@ -1,15 +1,20 @@
 'use client';
 
 import * as React from 'react';
+import Link from './AppLink';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   fenceSchema,
   ORG_UNIT_TYPES,
   parsePolygonTextarea,
   type FenceFormInput,
 } from '@/lib/validation';
-import type { FenceGeometry, GeometryType } from '@/lib/geo';
+import { searchPlaces, type FenceGeometry, type GeometryType, type PlaceSearchResult } from '@/lib/geo';
+import { listOrgUnits } from '@/lib/org';
+import { listEmployees, type EmployeeListItem } from '@/lib/employees';
+import { queryKeys } from '@/lib/query-keys';
 import { Button } from './ui/Button';
 import { FormField } from './ui/FormField';
 import { FenceMap } from './map/FenceMap';
@@ -18,12 +23,20 @@ import { Input } from './ui/Input';
 const inputClass =
   'w-full rounded-md border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 border-border';
 
+const LOCATION_PATH: Record<(typeof ORG_UNIT_TYPES)[number], string> = {
+  district: 'District',
+  mandal: 'District → Mandal',
+  village: 'District → Mandal → Village',
+  site: 'District → Mandal → Village → Site',
+};
+
 export interface FencePayload {
   name: string;
   scope_type: string;
   scope_id: string;
   geometry_type: GeometryType;
   geometry: FenceGeometry;
+  employee_ids?: string[];
   tolerance_meters?: number;
   accuracy_threshold_meters?: number;
 }
@@ -65,8 +78,42 @@ export function FenceForm({
   });
 
   const geometryType = watch('geometry_type');
+  const scopeType = watch('scope_type');
   const polygonText = watch('polygon_text') ?? '';
+  const [placeQuery, setPlaceQuery] = React.useState('');
+  const [placeResults, setPlaceResults] = React.useState<PlaceSearchResult[]>([]);
+  const [mapCenter, setMapCenter] = React.useState<{ lat: number; lng: number } | null>(null);
+  const [employeeQuery, setEmployeeQuery] = React.useState('');
+  const [selectedEmployees, setSelectedEmployees] = React.useState<EmployeeListItem[]>([]);
   const polygonPreview = React.useMemo(() => parsePolygonTextarea(polygonText), [polygonText]);
+  const unitsQuery = useQuery({
+    queryKey: queryKeys.orgUnits.list({ type: scopeType, limit: 100 }),
+    queryFn: () => listOrgUnits({ type: scopeType, limit: 100 }),
+    enabled: !!scopeType,
+    staleTime: 10 * 60_000,
+  });
+  const employeesQuery = useQuery({
+    queryKey: ['employees', 'fence-assignment', employeeQuery.trim()],
+    queryFn: () => listEmployees({ q: employeeQuery.trim(), status: 'ACTIVE', limit: 12 }),
+    enabled: employeeQuery.trim().length >= 2,
+    staleTime: 30_000,
+  });
+  const placeSearch = useMutation({
+    mutationFn: (query: string) => searchPlaces(query),
+    onSuccess: setPlaceResults,
+  });
+  const activeUnits = React.useMemo(
+    () => (unitsQuery.data?.data ?? []).filter((unit) => unit.status === 'ACTIVE'),
+    [unitsQuery.data?.data],
+  );
+
+  const choosePlace = (place: PlaceSearchResult) => {
+    setMapCenter({ lat: place.lat, lng: place.lng });
+    if (geometryType === 'circle') {
+      setValue('circle_lat', place.lat as never, { shouldValidate: true });
+      setValue('circle_lng', place.lng as never, { shouldValidate: true });
+    }
+  };
 
   const submit = async (v: FenceFormInput) => {
     if (v.geometry_type === 'circle') {
@@ -76,6 +123,7 @@ export function FenceForm({
         scope_id: v.scope_id,
         geometry_type: 'circle',
         geometry: { lat: v.circle_lat!, lng: v.circle_lng!, radius_m: v.radius_m! },
+        employee_ids: selectedEmployees.map((employee) => employee.id),
         tolerance_meters: v.tolerance_meters,
         accuracy_threshold_meters: v.accuracy_threshold_meters,
       });
@@ -94,6 +142,7 @@ export function FenceForm({
       geometry_type: 'polygon',
       // Backend contract: points are [lat, lng] tuples, not {lat,lng} objects.
       geometry: { points: parsed.points.map((p) => [p.lat, p.lng] as [number, number]) },
+      employee_ids: selectedEmployees.map((employee) => employee.id),
       tolerance_meters: v.tolerance_meters,
       accuracy_threshold_meters: v.accuracy_threshold_meters,
     });
@@ -122,6 +171,16 @@ export function FenceForm({
           points: polygonPreview.points.map((p) => [p.lat, p.lng] as [number, number]),
         }
       : null;
+  const selectedEmployeeIds = React.useMemo(
+    () => new Set(selectedEmployees.map((employee) => employee.id)),
+    [selectedEmployees],
+  );
+  const runPlaceSearch = () => {
+    const query = placeQuery.trim();
+    if (query.length < 2) return;
+    setPlaceResults([]);
+    placeSearch.mutate(query);
+  };
 
   return (
     <form onSubmit={handleSubmit(submit)} className="flex flex-col gap-4" noValidate>
@@ -130,7 +189,13 @@ export function FenceForm({
       </FormField>
       <div className="grid gap-4 sm:grid-cols-2">
         <FormField label="Scope type *" htmlFor="fence-scope-type" error={errors.scope_type?.message}>
-          <select id="fence-scope-type" className={inputClass} {...register('scope_type')}>
+          <select
+            id="fence-scope-type"
+            className={inputClass}
+            {...register('scope_type', {
+              onChange: () => setValue('scope_id', '', { shouldValidate: false }),
+            })}
+          >
             {ORG_UNIT_TYPES.map((t) => (
               <option key={t} value={t}>
                 {t}
@@ -138,10 +203,106 @@ export function FenceForm({
             ))}
           </select>
         </FormField>
-        <FormField label="Scope ID *" htmlFor="fence-scope-id" error={errors.scope_id?.message}>
-          <Input id="fence-scope-id" invalid={!!errors.scope_id} placeholder="Org unit id…" {...register('scope_id')} />
+        <FormField label="Location / site *" htmlFor="fence-scope-id" error={errors.scope_id?.message}>
+          <select
+            id="fence-scope-id"
+            className={inputClass}
+            disabled={!scopeType || unitsQuery.isLoading || activeUnits.length === 0}
+            aria-invalid={!!errors.scope_id}
+            {...register('scope_id', { onChange: () => clearErrors('scope_id') })}
+          >
+            <option value="">
+              {unitsQuery.isLoading
+                ? 'Loading locations…'
+                : activeUnits.length === 0
+                  ? `No active ${scopeType}s available`
+                  : `Select ${scopeType || 'location'}`}
+            </option>
+            {activeUnits.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name} ({u.code})
+              </option>
+            ))}
+          </select>
+          {unitsQuery.isError ? (
+            <div className="mt-2 rounded-md border border-danger/30 bg-danger/10 p-3 text-xs text-danger" role="alert">
+              <p>Locations could not be loaded.</p>
+              <Button type="button" size="sm" variant="secondary" className="mt-2" onClick={() => unitsQuery.refetch()}>
+                Retry
+              </Button>
+            </div>
+          ) : null}
+          {!unitsQuery.isLoading && !unitsQuery.isError && scopeType && activeUnits.length === 0 ? (
+            <div className="mt-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-xs text-text" role="status">
+              <p>
+                No active {scopeType}s exist. Create the {LOCATION_PATH[scopeType]} hierarchy, then refresh this list.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="secondary" onClick={() => unitsQuery.refetch()}>
+                  Refresh locations
+                </Button>
+                <Button asChild size="sm">
+                  <Link href="/org/locations" target="_blank" rel="noopener noreferrer">
+                    Create locations
+                  </Link>
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </FormField>
       </div>
+
+      <FormField label="Assign directly to employees (optional)" htmlFor="fence-employee-search">
+        <Input
+          id="fence-employee-search"
+          value={employeeQuery}
+          onChange={(event) => setEmployeeQuery(event.target.value)}
+          placeholder="Search by employee number or name…"
+        />
+        <p className="mt-1 text-xs text-text-muted">
+          A direct assignment takes priority over the employee&apos;s site fence and replaces any previous direct assignment.
+        </p>
+        {selectedEmployees.length > 0 ? (
+          <div className="mt-2 flex flex-wrap gap-2" aria-label="Selected employees">
+            {selectedEmployees.map((employee) => (
+              <button
+                key={employee.id}
+                type="button"
+                className="rounded-full bg-primary/10 px-2.5 py-1 text-xs text-primary hover:bg-primary/20"
+                onClick={() => setSelectedEmployees((current) => current.filter((item) => item.id !== employee.id))}
+                aria-label={`Remove ${employee.first_name} ${employee.last_name ?? ''}`.trim()}
+              >
+                {employee.emp_no} · {employee.first_name} {employee.last_name ?? ''} ×
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {employeeQuery.trim().length >= 2 ? (
+          <div className="mt-2 max-h-40 overflow-y-auto rounded-md border border-border bg-surface">
+            {employeesQuery.isLoading ? <p className="px-3 py-2 text-xs text-text-muted">Searching employees…</p> : null}
+            {(employeesQuery.data?.data ?? []).map((employee) => {
+              const selected = selectedEmployeeIds.has(employee.id);
+              return (
+                <button
+                  key={employee.id}
+                  type="button"
+                  className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-surface-sunken"
+                  onClick={() => setSelectedEmployees((current) => selected
+                    ? current.filter((item) => item.id !== employee.id)
+                    : [...current, employee])}
+                >
+                  <span>{employee.emp_no} · {employee.first_name} {employee.last_name ?? ''}</span>
+                  <span className={selected ? 'text-success' : 'text-text-subtle'}>{selected ? 'Selected' : 'Select'}</span>
+                </button>
+              );
+            })}
+            {!employeesQuery.isLoading && employeesQuery.data?.data.length === 0 ? (
+              <p className="px-3 py-2 text-xs text-text-muted">No active employees found.</p>
+            ) : null}
+          </div>
+        ) : null}
+      </FormField>
+
       <FormField label="Geometry *" htmlFor="fence-geo-type">
         <div className="flex gap-2" role="radiogroup" aria-label="Geometry type">
           {(['circle', 'polygon'] as const).map((t) => (
@@ -172,14 +333,55 @@ export function FenceForm({
         the shape below redraws as the fields change, so a wrong digit is
         obvious instead of being discovered by a field user failing to punch.
       */}
+      <FormField label="Find a place on the map" htmlFor="fence-place-search">
+        <div className="flex gap-2">
+          <Input
+            id="fence-place-search"
+            value={placeQuery}
+            onChange={(event) => setPlaceQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                runPlaceSearch();
+              }
+            }}
+            placeholder="Search village, office, landmark or address…"
+          />
+          <Button type="button" loading={placeSearch.isPending} disabled={placeQuery.trim().length < 2} onClick={runPlaceSearch}>
+            Search
+          </Button>
+        </div>
+        {placeSearch.isError ? (
+          <p role="alert" className="mt-1 text-xs text-danger">
+            {placeSearch.error instanceof Error ? placeSearch.error.message : 'Location search failed'}
+          </p>
+        ) : null}
+        {placeResults.length > 0 ? (
+          <div className="mt-2 max-h-44 overflow-y-auto rounded-md border border-border bg-surface">
+            {placeResults.map((place) => (
+              <button
+                key={place.id}
+                type="button"
+                className="block w-full border-b border-border px-3 py-2 text-left text-sm last:border-b-0 hover:bg-surface-sunken"
+                onClick={() => choosePlace(place)}
+              >
+                <span className="block text-text">{place.display_name}</span>
+                <span className="text-xs text-text-subtle">{place.lat.toFixed(5)}, {place.lng.toFixed(5)}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <p className="mt-1 text-xs text-text-muted">Search results © OpenStreetMap contributors.</p>
+      </FormField>
       <FenceMap
         height={320}
         circles={previewCircle ? [previewCircle] : []}
         polygons={previewPolygon ? [previewPolygon] : []}
-        center={previewCircle ? { lat: previewCircle.lat, lng: previewCircle.lng } : null}
+        center={mapCenter ?? (previewCircle ? { lat: previewCircle.lat, lng: previewCircle.lng } : null)}
         onMapClick={
           geometryType === 'circle'
             ? (pos) => {
+                setMapCenter(pos);
                 setValue('circle_lat', pos.lat as never, { shouldValidate: true });
                 setValue('circle_lng', pos.lng as never, { shouldValidate: true });
               }

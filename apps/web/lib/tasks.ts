@@ -54,6 +54,13 @@ export interface Task {
   labels?: TaskLabelRef[];
   /** S5: schedule health computed server-side (may be absent until S5 lands). */
   sla_status?: SlaStatusValue | string | null;
+  /**
+   * Statuses this task may move to, resolved server-side against the project's
+   * workflow. Optional because older API builds omitted it on list rows; a
+   * caller that finds it absent must fall back to attempting the transition
+   * rather than blocking a legitimate move.
+   */
+  allowed_next?: string[];
   [key: string]: unknown;
 }
 
@@ -436,6 +443,38 @@ export function toneForTaskStatus(
 /** Terminal task states — DONE/CANCELLED tasks accept no further transitions. */
 export function isTerminalTaskStatus(status: string): boolean {
   return status === 'DONE' || status === 'CANCELLED';
+}
+
+export type BoardMoveCheck =
+  | { allowed: true }
+  | { allowed: false; reason: string; allowedNext: string[] };
+
+/**
+ * Whether the board may move a task to `toStatus` without asking the server.
+ *
+ * The board renders a column per workflow status, including the terminal ones,
+ * because finished work still has to be visible. That makes every column a drop
+ * target, so a card could be dragged out of Done, move optimistically, fail
+ * with a 422 and snap back — a move that appeared to work and then silently
+ * undid itself.
+ *
+ * `allowed_next` is resolved server-side from the project's workflow and is now
+ * returned on list rows. It is optional: an older API build, or a page cached
+ * from before it was added, omits it. Treat absence as "let the server decide"
+ * rather than blocking a legitimate move.
+ */
+export function canMoveTaskTo(task: Task, toStatus: string): BoardMoveCheck {
+  const allowedNext = task.allowed_next;
+  if (!allowedNext) return { allowed: true };
+  if (allowedNext.includes(toStatus)) return { allowed: true };
+  const from = String(task.status);
+  return {
+    allowed: false,
+    allowedNext,
+    reason: isTerminalTaskStatus(from)
+      ? `${from} is a final status, so the task cannot be moved out of this column.`
+      : `A task in ${from} cannot move straight to ${toStatus}.`,
+  };
 }
 
 /** Raw extra fields the server attached to an error envelope (see apiClient details). */

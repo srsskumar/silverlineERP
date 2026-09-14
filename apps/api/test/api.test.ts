@@ -24,7 +24,7 @@ async function truncateVolatile(): Promise<void> {
   // S1 tables included: employees/org_units reference users and vice versa
   // (users.employee_id), so every FK pair must be truncated together.
   await pool.query(
-    `TRUNCATE TABLE provider_jobs, advisory_cases, payslip_revisions, project_workflow_overrides, notification_deliveries, report_registry, report_schedules, payslip_documents, vendors, inventory_items, invoices, stock_transactions, assets, asset_assignments, asset_audits, cycles, custom_field_definitions, domain_events, automation_rules, automation_executions, webhook_subscriptions, webhook_deliveries, insight_feedback, v2_operations, device_registrations, audit_events, sessions, user_roles, idempotency_keys,
+    `TRUNCATE TABLE provider_jobs, advisory_cases, payslip_revisions, project_workflow_overrides, notification_deliveries, report_registry, report_schedules, payslip_documents, vendors, inventory_items, invoices, stock_transactions, assets, asset_assignments, asset_audits, cycles, custom_field_definitions, domain_events, automation_rules, automation_executions, webhook_subscriptions, webhook_deliveries, insight_feedback, v2_operations, geo_fence_employee_assignments, device_registrations, audit_events, sessions, user_roles, idempotency_keys,
       users, employee_documents, employees, org_units, holidays,
       attendance_exceptions, attendance_records, attendance_events, geo_fences,
       leave_requests, leave_balances, leave_types,
@@ -307,12 +307,46 @@ describe("mfa", () => {
     const storedSecret = (idRow.rows[0] as { mfa_secret: string }).mfa_secret;
     expect(storedSecret).toMatch(/^gcm1\./);
     const liveSecret = decryptPii(storedSecret);
+    // Enrolment already spent this step's code, and codes are single-use
+    // (§14.1 replay policy), so a real user waits for their authenticator to
+    // roll before logging in. Rewinding the spent counter by one step is the
+    // same state as that wait, without costing the suite 30 seconds.
+    await pool.query(
+      "UPDATE users SET mfa_last_counter = mfa_last_counter - 1 WHERE username = 'mfa1'",
+    );
     const full = await loginBody("mfa1", "MfaPass1!", {
       totp_code: authenticator.generate(liveSecret),
     });
     expect(full.status).toBe(200);
     expect(full.body["mfa_required"]).toBe(false);
     expect(typeof full.body["access_token"]).toBe("string");
+  });
+
+  it("refuses a code that has already been spent", async () => {
+    await createUser({ username: "mfa_replay", password: "MfaPass1!" });
+    const headers = await authHeader("mfa_replay", "MfaPass1!");
+    const setup = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/mfa/setup",
+      headers,
+    });
+    const { secret } = setup.json() as { secret: string };
+    const code = authenticator.generate(secret);
+
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/v1/auth/mfa/verify",
+          headers,
+          payload: { code },
+        })
+      ).statusCode,
+    ).toBe(200);
+
+    // Same code, same window: a shoulder-surfer's replay must not authenticate.
+    const replay = await loginBody("mfa_replay", "MfaPass1!", { totp_code: code });
+    expect(replay.status).toBe(401);
   });
 });
 

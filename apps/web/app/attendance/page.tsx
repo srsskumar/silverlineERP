@@ -2,12 +2,13 @@
 
 import * as React from 'react';
 import Link from '@/components/AppLink';
+import nextDynamic from 'next/dynamic';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { AppShell } from '@/components/AppShell';
 import { RequirePermission } from '@/components/RequirePermission';
 import { AttendanceStatusBadge } from '@/components/AttendanceStatusBadge';
 import { PunchPanel } from '@/components/PunchPanel';
-import { PunchClusterMap } from '@/components/map/PunchClusterMap';
+import type { PunchClusterMapProps } from '@/components/map/PunchClusterMap';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -22,6 +23,13 @@ import { queryKeys } from '@/lib/query-keys';
 export const dynamic = 'force-static';
 
 const PAGE_LIMIT = 20;
+const PunchClusterMap = nextDynamic<PunchClusterMapProps>(
+  () => import('@/components/map/PunchClusterMap').then((module) => module.PunchClusterMap),
+  {
+    ssr: false,
+    loading: () => <Skeleton className="h-[420px] w-full" />,
+  },
+);
 const inputClass =
   'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 

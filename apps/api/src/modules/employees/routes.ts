@@ -1,7 +1,7 @@
 import {scanUpload} from "../../common/fileSafety.js";
+import {encodeBlob, readBlob} from "../../common/blobStore.js";
 import {mutationRoute} from "../../common/mutationRoute.js";
 import { createHash } from "node:crypto";
-import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
@@ -14,10 +14,12 @@ import {
   cursorPageQuerySchema,
   decodeCursor,
   documentUploadSchema,
+  employeeActivateSchema,
   employeeCreateSchema,
   employeeExitSchema,
   employeePatchSchema,
   employeeReactivateSchema,
+  employeeSuspendSchema,
   encodeCursor,
   toFieldErrors,
 } from "@silverline/shared";
@@ -28,6 +30,7 @@ import {
   decryptPii,
   encryptPii,
   maskLast4,
+  piiIndex,
   redactPiiForAudit,
 } from "../../common/crypto.js";
 import { sendError } from "../../common/httpErrors.js";
@@ -73,6 +76,7 @@ interface EmployeeRow {
   district_id: string | null;
   mandal_id: string | null;
   village_id: string | null;
+  site_id: string | null;
   designation: string | null;
   department: string | null;
   date_of_joining: Date | string;
@@ -134,6 +138,7 @@ function toShape(row: EmployeeRow, canSeePii: boolean) {
     district_id: row.district_id,
     mandal_id: row.mandal_id,
     village_id: row.village_id,
+    site_id: row.site_id,
     designation: row.designation,
     department: row.department,
     date_of_joining: dateOnly(row.date_of_joining),
@@ -169,6 +174,36 @@ function toShape(row: EmployeeRow, canSeePii: boolean) {
   };
 }
 
+/**
+ * Maps a Postgres unique-violation to the field the user actually typed.
+ *
+ * §7 asks for "its own stable field error" per duplicate. Collapsing every
+ * violation onto emp_no told an operator to change the one field that was
+ * fine — the offending value was the Aadhaar, the PhonePe number or the bank
+ * account.
+ */
+const DUPLICATE_FIELDS: Array<[fragment: string, field: string, message: string]> = [
+  ["uk_employees_aadhaar", "aadhaar", "Aadhaar already exists in this org"],
+  ["uk_employees_pan", "pan", "PAN already exists in this org"],
+  ["uk_employees_bank_account", "bank_account", "Bank account already exists in this org"],
+  ["uk_employees_phonepe", "phonepe_number", "PhonePe number already exists in this org"],
+  ["uk_emp_phone", "phone", "Phone already exists in this org"],
+  ["uk_emp_no", "emp_no", "emp_no already exists in this org"],
+];
+
+function duplicateFieldError(error: unknown): { field: string; message: string } {
+  const constraint = (error as { constraint?: string }).constraint ?? "";
+  for (const [fragment, field, message] of DUPLICATE_FIELDS) {
+    if (constraint.includes(fragment)) return { field, message };
+  }
+  // phonepe must be tested before the generic phone check, hence the ordered
+  // list above; anything unrecognised still names a field rather than nothing.
+  if (constraint.includes("phone")) {
+    return { field: "phone", message: "Phone already exists in this org" };
+  }
+  return { field: "emp_no", message: "emp_no already exists in this org" };
+}
+
 function ifMatchVersion(req: { headers: Record<string, unknown> }): number {
   const raw = req.headers["if-match"];
   const text = (Array.isArray(raw) ? raw[0] : raw)?.trim();
@@ -193,7 +228,7 @@ function ifMatchVersion(req: { headers: Record<string, unknown> }): number {
 const SELECT_COLS = `id, org_id, emp_no, first_name, last_name, father_name,
   date_of_birth, gender, phone, phone_secondary, email,
   aadhaar_encrypted, pan_encrypted, address,
-  district_id, mandal_id, village_id, designation, department,
+  district_id, mandal_id, village_id, site_id, designation, department,
   date_of_joining, date_of_exit, exit_reason, reports_to, salary_basic,
   bank_name, bank_account_encrypted, bank_ifsc, phonepe_number,
   education, skills, experience_years, status, version, created_at, updated_at`;
@@ -202,13 +237,14 @@ const SELECT_COLS = `id, org_id, emp_no, first_name, last_name, father_name,
 async function validateUnitRefs(
   pool: Pool,
   orgId: string,
-  refs: { district_id?: string; mandal_id?: string; village_id?: string },
+  refs: { district_id?: string; mandal_id?: string; village_id?: string; site_id?: string },
 ): Promise<Array<{ field: string; message: string }>> {
   const problems: Array<{ field: string; message: string }> = [];
   const checks: Array<[string, string | undefined, string]> = [
     ["district_id", refs.district_id, "district"],
     ["mandal_id", refs.mandal_id, "mandal"],
     ["village_id", refs.village_id, "village"],
+    ["site_id", refs.site_id, "site"],
   ];
   for (const [field, id, expectedType] of checks) {
     if (!id) {
@@ -504,13 +540,14 @@ export async function registerEmployeeRoutes(
         `INSERT INTO employees (
            org_id, emp_no, first_name, last_name, father_name, date_of_birth, gender,
            phone, phone_secondary, email, aadhaar_encrypted, pan_encrypted, address,
-           district_id, mandal_id, village_id, designation, department,
+           district_id, mandal_id, village_id, site_id, designation, department,
            date_of_joining, reports_to, salary_basic, bank_name,
            bank_account_encrypted, bank_ifsc, phonepe_number,
-           education, skills, experience_years, status, created_by, updated_by)
+           education, skills, experience_years, status, created_by, updated_by,
+           aadhaar_hash, pan_hash, bank_account_hash)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
-                 $14::uuid,$15::uuid,$16::uuid,$17,$18,$19,$20::uuid,$21,$22,
-                 $23,$24,$25,$26,$27,$28,'DRAFT',$29::uuid,$29::uuid)
+                 $14::uuid,$15::uuid,$16::uuid,$17::uuid,$18,$19,$20,$21::uuid,$22,$23,
+                 $24,$25,$26,$27,$28,$29,'DRAFT',$30::uuid,$30::uuid,$31,$32,$33)
          RETURNING ${SELECT_COLS}`,
         [
           user.orgId,
@@ -529,6 +566,7 @@ export async function registerEmployeeRoutes(
           d.district_id ?? null,
           d.mandal_id ?? null,
           d.village_id ?? null,
+          d.site_id ?? null,
           d.designation ?? null,
           d.department ?? null,
           d.date_of_joining,
@@ -542,23 +580,20 @@ export async function registerEmployeeRoutes(
           JSON.stringify(d.skills ?? []),
           d.experience_years ?? null,
           user.id,
+          piiIndex(d.aadhaar),
+          piiIndex(d.pan),
+          piiIndex(d.bank_account),
         ],
       );
       row = ins.rows[0] as EmployeeRow;
     } catch (err) {
       if ((err as { code?: string }).code === "23505") {
-        const constraint = (err as { constraint?: string }).constraint ?? "";
-        const fieldErrors409: Array<{ field: string; message: string }> = [];
-        if (constraint.includes("phone") && !constraint.includes("phonepe")) {
-          fieldErrors409.push({ field: "phone", message: "Phone already exists in this org" });
-        } else {
-          fieldErrors409.push({ field: "emp_no", message: "emp_no already exists in this org" });
-        }
+        const duplicate = duplicateFieldError(err);
         return sendError(reply, req.requestId, {
           status: 409,
           code: "CONFLICT",
-          message: "Employee with this emp_no or phone already exists",
-          fieldErrors: fieldErrors409,
+          message: `Another employee in this organization already uses this ${duplicate.field}`,
+          fieldErrors: [duplicate],
         });
       }
       throw err;
@@ -711,13 +746,14 @@ export async function registerEmployeeRoutes(
                 `INSERT INTO employees (
                    org_id, emp_no, first_name, last_name, father_name, date_of_birth, gender,
                    phone, phone_secondary, email, aadhaar_encrypted, pan_encrypted, address,
-                   district_id, mandal_id, village_id, designation, department,
+                   district_id, mandal_id, village_id, site_id, designation, department,
                    date_of_joining, reports_to, salary_basic, bank_name,
                    bank_account_encrypted, bank_ifsc, phonepe_number,
-                   education, skills, experience_years, status, created_by, updated_by)
+                   education, skills, experience_years, status, created_by, updated_by,
+                   aadhaar_hash, pan_hash, bank_account_hash)
                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
-                         $14::uuid,$15::uuid,$16::uuid,$17,$18,$19,$20::uuid,$21,$22,
-                         $23,$24,$25,$26,$27,$28,'DRAFT',$29::uuid,$29::uuid)
+                         $14::uuid,$15::uuid,$16::uuid,$17::uuid,$18,$19,$20,$21::uuid,$22,$23,
+                         $24,$25,$26,$27,$28,$29,'DRAFT',$30::uuid,$30::uuid,$31,$32,$33)
                  RETURNING id`,
                 [
                   user.orgId,
@@ -736,6 +772,7 @@ export async function registerEmployeeRoutes(
                   v.district_id ?? null,
                   v.mandal_id ?? null,
                   v.village_id ?? null,
+                  v.site_id ?? null,
                   v.designation ?? null,
                   v.department ?? null,
                   v.date_of_joining,
@@ -749,6 +786,9 @@ export async function registerEmployeeRoutes(
                   JSON.stringify(v.skills ?? []),
                   v.experience_years ?? null,
                   user.id,
+                  piiIndex(v.aadhaar),
+                  piiIndex(v.pan),
+                  piiIndex(v.bank_account),
                 ],
               );
               const newId = (ins.rows[0] as { id: string }).id;
@@ -780,7 +820,13 @@ export async function registerEmployeeRoutes(
                 errors: Array<{ field: string; message: string }>;
               } = {
                 index,
-                errors: [{ field: "emp_no", message: "Row conflicts with an existing employee" }],
+                // Name the field that actually collided so the operator can fix
+                // the right cell in their spreadsheet.
+                errors: [
+                  String((error as { code?: string }).code) === "23505"
+                    ? duplicateFieldError(error)
+                    : { field: "emp_no", message: "Row conflicts with an existing employee" },
+                ],
               };
               if (v.emp_no) {
                 entry.emp_no = v.emp_no;
@@ -984,20 +1030,24 @@ export async function registerEmployeeRoutes(
          district_id = COALESCE($15::uuid, district_id),
          mandal_id = COALESCE($16::uuid, mandal_id),
          village_id = COALESCE($17::uuid, village_id),
-         designation = COALESCE($18, designation),
-         department = COALESCE($19, department),
-         date_of_joining = COALESCE($20, date_of_joining),
-         reports_to = COALESCE($21::uuid, reports_to),
-         salary_basic = COALESCE($22, salary_basic),
-         bank_name = COALESCE($23, bank_name),
-         bank_account_encrypted = COALESCE($24, bank_account_encrypted),
-         bank_ifsc = COALESCE($25, bank_ifsc),
-         phonepe_number = COALESCE($26, phonepe_number),
-         education = COALESCE($27, education),
-         skills = COALESCE($28, skills),
-         experience_years = COALESCE($29, experience_years),
-         updated_by = $30::uuid, updated_at = NOW(), version = version + 1
-       WHERE id = $1::uuid AND org_id = $2 AND version = $31
+         site_id = COALESCE($18::uuid, site_id),
+         designation = COALESCE($19, designation),
+         department = COALESCE($20, department),
+         date_of_joining = COALESCE($21, date_of_joining),
+         reports_to = COALESCE($22::uuid, reports_to),
+         salary_basic = COALESCE($23, salary_basic),
+         bank_name = COALESCE($24, bank_name),
+         bank_account_encrypted = COALESCE($25, bank_account_encrypted),
+         bank_ifsc = COALESCE($26, bank_ifsc),
+         phonepe_number = COALESCE($27, phonepe_number),
+         education = COALESCE($28, education),
+         skills = COALESCE($29, skills),
+         experience_years = COALESCE($30, experience_years),
+         aadhaar_hash = CASE WHEN $12 IS NULL THEN aadhaar_hash ELSE $33 END,
+         pan_hash = CASE WHEN $13 IS NULL THEN pan_hash ELSE $34 END,
+         bank_account_hash = CASE WHEN $25 IS NULL THEN bank_account_hash ELSE $35 END,
+         updated_by = $31::uuid, updated_at = NOW(), version = version + 1
+       WHERE id = $1::uuid AND org_id = $2 AND version = $32
        RETURNING ${SELECT_COLS}`,
       [
         id,
@@ -1017,6 +1067,7 @@ export async function registerEmployeeRoutes(
         d.district_id ?? null,
         d.mandal_id ?? null,
         d.village_id ?? null,
+        d.site_id ?? null,
         d.designation ?? null,
         d.department ?? null,
         d.date_of_joining ?? null,
@@ -1031,6 +1082,9 @@ export async function registerEmployeeRoutes(
         d.experience_years ?? null,
         user.id,
         expectedVersion,
+        d.aadhaar !== undefined ? piiIndex(d.aadhaar) : null,
+        d.pan !== undefined ? piiIndex(d.pan) : null,
+        d.bank_account !== undefined ? piiIndex(d.bank_account) : null,
       ],
     );
     const row = upd.rows[0] as EmployeeRow | undefined;
@@ -1160,6 +1214,181 @@ export async function registerEmployeeRoutes(
 });},
   );
 
+  /**
+   * POST /api/v1/employees/:id/activate — DRAFT → ACTIVE.
+   *
+   * Creation lands an employee in DRAFT on purpose, so an incomplete record
+   * cannot punch, be assigned a fence or enter a payroll run. Without this
+   * transition that draft was terminal: nothing in the product could put a
+   * newly created employee on the roster. Authorized by employee.reactivate,
+   * which is already the grant for "put this person on the active roster".
+   */
+  app.post(
+    "/api/v1/employees/:id/activate",
+    { preHandler: canReactivate },
+    async (req, reply) => {return mutationRoute(opts.pool,req,reply,async(db,reply)=>{
+      const parsed = employeeActivateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return sendError(reply, req.requestId, {
+          status: 422,
+          code: "VALIDATION_ERROR",
+          message: "Validation failed",
+          fieldErrors: toFieldErrors(parsed.error),
+        });
+      }
+      const user = req.authUser;
+      if (!user) {
+        return sendError(reply, req.requestId, {
+          status: 401,
+          code: "UNAUTHENTICATED",
+          message: "Authentication required",
+        });
+      }
+      const { id } = req.params as { id: string };
+      const cur = await findInOrg(user.orgId, id);
+      if (!cur) {
+        return sendError(reply, req.requestId, {
+          status: 404,
+          code: "NOT_FOUND",
+          message: "Employee not found",
+        });
+      }
+      // Only the draft edge belongs here. An EXITED or SUSPENDED employee goes
+      // back through reactivate, which is the audited re-entry path.
+      if (cur.status !== "DRAFT") {
+        return sendError(reply, req.requestId, {
+          status: 422,
+          code: "VALIDATION_ERROR",
+          message: "Only DRAFT employees can be activated",
+          fieldErrors: [
+            {
+              field: "status",
+              message:
+                cur.status === "ACTIVE"
+                  ? "Employee is already ACTIVE"
+                  : `Cannot activate from status ${cur.status}; use reactivate`,
+            },
+          ],
+        });
+      }
+      const { reason } = parsed.data;
+      const upd = await db.query(
+        `UPDATE employees SET status = 'ACTIVE', status_changed_at = NOW(),
+           updated_by = $3::uuid, updated_at = NOW(), version = version + 1
+         WHERE id = $1::uuid AND org_id = $2
+         RETURNING ${SELECT_COLS}`,
+        [id, user.orgId, user.id],
+      );
+      const row = upd.rows[0] as EmployeeRow;
+      const body = toShape(row, canSeePii(req));
+      const meta = metaOf(req);
+      await writeAudit(db, {
+        orgId: user.orgId,
+        actorId: user.id,
+        actorIp: meta.ip,
+        actorUserAgent: meta.userAgent,
+        action: "employee.activate",
+        entityType: "employee",
+        entityId: row.id,
+        beforeState: redactPiiForAudit(toShape(cur, false)),
+        afterState: redactPiiForAudit(body),
+        reason,
+        requestId: req.requestId,
+      });
+      return reply.status(200).send(body);
+
+});},
+  );
+
+  /**
+   * POST /api/v1/employees/:id/suspend — ACTIVE → SUSPENDED.
+   *
+   * The counterpart to reactivate. Suspension is a reversible pause (BR-01
+   * eligibility stops immediately, history is preserved) as distinct from exit,
+   * so it carries the same authority as exit rather than a new permission code.
+   */
+  app.post(
+    "/api/v1/employees/:id/suspend",
+    { preHandler: canExit },
+    async (req, reply) => {return mutationRoute(opts.pool,req,reply,async(db,reply)=>{
+      const parsed = employeeSuspendSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return sendError(reply, req.requestId, {
+          status: 422,
+          code: "VALIDATION_ERROR",
+          message: "Validation failed",
+          fieldErrors: toFieldErrors(parsed.error),
+        });
+      }
+      const user = req.authUser;
+      if (!user) {
+        return sendError(reply, req.requestId, {
+          status: 401,
+          code: "UNAUTHENTICATED",
+          message: "Authentication required",
+        });
+      }
+      const { id } = req.params as { id: string };
+      const cur = await findInOrg(user.orgId, id);
+      if (!cur) {
+        return sendError(reply, req.requestId, {
+          status: 404,
+          code: "NOT_FOUND",
+          message: "Employee not found",
+        });
+      }
+      // Same self-protection as exit: an actor must not be able to lock
+      // themselves out of their own record.
+      const link = await db.query(
+        "SELECT id FROM users WHERE id = $1 AND employee_id = $2::uuid",
+        [user.id, id],
+      );
+      if ((link.rowCount ?? 0) > 0) {
+        return sendError(reply, req.requestId, {
+          status: 403,
+          code: "FORBIDDEN",
+          message: "You cannot suspend your own linked employee record",
+        });
+      }
+      if (cur.status !== "ACTIVE") {
+        return sendError(reply, req.requestId, {
+          status: 422,
+          code: "VALIDATION_ERROR",
+          message: "Only ACTIVE employees can be suspended",
+          fieldErrors: [
+            { field: "status", message: `Cannot suspend from status ${cur.status}` },
+          ],
+        });
+      }
+      const { reason } = parsed.data;
+      const upd = await db.query(
+        `UPDATE employees SET status = 'SUSPENDED', status_changed_at = NOW(),
+           updated_by = $3::uuid, updated_at = NOW(), version = version + 1
+         WHERE id = $1::uuid AND org_id = $2
+         RETURNING ${SELECT_COLS}`,
+        [id, user.orgId, user.id],
+      );
+      const row = upd.rows[0] as EmployeeRow;
+      const body = toShape(row, canSeePii(req));
+      const meta = metaOf(req);
+      await writeAudit(db, {
+        orgId: user.orgId,
+        actorId: user.id,
+        actorIp: meta.ip,
+        actorUserAgent: meta.userAgent,
+        action: "employee.suspend",
+        entityType: "employee",
+        entityId: row.id,
+        beforeState: redactPiiForAudit(toShape(cur, false)),
+        afterState: redactPiiForAudit(body),
+        reason,
+        requestId: req.requestId,
+      });
+      return reply.status(200).send(body);
+
+});},
+  );
+
   // POST /api/v1/employees/:id/reactivate
   app.post(
     "/api/v1/employees/:id/reactivate",
@@ -1235,7 +1464,8 @@ export async function registerEmployeeRoutes(
     const {id,documentId}=req.params as {id:string;documentId:string},user=req.authUser!;
     const row=(await opts.pool.query('SELECT * FROM employee_documents WHERE id=$1 AND employee_id=$2 AND org_id=$3',[documentId,id,user.orgId])).rows[0];
     if(!row)throw new ApiError({status:404,code:'NOT_FOUND',message:'Document not found'});
-    const stored=await readFile(row.file_path),binary=stored.subarray(0,5).toString()==='gcm1.'?Buffer.from(decryptPii(stored.toString()),'base64'):stored;
+    const binary=await readBlob(row);
+    if(!binary)throw new ApiError({status:404,code:'NOT_FOUND',message:'Document content is no longer available'});
     await writeAudit(opts.pool,{orgId:user.orgId,actorId:user.id,action:'document.download',entityType:'employee_document',entityId:documentId,requestId:req.requestId});
     return reply.header('Content-Type',row.mime_type).header('X-Content-Type-Options','nosniff').header('Content-Disposition',"attachment; filename*=UTF-8''"+encodeURIComponent(row.file_name)).send(binary);
   });
@@ -1397,14 +1627,9 @@ export async function registerEmployeeRoutes(
       const checksum = createHash("sha256").update(binary).digest("hex");
       const docIdRes = await db.query("SELECT gen_random_uuid() AS id");
       const docId = (docIdRes.rows[0] as { id: string }).id;
-      const safeName = file_name.replace(/[/\\]/g, "_");
-      const dir = join(uploadsDir(), id);
-      await mkdir(dir, { recursive: true });
-      const filePath = join(dir, `${docId}_${safeName}`);
-      await writeFile(filePath,encryptPii(binary.toString("base64")),{mode:0o600});
       const ins = await db.query(
         `INSERT INTO employee_documents
-           (id, org_id, employee_id, doc_type, file_name, file_path, file_size, mime_type, checksum, created_by)
+           (id, org_id, employee_id, doc_type, file_name, content_encrypted, file_size, mime_type, checksum, created_by)
          VALUES ($1::uuid, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10::uuid)
          RETURNING id, doc_type, file_name, file_size, checksum, created_at`,
         [
@@ -1413,7 +1638,7 @@ export async function registerEmployeeRoutes(
           id,
           doc_type,
           file_name,
-          filePath,
+          encodeBlob(binary),
           binary.length,
           MIME_BY_EXT[ext] ?? "application/octet-stream",
           checksum,

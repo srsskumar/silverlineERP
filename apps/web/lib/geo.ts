@@ -41,7 +41,16 @@ export interface GeoFence {
   accuracy_threshold_meters?: number | null;
   status?: string;
   version: number;
+  employee_ids?: string[];
   [key: string]: unknown;
+}
+
+export interface PlaceSearchResult {
+  id: string;
+  display_name: string;
+  lat: number;
+  lng: number;
+  type: string | null;
 }
 
 export interface ListFencesParams {
@@ -80,6 +89,7 @@ export async function createFence(input: {
   scope_id: string;
   geometry_type: GeometryType;
   geometry: FenceGeometry;
+  employee_ids?: string[];
   tolerance_meters?: number;
   accuracy_threshold_meters?: number;
 }): Promise<GeoFence> {
@@ -88,6 +98,16 @@ export async function createFence(input: {
     body: input as unknown as Record<string, unknown>,
   });
   return data;
+}
+
+/** Explicit, user-triggered place search used by the fence editor. */
+export async function searchPlaces(query: string): Promise<PlaceSearchResult[]> {
+  const { data } = await apiRequest<{ data?: PlaceSearchResult[] } | PlaceSearchResult[]>(
+    `/api/v1/geo/search?q=${encodeURIComponent(query.trim())}`,
+    { method: 'GET' },
+  );
+  if (Array.isArray(data)) return data;
+  return Array.isArray(data?.data) ? data.data : [];
 }
 
 export async function updateFence(
