@@ -3,7 +3,9 @@ import {
   receiptStatus, threeWayMatch, withinRequisition,
   requisitionSchema, purchaseOrderSchema, grnSchema,
   PR_TRANSITIONS, PO_TRANSITIONS, PROCUREMENT_ROLE_GRANTS,
-  type MatchLine,
+  compareQuotes, lowestQuote, checkAmendment,
+  returnSchema, acknowledgementSchema, rfqSchema,
+  type MatchLine, type VendorQuote, type AmendmentLine,
 } from './procurement.js';
 
 const line = (over: Partial<MatchLine> = {}): MatchLine => ({
@@ -278,5 +280,220 @@ describe('role grants', () => {
     for (const code of PROCUREMENT_ROLE_GRANTS.AUDITOR) {
       expect(code.endsWith('.read')).toBe(true);
     }
+  });
+});
+
+describe('RFQ comparison (§43.1)', () => {
+  const base = (over: Partial<VendorQuote> = {}): VendorQuote => ({
+    vendorId: 'v1', vendorName: 'Alpha Traders',
+    lines: [{ reference: 'Cement', quantity: 100, unitRate: 400, gstRatePct: 28 }],
+    ...over,
+  });
+
+  it('ranks on landed cost, not on unit rate', () => {
+    // 400 a bag plus 5,000 freight is 450 delivered, and loses to 420 carriage
+    // paid. Comparing unit rates picks the wrong vendor and it is real money.
+    const result = compareQuotes([
+      base({ vendorId: 'cheap-rate', vendorName: 'Cheap Rate', freight: 5_000 }),
+      base({
+        vendorId: 'carriage-paid', vendorName: 'Carriage Paid',
+        lines: [{ reference: 'Cement', quantity: 100, unitRate: 420, gstRatePct: 28 }],
+      }),
+    ]);
+    expect(lowestQuote(result)!.vendorId).toBe('carriage-paid');
+    expect(result.find(r => r.vendorId === 'cheap-rate')!.landedCost).toBe(45_000);
+    expect(result.find(r => r.vendorId === 'carriage-paid')!.landedCost).toBe(42_000);
+  });
+
+  it('excludes recoverable GST from the comparison', () => {
+    // It comes back, so it is not a cost.
+    const result = compareQuotes([base()]);
+    expect(result[0].taxAmount).toBe(11_200);
+    expect(result[0].irrecoverableTax).toBe(0);
+    expect(result[0].landedCost).toBe(40_000);
+  });
+
+  it('counts GST as a cost when it cannot be claimed', () => {
+    // A composition or unregistered supplier's tax is money that never comes
+    // back, and ignoring that regularly reverses a ranking.
+    const result = compareQuotes([
+      base({ vendorId: 'registered', vendorName: 'Registered Co' }),
+      base({
+        vendorId: 'composition', vendorName: 'Composition Co', gstCreditable: false,
+        lines: [{ reference: 'Cement', quantity: 100, unitRate: 380, gstRatePct: 28 }],
+      }),
+    ]);
+    // 380 looks cheaper than 400 until the unrecoverable tax is counted.
+    expect(result.find(r => r.vendorId === 'composition')!.landedCost).toBe(48_640);
+    expect(lowestQuote(result)!.vendorId).toBe('registered');
+  });
+
+  it('applies a line discount before tax', () => {
+    const result = compareQuotes([base({
+      lines: [{ reference: 'Cement', quantity: 100, unitRate: 400, discountPct: 10, gstRatePct: 28 }],
+    })]);
+    expect(result[0].discount).toBe(4_000);
+    expect(result[0].taxableValue).toBe(36_000);
+    expect(result[0].landedCost).toBe(36_000);
+  });
+
+  it('evaluates an unqualified quote but never ranks it', () => {
+    // The comparison sheet has to show what they offered; L1 must still be a
+    // vendor who could actually do the work.
+    const result = compareQuotes([
+      base({ vendorId: 'cheapest', vendorName: 'Cheapest', technicallyQualified: false,
+             lines: [{ reference: 'Cement', quantity: 100, unitRate: 300 }] }),
+      base({ vendorId: 'qualified', vendorName: 'Qualified' }),
+    ]);
+    const unqualified = result.find(r => r.vendorId === 'cheapest')!;
+    expect(unqualified.landedCost).toBe(30_000);
+    expect(unqualified.rank).toBeNull();
+    expect(lowestQuote(result)!.vendorId).toBe('qualified');
+  });
+
+  it('breaks a genuine tie on delivery', () => {
+    const result = compareQuotes([
+      base({ vendorId: 'slow', vendorName: 'Slow', deliveryDays: 30 }),
+      base({ vendorId: 'fast', vendorName: 'Fast', deliveryDays: 7 }),
+    ]);
+    expect(lowestQuote(result)!.vendorId).toBe('fast');
+  });
+
+  it('ranks every qualified quote in order', () => {
+    const result = compareQuotes([
+      base({ vendorId: 'c', vendorName: 'C', lines: [{ reference: 'X', quantity: 1, unitRate: 300 }] }),
+      base({ vendorId: 'a', vendorName: 'A', lines: [{ reference: 'X', quantity: 1, unitRate: 100 }] }),
+      base({ vendorId: 'b', vendorName: 'B', lines: [{ reference: 'X', quantity: 1, unitRate: 200 }] }),
+    ]);
+    expect(result.find(r => r.vendorId === 'a')!.rank).toBe(1);
+    expect(result.find(r => r.vendorId === 'b')!.rank).toBe(2);
+    expect(result.find(r => r.vendorId === 'c')!.rank).toBe(3);
+  });
+
+  it('keeps the sheet in the order quotes were received', () => {
+    const result = compareQuotes([
+      base({ vendorId: 'second', vendorName: 'Second', lines: [{ reference: 'X', quantity: 1, unitRate: 500 }] }),
+      base({ vendorId: 'first', vendorName: 'First', lines: [{ reference: 'X', quantity: 1, unitRate: 100 }] }),
+    ]);
+    expect(result.map(r => r.vendorId)).toEqual(['second', 'first']);
+  });
+
+  it('returns nothing recommended when no quote qualifies', () => {
+    const result = compareQuotes([base({ technicallyQualified: false })]);
+    expect(lowestQuote(result)).toBeNull();
+  });
+});
+
+describe('PO amendment rules (§43.2)', () => {
+  const line = (over: Partial<AmendmentLine> = {}): AmendmentLine => ({
+    poLineId: 'l1', reference: 'Cement',
+    currentQuantity: 100, newQuantity: 100,
+    currentRate: 400, newRate: 400,
+    receivedQuantity: 0,
+    ...over,
+  });
+
+  it('accepts an increase on an untouched line', () => {
+    const check = checkAmendment([line({ newQuantity: 150 })]);
+    expect(check.valid).toBe(true);
+    expect(check.valueChanged).toBe(true);
+    expect(check.newTotal).toBe(60_000);
+  });
+
+  it('refuses to reduce a line below what has already been received', () => {
+    // The material is on site and in stock. Reducing under it leaves a receipt
+    // with no authority behind it and a payable nobody can reconcile.
+    const check = checkAmendment([line({ newQuantity: 50, receivedQuantity: 80 })]);
+    expect(check.valid).toBe(false);
+    expect(check.problems[0]).toContain('already been received');
+  });
+
+  it('allows reducing to exactly what was received', () => {
+    // Short-closing the balance is ordinary.
+    expect(checkAmendment([line({ newQuantity: 80, receivedQuantity: 80 })]).valid).toBe(true);
+  });
+
+  it('refuses a rate change once material has been received at the old rate', () => {
+    const check = checkAmendment([line({ newRate: 450, receivedQuantity: 20 })]);
+    expect(check.valid).toBe(false);
+    expect(check.problems[0]).toContain('agreed price');
+  });
+
+  it('allows a rate change while nothing has been received', () => {
+    expect(checkAmendment([line({ newRate: 450 })]).valid).toBe(true);
+  });
+
+  it('refuses a zero quantity and points at cancellation instead', () => {
+    const check = checkAmendment([line({ newQuantity: 0 })]);
+    expect(check.problems[0]).toContain('cancel the line');
+  });
+
+  it('refuses a negative rate', () => {
+    expect(checkAmendment([line({ newRate: -1 })]).valid).toBe(false);
+  });
+
+  it('reports no value change when nothing moved', () => {
+    const check = checkAmendment([line()]);
+    expect(check.valueChanged).toBe(false);
+    expect(check.previousTotal).toBe(check.newTotal);
+  });
+
+  it('checks every line and collects all the problems', () => {
+    const check = checkAmendment([
+      line({ reference: 'A', newQuantity: 10, receivedQuantity: 50 }),
+      line({ reference: 'B', newRate: 500, receivedQuantity: 10 }),
+      line({ reference: 'C', newQuantity: 200 }),
+    ]);
+    expect(check.problems).toHaveLength(2);
+    expect(check.problems.map(p => p.split(':')[0])).toEqual(['A', 'B']);
+  });
+});
+
+describe('return and acknowledgement schemas (§43.3, §43.4)', () => {
+  const ret = {
+    return_no: 'RTV-1', grn_id: '3f1a0c2e-0000-4000-8000-000000000001',
+    return_date: '2026-09-20', reason: 'QUALITY_REJECTION' as const,
+    remarks: 'Bags torn and damp on arrival',
+    lines: [{ grn_line_id: '3f1a0c2e-0000-4000-8000-000000000002', quantity: 10 }],
+  };
+
+  it('accepts a return with a reason and remarks', () => {
+    expect(returnSchema.safeParse(ret).success).toBe(true);
+  });
+
+  it('insists a return explains itself', () => {
+    expect(returnSchema.safeParse({ ...ret, remarks: '' }).success).toBe(false);
+  });
+
+  it('refuses a return of nothing', () => {
+    expect(returnSchema.safeParse({ ...ret, lines: [] }).success).toBe(false);
+    expect(returnSchema.safeParse({
+      ...ret, lines: [{ grn_line_id: ret.lines[0].grn_line_id, quantity: 0 }],
+    }).success).toBe(false);
+  });
+
+  it('defaults a return to pending resolution', () => {
+    // Whether the vendor replaces or credits is usually decided later.
+    expect(returnSchema.parse(ret).resolution).toBe('PENDING');
+  });
+
+  it('accepts an acknowledgement with a promised date and exceptions', () => {
+    expect(acknowledgementSchema.safeParse({
+      acknowledged_on: '2026-09-16', promised_delivery_date: '2026-10-01',
+      exceptions: 'Cement available only in 50kg bags',
+    }).success).toBe(true);
+  });
+
+  it('requires at least two vendors on a competitive RFQ', () => {
+    const rfq = {
+      rfq_no: 'RFQ-1', due_date: '2026-09-25',
+      lines: [{ description: 'Cement', unit: 'bag', quantity: 100 }],
+    };
+    expect(rfqSchema.safeParse({ ...rfq, vendor_ids: ['3f1a0c2e-0000-4000-8000-000000000001'] }).success)
+      .toBe(false);
+    expect(rfqSchema.safeParse({
+      ...rfq,
+      vendor_ids: ['3f1a0c2e-0000-4000-8000-000000000001', '3f1a0c2e-0000-4000-8000-000000000002'],
+    }).success).toBe(true);
   });
 });

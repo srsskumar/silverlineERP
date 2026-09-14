@@ -317,6 +317,9 @@ export const PROCUREMENT_PERMISSIONS = [
   'po.read', 'po.manage', 'po.amend',
   'grn.read', 'grn.manage',
   'match.read', 'match.override',
+  // §43 enhancements.
+  'rfq.read', 'rfq.manage',
+  'return.read', 'return.manage',
 ] as const;
 
 export const PROCUREMENT_ROLE_GRANTS: Record<RoleCode, string[]> = {
@@ -326,14 +329,263 @@ export const PROCUREMENT_ROLE_GRANTS: Record<RoleCode, string[]> = {
   ADMIN: PROCUREMENT_PERMISSIONS.filter(p => p !== 'match.override'),
   // Raises requisitions for their site and receives material; does not cut
   // purchase orders, which is the procurement function.
-  PROJECT_MANAGER: ['requisition.read', 'requisition.manage', 'po.read', 'grn.read', 'grn.manage', 'match.read'],
-  TEAM_LEAD: ['requisition.read', 'requisition.manage', 'po.read', 'grn.read'],
-  INVENTORY_MANAGER: ['requisition.read', 'po.read', 'grn.read', 'grn.manage', 'match.read'],
-  AUDITOR: ['requisition.read', 'po.read', 'grn.read', 'match.read'],
-  BID_TENDER_MANAGER: ['requisition.read', 'po.read'],
+  PROJECT_MANAGER: ['requisition.read', 'requisition.manage', 'po.read', 'grn.read', 'grn.manage',
+    'match.read', 'rfq.read', 'return.read', 'return.manage'],
+  TEAM_LEAD: ['requisition.read', 'requisition.manage', 'po.read', 'grn.read', 'rfq.read', 'return.read'],
+  INVENTORY_MANAGER: ['requisition.read', 'po.read', 'grn.read', 'grn.manage', 'match.read',
+    'rfq.read', 'return.read', 'return.manage'],
+  AUDITOR: ['requisition.read', 'po.read', 'grn.read', 'match.read', 'rfq.read', 'return.read'],
+  BID_TENDER_MANAGER: ['requisition.read', 'po.read', 'rfq.read'],
   EMPLOYEE: [],
   SALES_BD_EXECUTIVE: [],
   HR_MANAGER: [],
   PAYROLL_OFFICER: [],
   CLIENT_VIEWER: [],
 };
+
+/* ---------------------------------------------------- RFQ comparison (§43.1) */
+
+export interface QuoteLine {
+  reference: string;
+  quantity: number;
+  unitRate: number;
+  discountPct?: number;
+  gstRatePct?: number;
+}
+
+export interface VendorQuote {
+  vendorId: string;
+  vendorName: string;
+  lines: QuoteLine[];
+  /** Charged once on the quote, not per line. */
+  freight?: number;
+  otherCharges?: number;
+  /**
+   * Whether the GST on this quote can be claimed as input credit.
+   *
+   * False for an unregistered or composition supplier, and it changes the
+   * answer: their tax is a real cost, while a registered supplier's is
+   * recovered. Comparing everyone gross, or everyone net, picks the wrong
+   * vendor in one direction or the other.
+   */
+  gstCreditable?: boolean;
+  deliveryDays?: number;
+  /** Cleared the technical evaluation. An unqualified quote cannot be L1. */
+  technicallyQualified?: boolean;
+  paymentTerms?: string;
+}
+
+export interface QuoteEvaluation {
+  vendorId: string;
+  vendorName: string;
+  basicValue: number;
+  discount: number;
+  taxableValue: number;
+  taxAmount: number;
+  /** Tax that cannot be recovered, and is therefore part of the cost. */
+  irrecoverableTax: number;
+  freight: number;
+  otherCharges: number;
+  /** What the purchase actually costs us. The number to rank on. */
+  landedCost: number;
+  technicallyQualified: boolean;
+  deliveryDays: number | null;
+  rank: number | null;
+}
+
+/**
+ * Compare quotes and rank them (§43.1).
+ *
+ * Ranked on landed cost, not unit rate. A vendor quoting 400 a bag with 5,000
+ * freight on 100 bags costs 450 a bag delivered and loses to one quoting 420
+ * carriage paid — comparing unit rates picks the wrong vendor and the
+ * difference is real money.
+ *
+ * Recoverable GST is excluded from the cost because it comes back; tax from an
+ * unregistered or composition supplier is included because it does not. That
+ * single distinction regularly reverses a ranking in Indian procurement.
+ *
+ * Technically unqualified quotes are evaluated and shown — the comparison
+ * sheet has to say what they offered — but never ranked, so L1 is always a
+ * vendor who could actually do the work.
+ */
+export function compareQuotes(quotes: VendorQuote[]): QuoteEvaluation[] {
+  const evaluated = quotes.map<QuoteEvaluation>(quote => {
+    let basic = 0, discount = 0, tax = 0;
+    for (const line of quote.lines) {
+      const gross = line.quantity * line.unitRate;
+      const off = gross * ((line.discountPct ?? 0) / 100);
+      basic += gross;
+      discount += off;
+      tax += (gross - off) * ((line.gstRatePct ?? 0) / 100);
+    }
+    const taxableValue = round2(basic - discount);
+    const taxAmount = round2(tax);
+    // Default true: most suppliers are registered, and assuming otherwise
+    // would silently inflate every comparison.
+    const creditable = quote.gstCreditable ?? true;
+    const irrecoverableTax = creditable ? 0 : taxAmount;
+    const freight = quote.freight ?? 0;
+    const otherCharges = quote.otherCharges ?? 0;
+    return {
+      vendorId: quote.vendorId,
+      vendorName: quote.vendorName,
+      basicValue: round2(basic),
+      discount: round2(discount),
+      taxableValue,
+      taxAmount,
+      irrecoverableTax,
+      freight: round2(freight),
+      otherCharges: round2(otherCharges),
+      landedCost: round2(taxableValue + irrecoverableTax + freight + otherCharges),
+      technicallyQualified: quote.technicallyQualified ?? true,
+      deliveryDays: quote.deliveryDays ?? null,
+      rank: null,
+    };
+  });
+
+  const ranked = evaluated
+    .filter(e => e.technicallyQualified)
+    .sort((a, b) =>
+      a.landedCost - b.landedCost ||
+      // A genuine tie on price is broken by who can deliver sooner.
+      (a.deliveryDays ?? Number.MAX_SAFE_INTEGER) - (b.deliveryDays ?? Number.MAX_SAFE_INTEGER) ||
+      a.vendorName.localeCompare(b.vendorName));
+  ranked.forEach((entry, index) => { entry.rank = index + 1; });
+
+  // Preserve the submitted order so the sheet reads as it was received.
+  return evaluated;
+}
+
+/** The recommended vendor: L1 among the technically qualified. */
+export function lowestQuote(evaluations: QuoteEvaluation[]): QuoteEvaluation | null {
+  return evaluations.find(e => e.rank === 1) ?? null;
+}
+
+/* ------------------------------------------------- amendment rules (§43.2) */
+
+export interface AmendmentLine {
+  poLineId: string;
+  reference: string;
+  currentQuantity: number;
+  newQuantity: number;
+  currentRate: number;
+  newRate: number;
+  /** Cumulative accepted quantity already received against this line. */
+  receivedQuantity: number;
+}
+
+export interface AmendmentCheck {
+  valid: boolean;
+  problems: string[];
+  previousTotal: number;
+  newTotal: number;
+  valueChanged: boolean;
+}
+
+/**
+ * Whether a proposed amendment is coherent (§43.2).
+ *
+ * The rule that matters: a line cannot be amended below what has already been
+ * received. The material is on site and in stock, and reducing the order under
+ * it leaves a receipt with no authority behind it and a payable nobody can
+ * reconcile. Rate changes on a line already received are refused for the same
+ * reason — the goods were accepted at the agreed price.
+ */
+export function checkAmendment(lines: AmendmentLine[]): AmendmentCheck {
+  const problems: string[] = [];
+  let previousTotal = 0, newTotal = 0;
+
+  for (const line of lines) {
+    previousTotal += line.currentQuantity * line.currentRate;
+    newTotal += line.newQuantity * line.newRate;
+
+    if (line.newQuantity < line.receivedQuantity) {
+      problems.push(
+        `${line.reference}: cannot reduce to ${line.newQuantity} when ${line.receivedQuantity} has already been received`);
+    }
+    if (line.newQuantity <= 0) {
+      problems.push(`${line.reference}: an amended quantity must be greater than zero — cancel the line instead`);
+    }
+    if (line.newRate !== line.currentRate && line.receivedQuantity > 0) {
+      problems.push(
+        `${line.reference}: the rate cannot change once ${line.receivedQuantity} has been received at the agreed price`);
+    }
+    if (line.newRate < 0) {
+      problems.push(`${line.reference}: a rate cannot be negative`);
+    }
+  }
+
+  return {
+    valid: problems.length === 0,
+    problems,
+    previousTotal: round2(previousTotal),
+    newTotal: round2(newTotal),
+    valueChanged: round2(previousTotal) !== round2(newTotal),
+  };
+}
+
+/* ---------------------------------------------------------- returns (§43.3) */
+
+export const RETURN_REASONS = [
+  'QUALITY_REJECTION', 'SHORT_SUPPLY', 'EXCESS_SUPPLY',
+  'WRONG_ITEM', 'DAMAGED_IN_TRANSIT', 'OTHER',
+] as const;
+
+export const returnSchema = z.object({
+  return_no: text.max(50),
+  grn_id: uuid,
+  return_date: dateStringSchema,
+  reason: z.enum(RETURN_REASONS),
+  /** Whether the vendor is replacing the goods or crediting the value. */
+  resolution: z.enum(['REPLACEMENT', 'CREDIT_NOTE', 'PENDING']).default('PENDING'),
+  remarks: z.string().trim().min(1).max(2000),
+  lines: z.array(z.object({
+    grn_line_id: uuid,
+    quantity: z.coerce.number().positive(),
+    remarks: z.string().trim().max(500).optional(),
+  })).min(1, 'A return needs at least one line'),
+});
+
+export const acknowledgementSchema = z.object({
+  acknowledged_on: dateStringSchema,
+  promised_delivery_date: dateStringSchema.optional(),
+  /** Anything the vendor could not accept as ordered. */
+  exceptions: z.string().trim().max(2000).optional(),
+  reference: z.string().trim().max(100).optional(),
+});
+
+export const rfqSchema = z.object({
+  rfq_no: text.max(50),
+  requisition_id: uuid.nullable().optional(),
+  project_id: uuid.nullable().optional(),
+  due_date: dateStringSchema,
+  scope: z.string().trim().max(4000).optional(),
+  vendor_ids: z.array(uuid).min(2, 'Competitive sourcing needs at least two vendors').max(20),
+  lines: z.array(z.object({
+    item_id: uuid.nullable().optional(),
+    description: text,
+    unit: z.string().trim().min(1).max(20),
+    quantity: qty,
+  })).min(1, 'An RFQ needs at least one line'),
+});
+
+export const quoteSchema = z.object({
+  vendor_id: uuid,
+  quote_no: z.string().trim().max(50).optional(),
+  quote_date: dateStringSchema,
+  validity_days: z.coerce.number().int().min(1).max(365).optional(),
+  freight: money.optional(),
+  other_charges: money.optional(),
+  delivery_days: z.coerce.number().int().min(0).max(365).optional(),
+  payment_terms: z.string().trim().max(200).optional(),
+  technically_qualified: z.boolean().default(true),
+  gst_creditable: z.boolean().default(true),
+  lines: z.array(z.object({
+    rfq_line_id: uuid,
+    unit_rate: money,
+    discount_pct: z.coerce.number().min(0).max(100).default(0),
+    gst_rate_pct: z.coerce.number().min(0).max(28).default(0),
+    remarks: z.string().trim().max(500).optional(),
+  })).min(1),
+});

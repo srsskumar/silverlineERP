@@ -2,9 +2,11 @@ import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import {
   requisitionSchema, purchaseOrderSchema, grnSchema,
+  rfqSchema, quoteSchema, returnSchema, acknowledgementSchema,
   receiptStatus, threeWayMatch, withinRequisition,
+  compareQuotes, lowestQuote, checkAmendment, requiresReapproval,
   PR_TRANSITIONS, PO_TRANSITIONS, type PrStatus, type PoStatus,
-  resolveLadder, type LadderMode,
+  resolveLadder, type LadderMode, type VendorQuote,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail, projectAccess } from '../../common/domain.js';
@@ -25,6 +27,18 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
   const auth = buildAuthenticate(opts);
   const guard = (p: string) => requirePermission(auth, p);
 
+  /** Authority slabs for a policy, in the shape the shared resolver wants. */
+  async function levelsForPolicy(db: Pool | PoolClient, policyId: string) {
+    return (await db.query(
+      'SELECT * FROM approval_levels WHERE policy_id = $1 ORDER BY sequence', [policyId])).rows
+      .map(r => ({
+        sequence: Number(r.sequence), minAmount: Number(r.min_amount),
+        maxAmount: r.max_amount === null ? null : Number(r.max_amount),
+        approverRole: r.approver_role, approverUserId: r.approver_user_id,
+        slaHours: r.sla_hours === null ? null : Number(r.sla_hours),
+      }));
+  }
+
   /** Raise an approval instance for a document, reusing the §41 engine. */
   async function submitForApproval(
     db: PoolClient, req: Parameters<typeof actor>[0], documentType: string,
@@ -40,15 +54,8 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
       fail('NO_APPROVAL_POLICY',
         `No active approval policy covers ${documentType}. Configure the authority slabs before submitting.`);
     }
-    const levels = (await db.query(
-      'SELECT * FROM approval_levels WHERE policy_id = $1 ORDER BY sequence', [policy.id])).rows
-      .map(r => ({
-        sequence: Number(r.sequence), minAmount: Number(r.min_amount),
-        maxAmount: r.max_amount === null ? null : Number(r.max_amount),
-        approverRole: r.approver_role, approverUserId: r.approver_user_id,
-        slaHours: r.sla_hours === null ? null : Number(r.sla_hours),
-      }));
-    const ladder = resolveLadder(levels, amount, policy.mode as LadderMode);
+    const ladder = resolveLadder(
+      await levelsForPolicy(db, String(policy.id)), amount, policy.mode as LadderMode);
     if (!ladder.length) fail('NO_APPROVER', `The policy leaves ${amount} outside every authority band`);
 
     const instance = (await db.query(
@@ -513,5 +520,431 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
     const rows = (await pool.query(
       'SELECT * FROM invoice_match_results WHERE invoice_id = $1 ORDER BY created_at DESC', [id])).rows;
     return { data: rows };
+  });
+
+  /* ------------------------------------------------------- RFQ (§43.1) */
+
+  app.get('/api/v1/rfqs', { preHandler: guard('rfq.read') }, async req => {
+    const u = actor(req), { limit, offset, q } = page(req);
+    const values: unknown[] = [u.orgId, limit + 1, offset];
+    let where = 'r.org_id = $1';
+    if (q.status) { values.push(q.status); where += ` AND r.status = $${values.length}`; }
+    const rows = (await pool.query(
+      `SELECT r.*, v.name AS selected_vendor_name,
+              (SELECT count(*)::int FROM rfq_vendors iv WHERE iv.rfq_id = r.id) AS invited_count,
+              (SELECT count(*)::int FROM vendor_quotes vq WHERE vq.rfq_id = r.id) AS quote_count
+       FROM rfqs r LEFT JOIN vendors v ON v.id = r.selected_vendor_id
+       WHERE ${where} ORDER BY r.due_date DESC, r.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+    return { data: rows.slice(0, limit), has_more: rows.length > limit };
+  });
+
+  app.get('/api/v1/rfqs/:id', { preHandler: guard('rfq.read') }, async req => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const rfq = await inOrg(pool, 'rfqs', id, u.orgId);
+    const [lines, invited, quotes] = await Promise.all([
+      pool.query('SELECT * FROM rfq_lines WHERE rfq_id = $1 ORDER BY line_no', [id]),
+      pool.query(
+        `SELECT iv.vendor_id, v.name AS vendor_name, iv.invited_at
+         FROM rfq_vendors iv JOIN vendors v ON v.id = iv.vendor_id
+         WHERE iv.rfq_id = $1 ORDER BY v.name`, [id]),
+      pool.query(
+        `SELECT q.id, q.vendor_id, v.name AS vendor_name, q.quote_date, q.technically_qualified
+         FROM vendor_quotes q JOIN vendors v ON v.id = q.vendor_id
+         WHERE q.rfq_id = $1 ORDER BY q.created_at`, [id]),
+    ]);
+    // Who was invited but has not responded — the chase list before the due date.
+    const quoted = new Set(quotes.rows.map(r => String(r.vendor_id)));
+    return {
+      data: {
+        ...rfq, lines: lines.rows, invited: invited.rows, quotes: quotes.rows,
+        awaiting: invited.rows.filter(v => !quoted.has(String(v.vendor_id))),
+      },
+    };
+  });
+
+  app.post('/api/v1/rfqs', { preHandler: guard('rfq.manage') }, async (req, reply) => {
+    const u = actor(req), input = parse(rfqSchema, req.body);
+    if (input.project_id) await projectAccess(pool, req, input.project_id);
+    const row = await mutate(pool, req, 'rfq.create', 'rfq', async db => {
+      for (const vendorId of input.vendor_ids) {
+        const vendor = await inOrg(db, 'vendors', vendorId, u.orgId);
+        // Inviting a blacklisted vendor wastes everyone's time and invites the
+        // award to go to somebody who cannot be given the order.
+        if (String(vendor.blacklist_status) === 'BLACKLISTED') {
+          fail('VENDOR_BLACKLISTED', `${vendor.name} is blacklisted and cannot be invited to quote`);
+        }
+      }
+      const rfq = (await db.query(
+        `INSERT INTO rfqs(org_id, created_by, rfq_no, requisition_id, project_id, due_date, scope)
+         VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [u.orgId, u.id, input.rfq_no, input.requisition_id ?? null,
+         input.project_id ?? null, input.due_date, input.scope ?? null])).rows[0];
+      let lineNo = 0;
+      for (const line of input.lines) {
+        lineNo += 1;
+        await db.query(
+          `INSERT INTO rfq_lines(org_id, rfq_id, line_no, item_id, description, unit, quantity)
+           VALUES($1,$2,$3,$4,$5,$6,$7)`,
+          [u.orgId, rfq.id, lineNo, line.item_id ?? null, line.description, line.unit, line.quantity]);
+      }
+      for (const vendorId of input.vendor_ids) {
+        await db.query('INSERT INTO rfq_vendors(org_id, rfq_id, vendor_id) VALUES($1,$2,$3)',
+          [u.orgId, rfq.id, vendorId]);
+      }
+      return rfq;
+    });
+    return reply.code(201).send({ data: row });
+  });
+
+  app.post('/api/v1/rfqs/:id/quotes', { preHandler: guard('rfq.manage') }, async (req, reply) => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const input = parse(quoteSchema, req.body);
+    const body = req.body as { disqualification_reason?: string };
+    const row = await mutate(pool, req, 'rfq.quote', 'rfq', async db => {
+      const rfq = await inOrg(db, 'rfqs', id, u.orgId, true);
+      if (rfq.status !== 'OPEN') {
+        fail('RFQ_CLOSED', `Quotes cannot be recorded against a ${String(rfq.status).toLowerCase()} RFQ`);
+      }
+      const invited = await db.query(
+        'SELECT 1 FROM rfq_vendors WHERE rfq_id = $1 AND vendor_id = $2', [id, input.vendor_id]);
+      if (!invited.rowCount) {
+        fail('VENDOR_NOT_INVITED',
+          'That vendor was not invited to this RFQ. Accepting an uninvited quote defeats the comparison.');
+      }
+      if (!input.technically_qualified && !body.disqualification_reason) {
+        fail('VALIDATION_ERROR', 'Say why the quote is technically disqualified');
+      }
+      let quote;
+      try {
+        quote = (await db.query(
+          `INSERT INTO vendor_quotes(org_id, created_by, rfq_id, vendor_id, quote_no, quote_date,
+             validity_days, freight, other_charges, delivery_days, payment_terms,
+             technically_qualified, gst_creditable, disqualification_reason)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+          [u.orgId, u.id, id, input.vendor_id, input.quote_no ?? null, input.quote_date,
+           input.validity_days ?? null, input.freight ?? 0, input.other_charges ?? 0,
+           input.delivery_days ?? null, input.payment_terms ?? null,
+           input.technically_qualified, input.gst_creditable,
+           body.disqualification_reason ?? null])).rows[0];
+      } catch (error) {
+        if ((error as { code?: string }).code === '23505') {
+          fail('QUOTE_ALREADY_RECORDED',
+            'A quote from this vendor is already on the RFQ. Withdraw it before recording a revision.', 409);
+        }
+        throw error;
+      }
+      for (const line of input.lines) {
+        await db.query(
+          `INSERT INTO vendor_quote_lines(org_id, quote_id, rfq_line_id, unit_rate,
+             discount_pct, gst_rate_pct, remarks)
+           VALUES($1,$2,$3,$4,$5,$6,$7)`,
+          [u.orgId, quote.id, line.rfq_line_id, line.unit_rate,
+           line.discount_pct, line.gst_rate_pct, line.remarks ?? null]);
+      }
+      return quote;
+    });
+    return reply.code(201).send({ data: row });
+  });
+
+  /** The comparison sheet: landed cost per vendor, ranked (§43.1). */
+  app.get('/api/v1/rfqs/:id/comparison', { preHandler: guard('rfq.read') }, async req => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const rfq = await inOrg(pool, 'rfqs', id, u.orgId);
+    const rfqLines = (await pool.query(
+      'SELECT * FROM rfq_lines WHERE rfq_id = $1 ORDER BY line_no', [id])).rows;
+    const quantities = new Map(rfqLines.map(l => [String(l.id), Number(l.quantity)]));
+    const rows = (await pool.query(
+      `SELECT q.*, v.name AS vendor_name,
+              COALESCE(json_agg(l.* ORDER BY l.rfq_line_id) FILTER (WHERE l.id IS NOT NULL), '[]') AS lines
+       FROM vendor_quotes q
+       JOIN vendors v ON v.id = q.vendor_id
+       LEFT JOIN vendor_quote_lines l ON l.quote_id = q.id
+       WHERE q.rfq_id = $1 GROUP BY q.id, v.name ORDER BY q.created_at`, [id])).rows;
+
+    const quotes: VendorQuote[] = rows.map(r => ({
+      vendorId: String(r.vendor_id),
+      vendorName: String(r.vendor_name),
+      freight: Number(r.freight),
+      otherCharges: Number(r.other_charges),
+      deliveryDays: r.delivery_days === null ? undefined : Number(r.delivery_days),
+      technicallyQualified: r.technically_qualified,
+      gstCreditable: r.gst_creditable,
+      paymentTerms: r.payment_terms ?? undefined,
+      lines: (r.lines as Record<string, unknown>[]).map(l => ({
+        reference: String(l.rfq_line_id),
+        quantity: quantities.get(String(l.rfq_line_id)) ?? 0,
+        unitRate: Number(l.unit_rate),
+        discountPct: Number(l.discount_pct),
+        gstRatePct: Number(l.gst_rate_pct),
+      })),
+    }));
+
+    const evaluations = compareQuotes(quotes);
+    return {
+      data: {
+        rfq, lines: rfqLines, evaluations,
+        recommended: lowestQuote(evaluations),
+      },
+    };
+  });
+
+  /**
+   * Award the RFQ.
+   *
+   * Choosing anyone but L1 is allowed — delivery, quality history and capacity
+   * are real considerations — but §43.1 asks for the justification, and it is
+   * demanded here rather than left optional.
+   */
+  app.post('/api/v1/rfqs/:id/award', { preHandler: guard('rfq.manage') }, async req => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const body = req.body as { vendor_id?: string; reason?: string };
+    if (!body.vendor_id) fail('VALIDATION_ERROR', 'Name the vendor being awarded');
+    return {
+      data: await mutate(pool, req, 'rfq.award', 'rfq', async db => {
+        const rfq = await inOrg(db, 'rfqs', id, u.orgId, true);
+        version(req, rfq as { version: number });
+        if (rfq.status !== 'OPEN') {
+          fail('RFQ_CLOSED', `A ${String(rfq.status).toLowerCase()} RFQ cannot be awarded again`);
+        }
+        const quote = await db.query(
+          'SELECT technically_qualified FROM vendor_quotes WHERE rfq_id = $1 AND vendor_id = $2',
+          [id, body.vendor_id]);
+        if (!quote.rowCount) fail('NO_QUOTE', 'That vendor did not quote on this RFQ');
+        if (!quote.rows[0].technically_qualified) {
+          fail('NOT_QUALIFIED', 'That quote was technically disqualified and cannot be awarded');
+        }
+        if (!body.reason) {
+          fail('VALIDATION_ERROR',
+            'Record why this vendor was selected — the comparison has to be defensible later');
+        }
+        return (await db.query(
+          `UPDATE rfqs SET status='AWARDED', selected_vendor_id=$2, selection_reason=$3,
+             selected_by=$4, selected_at=now(), version=version+1, updated_at=now(), updated_by=$4
+           WHERE id=$1 RETURNING *`, [id, body.vendor_id, body.reason, u.id])).rows[0];
+      }),
+    };
+  });
+
+  /* ------------------------------------------------- amendments (§43.2) */
+
+  /**
+   * Amend an issued order.
+   *
+   * The gap this closes: po_amendments existed as a table with no endpoint.
+   * A material change re-routes the approval through the §41 engine, so an
+   * order approved at one value cannot quietly ship at another.
+   */
+  app.post('/api/v1/purchase-orders/:id/amend', { preHandler: guard('po.amend') }, async (req, reply) => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const body = req.body as {
+      reason?: string;
+      lines?: { po_line_id: string; quantity?: number; unit_rate?: number }[];
+      delivery_date?: string;
+    };
+    if (!body.reason) fail('VALIDATION_ERROR', 'Say why the order is being amended');
+    const row = await mutate(pool, req, 'po.amend', 'purchase_order', async db => {
+      const po = await inOrg(db, 'purchase_orders', id, u.orgId, true);
+      version(req, po as { version: number });
+      if (['CLOSED', 'CANCELLED', 'FULLY_RECEIVED'].includes(String(po.status))) {
+        fail('PO_NOT_AMENDABLE', `An order at ${po.status} can no longer be amended`);
+      }
+
+      const poLines = (await db.query(
+        'SELECT * FROM purchase_order_lines WHERE purchase_order_id = $1 ORDER BY line_no', [id])).rows;
+      const receipts = await receiptsFor(db, id);
+      const proposed = new Map((body.lines ?? []).map(l => [l.po_line_id, l]));
+
+      const check = checkAmendment(poLines.map(l => {
+        const change = proposed.get(String(l.id));
+        return {
+          poLineId: String(l.id),
+          reference: String(l.description),
+          currentQuantity: Number(l.quantity),
+          newQuantity: change?.quantity ?? Number(l.quantity),
+          currentRate: Number(l.unit_rate),
+          newRate: change?.unit_rate ?? Number(l.unit_rate),
+          receivedQuantity: receipts.get(String(l.id))?.accepted ?? 0,
+        };
+      }));
+      if (!check.valid) fail('INVALID_AMENDMENT', check.problems.join('; '));
+
+      for (const l of poLines) {
+        const change = proposed.get(String(l.id));
+        if (!change) continue;
+        const quantity = change.quantity ?? Number(l.quantity);
+        const rate = change.unit_rate ?? Number(l.unit_rate);
+        const taxable = Math.round(quantity * rate * 100) / 100;
+        const tax = Math.round(taxable * Number(l.gst_rate_pct)) / 100;
+        await db.query(
+          `UPDATE purchase_order_lines SET quantity=$2, unit_rate=$3, taxable_value=$4,
+             tax_amount=$5, line_total=$6 WHERE id=$1`,
+          [l.id, quantity, rate, taxable.toFixed(2), tax.toFixed(2), (taxable + tax).toFixed(2)]);
+      }
+
+      const totals = (await db.query(
+        `SELECT COALESCE(sum(taxable_value),0) AS taxable, COALESCE(sum(tax_amount),0) AS tax,
+                COALESCE(sum(line_total),0) AS total
+         FROM purchase_order_lines WHERE purchase_order_id = $1`, [id])).rows[0];
+
+      const revision = Number(po.revision) + 1;
+      const amendment = (await db.query(
+        `INSERT INTO po_amendments(org_id, purchase_order_id, revision, reason,
+           previous_total, new_total, changes, amended_by)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        [u.orgId, id, revision, body.reason, po.total_value, totals.total,
+         JSON.stringify({ lines: body.lines ?? [], delivery_date: body.delivery_date ?? null }), u.id])).rows[0];
+
+      await db.query(
+        `UPDATE purchase_orders SET taxable_value=$2, tax_amount=$3, total_value=$4,
+           delivery_date=COALESCE($5, delivery_date), revision=$6,
+           version=version+1, updated_at=now(), updated_by=$7
+         WHERE id=$1`,
+        [id, totals.taxable, totals.tax, totals.total, body.delivery_date ?? null, revision, u.id]);
+
+      // §41: an order approved at one value must not ship at another. The
+      // approval engine decides whether the move is material.
+      let reapproval: { required: boolean; reason: string } | null = null;
+      if (po.approval_id) {
+        const instance = (await db.query(
+          'SELECT * FROM approval_instances WHERE id = $1', [po.approval_id])).rows[0];
+        const policy = (await db.query(
+          'SELECT * FROM approval_policies WHERE id = $1', [instance.policy_id])).rows[0];
+        const levels = await levelsForPolicy(db, String(instance.policy_id));
+        const verdict = requiresReapproval({
+          approvedAmount: Number(instance.amount),
+          newAmount: Number(totals.total),
+          levels,
+          mode: policy.mode as LadderMode,
+          tolerancePct: Number(policy.tolerance_pct),
+        });
+        reapproval = verdict;
+        if (verdict.required) {
+          await db.query(
+            `UPDATE approval_instances SET status='SUPERSEDED', superseded_reason=$2, superseded_by=$1,
+               decided_at=now(), version=version+1, updated_at=now(), updated_by=$3
+             WHERE id=$1`, [po.approval_id, `Amendment ${revision}: ${verdict.reason}`, u.id]);
+          await db.query(
+            "UPDATE approval_steps SET status='SKIPPED' WHERE instance_id=$1 AND status='PENDING'",
+            [po.approval_id]);
+          const freshId = await submitForApproval(
+            db, req, 'PURCHASE_ORDER', id, Number(totals.total), po.project_id);
+          await db.query('UPDATE approval_instances SET superseded_by=$2 WHERE id=$1',
+            [po.approval_id, freshId]);
+          await db.query(
+            `UPDATE purchase_orders SET approval_id=$2, status='PENDING_APPROVAL',
+               version=version+1, updated_at=now(), updated_by=$3 WHERE id=$1`,
+            [id, freshId, u.id]);
+          await db.query('UPDATE po_amendments SET approval_id=$2 WHERE id=$1', [amendment.id, freshId]);
+        }
+      }
+      return { ...amendment, reapproval };
+    });
+    return reply.code(201).send({ data: row });
+  });
+
+  /* ------------------------------------------- acknowledgement (§43.4) */
+
+  app.post('/api/v1/purchase-orders/:id/acknowledge', { preHandler: guard('po.manage') }, async req => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const input = parse(acknowledgementSchema, req.body);
+    return {
+      data: await mutate(pool, req, 'po.acknowledge', 'purchase_order', async db => {
+        const po = await inOrg(db, 'purchase_orders', id, u.orgId, true);
+        version(req, po as { version: number });
+        // Anything from APPROVED onward has been issued, so a vendor can
+        // acknowledge it — including retrospectively after delivery, which is
+        // ordinary record-keeping. Only a draft or a cancelled order has
+        // genuinely never reached them.
+        if (['DRAFT', 'PENDING_APPROVAL', 'CANCELLED'].includes(String(po.status))) {
+          fail('PO_NOT_ISSUED',
+            `An order at ${po.status} has not been issued to the vendor, so there is nothing to acknowledge`);
+        }
+        // A promised date earlier than the order itself is a data-entry error.
+        if (input.promised_delivery_date && input.promised_delivery_date < String(po.po_date).slice(0, 10)) {
+          fail('VALIDATION_ERROR', 'The promised delivery date cannot precede the order date');
+        }
+        return (await db.query(
+          `UPDATE purchase_orders SET acknowledged_on=$2, acknowledged_reference=$3,
+             promised_delivery_date=$4, acknowledgement_exceptions=$5,
+             version=version+1, updated_at=now(), updated_by=$6
+           WHERE id=$1 RETURNING *`,
+          [id, input.acknowledged_on, input.reference ?? null,
+           input.promised_delivery_date ?? null, input.exceptions ?? null, u.id])).rows[0];
+      }),
+    };
+  });
+
+  /* ------------------------------------------------- returns (§43.3) */
+
+  app.post('/api/v1/vendor-returns', { preHandler: guard('return.manage') }, async (req, reply) => {
+    const u = actor(req), input = parse(returnSchema, req.body);
+    const row = await mutate(pool, req, 'return.create', 'vendor_return', async db => {
+      const grn = await inOrg(db, 'goods_receipt_notes', input.grn_id, u.orgId, true);
+      if (grn.status !== 'RECEIVED') {
+        fail('GRN_CANCELLED', 'Material cannot be returned against a cancelled receipt');
+      }
+      const grnLines = new Map((await db.query(
+        `SELECT l.*, p.item_id, p.description
+         FROM grn_lines l JOIN purchase_order_lines p ON p.id = l.po_line_id
+         WHERE l.grn_id = $1`, [input.grn_id])).rows.map(r => [String(r.id), r]));
+
+      // Already returned, so a second return cannot exceed what is left.
+      const returned = new Map((await db.query(
+        `SELECT l.grn_line_id, COALESCE(sum(l.quantity),0) AS qty
+         FROM vendor_return_lines l
+         JOIN vendor_returns r ON r.id = l.return_id
+         WHERE r.grn_id = $1 GROUP BY l.grn_line_id`, [input.grn_id])).rows
+        .map(r => [String(r.grn_line_id), Number(r.qty)]));
+
+      for (const line of input.lines) {
+        const grnLine = grnLines.get(line.grn_line_id);
+        if (!grnLine) fail('UNKNOWN_GRN_LINE', 'A return line does not belong to this receipt');
+        const accepted = Number(grnLine!.accepted_quantity);
+        const already = returned.get(line.grn_line_id) ?? 0;
+        if (already + line.quantity > accepted) {
+          fail('EXCEEDS_RECEIPT',
+            `${grnLine!.description}: returning ${line.quantity} would exceed the ${accepted} accepted` +
+            (already ? ` (${already} already returned)` : ''));
+        }
+      }
+
+      const ret = (await db.query(
+        `INSERT INTO vendor_returns(org_id, created_by, return_no, grn_id, return_date,
+           reason, resolution, remarks, returned_by)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$2) RETURNING *`,
+        [u.orgId, u.id, input.return_no, input.grn_id, input.return_date,
+         input.reason, input.resolution, input.remarks])).rows[0];
+
+      for (const line of input.lines) {
+        const grnLine = grnLines.get(line.grn_line_id)!;
+        // §43.3: inventory moves only through controlled transactions, so the
+        // return posts its own OUT rather than editing the original receipt.
+        let stockId: string | null = null;
+        if (grnLine.item_id) {
+          stockId = (await db.query(
+            `INSERT INTO stock_transactions(org_id, created_by, item_id, direction, quantity, reference)
+             VALUES($1,$2,$3,'OUT',$4,$5) RETURNING id`,
+            [u.orgId, u.id, grnLine.item_id, line.quantity, `Return ${input.return_no}`])).rows[0].id;
+        }
+        await db.query(
+          `INSERT INTO vendor_return_lines(org_id, return_id, grn_line_id, quantity, remarks, stock_transaction_id)
+           VALUES($1,$2,$3,$4,$5,$6)`,
+          [u.orgId, ret.id, line.grn_line_id, line.quantity, line.remarks ?? null, stockId]);
+      }
+      return ret;
+    });
+    return reply.code(201).send({ data: row });
+  });
+
+  app.get('/api/v1/vendor-returns', { preHandler: guard('return.read') }, async req => {
+    const u = actor(req), { limit, offset, q } = page(req);
+    const values: unknown[] = [u.orgId, limit + 1, offset];
+    let where = 'r.org_id = $1';
+    if (q.grn_id) { values.push(q.grn_id); where += ` AND r.grn_id = $${values.length}::uuid`; }
+    const rows = (await pool.query(
+      `SELECT r.*, g.grn_no FROM vendor_returns r
+       JOIN goods_receipt_notes g ON g.id = r.grn_id
+       WHERE ${where} ORDER BY r.return_date DESC LIMIT $2 OFFSET $3`, values)).rows;
+    return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 }

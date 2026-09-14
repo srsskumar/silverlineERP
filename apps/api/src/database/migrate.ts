@@ -46,6 +46,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   // touching clients.gstin / vendors.gstin is live — see the file header.
   { version: "037_drop_client_gstin", file: "037_drop_client_gstin.sql" },
   { version: "038_procurement", file: "038_procurement.sql" },
+  { version: "039_procurement_enhancements", file: "039_procurement_enhancements.sql" },
 ];
 
 /**

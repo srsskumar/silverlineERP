@@ -36,7 +36,9 @@ export async function inOrg(db:Pool|PoolClient,table:string,id:string,orgId:stri
   // Approvals (§41).
   'approval_policies','approval_instances','approval_delegations',
   // Procurement (§13).
-  'purchase_requisitions','purchase_orders','goods_receipt_notes'];
+  'purchase_requisitions','purchase_orders','goods_receipt_notes',
+  // §43 enhancements.
+  'rfqs','vendor_quotes','vendor_returns'];
  if(!allowed.includes(table)) throw new Error('Unknown domain table');
  const r=await db.query(`SELECT * FROM ${table} WHERE id=$1 AND org_id=$2${lock?' FOR UPDATE':''}`,[id,orgId]);
  if(!r.rowCount) fail('NOT_FOUND','Record not found',404);
