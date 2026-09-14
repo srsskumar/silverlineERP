@@ -5,6 +5,7 @@
  * Deep link: /(tabs)/tasks?taskId=<id> opens the detail sheet, which is how a
  * push notification lands the user on the right task.
  */
+import { withScreenBoundary } from "../../src/ui/ErrorBoundary";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Modal, ScrollView, View } from "react-native";
@@ -47,7 +48,7 @@ function statusTone(status: string): "success" | "warning" | "info" | "neutral" 
   return "neutral";
 }
 
-export default function TasksScreen() {
+function TasksScreen() {
   const params = useLocalSearchParams<{ taskId?: string }>();
   const [search, setSearch] = useState("");
   const [onlyMine, setOnlyMine] = useState(true);
@@ -426,3 +427,8 @@ function TaskSheet({ taskId, onClose }: { taskId: string | null; onClose: () => 
     </Modal>
   );
 }
+
+// Contained per screen: a render error here shows the recovery card in the
+// content area while the tab bar and navigation stay usable, instead of
+// unmounting the navigator and dropping the user back on Home.
+export default withScreenBoundary(TasksScreen);

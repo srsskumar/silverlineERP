@@ -1,5 +1,5 @@
 import {clearPayslipFiles} from "../src/ui/Payslip";
-import {AppErrorBoundary} from "../src/ui/ErrorBoundary";
+import {AppErrorBoundary, RouteErrorBoundary} from "../src/ui/ErrorBoundary";
 import {registerBackgroundSync} from "../src/sync/background";
 import { useEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -29,16 +29,29 @@ function Gate({ children }: { children: React.ReactNode }) {
 
 export default function RootLayout() {
   return (
-    <AppErrorBoundary><QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <Gate>
-          <StatusBar style="auto" />
-          <Stack screenOptions={{ headerShown: false }}>
-            <Stack.Screen name="(auth)" />
-            <Stack.Screen name="(tabs)" />
-          </Stack>
-        </Gate>
-      </AuthProvider>
-    </QueryClientProvider></AppErrorBoundary>
+    // Two boundaries, deliberately nested.
+    //
+    // The outer one is a last resort for AuthProvider/QueryClient themselves.
+    // The inner one sits INSIDE AuthProvider, and that placement is the whole
+    // point: when the only boundary wrapped AuthProvider, any render error
+    // unmounted the provider, React state holding the session went with it,
+    // and the remount ran loadSession() — which returns null by design so a
+    // fresh launch demands credentials. The result was that a single component
+    // error signed the user out and reset navigation to the first tab.
+    <AppErrorBoundary fatal>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <Gate>
+            <StatusBar style="auto" />
+            <RouteErrorBoundary>
+              <Stack screenOptions={{ headerShown: false }}>
+                <Stack.Screen name="(auth)" />
+                <Stack.Screen name="(tabs)" />
+              </Stack>
+            </RouteErrorBoundary>
+          </Gate>
+        </AuthProvider>
+      </QueryClientProvider>
+    </AppErrorBoundary>
   );
 }

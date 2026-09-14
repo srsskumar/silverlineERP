@@ -10,6 +10,7 @@
  * client UUID and Idempotency-Key and flush on reconnect. Fences are cached, so
  * the map and the containment check still work without signal.
  */
+import { withScreenBoundary } from "../../src/ui/ErrorBoundary";
 import { useCallback, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { View } from "react-native";
@@ -51,7 +52,7 @@ import {
 import { MapCanvas } from "../../src/ui/MapCanvas";
 import { space, useTheme } from "../../src/theme";
 
-export default function AttendanceScreen() {
+function AttendanceScreen() {
   const t = useTheme();
   const [fix, setFix] = useState<PunchFix | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -373,3 +374,8 @@ function statusTone(status: string): "success" | "warning" | "danger" | "neutral
   if (status === "ABSENT" || status === "REJECTED") return "danger";
   return "neutral";
 }
+
+// Contained per screen: a render error here shows the recovery card in the
+// content area while the tab bar and navigation stay usable, instead of
+// unmounting the navigator and dropping the user back on Home.
+export default withScreenBoundary(AttendanceScreen);

@@ -2,6 +2,7 @@
  * More: read-only profile, security settings, notification preferences,
  * the sync queue, notifications and sign-out.
  */
+import { withScreenBoundary } from "../../src/ui/ErrorBoundary";
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Switch, View } from "react-native";
@@ -42,7 +43,7 @@ const CHANNELS = [
   { key: "whatsapp", label: "WhatsApp" },
 ] as const;
 
-export default function MoreScreen() {
+function MoreScreen() {
   const t = useTheme();
   const { user, roles, logout } = useAuth();
   const sync = useSyncEngine();
@@ -277,3 +278,8 @@ export default function MoreScreen() {
     </Screen>
   );
 }
+
+// Contained per screen: a render error here shows the recovery card in the
+// content area while the tab bar and navigation stay usable, instead of
+// unmounting the navigator and dropping the user back on Home.
+export default withScreenBoundary(MoreScreen);
