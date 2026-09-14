@@ -11,6 +11,7 @@ import {
   Activity, BarChart3, Boxes, Building2, CalendarDays, ClipboardList, Clock,
   FileSpreadsheet, FolderKanban, Inbox, LayoutDashboard, MapPin,
   Package, PlaneTakeoff, Settings, Shield, Users, Wallet, Workflow,
+  Briefcase, Contact, Gavel,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { PERMISSIONS } from './permissions';
@@ -47,6 +48,15 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    // Commercial spine (§7, §8): the pipeline that precedes a project.
+    title: 'Commercial',
+    items: [
+      { href: '/leads', label: 'Pipeline', permission: 'lead.read', icon: Briefcase },
+      { href: '/tenders', label: 'Tenders', permission: 'tender.read', icon: Gavel },
+      { href: '/clients', label: 'Clients', permission: 'client.read', icon: Contact },
+    ],
+  },
+  {
     title: 'People',
     items: [
       { href: '/employees', label: 'Directory', permission: PERMISSIONS.EMPLOYEE_READ, icon: Users },
@@ -80,6 +90,8 @@ export const NAV_GROUPS: NavGroup[] = [
 
 /** Primary create actions surfaced in the top bar rather than buried in nav. */
 export const QUICK_CREATE: NavItem[] = [
+  { href: '/leads/new', label: 'New lead', permission: 'lead.manage', icon: Briefcase },
+  { href: '/tenders/new', label: 'New tender', permission: 'tender.manage', icon: Gavel },
   { href: '/projects/new', label: 'New project', permission: PERMISSIONS.PROJECT_CREATE, icon: FolderKanban },
   { href: '/leave/new', label: 'New leave request', permission: PERMISSIONS.LEAVE_REQUEST, icon: PlaneTakeoff },
   { href: '/payroll/new', label: 'New payroll run', permission: PERMISSIONS.PAYROLL_GENERATE, icon: Wallet },
