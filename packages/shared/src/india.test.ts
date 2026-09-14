@@ -3,7 +3,7 @@ import {
   GST_STATE_CODES, gstinCheckDigit, parseGstin, isValidGstin, gstinMatchesPan,
   parsePan, isValidPan, isValidUdyam, isValidIfsc,
   financialYearOf, sameFinancialYear, gstDocumentNumber, isValidGstDocumentNumber,
-  splitGst, msmeDueDate, msmeDelayInterest, tdsOn,
+  splitGst, msmeDueDate, msmeDelayInterest, tdsOn, computeInvoice, isValidGstRate,
   MSME_DAYS_WITH_AGREEMENT, MSME_DAYS_WITHOUT_AGREEMENT,
 } from './india.js';
 
@@ -265,5 +265,96 @@ describe('TDS', () => {
 
   it('refuses an unknown section rather than silently deducting nothing', () => {
     expect(() => tdsOn(1000, '194ZZ')).toThrow(/Unknown TDS section/);
+  });
+});
+
+describe('GST invoice', () => {
+  const lines = [
+    { description: 'Cement OPC 53', hsnSac: '25232910', quantity: 100, unitRate: 400, gstRatePct: 28 },
+    { description: 'River sand', hsnSac: '25051011', quantity: 50, unitRate: 1200, gstRatePct: 5 },
+  ];
+
+  it('taxes each line at its own rate', () => {
+    // A single invoice-level rate misstates both lines; 28% cement beside 5%
+    // sand on one invoice is ordinary.
+    const inv = computeInvoice({ lines, supplierStateCode: '27', placeOfSupplyCode: '27' });
+    expect(inv.lines[0].total).toBe(11_200);   // 28% of 40,000
+    expect(inv.lines[1].total).toBe(3_000);    // 5% of 60,000
+    expect(inv.taxTotal).toBe(14_200);
+  });
+
+  it('splits into CGST and SGST within the state', () => {
+    const inv = computeInvoice({ lines, supplierStateCode: '27', placeOfSupplyCode: '27' });
+    expect(inv.treatment).toBe('INTRA_STATE');
+    expect(inv.cgst).toBe(7_100);
+    expect(inv.sgst).toBe(7_100);
+    expect(inv.igst).toBe(0);
+  });
+
+  it('charges IGST when the place of supply is another state', () => {
+    const inv = computeInvoice({ lines, supplierStateCode: '27', placeOfSupplyCode: '29' });
+    expect(inv.treatment).toBe('INTER_STATE');
+    expect(inv.igst).toBe(14_200);
+    expect(inv.cgst + inv.sgst).toBe(0);
+  });
+
+  it('charges nothing under reverse charge', () => {
+    // s.9(3)/9(4): the recipient pays the tax directly. Carrying an amount
+    // here double-counts the liability.
+    const inv = computeInvoice({ lines, supplierStateCode: '27', placeOfSupplyCode: '27', reverseCharge: true });
+    expect(inv.taxTotal).toBe(0);
+    expect(inv.total).toBe(inv.taxableValue);
+  });
+
+  it('reconciles the total to its own lines', () => {
+    const inv = computeInvoice({ lines, supplierStateCode: '27', placeOfSupplyCode: '29' });
+    const fromLines = inv.lines.reduce((t, l) => t + l.lineTotal, 0);
+    expect(Number(fromLines.toFixed(2))).toBe(inv.total);
+    expect(Number((inv.taxableValue + inv.taxTotal).toFixed(2))).toBe(inv.total);
+  });
+
+  it('shows the rounding difference as its own figure', () => {
+    const odd = [{ description: 'Labour', hsnSac: '995431', quantity: 1, unitRate: 1234.56, gstRatePct: 18 }];
+    const inv = computeInvoice({ lines: odd, supplierStateCode: '27', placeOfSupplyCode: '27', roundToRupee: true });
+    expect(Number.isInteger(inv.total)).toBe(true);
+    expect(Math.abs(inv.roundOff)).toBeLessThan(1);
+    expect(Number((inv.taxableValue + inv.taxTotal + inv.roundOff).toFixed(2))).toBe(inv.total);
+  });
+
+  it('applies a line discount before tax', () => {
+    const inv = computeInvoice({
+      lines: [{ ...lines[0], discount: 4_000 }],
+      supplierStateCode: '27', placeOfSupplyCode: '27',
+    });
+    expect(inv.taxableValue).toBe(36_000);
+    expect(inv.taxTotal).toBe(10_080); // 28% of 36,000, not of 40,000
+  });
+
+  it('builds the HSN-wise summary the return annexure needs', () => {
+    const inv = computeInvoice({
+      lines: [...lines, { ...lines[0], quantity: 20 }],
+      supplierStateCode: '27', placeOfSupplyCode: '27',
+    });
+    expect(inv.hsnSummary).toHaveLength(2);
+    const cement = inv.hsnSummary.find(h => h.hsnSac === '25232910')!;
+    // The two cement lines are merged under one HSN and rate.
+    expect(cement.taxableValue).toBe(48_000);
+  });
+
+  it('refuses a rate that is not notified', () => {
+    // 15% is not a GST rate; accepting it produces a return that will bounce.
+    expect(() => computeInvoice({
+      lines: [{ ...lines[0], gstRatePct: 15 }],
+      supplierStateCode: '27', placeOfSupplyCode: '27',
+    })).toThrow(/not a notified GST rate/);
+  });
+
+  it('accepts a nil-rated line', () => {
+    const inv = computeInvoice({
+      lines: [{ description: 'Exempt supply', hsnSac: '99999999', quantity: 1, unitRate: 1000, gstRatePct: 0 }],
+      supplierStateCode: '27', placeOfSupplyCode: '27',
+    });
+    expect(inv.taxTotal).toBe(0);
+    expect(inv.total).toBe(1000);
   });
 });

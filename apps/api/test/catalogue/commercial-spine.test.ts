@@ -483,6 +483,27 @@ describe("§7.1/§51.3 duplicate detection", () => {
     expect(second.status).toBeGreaterThanOrEqual(400);
   });
 
+  it("fails the whole creation when the GSTIN is already taken", async () => {
+    // The registration insert is deliberately not ON CONFLICT DO NOTHING:
+    // swallowing it would commit a client whose GSTIN went nowhere, which
+    // looks like success and loses the tax identifier.
+    const gstin = gstinFor("33", uniqPan());
+    await makeClient({ gstin });
+    const second = await post(w.admin, "/api/v1/clients",
+      { code: uniq("CL"), name: `Dup ${uniq()}`, client_type: "PRIVATE", gstin });
+    expect(second.status).toBe(409);
+    expect(second.body.code).toBe("GSTIN_ALREADY_REGISTERED");
+  });
+
+  it("refuses to edit a GSTIN through the client record", async () => {
+    // A client holds one per state; the column is gone and the registrations
+    // endpoint is the only way in.
+    const client = await makeClient();
+    const res = await patch(w.admin, `/api/v1/clients/${client.id}`, { gstin: gstinFor("27", uniqPan()) });
+    expect(res.status).toBe(422);
+    expect(res.body.message).toContain("gst-registrations");
+  });
+
   it("warns without blocking when only the name matches", async () => {
     const name = `Shared Name ${uniq()}`;
     await makeClient({ name });

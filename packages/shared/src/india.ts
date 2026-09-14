@@ -315,3 +315,118 @@ export function tdsOn(
   }
   return { section, ratePct: config.ratePct, tds: round2((amount * config.ratePct) / 100), reason: config.description };
 }
+
+/* ------------------------------------------------------------- invoicing */
+
+/** The notified GST rates. Anything else is a data-entry error. */
+export const GST_RATES = [0, 0.1, 0.25, 1, 1.5, 3, 5, 6, 7.5, 12, 18, 28] as const;
+
+export function isValidGstRate(rate: number): boolean {
+  return (GST_RATES as readonly number[]).includes(rate);
+}
+
+export interface InvoiceLineInput {
+  description: string;
+  hsnSac: string;
+  quantity: number;
+  unitRate: number;
+  discount?: number;
+  gstRatePct: number;
+}
+
+export interface ComputedInvoiceLine extends GstSplit {
+  description: string;
+  hsnSac: string;
+  quantity: number;
+  unitRate: number;
+  discount: number;
+  taxableValue: number;
+  gstRatePct: number;
+  lineTotal: number;
+}
+
+export interface ComputedInvoice {
+  treatment: GstTreatment;
+  lines: ComputedInvoiceLine[];
+  taxableValue: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  taxTotal: number;
+  roundOff: number;
+  total: number;
+  /** HSN-wise summary; a required annexure on the return. */
+  hsnSummary: { hsnSac: string; gstRatePct: number; taxableValue: number; tax: number }[];
+}
+
+/**
+ * Draw a GST invoice.
+ *
+ * Tax is computed per line, because rate and HSN belong to the item: cement at
+ * 28% beside sand at 5% on one invoice is ordinary, and a single invoice-level
+ * rate misstates both. Totals are summed from the lines rather than recomputed
+ * from the invoice total, so the invoice always reconciles to its own detail.
+ *
+ * Under reverse charge (s.9(3)/9(4)) the supplier charges nothing — the
+ * recipient pays the tax directly — so every tax head is zero and the total is
+ * the taxable value. Carrying tax anyway double-counts the liability.
+ */
+export function computeInvoice(args: {
+  lines: InvoiceLineInput[];
+  supplierStateCode: string;
+  placeOfSupplyCode: string;
+  reverseCharge?: boolean;
+  roundToRupee?: boolean;
+}): ComputedInvoice {
+  const reverseCharge = args.reverseCharge ?? false;
+  const treatment: GstTreatment =
+    args.supplierStateCode === args.placeOfSupplyCode ? 'INTRA_STATE' : 'INTER_STATE';
+
+  const lines: ComputedInvoiceLine[] = args.lines.map(line => {
+    if (!isValidGstRate(line.gstRatePct)) {
+      throw new Error(`${line.gstRatePct}% is not a notified GST rate`);
+    }
+    const discount = line.discount ?? 0;
+    const taxableValue = round2(line.quantity * line.unitRate - discount);
+    const split = reverseCharge
+      ? { treatment, cgst: 0, sgst: 0, igst: 0, total: 0 }
+      : splitGst(taxableValue, line.gstRatePct, args.supplierStateCode, args.placeOfSupplyCode);
+    return {
+      description: line.description,
+      hsnSac: line.hsnSac,
+      quantity: line.quantity,
+      unitRate: line.unitRate,
+      discount,
+      taxableValue,
+      gstRatePct: line.gstRatePct,
+      ...split,
+      lineTotal: round2(taxableValue + split.total),
+    };
+  });
+
+  const sum = (pick: (l: ComputedInvoiceLine) => number) => round2(lines.reduce((t, l) => t + pick(l), 0));
+  const taxableValue = sum(l => l.taxableValue);
+  const cgst = sum(l => l.cgst), sgst = sum(l => l.sgst), igst = sum(l => l.igst);
+  const taxTotal = round2(cgst + sgst + igst);
+  const gross = round2(taxableValue + taxTotal);
+  // Invoices are commonly presented rounded to the rupee, with the difference
+  // shown as its own line so the arithmetic still ties out.
+  const rounded = args.roundToRupee ? Math.round(gross) : gross;
+  const roundOff = round2(rounded - gross);
+
+  const summary = new Map<string, { hsnSac: string; gstRatePct: number; taxableValue: number; tax: number }>();
+  for (const line of lines) {
+    const key = `${line.hsnSac}:${line.gstRatePct}`;
+    const entry = summary.get(key)
+      ?? { hsnSac: line.hsnSac, gstRatePct: line.gstRatePct, taxableValue: 0, tax: 0 };
+    entry.taxableValue = round2(entry.taxableValue + line.taxableValue);
+    entry.tax = round2(entry.tax + line.total);
+    summary.set(key, entry);
+  }
+
+  return {
+    treatment, lines, taxableValue, cgst, sgst, igst, taxTotal,
+    roundOff, total: round2(rounded),
+    hsnSummary: [...summary.values()].sort((a, b) => a.hsnSac.localeCompare(b.hsnSac)),
+  };
+}

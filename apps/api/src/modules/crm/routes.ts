@@ -35,12 +35,18 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
    */
   async function duplicateWarnings(db: Pool | PoolClient, orgId: string, input: Record<string, unknown>, excludeId?: string) {
     const clauses: string[] = [], values: unknown[] = [orgId];
-    if (input.name) { values.push(String(input.name).trim().toLowerCase()); clauses.push(`lower(name) = $${values.length}`); }
-    if (input.gstin) { values.push(input.gstin); clauses.push(`gstin = $${values.length}`); }
-    if (input.pan) { values.push(input.pan); clauses.push(`pan = $${values.length}`); }
+    if (input.name) { values.push(String(input.name).trim().toLowerCase()); clauses.push(`lower(c.name) = $${values.length}`); }
+    if (input.pan) { values.push(input.pan); clauses.push(`c.pan = $${values.length}`); }
+    // GSTIN now lives one row per state in party_gst_registrations, so the
+    // match is a subquery rather than a column comparison.
+    if (input.gstin) {
+      values.push(input.gstin);
+      clauses.push(`EXISTS (SELECT 1 FROM party_gst_registrations r
+         WHERE r.party_type = 'CLIENT' AND r.party_id = c.id AND r.gstin = $${values.length})`);
+    }
     if (!clauses.length) return [];
-    let sql = `SELECT id, code, name, gstin, pan FROM clients WHERE org_id = $1 AND (${clauses.join(' OR ')})`;
-    if (excludeId) { values.push(excludeId); sql += ` AND id <> $${values.length}`; }
+    let sql = `SELECT c.id, c.code, c.name, c.pan FROM clients c WHERE c.org_id = $1 AND (${clauses.join(' OR ')})`;
+    if (excludeId) { values.push(excludeId); sql += ` AND c.id <> $${values.length}`; }
     return (await db.query(`${sql} LIMIT 5`, values)).rows;
   }
 
@@ -70,20 +76,35 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
     const u = actor(req), input = parse(clientSchema, req.body) as Record<string, unknown>;
     const row = await mutate(pool, req, 'client.create', 'client', async db => {
       const warnings = await duplicateWarnings(db, u.orgId, input);
-      const keys = Object.keys(input), values = [u.orgId, u.id, ...Object.values(input)];
+      // `gstin` is accepted on the request for convenience but is not a column
+      // on `clients` any more — it becomes the primary registration below.
+      const { gstin, ...columns } = input;
+      const keys = Object.keys(columns), values = [u.orgId, u.id, ...Object.values(columns)];
       const created = (await db.query(
         `INSERT INTO clients(org_id, created_by, ${keys.join(',')})
          VALUES(${values.map((_, i) => `$${i + 1}`).join(',')}) RETURNING *`, values)).rows[0];
       // A party holds one GSTIN per state (§6.5). The one given at creation
       // becomes the primary registration; further states are added through the
       // registrations endpoint rather than by overwriting a column.
-      if (input.gstin) {
-        const parsed = parseGstin(String(input.gstin));
-        if (parsed) {
+      if (gstin) {
+        const parsed = parseGstin(String(gstin));
+        // The schema already validated it, so a parse failure here is a bug
+        // rather than bad input — fail loudly instead of dropping it.
+        if (!parsed) fail('VALIDATION_ERROR', 'That GSTIN could not be parsed');
+        try {
           await db.query(
             `INSERT INTO party_gst_registrations(org_id, created_by, party_type, party_id, gstin, state_code, is_primary)
-             VALUES($1,$2,'CLIENT',$3,$4,$5,TRUE) ON CONFLICT DO NOTHING`,
-            [u.orgId, u.id, created.id, parsed.stateCode + String(input.gstin).slice(2), parsed.stateCode]);
+             VALUES($1,$2,'CLIENT',$3,$4,$5,TRUE)`,
+            [u.orgId, u.id, created.id, String(gstin).toUpperCase(), parsed!.stateCode]);
+        } catch (error) {
+          // Deliberately not ON CONFLICT DO NOTHING: swallowing this would
+          // commit a client whose GSTIN silently went nowhere, which looks
+          // like success and loses the tax identifier.
+          if ((error as { code?: string }).code === '23505') {
+            fail('GSTIN_ALREADY_REGISTERED',
+              'That GSTIN is already recorded against another party. A GSTIN identifies one registration nationally.', 409);
+          }
+          throw error;
         }
       }
       return { ...created, duplicate_warnings: warnings };
@@ -93,7 +114,12 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
 
   app.patch('/api/v1/clients/:id', { preHandler: guard('client.manage') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const input = parse(clientSchema.partial(), req.body) as Record<string, unknown>;
+    const parsed = parse(clientSchema.partial(), req.body) as Record<string, unknown>;
+    if ('gstin' in parsed) {
+      fail('VALIDATION_ERROR',
+        'A client holds one GSTIN per state. Manage them through /parties/client/:id/gst-registrations.');
+    }
+    const input = parsed;
     if (!Object.keys(input).length) fail('VALIDATION_ERROR', 'Send at least one field to change');
     return {
       data: await mutate(pool, req, 'client.update', 'client', async db => {

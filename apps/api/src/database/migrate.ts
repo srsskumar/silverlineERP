@@ -41,6 +41,10 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "033_indian_tender_practice", file: "033_indian_tender_practice.sql" },
   { version: "034_ra_billing", file: "034_ra_billing.sql" },
   { version: "035_approvals", file: "035_approvals.sql" },
+  { version: "036_gst_invoice_model", file: "036_gst_invoice_model.sql" },
+  // Contract phase of the GSTIN move. Run only after the API build that stops
+  // touching clients.gstin / vendors.gstin is live — see the file header.
+  { version: "037_drop_client_gstin", file: "037_drop_client_gstin.sql" },
 ];
 
 /**
