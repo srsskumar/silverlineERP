@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { RoleCode } from './rbac.js';
+import { PAYMENT_MODES } from './financial-control.js';
 
 /**
  * Expense management (§6.8, §16).
@@ -436,8 +437,9 @@ export function canApproveClaim(check: ClaimApprovalCheck): { allowed: boolean; 
 
 /* ---------------------------------------------------------- reimbursement */
 
-export const PAYMENT_MODES = ['NEFT', 'RTGS', 'IMPS', 'UPI', 'CHEQUE', 'CASH', 'PAYROLL'] as const;
-export type PaymentMode = (typeof PAYMENT_MODES)[number];
+// Payment instruments are shared with the finance module: a reimbursement and
+// a client receipt move money the same ways, and two lists drift.
+export { PAYMENT_MODES, type PaymentMode } from './financial-control.js';
 
 /**
  * How much of an approved claim is still owed to the employee.

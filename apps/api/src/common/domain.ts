@@ -44,7 +44,9 @@ export async function inOrg(db:Pool|PoolClient,table:string,id:string,orgId:stri
   // §43 enhancements.
   'rfqs','vendor_quotes','vendor_returns',
   // Expenses and project cost control (§15.6, §16).
-  'cost_heads','expense_policies','expense_claims'];
+  'cost_heads','expense_policies','expense_claims',
+  // Financial control (§45).
+  'financial_periods','payments','bank_transactions'];
  if(!allowed.includes(table)) throw new Error('Unknown domain table');
  const r=await db.query(`SELECT * FROM ${table} WHERE id=$1 AND org_id=$2${lock?' FOR UPDATE':''}`,[id,orgId]);
  if(!r.rowCount) fail('NOT_FOUND','Record not found',404);
