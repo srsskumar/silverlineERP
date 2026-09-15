@@ -12,6 +12,7 @@ import { RequirePermission } from '@/components/RequirePermission';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 import { createProject, listProjectTypes, listWorkspaces } from '@/lib/projects';
+import { apiRequestRaw } from '@/lib/apiClient';
 import { queryKeys } from '@/lib/query-keys';
 import { projectSchema, type ProjectFormInput } from '@/lib/validation';
 import { applyFieldErrors } from '@/lib/form-errors';
@@ -27,9 +28,16 @@ const inputClass =
   'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 /**
- * Create a project (always starts DRAFT server-side). Workspace + type are
- * server-driven selects; the PM is an optional user-ID (UUID) text field —
- * S4 has no users directory (see README).
+ * Create a project (always starts DRAFT server-side).
+ *
+ * The commercial fields (§8, §8.8, §37) matter as much as the scheduling ones:
+ * a project with no track, client or contract value cannot appear in a margin
+ * report, and until now only a tender conversion ever set them — so a project
+ * keyed in directly was commercially invisible.
+ *
+ * Government and private work diverge here. A government job carries a work
+ * order; a private one does not, and the field is hidden rather than left to
+ * be filled in wrongly.
  */
 function NewProjectPanel() {
   const router = useRouter();
@@ -51,10 +59,29 @@ function NewProjectPanel() {
     staleTime: 10 * 60_000,
   });
 
+  const clientsQuery = useQuery({
+    queryKey: ['clients', 'for-project'],
+    queryFn: async () =>
+      ((await apiRequestRaw('/api/v1/clients?limit=100')).body as { data: Record<string, any>[] }).data,
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
+
+  // There is a users endpoint now, so the project manager is a real choice
+  // rather than a UUID somebody has to look up and paste.
+  const usersQuery = useQuery({
+    queryKey: ['users', 'for-project'],
+    queryFn: async () =>
+      ((await apiRequestRaw('/api/v1/users?limit=100')).body as { data: Record<string, any>[] }).data,
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
+
   const {
     register,
     handleSubmit,
     setError,
+    watch,
     formState: { errors },
   } = useForm<ProjectFormInput>({
     resolver: zodResolver(projectSchema),
@@ -68,8 +95,14 @@ function NewProjectPanel() {
       planned_start_date: '',
       planned_end_date: '',
       priority: '',
+      project_kind: '',
+      client_id: '',
+      contract_value: '',
+      work_order_number: '',
     },
   });
+
+  const projectKind = watch('project_kind');
 
   const mutation = useMutation({
     mutationFn: (v: ProjectFormInput) =>
@@ -83,6 +116,12 @@ function NewProjectPanel() {
         ...(v.planned_start_date?.trim() ? { planned_start_date: v.planned_start_date.trim() } : {}),
         ...(v.planned_end_date?.trim() ? { planned_end_date: v.planned_end_date.trim() } : {}),
         ...(v.priority?.trim() ? { priority: v.priority.trim() } : {}),
+        ...(v.project_kind ? { project_kind: v.project_kind } : {}),
+        ...(v.client_id?.trim() ? { client_id: v.client_id.trim() } : {}),
+        ...(v.contract_value?.trim() ? { contract_value: Number(v.contract_value) } : {}),
+        ...(v.project_kind === 'GOVERNMENT' && v.work_order_number?.trim()
+          ? { work_order_number: v.work_order_number.trim() }
+          : {}),
       }),
     onSuccess: (project) => {
       setSubmitError(null);
@@ -143,15 +182,97 @@ function NewProjectPanel() {
         <textarea id="project-description" rows={3} className={inputClass} placeholder="What is this project about?…" {...register('description')} />
       </FormField>
 
-      <FormField label="Project manager (user ID, optional)" htmlFor="project-pm" error={errors.project_manager_id?.message}>
-        <Input
-          id="project-pm"
-          className="font-mono"
-          placeholder="Paste user ID (UUID) — no users directory in S4"
-          invalid={!!errors.project_manager_id}
-          {...register('project_manager_id')}
-        />
+      <FormField label="Project manager" htmlFor="project-pm" error={errors.project_manager_id?.message}>
+        {usersQuery.isSuccess ? (
+          <select id="project-pm" className={inputClass} {...register('project_manager_id')}>
+            <option value="">Unassigned…</option>
+            {(usersQuery.data ?? []).map((u) => (
+              <option key={String(u.id)} value={String(u.id)}>{u.username}</option>
+            ))}
+          </select>
+        ) : (
+          // Falls back to the raw id when the directory is not readable by
+          // this role, rather than hiding the field entirely.
+          <Input
+            id="project-pm"
+            className="font-mono"
+            placeholder="Paste user ID (UUID)"
+            invalid={!!errors.project_manager_id}
+            {...register('project_manager_id')}
+          />
+        )}
       </FormField>
+
+      <div className="rounded-lg border border-border bg-surface-sunken p-3">
+        <p className="mb-3 text-2xs font-semibold uppercase tracking-wide text-text-subtle">
+          Commercial
+        </p>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FormField label="Track" htmlFor="project-kind" error={errors.project_kind?.message}>
+            <select id="project-kind" className={inputClass} {...register('project_kind')}>
+              <option value="">Not set…</option>
+              <option value="GOVERNMENT">Government</option>
+              <option value="PRIVATE">Private</option>
+            </select>
+          </FormField>
+
+          <FormField label="Client" htmlFor="project-client" error={errors.client_id?.message}>
+            {clientsQuery.isSuccess ? (
+              <select id="project-client" className={inputClass} {...register('client_id')}>
+                <option value="">No client…</option>
+                {(clientsQuery.data ?? []).map((c) => (
+                  <option key={String(c.id)} value={String(c.id)}>{c.name}</option>
+                ))}
+              </select>
+            ) : (
+              <Input
+                id="project-client"
+                className="font-mono"
+                placeholder="Paste client ID (UUID)"
+                invalid={!!errors.client_id}
+                {...register('client_id')}
+              />
+            )}
+          </FormField>
+
+          <FormField
+            label="Contract value (₹)"
+            htmlFor="project-contract-value"
+            error={errors.contract_value?.message}
+          >
+            <Input
+              id="project-contract-value"
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="Awarded value"
+              invalid={!!errors.contract_value}
+              {...register('contract_value')}
+            />
+          </FormField>
+
+          {projectKind === 'GOVERNMENT' ? (
+            <FormField
+              label="Work order number"
+              htmlFor="project-work-order"
+              error={errors.work_order_number?.message}
+            >
+              <Input
+                id="project-work-order"
+                placeholder="As issued by the department"
+                invalid={!!errors.work_order_number}
+                {...register('work_order_number')}
+              />
+            </FormField>
+          ) : null}
+        </div>
+
+        <p className="mt-2 text-2xs text-text-subtle">
+          A project won on a tender carries these across automatically. Set them here when the work
+          was not tendered, or the margin report has nothing to measure against.
+        </p>
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <FormField label="Planned start" htmlFor="project-start" error={errors.planned_start_date?.message}>

@@ -216,6 +216,19 @@ export type WorkspaceCreateInput = z.infer<typeof workspaceCreateSchema>;
 // Projects
 // ---------------------------------------------------------------------------
 
+/**
+ * Government and private work are run differently (§8, §8.8, §37).
+ *
+ * A government job is won on a tender, carries EMD and a work order, and bills
+ * against a BOQ; a private job comes from a proposal and is negotiated. The
+ * distinction drives which documents are expected and which reports a project
+ * appears in, so it is recorded on the project rather than inferred from
+ * whether a tender happens to be linked.
+ */
+export const PROJECT_KINDS = ["GOVERNMENT", "PRIVATE"] as const;
+export type ProjectKind = (typeof PROJECT_KINDS)[number];
+export const projectKindSchema = z.enum(PROJECT_KINDS);
+
 const projectBase = {
   description: z.string().max(5000).optional(),
   project_type_id: z.string().uuid("project_type_id must be a UUID").optional(),
@@ -226,6 +239,14 @@ const projectBase = {
   planned_start_date: dateStringSchema.optional(),
   planned_end_date: dateStringSchema.optional(),
   priority: prioritySchema.optional(),
+  // The commercial facts a project carries whether it arrived through a tender
+  // conversion or was keyed in directly. Until now only the conversion set
+  // them, so a directly created project had no client and no contract value —
+  // and nothing downstream could report on its margin.
+  project_kind: projectKindSchema.optional(),
+  client_id: z.string().uuid("client_id must be a UUID").optional(),
+  contract_value: z.coerce.number().finite().min(0).optional(),
+  work_order_number: z.string().trim().max(100).optional(),
 };
 
 /** POST /api/v1/projects */
@@ -247,15 +268,13 @@ export const projectPatchSchema = z
     planned_start_date: dateStringSchema.optional(),
     planned_end_date: dateStringSchema.optional(),
     status: projectStatusSchema.optional(),
+    project_kind: projectKindSchema.optional(),
+    client_id: z.string().uuid("client_id must be a UUID").optional(),
+    contract_value: z.coerce.number().finite().min(0).optional(),
+    work_order_number: z.string().trim().max(100).optional(),
   })
   .refine(
-    (v) =>
-      v.name !== undefined ||
-      v.description !== undefined ||
-      v.priority !== undefined ||
-      v.planned_start_date !== undefined ||
-      v.planned_end_date !== undefined ||
-      v.status !== undefined,
+    (v) => Object.values(v).some((field) => field !== undefined),
     { message: "Nothing to update" },
   );
 

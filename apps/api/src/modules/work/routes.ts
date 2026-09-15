@@ -243,14 +243,27 @@ interface ProjectRow {
   planned_end_date: Date | string | null;
   priority: string;
   status: string;
+  // The commercial facts (§6.2, §8, §37). Set either by a tender or proposal
+  // conversion or directly on the project.
+  project_kind: string | null;
+  client_id: string | null;
+  contract_value: string | number | null;
+  work_order_number: string | null;
+  tender_id: string | null;
+  proposal_id: string | null;
   version: number;
   created_at: Date | string;
   updated_at: Date | string;
 }
 
+// tender_id and proposal_id are read-only here — they are written only by the
+// conversion (§8.7) and are what makes a converted project traceable. Leaving
+// them out of the response meant a government project looked identical to a
+// private one in every screen.
 const PROJECT_COLS = `id, org_id, workspace_id, code, name, description,
   project_type_id, project_manager_id, planned_start_date, planned_end_date,
-  priority, status, version, created_at, updated_at`;
+  priority, status, project_kind, client_id, contract_value, work_order_number,
+  tender_id, proposal_id, version, created_at, updated_at`;
 
 function toProjectShape(row: ProjectRow) {
   return {
@@ -265,6 +278,12 @@ function toProjectShape(row: ProjectRow) {
     planned_end_date: dateOnly(row.planned_end_date),
     priority: row.priority,
     status: row.status,
+    project_kind: row.project_kind,
+    client_id: row.client_id,
+    contract_value: row.contract_value === null ? null : Number(row.contract_value),
+    work_order_number: row.work_order_number,
+    tender_id: row.tender_id,
+    proposal_id: row.proposal_id,
     version: row.version,
     created_at: iso(row.created_at),
     updated_at: iso(row.updated_at),
@@ -949,15 +968,32 @@ export async function registerWorkRoutes(
         });
       }
     }
+    if (d.client_id) {
+      // Scoped to the tenant, like every other foreign key here. The column's
+      // own constraint only checks that the row exists, which would happily
+      // link a client belonging to another organisation.
+      const cl = await db.query(
+        "SELECT id FROM clients WHERE id = $1::uuid AND org_id = $2",
+        [d.client_id, user.orgId],
+      );
+      if ((cl.rowCount ?? 0) === 0) {
+        return sendError(reply, req.requestId, {
+          status: 404,
+          code: "NOT_FOUND",
+          message: "Client not found",
+        });
+      }
+    }
     let row: ProjectRow;
     try {
       const ins = await db.query(
         `INSERT INTO projects
            (org_id, workspace_id, code, name, description, project_type_id,
             project_manager_id, planned_start_date, planned_end_date,
-            priority, status, created_by, updated_by)
+            priority, status, project_kind, client_id, contract_value,
+            work_order_number, created_by, updated_by)
          VALUES ($1, $2::uuid, $3, $4, $5, $6::uuid, $7::uuid, $8, $9, $10,
-           'DRAFT', $11::uuid, $11::uuid)
+           'DRAFT', $11, $12::uuid, $13, $14, $15::uuid, $15::uuid)
          RETURNING ${PROJECT_COLS}`,
         [
           user.orgId,
@@ -970,6 +1006,10 @@ export async function registerWorkRoutes(
           d.planned_start_date ?? null,
           d.planned_end_date ?? null,
           d.priority ?? "MEDIUM",
+          d.project_kind ?? null,
+          d.client_id ?? null,
+          d.contract_value ?? null,
+          d.work_order_number ?? null,
           user.id,
         ],
       );
@@ -1163,6 +1203,22 @@ export async function registerWorkRoutes(
         },
       });
     }
+    if (d.client_id) {
+      // Scoped to the tenant, like every other foreign key here. The column's
+      // own constraint only checks that the row exists, which would happily
+      // link a client belonging to another organisation.
+      const cl = await db.query(
+        "SELECT id FROM clients WHERE id = $1::uuid AND org_id = $2",
+        [d.client_id, user.orgId],
+      );
+      if ((cl.rowCount ?? 0) === 0) {
+        return sendError(reply, req.requestId, {
+          status: 404,
+          code: "NOT_FOUND",
+          message: "Client not found",
+        });
+      }
+    }
     const upd = await db.query(
       `UPDATE projects SET
          name = COALESCE($3, name),
@@ -1171,8 +1227,12 @@ export async function registerWorkRoutes(
          planned_start_date = COALESCE($6, planned_start_date),
          planned_end_date = COALESCE($7, planned_end_date),
          status = COALESCE($8, status),
-         updated_by = $9::uuid, updated_at = NOW(), version = version + 1
-       WHERE id = $1::uuid AND org_id = $2 AND version = $10
+         project_kind = COALESCE($9, project_kind),
+         client_id = COALESCE($10::uuid, client_id),
+         contract_value = COALESCE($11, contract_value),
+         work_order_number = COALESCE($12, work_order_number),
+         updated_by = $13::uuid, updated_at = NOW(), version = version + 1
+       WHERE id = $1::uuid AND org_id = $2 AND version = $14
        RETURNING ${PROJECT_COLS}`,
       [
         id,
@@ -1183,6 +1243,10 @@ export async function registerWorkRoutes(
         d.planned_start_date ?? null,
         d.planned_end_date ?? null,
         d.status ?? null,
+        d.project_kind ?? null,
+        d.client_id ?? null,
+        d.contract_value ?? null,
+        d.work_order_number ?? null,
         user.id,
         expectedVersion,
       ],

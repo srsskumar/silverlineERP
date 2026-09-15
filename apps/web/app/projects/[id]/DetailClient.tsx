@@ -26,6 +26,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ApiClientError } from '@/lib/apiClient';
+import { Badge } from '@/components/ui/Badge';
+import { money } from '@/lib/finance';
 import { isConflictError, requestIdOf } from '@/lib/form-errors';
 
 const inputClass =
@@ -98,6 +100,11 @@ export function ProjectDetailView({ id }: { id: string }) {
                 </h1>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <ProjectStatusBadge status={String(project.status)} />
+                  {project.project_kind ? (
+                    <Badge tone={project.project_kind === 'GOVERNMENT' ? 'info' : 'neutral'} size="sm">
+                      {project.project_kind === 'GOVERNMENT' ? 'Government' : 'Private'}
+                    </Badge>
+                  ) : null}
                   {project.priority ? (
                     <span className="rounded-full bg-surface-sunken px-2.5 py-0.5 text-xs font-medium text-text-muted">
                       {String(project.priority)}
@@ -136,6 +143,52 @@ export function ProjectDetailView({ id }: { id: string }) {
                 }
               />
               <DetailRow label="Description" value={project.description ? String(project.description) : '—'} />
+
+              {/*
+                The commercial facts (§8, §15.1). A project converted from a
+                tender carries these across; one keyed in directly now can too.
+                Without them the margin report at /billing has nothing to
+                measure cost against.
+              */}
+              <DetailRow
+                label="Track"
+                value={
+                  project.project_kind
+                    ? (project.project_kind === 'GOVERNMENT' ? 'Government' : 'Private')
+                    : <span className="text-text-subtle">Not set</span>
+                }
+              />
+              <DetailRow
+                label="Contract value"
+                value={
+                  project.contract_value === null || project.contract_value === undefined
+                    ? <span className="text-text-subtle">Not recorded</span>
+                    : <span className="tabular-nums">{money(project.contract_value)}</span>
+                }
+              />
+              {project.work_order_number ? (
+                <DetailRow label="Work order" value={<span className="font-mono text-xs">{String(project.work_order_number)}</span>} />
+              ) : null}
+              {project.tender_id ? (
+                <DetailRow
+                  label="Won on tender"
+                  value={
+                    <Link href={`/tenders?open=${project.tender_id}`} className="text-primary hover:underline">
+                      Open the tender
+                    </Link>
+                  }
+                />
+              ) : null}
+              {project.contract_value ? (
+                <DetailRow
+                  label="Finance"
+                  value={
+                    <Link href="/billing" className="text-primary hover:underline">
+                      Bills, retention and budget versus actual
+                    </Link>
+                  }
+                />
+              ) : null}
             </dl>
           </div>
 

@@ -1281,3 +1281,149 @@ describe("UT-WORK-12 change board/filter configuration", () => {
     expect(res.statusCode).toBeGreaterThanOrEqual(400);
   });
 });
+
+/**
+ * The commercial facts on a project (§8, §8.8, §15.1, §37).
+ *
+ * These columns have existed since the conversion lineage migration, but only
+ * a tender conversion ever wrote them and the read API never returned them —
+ * so a government job and a private one looked identical in every screen, and
+ * a directly created project had no contract value for any margin report to
+ * measure cost against.
+ */
+describe("UT-WORK-13 project commercial fields", () => {
+  async function makeClient(): Promise<string> {
+    const r = await w.pool.query(
+      `INSERT INTO clients(org_id, created_by, code, name, client_type, status)
+       VALUES($1,$2,$3,$4,'GOVERNMENT','ACTIVE') RETURNING id`,
+      [w.orgId, w.adminId, uniq("CL"), `Client ${uniq()}`]);
+    return String(r.rows[0].id);
+  }
+
+  it("accepts the track, client, contract value and work order on create", async () => {
+    const clientId = await makeClient();
+    const res = await w.app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        workspace_id: w.workspaceId,
+        code: `GOV${uniq().toUpperCase().slice(-6)}`,
+        name: "District road widening",
+        project_kind: "GOVERNMENT",
+        client_id: clientId,
+        contract_value: 12_500_000,
+        work_order_number: "WO/2026/PR/118",
+      },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    const body = res.json();
+    expect(body.project_kind).toBe("GOVERNMENT");
+    expect(body.client_id).toBe(clientId);
+    expect(body.contract_value).toBe(12_500_000);
+    expect(body.work_order_number).toBe("WO/2026/PR/118");
+  });
+
+  it("returns them on read, not only on the create response", async () => {
+    // The original defect: the insert could have carried them and the GET
+    // still would not show them, because PROJECT_COLS left them out.
+    const res = await w.app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        workspace_id: w.workspaceId,
+        code: `PVT${uniq().toUpperCase().slice(-6)}`,
+        name: "Private campus works",
+        project_kind: "PRIVATE",
+        contract_value: 4_200_000,
+      },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    const id = res.json().id;
+
+    const read = await w.app.inject({
+      method: "GET", url: `/api/v1/projects/${id}`, headers: w.admin,
+    });
+    expect(read.statusCode).toBe(200);
+    expect(read.json().project_kind).toBe("PRIVATE");
+    expect(read.json().contract_value).toBe(4_200_000);
+  });
+
+  it("leaves a project with no commercial detail reading as unset, not zero", async () => {
+    // Null is "not recorded"; zero would claim the job is worth nothing.
+    const id = await project("Plain project");
+    const read = await w.app.inject({
+      method: "GET", url: `/api/v1/projects/${id}`, headers: w.admin,
+    });
+    expect(read.json().project_kind).toBeNull();
+    expect(read.json().contract_value).toBeNull();
+  });
+
+  it("refuses a track it does not recognise", async () => {
+    const res = await w.app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        workspace_id: w.workspaceId,
+        code: `BAD${uniq().toUpperCase().slice(-6)}`,
+        name: "Wrong track",
+        project_kind: "MUNICIPAL",
+      },
+    });
+    expect(res.statusCode).toBe(422);
+  });
+
+  it("refuses a client from another organisation", async () => {
+    const other = await w.pool.query(
+      `INSERT INTO clients(org_id, created_by, code, name, client_type, status)
+       VALUES($1,$2,$3,$4,'PRIVATE','ACTIVE') RETURNING id`,
+      [w.other.orgId, w.other.adminId, uniq("CL"), `Foreign ${uniq()}`]);
+    const res = await w.app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        workspace_id: w.workspaceId,
+        code: `XORG${uniq().toUpperCase().slice(-5)}`,
+        name: "Cross tenant",
+        client_id: String(other.rows[0].id),
+      },
+    });
+    // The foreign key is scoped to the row, not the tenant, so this must be
+    // caught rather than quietly linking a client nobody in this org can see.
+    expect([403, 404, 422]).toContain(res.statusCode);
+  });
+
+  it("lets a project acquire its commercial detail later", async () => {
+    // Work often starts before the award paperwork lands.
+    const id = await project("Later award");
+    const current = await w.app.inject({
+      method: "GET", url: `/api/v1/projects/${id}`, headers: w.admin,
+    });
+    const res = await w.app.inject({
+      method: "PATCH",
+      url: `/api/v1/projects/${id}`,
+      headers: { ...w.admin, "if-match": String(current.json().version), ...idem() },
+      payload: { project_kind: "GOVERNMENT", contract_value: 900_000 },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().project_kind).toBe("GOVERNMENT");
+    expect(res.json().contract_value).toBe(900_000);
+  });
+
+  it("still refuses a patch that changes nothing", async () => {
+    const id = await project("No-op patch");
+    const current = await w.app.inject({
+      method: "GET", url: `/api/v1/projects/${id}`, headers: w.admin,
+    });
+    const res = await w.app.inject({
+      method: "PATCH",
+      url: `/api/v1/projects/${id}`,
+      headers: { ...w.admin, "if-match": String(current.json().version), ...idem() },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(422);
+  });
+});
