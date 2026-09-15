@@ -12,6 +12,8 @@ import {
   FileSpreadsheet, FolderKanban, Inbox, LayoutDashboard, MapPin,
   Package, PlaneTakeoff, Settings, Shield, Users, Wallet, Workflow,
   Briefcase, Contact, Gavel, Receipt, ShoppingCart, CheckSquare, IndianRupee, Download,
+  ArrowDownToLine,
+  ArrowUpFromLine,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { PERMISSIONS } from './permissions';
@@ -66,6 +68,11 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/procurement', label: 'Procurement', permission: 'requisition.read', icon: ShoppingCart },
       { href: '/expenses', label: 'Expenses', permission: 'expense.read', icon: Receipt },
       { href: '/billing', label: 'Project finance', permission: 'rabill.read', icon: IndianRupee },
+      // The two ledgers (section 58). Separate entries rather than tabs under
+      // project finance: collections and payment runs are different people's
+      // jobs, and neither is scoped to one project.
+      { href: '/receivables', label: 'Receivables', permission: 'ar.read', icon: ArrowDownToLine },
+      { href: '/payables', label: 'Payables', permission: 'ap.read', icon: ArrowUpFromLine },
     ],
   },
   {

@@ -5,6 +5,10 @@ import {
   utilisationWidth, categoryLabel, creditBlockLabel,
 } from '../lib/finance';
 import { NAV_GROUPS, QUICK_CREATE } from '../lib/nav';
+import {
+  APPROVAL_PERMISSIONS, BILLING_PERMISSIONS, EXPENSE_PERMISSIONS,
+  LEDGER_PERMISSIONS, PROCUREMENT_PERMISSIONS,
+} from '@silverline/shared';
 
 describe('money', () => {
   it('prints zero rather than hiding it', () => {
@@ -204,10 +208,19 @@ describe('finance navigation', () => {
   });
 
   it('uses the permission codes the server actually issues', () => {
-    // Backend-canonical dot codes. A colon-style code would never match and
-    // the item would silently vanish for everybody.
-    const codes = financeGroup.items.map((i) => i.permission);
-    expect(codes).toEqual(['approval.read', 'requisition.read', 'expense.read', 'rabill.read']);
+    // Checked against the server's own constants rather than a list copied
+    // here. A frozen literal only ever compares this file to itself, which is
+    // precisely the check that would miss a code the backend renamed. A
+    // colon-style code would never match, and the destination would silently
+    // vanish for everybody without a single test failing.
+    const issued = new Set<string>([
+      ...APPROVAL_PERMISSIONS, ...PROCUREMENT_PERMISSIONS, ...EXPENSE_PERMISSIONS,
+      ...BILLING_PERMISSIONS, ...LEDGER_PERMISSIONS,
+    ]);
+    for (const item of financeGroup.items) {
+      expect(issued.has(item.permission!), `${item.href} gates on ${item.permission}, which the server never issues`)
+        .toBe(true);
+    }
   });
 
   it('offers a claim to anyone who can raise one', () => {
