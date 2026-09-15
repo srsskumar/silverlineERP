@@ -33,6 +33,7 @@ import {
   P1_ALL_PERMISSIONS,
   P1_ROLE_GRANTS,
   PROJECT_TYPE_SEEDS,
+  PROJECT_CATEGORY_SEEDS,
   defaultTaskWorkflow,
   type RoleCode,
 } from "@silverline/shared";
@@ -205,6 +206,18 @@ export async function seedDatabase(
          active = true,
          updated_at = NOW()`,
       [orgId, t.code, t.name, t.isPaid, t.entitlement, t.requiresBalance],
+    );
+  }
+
+  // Project categories — what the work is about, independent of how it is
+  // contracted. Re-runnable, and an organisation adds its own from the
+  // Projects screen.
+  for (const c of PROJECT_CATEGORY_SEEDS) {
+    await pool.query(
+      `INSERT INTO project_categories (org_id, code, name)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (org_id, code) DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()`,
+      [orgId, c.code, c.name],
     );
   }
 

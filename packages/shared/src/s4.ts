@@ -194,11 +194,63 @@ export const dependencyTypeSchema = z.enum(["FINISH_TO_START"]);
 
 export type DependencyType = z.infer<typeof dependencyTypeSchema>;
 
-/** Seeded project-type codes (both share the default workflow). */
+/**
+ * Seeded project types — how the work is contracted.
+ *
+ * They all share the default task workflow; the type is what the commercial
+ * arrangement is, not how the work moves. Organisations add their own from
+ * the Projects screen, so this is a starting point rather than a closed list.
+ */
 export const PROJECT_TYPE_SEEDS = [
   { code: "general", name: "General" },
   { code: "fieldwork", name: "Field Work" },
+  { code: "amc", name: "AMC" },
+  { code: "goods", name: "Goods" },
+  { code: "services", name: "Services" },
+  { code: "goods_and_services", name: "Goods and Services" },
 ] as const;
+
+/**
+ * Seeded project categories — what the work is about.
+ *
+ * Deliberately a second dimension rather than more types: an AMC on CCTV and
+ * an AMC on drones share a contract shape and nothing else, and folding the
+ * two together would multiply the type list into every combination.
+ */
+export const PROJECT_CATEGORY_SEEDS = [
+  { code: "electronics", name: "Electronics" },
+  { code: "drones", name: "Drones" },
+  { code: "cctv_equipment", name: "CCTV Equipment" },
+  { code: "survey_equipment", name: "Survey Equipment" },
+  { code: "land_survey", name: "Land Survey" },
+] as const;
+
+/**
+ * A stable key for a master record, from whatever a person typed.
+ *
+ * Codes are matched, not read, so "CCTV Equipment" and "cctv  equipment" have
+ * to land on the same key or one category quietly becomes two.
+ */
+export function slugifyCode(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+}
+
+/**
+ * POST /api/v1/project-categories
+ *
+ * The code is derived from the name when it is not given: somebody typing
+ * "Thermal Imaging" into a form should not also have to invent a key for it.
+ */
+export const projectCategorySchema = z.object({
+  code: z.string().trim().max(50).optional(),
+  name: z.string().trim().min(1).max(255),
+  description: z.string().trim().max(1000).optional(),
+  active: z.boolean().default(true),
+}).transform((v) => ({ ...v, code: slugifyCode(v.code?.trim() ? v.code : v.name) }))
+  .refine((v) => v.code.length > 0, {
+    message: "Give the category a name with at least one letter or digit",
+    path: ["name"],
+  });
 
 // ---------------------------------------------------------------------------
 // Workspaces
@@ -245,7 +297,13 @@ const projectBase = {
   // and nothing downstream could report on its margin.
   project_kind: projectKindSchema.optional(),
   client_id: z.string().uuid("client_id must be a UUID").optional(),
+  project_category_id: z.string().uuid("project_category_id must be a UUID").optional(),
   contract_value: z.coerce.number().finite().min(0).optional(),
+  // Whether contract_value already includes GST. Recorded rather than assumed:
+  // booking an inclusive figure as exclusive overstates every margin on the
+  // job by the tax rate.
+  contract_gst_included: z.boolean().optional(),
+  contract_gst_rate: z.coerce.number().min(0).max(28).optional(),
   work_order_number: z.string().trim().max(100).optional(),
 };
 
@@ -270,7 +328,10 @@ export const projectPatchSchema = z
     status: projectStatusSchema.optional(),
     project_kind: projectKindSchema.optional(),
     client_id: z.string().uuid("client_id must be a UUID").optional(),
+    project_category_id: z.string().uuid("project_category_id must be a UUID").optional(),
     contract_value: z.coerce.number().finite().min(0).optional(),
+    contract_gst_included: z.boolean().optional(),
+    contract_gst_rate: z.coerce.number().min(0).max(28).optional(),
     work_order_number: z.string().trim().max(100).optional(),
   })
   .refine(

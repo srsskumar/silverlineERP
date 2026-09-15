@@ -23,6 +23,7 @@ import {
   encodeCursor,
   extractMentionUsernames,
   projectCloseSchema,
+  projectCategorySchema,
   projectCreateSchema,
   projectPatchSchema,
   taskAssignSchema,
@@ -228,7 +229,10 @@ interface ProjectRow {
   // conversion or directly on the project.
   project_kind: string | null;
   client_id: string | null;
+  project_category_id: string | null;
   contract_value: string | number | null;
+  contract_gst_included: boolean | null;
+  contract_gst_rate: string | number | null;
   work_order_number: string | null;
   tender_id: string | null;
   proposal_id: string | null;
@@ -243,7 +247,8 @@ interface ProjectRow {
 // private one in every screen.
 const PROJECT_COLS = `id, org_id, workspace_id, code, name, description,
   project_type_id, project_manager_id, planned_start_date, planned_end_date,
-  priority, status, project_kind, client_id, contract_value, work_order_number,
+  priority, status, project_kind, client_id, project_category_id, contract_value,
+  contract_gst_included, contract_gst_rate, work_order_number,
   tender_id, proposal_id, version, created_at, updated_at`;
 
 function toProjectShape(row: ProjectRow) {
@@ -261,7 +266,10 @@ function toProjectShape(row: ProjectRow) {
     status: row.status,
     project_kind: row.project_kind,
     client_id: row.client_id,
+    project_category_id: row.project_category_id,
     contract_value: row.contract_value === null ? null : Number(row.contract_value),
+    contract_gst_included: row.contract_gst_included,
+    contract_gst_rate: row.contract_gst_rate === null ? null : Number(row.contract_gst_rate),
     work_order_number: row.work_order_number,
     tender_id: row.tender_id,
     proposal_id: row.proposal_id,
@@ -857,6 +865,69 @@ export async function registerWorkRoutes(
     return reply.status(200).send(toWorkspaceShape(row));
   });
 
+  // ------------------------------------- project categories (§6.2 masters)
+  //
+  // What the work is about — drones, CCTV, survey equipment — as a second
+  // dimension to the project type, which is how it is contracted. Read by
+  // anyone who can see projects; created by anyone who can create one, so the
+  // Projects screen can add a missing category without a trip to an admin
+  // area and without anybody keying a free-text value that never matches.
+  app.get("/api/v1/project-categories", { preHandler: authenticate }, async (req, reply) => {
+    const user = req.authUser;
+    if (!user) {
+      return sendError(reply, req.requestId, {
+        status: 401, code: "UNAUTHENTICATED", message: "Authentication required",
+      });
+    }
+    const res = await opts.pool.query(
+      `SELECT id, code, name, description, active, version, created_at, updated_at
+       FROM project_categories WHERE org_id = $1 ORDER BY name ASC`,
+      [user.orgId],
+    );
+    return reply.status(200).send({ data: res.rows });
+  });
+
+  app.post("/api/v1/project-categories", { preHandler: canCreateProject }, async (req, reply) => {
+    return mutationRoute(opts.pool, req, reply, async (db, reply) => {
+      if (await replayIfSeen(db, req, reply)) return;
+      const parsed = projectCategorySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return sendError(reply, req.requestId, {
+          status: 422, code: "VALIDATION_ERROR", message: "Validation failed",
+          fieldErrors: toFieldErrors(parsed.error),
+        });
+      }
+      const user = req.authUser!;
+      const d = parsed.data;
+      const clash = await db.query(
+        "SELECT id, name FROM project_categories WHERE org_id = $1 AND code = $2",
+        [user.orgId, d.code],
+      );
+      if (clash.rowCount) {
+        // Returning the existing row rather than an error: the caller is a
+        // person adding a category from a form, and "Drones already exists"
+        // with no way forward is a worse answer than simply using it.
+        return reply.status(200).send({ data: clash.rows[0] });
+      }
+      const ins = await db.query(
+        `INSERT INTO project_categories (org_id, code, name, description, active, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6::uuid, $6::uuid)
+         RETURNING id, code, name, description, active, version, created_at, updated_at`,
+        [user.orgId, d.code, d.name, d.description ?? null, d.active, user.id],
+      );
+      const row = ins.rows[0];
+      const meta = metaOf(req);
+      await writeAudit(db, {
+        orgId: user.orgId, actorId: user.id, actorIp: meta.ip,
+        actorUserAgent: meta.userAgent, action: "project_category.create",
+        entityType: "project_category", entityId: row.id,
+        afterState: row, requestId: req.requestId,
+      });
+      await storeIdempotentResponse(db, req, user.id, 201, row);
+      return reply.status(201).send({ data: row });
+    });
+  });
+
   // ------------------------------------------------ GET /project-types
   app.get("/api/v1/project-types", { preHandler: authenticate }, async (req, reply) => {
     const user = req.authUser;
@@ -965,16 +1036,30 @@ export async function registerWorkRoutes(
         });
       }
     }
+    if (d.project_category_id) {
+      const cat = await db.query(
+        "SELECT id FROM project_categories WHERE id = $1::uuid AND org_id = $2",
+        [d.project_category_id, user.orgId],
+      );
+      if ((cat.rowCount ?? 0) === 0) {
+        return sendError(reply, req.requestId, {
+          status: 404,
+          code: "NOT_FOUND",
+          message: "Project category not found",
+        });
+      }
+    }
     let row: ProjectRow;
     try {
       const ins = await db.query(
         `INSERT INTO projects
            (org_id, workspace_id, code, name, description, project_type_id,
             project_manager_id, planned_start_date, planned_end_date,
-            priority, status, project_kind, client_id, contract_value,
+            priority, status, project_kind, client_id, project_category_id,
+            contract_value, contract_gst_included, contract_gst_rate,
             work_order_number, created_by, updated_by)
          VALUES ($1, $2::uuid, $3, $4, $5, $6::uuid, $7::uuid, $8, $9, $10,
-           'DRAFT', $11, $12::uuid, $13, $14, $15::uuid, $15::uuid)
+           'DRAFT', $11, $12::uuid, $13::uuid, $14, $15, $16, $17, $18::uuid, $18::uuid)
          RETURNING ${PROJECT_COLS}`,
         [
           user.orgId,
@@ -989,7 +1074,10 @@ export async function registerWorkRoutes(
           d.priority ?? "MEDIUM",
           d.project_kind ?? null,
           d.client_id ?? null,
+          d.project_category_id ?? null,
           d.contract_value ?? null,
+          d.contract_gst_included ?? null,
+          d.contract_gst_rate ?? null,
           d.work_order_number ?? null,
           user.id,
         ],
@@ -1200,6 +1288,19 @@ export async function registerWorkRoutes(
         });
       }
     }
+    if (d.project_category_id) {
+      const cat = await db.query(
+        "SELECT id FROM project_categories WHERE id = $1::uuid AND org_id = $2",
+        [d.project_category_id, user.orgId],
+      );
+      if ((cat.rowCount ?? 0) === 0) {
+        return sendError(reply, req.requestId, {
+          status: 404,
+          code: "NOT_FOUND",
+          message: "Project category not found",
+        });
+      }
+    }
     const upd = await db.query(
       `UPDATE projects SET
          name = COALESCE($3, name),
@@ -1210,10 +1311,13 @@ export async function registerWorkRoutes(
          status = COALESCE($8, status),
          project_kind = COALESCE($9, project_kind),
          client_id = COALESCE($10::uuid, client_id),
-         contract_value = COALESCE($11, contract_value),
-         work_order_number = COALESCE($12, work_order_number),
-         updated_by = $13::uuid, updated_at = NOW(), version = version + 1
-       WHERE id = $1::uuid AND org_id = $2 AND version = $14
+         project_category_id = COALESCE($11::uuid, project_category_id),
+         contract_value = COALESCE($12, contract_value),
+         contract_gst_included = COALESCE($13, contract_gst_included),
+         contract_gst_rate = COALESCE($14, contract_gst_rate),
+         work_order_number = COALESCE($15, work_order_number),
+         updated_by = $16::uuid, updated_at = NOW(), version = version + 1
+       WHERE id = $1::uuid AND org_id = $2 AND version = $17
        RETURNING ${PROJECT_COLS}`,
       [
         id,
@@ -1226,7 +1330,10 @@ export async function registerWorkRoutes(
         d.status ?? null,
         d.project_kind ?? null,
         d.client_id ?? null,
+        d.project_category_id ?? null,
         d.contract_value ?? null,
+        d.contract_gst_included ?? null,
+        d.contract_gst_rate ?? null,
         d.work_order_number ?? null,
         user.id,
         expectedVersion,

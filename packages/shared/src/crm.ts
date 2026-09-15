@@ -59,8 +59,17 @@ const optionalText = (max = 2000) => z.string().trim().max(max).optional();
 
 export const CLIENT_TYPES = ['GOVERNMENT','PRIVATE'] as const;
 
-export const clientSchema = z.object({
-  code: text.max(50),
+/**
+ * The client's own fields, before the code is derived.
+ *
+ * Exported separately because a transform produces a ZodEffects, and
+ * ZodEffects has no `.partial()` — which the PATCH route needs.
+ */
+export const clientBaseSchema = z.object({
+  // Derived from the name when omitted. A person adding a client from the
+  // project form should not have to invent a key for it, and asking them to
+  // is how the same organisation ends up in the master twice.
+  code: z.string().trim().max(50).optional(),
   name: text,
   client_type: z.enum(CLIENT_TYPES),
   category: optionalText(100),
@@ -86,6 +95,19 @@ export const clientSchema = z.object({
   payment_terms: optionalText(100),
   notes: optionalText(),
 });
+
+/**
+ * POST /api/v1/clients — the code is derived from the name when absent.
+ *
+ * A person adding a client from the project form should not have to invent a
+ * key for it, and asking them to is how the same organisation lands in the
+ * master twice under two spellings.
+ */
+export const clientSchema = clientBaseSchema.transform((v) => ({
+  ...v,
+  code: (v.code?.trim() ? v.code : v.name)
+    .trim().toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50),
+}));
 
 export const contactBaseSchema = z.object({
   client_id: uuid.nullable().optional(),

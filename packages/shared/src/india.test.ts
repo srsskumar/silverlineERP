@@ -5,6 +5,7 @@ import {
   financialYearOf, sameFinancialYear, gstDocumentNumber, isValidGstDocumentNumber,
   splitGst, msmeDueDate, msmeDelayInterest, tdsOn, computeInvoice, isValidGstRate,
   MSME_DAYS_WITH_AGREEMENT, MSME_DAYS_WITHOUT_AGREEMENT,
+  contractValueBreakdown, amountInWords,
 } from './india.js';
 
 /**
@@ -356,5 +357,70 @@ describe('GST invoice', () => {
     });
     expect(inv.taxTotal).toBe(0);
     expect(inv.total).toBe(1000);
+  });
+});
+
+describe('contractValueBreakdown', () => {
+  it('extracts the tax from a GST-inclusive figure', () => {
+    // 11,80,000 inclusive at 18% is 10,00,000 of revenue.
+    const b = contractValueBreakdown({ amount: 1_180_000, gstIncluded: true, ratePct: 18 });
+    expect(b.net).toBe(1_000_000);
+    expect(b.gst).toBe(180_000);
+    expect(b.gross).toBe(1_180_000);
+  });
+
+  it('adds the tax to a GST-exclusive figure', () => {
+    const b = contractValueBreakdown({ amount: 1_000_000, gstIncluded: false, ratePct: 18 });
+    expect(b.net).toBe(1_000_000);
+    expect(b.gst).toBe(180_000);
+    expect(b.gross).toBe(1_180_000);
+  });
+
+  it('keeps net plus tax equal to gross when the split does not divide evenly', () => {
+    // The failure this prevents: three separately rounded figures that do not
+    // add up, which an auditor will notice before anybody else does.
+    const b = contractValueBreakdown({ amount: 100_000.01, gstIncluded: true, ratePct: 18 });
+    expect(Math.round((b.net + b.gst) * 100)).toBe(Math.round(b.gross * 100));
+  });
+
+  it('treats a zero rate as no tax either way', () => {
+    const inclusive = contractValueBreakdown({ amount: 500, gstIncluded: true, ratePct: 0 });
+    const exclusive = contractValueBreakdown({ amount: 500, gstIncluded: false, ratePct: 0 });
+    expect(inclusive).toEqual(exclusive);
+    expect(inclusive.gst).toBe(0);
+  });
+
+  it('never turns a negative into a credit', () => {
+    expect(contractValueBreakdown({ amount: -100, gstIncluded: false, ratePct: 18 }).net).toBe(0);
+  });
+});
+
+describe('amountInWords', () => {
+  it('counts in lakh and crore, which is what the work order says', () => {
+    expect(amountInWords(1_250_000)).toBe('Twelve Lakh Fifty Thousand Rupees only');
+    expect(amountInWords(12_500_000)).toBe('One Crore Twenty Five Lakh Rupees only');
+  });
+
+  it('reads the teens correctly', () => {
+    expect(amountInWords(19)).toBe('Nineteen Rupees only');
+    expect(amountInWords(1_15_000)).toBe('One Lakh Fifteen Thousand Rupees only');
+  });
+
+  it('includes paise when there are any', () => {
+    expect(amountInWords(1234.56)).toBe('One Thousand Two Hundred Thirty Four Rupees and Fifty Six Paise only');
+  });
+
+  it('says zero rather than nothing', () => {
+    expect(amountInWords(0)).toBe('Zero Rupees only');
+  });
+
+  it('marks a negative rather than dropping the sign', () => {
+    expect(amountInWords(-500)).toBe('Minus Five Hundred Rupees only');
+  });
+
+  it('handles a figure with gaps in the middle', () => {
+    // 1,00,00,007 — the classic case where a naive implementation emits
+    // "One Crore Seven" and loses nothing, or emits stray empty groups.
+    expect(amountInWords(10_000_007)).toBe('One Crore Seven Rupees only');
   });
 });

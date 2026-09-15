@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import {
+  clientBaseSchema,
   clientSchema, contactSchema, contactBaseSchema, leadSchema, leadStageSchema,
   opportunitySchema, interactionSchema, gstRegistrationSchema,
   LEAD_STAGE_TRANSITIONS, type LeadStage, parseGstin,
@@ -114,7 +115,7 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
 
   app.patch('/api/v1/clients/:id', { preHandler: guard('client.manage') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const parsed = parse(clientSchema.partial(), req.body) as Record<string, unknown>;
+    const parsed = parse(clientBaseSchema.partial(), req.body) as Record<string, unknown>;
     if ('gstin' in parsed) {
       fail('VALIDATION_ERROR',
         'A client holds one GSTIN per state. Manage them through /parties/client/:id/gst-registrations.');

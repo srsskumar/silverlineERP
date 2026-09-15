@@ -29,6 +29,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { ApiClientError } from '@/lib/apiClient';
 import { Badge } from '@/components/ui/Badge';
 import { money } from '@/lib/finance';
+import { contractValueBreakdown, amountInWords } from '@silverline/shared';
 import { isConflictError, requestIdOf } from '@/lib/form-errors';
 
 const inputClass =
@@ -118,6 +119,14 @@ export function ProjectDetailView({ id }: { id: string }) {
                 <Link href="/projects" className="text-sm text-primary hover:underline">
                   Back to projects
                 </Link>
+                {canUpdate && (
+                  <Link
+                    href={`/projects/edit?id=${project.id}`}
+                    className="inline-flex h-8 items-center rounded border border-border bg-surface px-3 text-sm font-medium text-text shadow-sm hover:bg-surface-sunken"
+                  >
+                    Edit
+                  </Link>
+                )}
                 {canClose && <Button variant="danger" onClick={() => setCloseOpen(true)}>Close project…</Button>}
               </div>
             </div>
@@ -161,11 +170,7 @@ export function ProjectDetailView({ id }: { id: string }) {
               />
               <DetailRow
                 label="Contract value"
-                value={
-                  project.contract_value === null || project.contract_value === undefined
-                    ? <span className="text-text-subtle">Not recorded</span>
-                    : <span className="tabular-nums">{money(project.contract_value)}</span>
-                }
+                value={<ContractValue project={project as Record<string, unknown>} />}
               />
               {project.work_order_number ? (
                 <DetailRow label="Work order" value={<span className="font-mono text-xs">{String(project.work_order_number)}</span>} />
@@ -472,3 +477,40 @@ function ProjectTasksTable({ projectId, canCreateTask }: { projectId: string; ca
   );
 }
 
+/**
+ * The contract value, and what it is once GST is accounted for.
+ *
+ * Shown split because the figure on the order and the project's revenue are
+ * different numbers whenever the quote was GST-inclusive, and the margin at
+ * /billing is measured on the revenue.
+ */
+function ContractValue({ project }: { project: Record<string, unknown> }) {
+  const amount = project.contract_value;
+  if (amount === null || amount === undefined) {
+    return <span className="text-text-subtle">Not recorded</span>;
+  }
+  const included = project.contract_gst_included;
+  const rate = project.contract_gst_rate;
+  if (included === null || included === undefined || rate === null || rate === undefined) {
+    return (
+      <span>
+        <span className="tabular-nums">{money(amount)}</span>
+        <span className="ml-2 text-2xs text-warning">GST treatment not stated</span>
+      </span>
+    );
+  }
+  const b = contractValueBreakdown({
+    amount: Number(amount),
+    gstIncluded: Boolean(included),
+    ratePct: Number(rate),
+  });
+  return (
+    <span className="block">
+      <span className="tabular-nums">{money(b.gross)}</span>
+      <span className="ml-2 text-2xs text-text-subtle">
+        {money(b.net)} + {money(b.gst)} GST at {b.ratePct}%
+      </span>
+      <span className="mt-0.5 block text-2xs text-text-muted">{amountInWords(b.gross)}</span>
+    </span>
+  );
+}

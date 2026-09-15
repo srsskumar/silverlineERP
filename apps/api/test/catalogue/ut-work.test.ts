@@ -1427,3 +1427,126 @@ describe("UT-WORK-13 project commercial fields", () => {
     expect(res.statusCode).toBe(422);
   });
 });
+
+/**
+ * Project categories — what the work is about (§6.2).
+ *
+ * Kept separate from the project type, which is how the work is contracted.
+ * Folding them together would multiply the type list into every combination
+ * of arrangement and subject.
+ */
+describe("UT-WORK-14 project categories", () => {
+  it("seeds the categories the business asked for", async () => {
+    const res = await w.app.inject({
+      method: "GET", url: "/api/v1/project-categories", headers: w.admin,
+    });
+    expect(res.statusCode).toBe(200);
+    const names = res.json().data.map((c: { name: string }) => c.name);
+    for (const expected of ["Electronics", "Drones", "CCTV Equipment", "Survey Equipment", "Land Survey"]) {
+      expect(names).toContain(expected);
+    }
+  });
+
+  it("creates one from the Projects screen without leaving it", async () => {
+    const res = await w.app.inject({
+      method: "POST", url: "/api/v1/project-categories",
+      headers: { ...w.admin, ...idem() },
+      payload: { name: `Thermal Imaging ${uniq()}` },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    expect(res.json().data.code).toMatch(/^thermal_imaging_/);
+  });
+
+  it("normalises the code so one category cannot become two", async () => {
+    // "CCTV Equipment" typed a second time as "cctv equipment" must land on
+    // the row that already exists, not create a rival master.
+    const label = `Drone Fleet ${uniq()}`;
+    const first = await w.app.inject({
+      method: "POST", url: "/api/v1/project-categories",
+      headers: { ...w.admin, ...idem() }, payload: { name: label },
+    });
+    expect(first.statusCode, first.body).toBe(201);
+    const again = await w.app.inject({
+      method: "POST", url: "/api/v1/project-categories",
+      headers: { ...w.admin, ...idem() },
+      payload: { code: `  ${label.toUpperCase()}  `, name: label },
+    });
+    // Returns the existing row rather than an error: the caller is a person
+    // filling in a form, and a dead end is a worse answer than the row.
+    expect(again.statusCode).toBe(200);
+    expect(again.json().data.id).toBe(first.json().data.id);
+  });
+
+  it("links a category to a project and returns it on read", async () => {
+    const cats = await w.app.inject({
+      method: "GET", url: "/api/v1/project-categories", headers: w.admin,
+    });
+    const drones = cats.json().data.find((c: { code: string }) => c.code === "drones");
+    const res = await w.app.inject({
+      method: "POST", url: "/api/v1/projects",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        workspace_id: w.workspaceId,
+        code: `CAT${uniq().toUpperCase().slice(-6)}`,
+        name: "Drone survey",
+        project_category_id: drones.id,
+      },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    expect(res.json().project_category_id).toBe(drones.id);
+  });
+
+  it("refuses a category from another organisation", async () => {
+    const foreign = await w.pool.query(
+      `INSERT INTO project_categories(org_id, code, name) VALUES($1,$2,$3) RETURNING id`,
+      [w.other.orgId, uniq("c"), "Foreign category"]);
+    const res = await w.app.inject({
+      method: "POST", url: "/api/v1/projects",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        workspace_id: w.workspaceId,
+        code: `XCAT${uniq().toUpperCase().slice(-5)}`,
+        name: "Cross tenant category",
+        project_category_id: String(foreign.rows[0].id),
+      },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("records which side of GST the contract value sits on", async () => {
+    // Booking an inclusive figure as exclusive overstates every margin on the
+    // job by the tax rate, so the answer is stored rather than assumed.
+    const res = await w.app.inject({
+      method: "POST", url: "/api/v1/projects",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        workspace_id: w.workspaceId,
+        code: `GST${uniq().toUpperCase().slice(-6)}`,
+        name: "Inclusive contract",
+        contract_value: 1_180_000,
+        contract_gst_included: true,
+        contract_gst_rate: 18,
+      },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    expect(res.json().contract_gst_included).toBe(true);
+    expect(res.json().contract_gst_rate).toBe(18);
+  });
+
+  it("refuses a rate with nobody saying which side it applies to", async () => {
+    const res = await w.app.inject({
+      method: "POST", url: "/api/v1/projects",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        workspace_id: w.workspaceId,
+        code: `GSTX${uniq().toUpperCase().slice(-5)}`,
+        name: "Rate with no side",
+        contract_value: 100000,
+        contract_gst_rate: 18,
+      },
+    });
+    // The database constraint refuses the pair; the API surfaces it rather
+    // than storing a rate that cannot be applied.
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+  });
+});

@@ -430,3 +430,96 @@ export function computeInvoice(args: {
     hsnSummary: [...summary.values()].sort((a, b) => a.hsnSac.localeCompare(b.hsnSac)),
   };
 }
+
+/* ------------------------------------------------- contract value and GST */
+
+export interface ContractValueInput {
+  /** The figure as written on the work order or agreement. */
+  amount: number;
+  /** Whether that figure already includes GST. */
+  gstIncluded: boolean;
+  ratePct: number;
+}
+
+export interface ContractValueBreakdown {
+  /** Value before tax — what the project's revenue actually is. */
+  net: number;
+  gst: number;
+  /** Value including tax — what the client is invoiced. */
+  gross: number;
+  ratePct: number;
+}
+
+/**
+ * Split a contract value into net, tax and gross.
+ *
+ * Which side of the tax the quoted figure sits on has to be recorded rather
+ * than assumed. Booking a GST-inclusive figure as though it were exclusive
+ * overstates the revenue — and therefore every margin on the job — by the tax
+ * rate, which at 18% is not a rounding difference.
+ *
+ * Margin is always measured on the net: the tax is collected on the
+ * government's behalf and was never the contractor's money.
+ */
+export function contractValueBreakdown(input: ContractValueInput): ContractValueBreakdown {
+  const rate = Math.max(0, input.ratePct) / 100;
+  const amount = Math.max(0, input.amount);
+  // Computed in paise so that a half-paisa never compounds across the three
+  // figures and leaves net + gst disagreeing with gross.
+  const paise = Math.round(amount * 100);
+  const netPaise = input.gstIncluded ? Math.round(paise / (1 + rate)) : paise;
+  const grossPaise = input.gstIncluded ? paise : Math.round(paise * (1 + rate));
+  return {
+    net: netPaise / 100,
+    gst: (grossPaise - netPaise) / 100,
+    gross: grossPaise / 100,
+    ratePct: input.ratePct,
+  };
+}
+
+const ONES = [
+  '', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
+  'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen',
+  'Eighteen', 'Nineteen',
+];
+const TENS = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+
+function underThousand(n: number): string {
+  if (n === 0) return '';
+  if (n < 20) return ONES[n];
+  if (n < 100) return `${TENS[Math.floor(n / 10)]}${n % 10 ? ` ${ONES[n % 10]}` : ''}`;
+  return `${ONES[Math.floor(n / 100)]} Hundred${n % 100 ? ` ${underThousand(n % 100)}` : ''}`;
+}
+
+/**
+ * An amount in words, on the Indian scale.
+ *
+ * Contracts and invoices carry the figure in words precisely so that a
+ * mis-keyed digit is caught, which is why this counts in lakh and crore rather
+ * than millions — a reader checking a work order against the system is reading
+ * Indian numbering, and "twelve million" gives them nothing to compare.
+ */
+export function amountInWords(amount: number): string {
+  if (!Number.isFinite(amount)) return '';
+  const negative = amount < 0;
+  const paise = Math.round(Math.abs(amount) * 100);
+  const rupees = Math.floor(paise / 100);
+  const fraction = paise % 100;
+
+  const parts: string[] = [];
+  const crore = Math.floor(rupees / 10_000_000);
+  const lakh = Math.floor((rupees % 10_000_000) / 100_000);
+  const thousand = Math.floor((rupees % 100_000) / 1_000);
+  const rest = rupees % 1_000;
+
+  if (crore) parts.push(`${underThousand(crore)} Crore`);
+  if (lakh) parts.push(`${underThousand(lakh)} Lakh`);
+  if (thousand) parts.push(`${underThousand(thousand)} Thousand`);
+  if (rest) parts.push(underThousand(rest));
+
+  const rupeeWords = parts.length ? parts.join(' ') : 'Zero';
+  const words = fraction
+    ? `${rupeeWords} Rupees and ${underThousand(fraction)} Paise only`
+    : `${rupeeWords} Rupees only`;
+  return `${negative ? 'Minus ' : ''}${words}`;
+}
