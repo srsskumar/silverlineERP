@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { DOCUMENT_TYPE_SEEDS } from '@silverline/shared';
+import { DOCUMENT_ROLE_GRANTS, DOCUMENT_TYPE_SEEDS } from '@silverline/shared';
 
 /**
  * The seeded document types exist twice: once in TypeScript, where the API
@@ -77,5 +77,78 @@ describe('document type seeds', () => {
   it('gives every organisation the list, not just the first', () => {
     expect(sql).toContain('FROM organizations o');
     expect(sql).toContain('CROSS JOIN');
+  });
+});
+
+/**
+ * The role grants exist twice too: in TypeScript, where the seed script reads
+ * them, and in migration 048, which is what actually runs on a deployment.
+ *
+ * They were separated the hard way. Migration 047 shipped the register, the
+ * application enforced `document.manage`, and production had never heard of
+ * the permission — every write came back "insufficient permissions" with
+ * nothing in the deployment explaining why, because new permissions had only
+ * ever arrived through a seed script that does not run against a live
+ * database.
+ */
+const grantSql = readFileSync(
+  fileURLToPath(new URL('../src/database/migrations/048_document_permissions.sql', import.meta.url)),
+  'utf8',
+);
+
+describe('document permission grants', () => {
+  const pairs = [...grantSql.matchAll(/\('([A-Z_]+)','(document\.[a-z]+)'\)/g)]
+    .map(m => [m[1], m[2]] as const);
+
+  it('parses the grants out of the migration', () => {
+    expect(pairs.length).toBeGreaterThan(10);
+  });
+
+  it('grants exactly what the application believes each role has', () => {
+    for (const [role, grants] of Object.entries(DOCUMENT_ROLE_GRANTS)) {
+      for (const permission of grants) {
+        // document.read is granted by a separate statement, since the
+        // permission predates this module.
+        if (permission === 'document.read') continue;
+        expect(
+          pairs.some(([r, p]) => r === role && p === permission),
+          `${role} should be granted ${permission} by the migration`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it('grants nothing the application does not believe in', () => {
+    for (const [role, permission] of pairs) {
+      expect(
+        DOCUMENT_ROLE_GRANTS[role as keyof typeof DOCUMENT_ROLE_GRANTS] ?? [],
+        `${role} is granted ${permission} by the migration but not by the application`,
+      ).toContain(permission);
+    }
+  });
+
+  it('never grants deletion to anyone but an administrator', () => {
+    // An auditor who can destroy evidence is not a control.
+    for (const [role, permission] of pairs) {
+      if (permission === 'document.delete') {
+        expect(['SUPER_ADMIN', 'ADMIN']).toContain(role);
+      }
+    }
+  });
+
+  it('creates every permission it then grants', () => {
+    // A grant referencing a permission that does not exist violates the
+    // foreign key and fails the whole migration.
+    const created = [...grantSql.matchAll(/\('(document\.[a-z]+)',\s*'[^']*',\s*'documents'\)/g)]
+      .map(m => m[1]);
+    for (const [, permission] of pairs) {
+      if (permission === 'document.read') continue;
+      expect(created, `${permission} is granted but never created`).toContain(permission);
+    }
+  });
+
+  it('can be applied twice without failing', () => {
+    expect(grantSql).toContain('ON CONFLICT (code) DO NOTHING');
+    expect(grantSql).toContain('ON CONFLICT (role_id, permission_code) DO NOTHING');
   });
 });
