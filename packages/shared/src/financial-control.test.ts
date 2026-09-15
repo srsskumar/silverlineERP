@@ -3,7 +3,7 @@ import {
   INVOICE_TRANSITIONS, canIssue, settlementPosition, unallocated, checkAllocation,
   periodAllows, findPeriodOverlap, reconcileImport,
   FINANCE_ROLE_GRANTS, FINANCE_PERMISSIONS,
-  paymentSchema, allocationSchema, financialPeriodSchema, periodClosureSchema, disputeSchema,
+  paymentSchema, paymentAllocationSchema as allocationSchema, financialPeriodSchema, periodClosureSchema, disputeSchema,
   type FinancialPeriod,
 } from './financial-control.js';
 

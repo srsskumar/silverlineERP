@@ -372,7 +372,7 @@ export const paymentSchema = z.object({
   notes: z.string().trim().max(1000).optional(),
 });
 
-export const allocationSchema = z.object({
+export const paymentAllocationSchema = z.object({
   document_type: z.enum(['RA_BILL', 'VENDOR_INVOICE', 'EXPENSE_CLAIM', 'ADVANCE']),
   document_id: uuid,
   amount: money,

@@ -48,7 +48,9 @@ export async function inOrg(db:Pool|PoolClient,table:string,id:string,orgId:stri
   // Financial control (§45).
   'financial_periods','payments','bank_transactions',
   // Inventory control (§44).
-  'stock_locations','stock_reservations','stock_counts'];
+  'stock_locations','stock_reservations','stock_counts',
+  // Workforce allocation (§47).
+  'resource_allocations','work_shifts','roster_entries'];
  if(!allowed.includes(table)) throw new Error('Unknown domain table');
  const r=await db.query(`SELECT * FROM ${table} WHERE id=$1 AND org_id=$2${lock?' FOR UPDATE':''}`,[id,orgId]);
  if(!r.rowCount) fail('NOT_FOUND','Record not found',404);

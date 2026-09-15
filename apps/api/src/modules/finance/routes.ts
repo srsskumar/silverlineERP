@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import {
-  paymentSchema, allocationSchema, financialPeriodSchema, periodClosureSchema,
+  paymentSchema, paymentAllocationSchema, financialPeriodSchema, periodClosureSchema,
   bankImportSchema, invoiceStatusSchema, disputeSchema,
   settlementPosition, unallocated, checkAllocation, periodAllows, findPeriodOverlap,
   reconcileImport, INVOICE_TRANSITIONS,
@@ -256,7 +256,7 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
 
   app.post('/api/v1/payments/:id/allocations', { preHandler: guard('payment.allocate') }, async (req, reply) => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const input = parse(allocationSchema, req.body);
+    const input = parse(paymentAllocationSchema, req.body);
     const row = await mutate(pool, req, 'payment.allocate', 'payment_allocation', async db => {
       const payment = await inOrg(db, 'payments', id, u.orgId, true);
       if (payment.reversed_at) fail('PAYMENT_REVERSED', 'A reversed payment cannot be allocated');

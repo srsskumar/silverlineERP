@@ -51,6 +51,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "041_project_category_and_gst", file: "041_project_category_and_gst.sql" },
   { version: "042_financial_control", file: "042_financial_control.sql" },
   { version: "043_inventory_control", file: "043_inventory_control.sql" },
+  { version: "044_allocation_roster", file: "044_allocation_roster.sql" },
 ];
 
 /**
