@@ -4,6 +4,11 @@ import {Workbench,Panel,MutationForm,choices} from '@/components/v2/Workbench';
 /**
  * §8.1 tender capture. Linking an opportunity closes the originating lead and
  * records the lineage (§37.1) — the server does both in one transaction.
+ *
+ * The authority's own free-text work category used to sit here. Nothing read
+ * it — no filter, no report, no grouping — and the project category master now
+ * does that job properly, so it has gone rather than staying as a box people
+ * dutifully fill in for nobody.
  */
 export default function Page(){
  return <Workbench title="New tender" description="Government and private bids. Linking an opportunity carries the pipeline across instead of re-keying it.">
@@ -11,10 +16,10 @@ export default function Page(){
    <MutationForm path="tenders" fields={[
      {key:'tender_no',label:'Tender number',required:true},
      {key:'tender_type',label:'Type',type:'select',required:true,options:choices(['OPEN','LIMITED','SINGLE','EOI','RFP'])},
-     {key:'client_id',label:'Client',source:'clients?limit=100'},
-     {key:'opportunity_id',label:'From opportunity',source:'opportunities?limit=100',labelKey:'organization_name'},
-     {key:'category',label:'Authority work category',
-      hint:'As printed on the notice. Our own classification is below.'},
+     {key:'client_id',label:'Client',source:'clients?limit=100',createPath:'clients',
+      hint:'Type to search, or add a client that is not on the list yet.'},
+     {key:'opportunity_id',label:'Won from this opportunity',source:'opportunities?limit=100',labelKey:'organization_name',
+      hint:'Links the bid to the pipeline: the opportunity and its lead are closed automatically, and the lineage is kept. Leave empty for a tender found directly on a portal.'},
      {key:'project_type_id',label:'Project type',source:'project-types',labelKey:'name',
       createPath:'project-types',
       hint:'How the work is contracted — AMC, goods, services.'},

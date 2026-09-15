@@ -5,6 +5,7 @@ import { apiRequest,apiRequestRaw } from '@/lib/apiClient';
 import { AppShell } from '@/components/AppShell';
 import { useAuth } from '@/components/AuthProvider';
 import { Button } from '@/components/ui/Button';
+import { Combobox } from '@/components/ui/Combobox';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 export type Row=Record<string,any>;
 export function useRows(path:string,enabled=true){const {status}=useAuth();return useQuery({queryKey:['v2',path],queryFn:async()=>{const r=await apiRequestRaw('/api/v1/'+path);const b=r.body as {data?:Row[];has_more?:boolean;next_offset?:number};return {rows:Array.isArray(b)?b:b.data??[],hasMore:b.has_more??false};},enabled:enabled&&status==='authenticated'});}
@@ -30,49 +31,41 @@ export interface Field {
 function SelectField({field,value,onChange}:{field:Field;value:unknown;onChange:(v:unknown)=>void}){
  const query=useRows(field.source??'',!!field.source);
  const client=useQueryClient();
- const [adding,setAdding]=useState(false);
- const [name,setName]=useState('');
- const [busy,setBusy]=useState(false);
- const [error,setError]=useState<string|null>(null);
 
- async function create(){
-  if(!name.trim()||!field.createPath) return;
-  setBusy(true);setError(null);
-  try{
-   const {data}=await apiRequest<Row>('/api/v1/'+field.createPath,{method:'POST',body:{[field.createField??'name']:name.trim()}});
-   await client.invalidateQueries({queryKey:['v2','/api/v1/'+(field.source??'')]});
-   await client.invalidateQueries({queryKey:['v2',field.source??'']});
-   onChange(String(data.id));
-   setName('');setAdding(false);
-  }catch(e){setError(e instanceof Error?e.message:'Could not add that');}
-  finally{setBusy(false);}
- }
+ const options=(field.options?.map(o=>({id:o.value,label:o.label}))
+  ??query.data?.rows.map(r=>({
+    id:String(r.id),
+    label:String(r[field.labelKey??'name']??r.title??r.username??`${r.first_name??''} ${r.last_name??''}`.trim()??r.id),
+    hint:r.code?String(r.code):undefined,
+  }))??[]);
 
- const options=field.options??query.data?.rows.map(r=>({value:r.id,label:r[field.labelKey??'name']??r.title??r.username??`${r.first_name??''} ${r.last_name??''}`}))??[];
+ // A multi-select still needs every option visible at once, so it keeps the
+ // native control; a single choice from a long list is what the typeahead is
+ // for.
+ if(field.type==='multi_select') return <select className="w-full rounded-md border border-border p-2" multiple
+   value={Array.isArray(value)?value:[]}
+   onChange={e=>onChange(Array.from(e.target.selectedOptions,o=>o.value))}>
+   {options.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}
+  </select>;
 
- if(adding) return <div className="space-y-1">
-  <div className="flex gap-2">
-   <input autoFocus className="w-full rounded-md border border-border p-2" placeholder={`New ${field.label.toLowerCase()}`} value={name} maxLength={255}
-    onChange={e=>setName(e.target.value)}
-    onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();void create();}if(e.key==='Escape'){setAdding(false);setName('');}}}/>
-   <Button type="button" loading={busy} disabled={!name.trim()} onClick={()=>void create()}>Add</Button>
-   <Button type="button" variant="secondary" onClick={()=>{setAdding(false);setName('');setError(null);}}>Cancel</Button>
-  </div>
-  {error?<p className="text-2xs text-danger">{error}</p>:null}
- </div>;
+ const create=field.createPath?async(name:string)=>{
+  const {data}=await apiRequest<Row>('/api/v1/'+field.createPath,{method:'POST',body:{[field.createField??'name']:name}});
+  await client.invalidateQueries({queryKey:['v2',field.source??'']});
+  // Some endpoints answer with the bare row and some with an envelope; both
+  // shapes are legitimate here and the picker should not care.
+  return {id:String((data as Row)?.id ?? (data as Row)?.data?.id)};
+ }:undefined;
 
- return <div className="space-y-1">
-  <div className="flex gap-2">
-   <select className="w-full rounded-md border border-border p-2" required={field.required} multiple={field.type==='multi_select'}
-    value={field.type==='multi_select'?(Array.isArray(value)?value:[]):String(value??'')}
-    onChange={e=>onChange(field.type==='multi_select'?Array.from(e.target.selectedOptions,o=>o.value):e.target.value)}>
-    <option value="">Select {field.label.toLowerCase()}</option>
-    {options.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
-   </select>
-   {field.createPath?<Button type="button" variant="secondary" onClick={()=>setAdding(true)}>+ New</Button>:null}
-  </div>
-  {field.hint?<p className="text-2xs text-text-subtle">{field.hint}</p>:null}
- </div>;
+ return <Combobox
+  value={String(value??'')}
+  onChange={v=>onChange(v)}
+  options={options}
+  isLoading={query.isLoading}
+  placeholder={`Search ${field.label.toLowerCase()}…`}
+  onCreate={create}
+  createLabel="Add"
+  emptyHint={field.hint}
+ />;
 }
 
 export function MutationForm({path,fields,method='POST',version,initial={},submit='Save',transform,onSaved}:{path:string;fields:Field[];method?:string;version?:number;initial?:Row;submit?:string;transform?:(row:Row)=>Row;onSaved?:(row:Row)=>void}){

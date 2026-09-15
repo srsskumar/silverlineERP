@@ -1,0 +1,58 @@
+import { describe, expect, it } from 'vitest';
+import { IMPORT_TEMPLATES, templateCsv } from '../lib/import-templates';
+import { parseEmployeeCsv } from '../lib/csv';
+
+/**
+ * A template nobody can actually upload is worse than none: it sends the user
+ * round a loop of validation errors while looking authoritative.
+ */
+describe('import templates', () => {
+  it('offers the three formats that are loaded from a file', () => {
+    expect(IMPORT_TEMPLATES.map((t) => t.key).sort()).toEqual(['assets', 'employees', 'inventory']);
+  });
+
+  it('gives every column an example value', () => {
+    // A header with no example leaves the reader guessing at exactly the
+    // formats they most need to see.
+    for (const t of IMPORT_TEMPLATES) {
+      expect(t.example, `${t.key} example`).toHaveLength(t.headers.length);
+    }
+  });
+
+  it('includes every required column in the header row', () => {
+    for (const t of IMPORT_TEMPLATES) {
+      for (const r of t.required) expect(t.headers, `${t.key}`).toContain(r);
+    }
+  });
+
+  it('produces a CSV the employee importer actually accepts', () => {
+    // The point of the template: round-trip it through the real parser rather
+    // than trusting that the columns look right.
+    const employees = IMPORT_TEMPLATES.find((t) => t.key === 'employees')!;
+    const parsed = parseEmployeeCsv(templateCsv(employees));
+    expect(parsed.parseErrors).toHaveLength(0);
+    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.rows[0].emp_no).toBe('EMP001');
+    expect(parsed.rows[0].first_name).toBe('Anitha');
+    // Dates land as written, in the form the server expects.
+    expect(parsed.rows[0].date_of_birth).toBe('1990-07-24');
+  });
+
+  it('maps every template header to a field the parser recognises', () => {
+    const employees = IMPORT_TEMPLATES.find((t) => t.key === 'employees')!;
+    const parsed = parseEmployeeCsv(templateCsv(employees));
+    expect(parsed.headers).toEqual(employees.headers);
+  });
+
+  it('quotes a value containing a comma', () => {
+    const employees = IMPORT_TEMPLATES.find((t) => t.key === 'employees')!;
+    // The example address has a comma in it; unquoted it would shift every
+    // subsequent column by one and the whole row would be wrong.
+    expect(templateCsv(employees)).toContain('"12 MG Road, Hyderabad"');
+  });
+
+  it('names a unique file per template', () => {
+    const names = IMPORT_TEMPLATES.map((t) => t.fileName);
+    expect(new Set(names).size).toBe(names.length);
+  });
+});

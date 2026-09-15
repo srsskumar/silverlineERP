@@ -52,7 +52,9 @@ export async function inOrg(db:Pool|PoolClient,table:string,id:string,orgId:stri
   // Workforce allocation (§47).
   'resource_allocations','work_shifts','roster_entries',
   // Project masters (§6.2).
-  'project_categories','project_types'];
+  'project_categories','project_types',
+  // Payables and receivables (§58).
+  'payment_runs'];
  // The allow-list is the injection guard for the interpolated table name
  // below, not a convenience — every table a route passes here must be named.
  // Naming the table in the error turns a bare 500 into a one-line fix; this

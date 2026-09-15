@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { contractValueBreakdown, amountInWords } from '@silverline/shared';
 import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
 import { Button } from '@/components/ui/Button';
+import { Combobox } from '@/components/ui/Combobox';
 import { money } from '@/lib/finance';
 
 type Row = Record<string, any>;
@@ -53,7 +54,7 @@ export function MasterSelect({
   label: string;
   value: string;
   onChange: (id: string) => void;
-  options: Array<{ id: string; label: string }>;
+  options: Array<{ id: string; label: string; hint?: string }>;
   isLoading?: boolean;
   placeholder: string;
   /** Omitted when the caller has no permission to add one. */
@@ -62,73 +63,21 @@ export function MasterSelect({
   disabled?: boolean;
   hint?: React.ReactNode;
 }) {
-  const [adding, setAdding] = React.useState(false);
-  const [name, setName] = React.useState('');
-  const [error, setError] = React.useState<string | null>(null);
-  const [busy, setBusy] = React.useState(false);
-
-  async function create() {
-    if (!name.trim() || !onCreate) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const created = await onCreate(name.trim());
-      onChange(created.id);
-      setName('');
-      setAdding(false);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not add that');
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <div>
       <label className="mb-1 block text-xs font-medium text-text-muted">{label}</label>
-      {adding ? (
-        <div className="flex gap-2">
-          <input
-            autoFocus
-            className={inputClass}
-            placeholder={createLabel ?? `New ${label.toLowerCase()}`}
-            value={name}
-            maxLength={255}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') { e.preventDefault(); void create(); }
-              if (e.key === 'Escape') { setAdding(false); setName(''); }
-            }}
-          />
-          <Button type="button" loading={busy} disabled={!name.trim()} onClick={() => void create()}>
-            Add
-          </Button>
-          <Button type="button" variant="secondary" onClick={() => { setAdding(false); setName(''); setError(null); }}>
-            Cancel
-          </Button>
-        </div>
-      ) : (
-        <div className="flex gap-2">
-          <select
-            className={inputClass}
-            value={value}
-            disabled={disabled || isLoading}
-            onChange={(e) => onChange(e.target.value)}
-          >
-            <option value="">{isLoading ? 'Loading…' : placeholder}</option>
-            {options.map((o) => (
-              <option key={o.id} value={o.id}>{o.label}</option>
-            ))}
-          </select>
-          {onCreate ? (
-            <Button type="button" variant="secondary" onClick={() => setAdding(true)}>
-              + New
-            </Button>
-          ) : null}
-        </div>
-      )}
-      {error ? <p className="mt-1 text-2xs text-danger">{error}</p> : null}
-      {hint && !adding ? <p className="mt-1 text-2xs text-text-subtle">{hint}</p> : null}
+      <Combobox
+        value={value}
+        onChange={onChange}
+        options={options}
+        placeholder={placeholder}
+        disabled={disabled}
+        isLoading={isLoading}
+        onCreate={onCreate}
+        createLabel={createLabel ? `Add ${createLabel.replace(/^New /i, '').replace(/ name$/i, '')}` : 'Add'}
+        emptyHint={hint}
+      />
+      {value && hint ? <p className="mt-1 text-2xs text-text-subtle">{hint}</p> : null}
     </div>
   );
 }

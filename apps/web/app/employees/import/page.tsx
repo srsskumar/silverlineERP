@@ -11,6 +11,7 @@ import { FormField } from '@/components/ui/FormField';
 import { PERMISSIONS } from '@/lib/permissions';
 import { bulkImportEmployees, type BulkImportResult } from '@/lib/employees';
 import { parseEmployeeCsv } from '@/lib/csv';
+import { ImportTemplateCard } from '@/components/ImportTemplateCard';
 import { importRowSchema } from '@/lib/validation';
 
 export const dynamic = 'force-static';
@@ -53,6 +54,7 @@ function ImportForm() {
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-lg border border-border bg-surface p-4">
+          <div className="mb-4"><ImportTemplateCard templateKey="employees" /></div>
           <FormField label="CSV file" htmlFor="import-file">
             <input
               id="import-file"

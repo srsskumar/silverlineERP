@@ -12,6 +12,7 @@ import { registerExpenseRoutes } from "./modules/expenses/routes.js";
 import { registerFinanceRoutes } from "./modules/finance/routes.js";
 import { registerStockRoutes } from "./modules/stock/routes.js";
 import { registerAllocationRoutes } from "./modules/allocation/routes.js";
+import { registerLedgerRoutes } from "./modules/ledgers/routes.js";
 import { registerAutomationRoutes } from "./modules/automation/routes.js";
 import { registerInventoryRoutes } from "./modules/inventory/routes.js";
 import { registerPlanningRoutes } from "./modules/planning/routes.js";
@@ -205,6 +206,7 @@ export async function buildApp(
   await registerFinanceRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerStockRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerAllocationRoutes(app, { pool, jwtSecret: config.jwtSecret });
+  await registerLedgerRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerAdminRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerPayrollDocuments(app, { pool, jwtSecret: config.jwtSecret });
   await registerOrgImport(app,{pool,jwtSecret:config.jwtSecret});

@@ -11,7 +11,7 @@ import {
   Activity, BarChart3, Boxes, Building2, CalendarDays, ClipboardList, Clock,
   FileSpreadsheet, FolderKanban, Inbox, LayoutDashboard, MapPin,
   Package, PlaneTakeoff, Settings, Shield, Users, Wallet, Workflow,
-  Briefcase, Contact, Gavel, Receipt, ShoppingCart, CheckSquare, IndianRupee,
+  Briefcase, Contact, Gavel, Receipt, ShoppingCart, CheckSquare, IndianRupee, Download,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { PERMISSIONS } from './permissions';
@@ -95,6 +95,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/org/locations', label: 'Locations', permission: PERMISSIONS.ORG_UNITS_READ, icon: Building2 },
       { href: '/org/holidays', label: 'Holidays', permission: PERMISSIONS.HOLIDAY_READ, icon: CalendarDays },
       { href: '/admin', label: 'Administration', permission: 'users.read', icon: Settings },
+      { href: '/admin/import-templates', label: 'Upload formats', permission: 'users.read', icon: Download },
       { href: '/security', label: 'Security', icon: Shield },
     ],
   },

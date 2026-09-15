@@ -22,6 +22,8 @@ import {
   INVENTORY_ROLE_GRANTS,
   ALLOCATION_PERMISSIONS,
   ALLOCATION_ROLE_GRANTS,
+  LEDGER_PERMISSIONS,
+  LEDGER_ROLE_GRANTS,
   ROLE_CODES,
   ROLE_PERMISSIONS,
   S1_ALL_PERMISSIONS,
@@ -93,6 +95,10 @@ const PERMISSION_MODULES: Record<string, string> = {
   stockcount: "inventory",
   allocation: "workforce",
   roster: "workforce",
+  ar: "finance",
+  ap: "finance",
+  payable: "finance",
+  paymentrun: "finance",
 };
 
 function moduleFor(permission: string): string {
@@ -130,7 +136,7 @@ export async function seedDatabase(
     orgId = (org.rows[0] as { id: string }).id;
   }
 
-  for (const code of [...ALL_PERMISSIONS, ...S1_ALL_PERMISSIONS, ...S2_ALL_PERMISSIONS, ...S3_ALL_PERMISSIONS, ...S4_ALL_PERMISSIONS, ...S5_ALL_PERMISSIONS, ...S6_ALL_PERMISSIONS, ...P1_ALL_PERMISSIONS, ...V2_PERMISSIONS, ...CRM_PERMISSIONS, ...BILLING_PERMISSIONS, ...APPROVAL_PERMISSIONS, ...PROCUREMENT_PERMISSIONS, ...COST_CONTROL_PERMISSIONS, ...EXPENSE_PERMISSIONS, ...FINANCE_PERMISSIONS, ...INVENTORY_PERMISSIONS, ...ALLOCATION_PERMISSIONS]) {
+  for (const code of [...ALL_PERMISSIONS, ...S1_ALL_PERMISSIONS, ...S2_ALL_PERMISSIONS, ...S3_ALL_PERMISSIONS, ...S4_ALL_PERMISSIONS, ...S5_ALL_PERMISSIONS, ...S6_ALL_PERMISSIONS, ...P1_ALL_PERMISSIONS, ...V2_PERMISSIONS, ...CRM_PERMISSIONS, ...BILLING_PERMISSIONS, ...APPROVAL_PERMISSIONS, ...PROCUREMENT_PERMISSIONS, ...COST_CONTROL_PERMISSIONS, ...EXPENSE_PERMISSIONS, ...FINANCE_PERMISSIONS, ...INVENTORY_PERMISSIONS, ...ALLOCATION_PERMISSIONS, ...LEDGER_PERMISSIONS]) {
     await pool.query(
       `INSERT INTO permissions (code, description, module)
        VALUES ($1, $2, $3) ON CONFLICT (code) DO NOTHING`,
@@ -173,6 +179,7 @@ export async function seedDatabase(
       ...(FINANCE_ROLE_GRANTS[code as RoleCode] ?? []),
       ...(INVENTORY_ROLE_GRANTS[code as RoleCode] ?? []),
       ...(ALLOCATION_ROLE_GRANTS[code as RoleCode] ?? []),
+      ...(LEDGER_ROLE_GRANTS[code as RoleCode] ?? []),
     ]);
     for (const perm of grants) {
       await pool.query(

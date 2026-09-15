@@ -167,6 +167,15 @@ function LeadCard({ lead, onOpen }: { lead: Row; onOpen: () => void }) {
           ) : null}
         </div>
       </button>
+      <div className="border-t border-border px-2.5 py-1.5 text-right">
+        <a
+          href={`/leads/edit?id=${lead.id}`}
+          className="text-2xs font-medium text-primary hover:underline"
+          onClick={(e) => e.stopPropagation()}
+        >
+          Edit
+        </a>
+      </div>
     </article>
   );
 }
