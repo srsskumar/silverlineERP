@@ -12,7 +12,8 @@ import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 import { getTask, patchTask } from '@/lib/tasks';
 import { queryKeys } from '@/lib/query-keys';
 import { taskPatchSchema, type TaskPatchInput } from '@/lib/validation';
-import { shortUserId } from '@/components/ApprovalTimeline';
+import { listPeople, peopleIndex, personLabel } from '@/lib/people';
+import { PRIORITIES } from '@/components/projects/ProjectFields';
 import { AssignDialog } from '@/components/AssignDialog';
 import { CommentThread } from '@/components/CommentThread';
 import { ConflictDialog, useConflict } from '@/components/ConflictDialog';
@@ -62,6 +63,10 @@ export function TaskDetailView({ projectId, taskId }: { projectId: string; taskI
     queryKey: queryKeys.tasks.detail(taskId),
     queryFn: () => getTask(taskId),
   });
+
+  // The assignee is shown by name, from the employee directory.
+  const peopleQuery = useQuery({ queryKey: ['people'], queryFn: listPeople, staleTime: 300_000 });
+  const people = React.useMemo(() => peopleIndex(peopleQuery.data ?? []), [peopleQuery.data]);
 
   const refetchAll = React.useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: queryKeys.tasks.detail(taskId) });
@@ -130,14 +135,9 @@ export function TaskDetailView({ projectId, taskId }: { projectId: string; taskI
               <DetailRow
                 label="Assignee"
                 value={
-                  task.assignee_id ? (
-                    <span className="font-mono text-xs" title={String(task.assignee_id)}>
-                      {shortUserId(String(task.assignee_id))}
-                      <span className="ml-2 text-text-subtle">(user id — no users directory in S4)</span>
-                    </span>
-                  ) : (
-                    'Unassigned'
-                  )
+                  task.assignee_id
+                    ? <span title={String(task.assignee_id)}>{personLabel(people, String(task.assignee_id))}</span>
+                    : <span className="text-text-subtle">Unassigned</span>
                 }
               />
               <DetailRow label="Description" value={task.description ? String(task.description) : '—'} />
@@ -185,11 +185,18 @@ export function TaskDetailView({ projectId, taskId }: { projectId: string; taskI
               <ul className="mt-3 divide-y divide-border">
                 {subtasks.map((s) => (
                   <li key={s.id} className="flex items-center justify-between gap-3 py-2 text-sm">
-                    <span className="min-w-0 truncate text-text">{s.title}</span>
+                    <span className="min-w-0 truncate">
+                      <span className="text-text">{s.title}</span>
+                      <span className="ml-2 text-2xs text-text-subtle">
+                        {personLabel(people, s.assignee_id as string | null)}
+                      </span>
+                    </span>
                     <span className="flex shrink-0 items-center gap-3">
                       <TaskStatusBadge status={String(s.status)} />
+                      {/* A subtask is a task: opening it gives the same edit,
+                          assign and status controls as any other. */}
                       <Link href={`/projects/${projectId}/tasks/${s.id}`} className="text-primary hover:underline">
-                        Open
+                        Edit
                       </Link>
                     </span>
                   </li>
@@ -332,7 +339,14 @@ function EditTaskFields({
           <textarea id={`task-desc-${taskId}`} rows={3} className={inputClass} {...register('description')} />
         </FormField>
         <FormField label="Priority" htmlFor={`task-priority-${taskId}`} error={errors.priority?.message}>
-          <Input id={`task-priority-${taskId}`} placeholder="e.g. HIGH" {...register('priority')} />
+          {/* A dropdown, not free text: the server accepts four values and
+              typing produced "high", "Hi" and "URGENT!" against them. */}
+          <select id={`task-priority-${taskId}`} className={inputClass} {...register('priority')}>
+            <option value="">Unset</option>
+            {PRIORITIES.map((p) => (
+              <option key={p} value={p}>{p.charAt(0) + p.slice(1).toLowerCase()}</option>
+            ))}
+          </select>
         </FormField>
         {submitError ? <ErrorCard title="Could not save task" error={submitError} /> : null}
         <div>

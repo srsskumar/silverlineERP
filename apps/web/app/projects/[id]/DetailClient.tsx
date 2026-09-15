@@ -12,7 +12,7 @@ import { listTasksPage, type Task } from '@/lib/tasks';
 import { queryKeys } from '@/lib/query-keys';
 import { PROJECT_STATUS_TRANSITIONS } from '@silverline/shared';
 import { statusLabel } from '@/lib/board-visuals';
-import { shortUserId } from '@/components/ApprovalTimeline';
+import { listPeople, peopleIndex, personLabel } from '@/lib/people';
 import { CloseProjectDialog } from '@/components/CloseProjectDialog';
 import { ConflictDialog, useConflict } from '@/components/ConflictDialog';
 import { FilterBar } from '@/components/FilterBar';
@@ -59,6 +59,10 @@ export function ProjectDetailView({ id }: { id: string }) {
     queryKey: queryKeys.projects.detail(id),
     queryFn: () => getProject(id),
   });
+
+  // Names, not identifiers: nobody refers to a colleague by UUID.
+  const peopleQuery = useQuery({ queryKey: ['people'], queryFn: listPeople, staleTime: 300_000 });
+  const peopleIdx = React.useMemo(() => peopleIndex(peopleQuery.data ?? []), [peopleQuery.data]);
 
   const refetchAll = React.useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(id) });
@@ -142,14 +146,9 @@ export function ProjectDetailView({ id }: { id: string }) {
               <DetailRow
                 label="Manager"
                 value={
-                  project.project_manager_id ? (
-                    <span className="font-mono text-xs" title={String(project.project_manager_id)}>
-                      {shortUserId(String(project.project_manager_id))}
-                      <span className="ml-2 text-text-subtle">(user id — no users directory in S4)</span>
-                    </span>
-                  ) : (
-                    '—'
-                  )
+                  project.project_manager_id
+                    ? personLabel(peopleIdx, String(project.project_manager_id))
+                    : <span className="text-text-subtle">Unassigned</span>
                 }
               />
               <DetailRow label="Description" value={project.description ? String(project.description) : '—'} />
@@ -346,6 +345,8 @@ function ProjectStatusPanel({
 
 function ProjectTasksTable({ projectId, canCreateTask }: { projectId: string; canCreateTask: boolean }) {
   const queryClient = useQueryClient();
+  const peopleQuery = useQuery({ queryKey: ['people'], queryFn: listPeople, staleTime: 300_000 });
+  const people = React.useMemo(() => peopleIndex(peopleQuery.data ?? []), [peopleQuery.data]);
   const [status, setStatus] = React.useState('');
   const [q, setQ] = React.useState('');
   const [mineOnly, setMineOnly] = React.useState(false);
@@ -457,7 +458,7 @@ function ProjectTasksTable({ projectId, canCreateTask }: { projectId: string; ca
                   </td>
                   <td className="px-3 py-2 font-mono text-xs text-text-muted">
                     {t.assignee_id ? (
-                      <span title={String(t.assignee_id)}>{shortUserId(String(t.assignee_id))}</span>
+                      <span title={String(t.assignee_id)}>{personLabel(people, String(t.assignee_id))}</span>
                     ) : (
                       <span className="text-text-subtle">—</span>
                     )}

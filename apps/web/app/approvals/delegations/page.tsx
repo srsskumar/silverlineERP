@@ -14,6 +14,7 @@ import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Tabl
 import { Badge } from '@/components/ui/Badge';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
+import { listPeople } from '@/lib/people';
 import { Notice, Section } from '@/components/finance/Primitives';
 import { day, DOCUMENT_TYPE_LABELS } from '@/lib/finance';
 
@@ -42,8 +43,7 @@ export default function DelegationsPage() {
 
   const users = useQuery({
     queryKey: ['users', 'for-delegation'],
-    queryFn: async () =>
-      ((await apiRequestRaw('/api/v1/users?limit=100')).body as { data: Row[] }).data,
+    queryFn: listPeople,
     enabled: canDelegate,
     staleTime: 300_000,
   });
@@ -112,7 +112,7 @@ export default function DelegationsPage() {
                     {(users.data ?? [])
                       .filter((u) => String(u.id) !== session?.user?.id)
                       .map((u) => (
-                        <option key={String(u.id)} value={String(u.id)}>{u.username}</option>
+                        <option key={String(u.id)} value={String(u.id)}>{u.name ?? u.username}</option>
                       ))}
                   </select>
                 </label>

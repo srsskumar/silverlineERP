@@ -865,6 +865,59 @@ export async function registerWorkRoutes(
     return reply.status(200).send(toWorkspaceShape(row));
   });
 
+  // ------------------------------------------------- GET /people
+  //
+  // Who work can be assigned to, by name.
+  //
+  // Tasks are assigned to a user, but people are known by their employee
+  // record, so this joins the two and returns the name the rest of the
+  // business uses. Without it the only list of users was /admin/users, gated
+  // on users.read — which a project manager does not hold — so every assign
+  // and project-manager field asked for a raw UUID that somebody had to look
+  // up elsewhere and paste.
+  //
+  // Authenticated rather than permission-gated, and deliberately narrow: it
+  // returns a colleague's display name and employee number, both of which
+  // already appear on every task card. No contact details, no identifiers,
+  // nothing that is not already on screen.
+  app.get("/api/v1/people", { preHandler: authenticate }, async (req, reply) => {
+    const user = req.authUser;
+    if (!user) {
+      return sendError(reply, req.requestId, {
+        status: 401, code: "UNAUTHENTICATED", message: "Authentication required",
+      });
+    }
+    // The same page cap as every other list. A picker wants the whole
+    // directory, but it gets there by paging like everything else rather than
+    // by this one route having a private limit nobody else knows about.
+    const q = req.query as Record<string, string>;
+    const limit = Math.min(100, Math.max(1, Number(q.limit) || 100));
+    const offset = Math.max(0, Number(q.offset) || 0);
+    const rows = (await opts.pool.query(
+      `SELECT u.id, u.username, u.employee_id,
+              e.emp_no,
+              trim(concat_ws(' ', e.first_name, e.last_name)) AS employee_name,
+              e.status AS employee_status
+       FROM users u
+       LEFT JOIN employees e ON e.id = u.employee_id AND e.org_id = u.org_id
+       WHERE u.org_id = $1 AND u.auth_status = 'ACTIVE'
+       ORDER BY COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), u.username)
+       LIMIT $2 OFFSET $3`,
+      [user.orgId, limit + 1, offset],
+    )).rows;
+    const data = rows.slice(0, limit).map((r) => ({
+      id: r.id,
+      username: r.username,
+      employee_id: r.employee_id,
+      emp_no: r.emp_no,
+      // The name to show. Falls back to the sign-in name for an account with
+      // no employee record — a service or admin login — rather than blank.
+      name: (r.employee_name && String(r.employee_name).trim()) || r.username,
+      employee_status: r.employee_status,
+    }));
+    return reply.status(200).send({ data, has_more: rows.length > limit });
+  });
+
   // ------------------------------------- project categories (§6.2 masters)
   //
   // What the work is about — drones, CCTV, survey equipment — as a second

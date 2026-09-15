@@ -1550,3 +1550,71 @@ describe("UT-WORK-14 project categories", () => {
     expect(res.statusCode).toBeGreaterThanOrEqual(400);
   });
 });
+
+/**
+ * The people directory (§4, §12.2).
+ *
+ * Tasks carry a user id, but nobody refers to a colleague as a UUID. Before
+ * this endpoint the only user list was /admin/users, gated on users.read —
+ * which a project manager does not hold — so every assign field asked for an
+ * identifier the user had to find elsewhere and paste.
+ */
+describe("UT-WORK-15 people directory", () => {
+  it("returns the employee name, not the sign-in name, where there is one", async () => {
+    const res = await w.app.inject({ method: "GET", url: "/api/v1/people", headers: w.admin });
+    expect(res.statusCode).toBe(200);
+    const rows = res.json().data as Array<{ id: string; name: string; employee_id: string | null }>;
+    const linked = rows.find((r) => r.employee_id);
+    expect(linked).toBeTruthy();
+    const employee = await w.pool.query(
+      "SELECT first_name, last_name FROM employees WHERE id = $1", [linked!.employee_id]);
+    expect(linked!.name).toBe(
+      `${employee.rows[0].first_name} ${employee.rows[0].last_name}`.trim());
+  });
+
+  it("falls back to the sign-in name for an account with no employee record", async () => {
+    // A service or administrator login still has to be selectable; showing a
+    // blank row would make it unpickable and look like data loss.
+    const res = await w.app.inject({ method: "GET", url: "/api/v1/people", headers: w.admin });
+    const rows = res.json().data as Array<{ name: string; employee_id: string | null; username: string }>;
+    for (const r of rows.filter((x) => !x.employee_id)) {
+      expect(r.name).toBe(r.username);
+    }
+    for (const r of rows) expect(r.name.trim().length).toBeGreaterThan(0);
+  });
+
+  it("is readable by a project manager, who cannot read the admin user list", async () => {
+    // The whole point: the assign field is used by people who do not hold
+    // users.read, and gating the directory on it is what forced the UUID.
+    const admin = await w.app.inject({
+      method: "GET", url: "/api/v1/admin/users", headers: w.role.PROJECT_MANAGER,
+    });
+    expect(admin.statusCode).toBe(403);
+    const people = await w.app.inject({
+      method: "GET", url: "/api/v1/people", headers: w.role.PROJECT_MANAGER,
+    });
+    expect(people.statusCode).toBe(200);
+  });
+
+  it("carries no contact details beyond what a task card already shows", async () => {
+    const res = await w.app.inject({ method: "GET", url: "/api/v1/people", headers: w.admin });
+    const keys = new Set(Object.keys(res.json().data[0] ?? {}));
+    for (const leaked of ["email", "phone", "aadhaar", "pan", "password_hash", "bank_account"]) {
+      expect(keys.has(leaked), `${leaked} must not be in the directory`).toBe(false);
+    }
+  });
+
+  it("stays inside the organisation", async () => {
+    const mine = await w.app.inject({ method: "GET", url: "/api/v1/people", headers: w.admin });
+    const theirs = await w.app.inject({ method: "GET", url: "/api/v1/people", headers: w.other.admin });
+    const mineIds = new Set((mine.json().data as Array<{ id: string }>).map((r) => r.id));
+    for (const r of theirs.json().data as Array<{ id: string }>) {
+      expect(mineIds.has(r.id)).toBe(false);
+    }
+  });
+
+  it("refuses an unauthenticated caller", async () => {
+    const res = await w.app.inject({ method: "GET", url: "/api/v1/people" });
+    expect(res.statusCode).toBe(401);
+  });
+});

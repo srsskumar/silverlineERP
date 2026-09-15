@@ -210,7 +210,7 @@ export function useClients(track: string) {
 export function useUsers() {
   return useQuery({
     queryKey: ['users', 'master'],
-    queryFn: () => fetchAll('/api/v1/users'),
+    queryFn: () => fetchAll('/api/v1/people'),
     staleTime: 300_000,
     retry: false,
   });
