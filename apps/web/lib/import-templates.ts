@@ -11,6 +11,8 @@
  * which is the mistake a placeholder invites.
  */
 
+import { downloadWorkbook, type SheetSpec } from './xlsx';
+
 export interface ImportTemplate {
   key: string;
   label: string;
@@ -22,6 +24,14 @@ export interface ImportTemplate {
   required: string[];
   /** One row of realistic data, so the expected formats are unambiguous. */
   example: string[];
+  /**
+   * Columns that accept a fixed set of values, keyed by header.
+   *
+   * In the CSV these are only documented; in the Excel file they become
+   * dropdowns, which is the difference between a rule stated and a rule
+   * enforced. Most import failures are a mis-typed enum.
+   */
+  options?: Record<string, string[]>;
   notes: string[];
 }
 
@@ -39,6 +49,10 @@ export const IMPORT_TEMPLATES: ImportTemplate[] = [
       'aadhaar', 'pan', 'bank_name', 'bank_account', 'bank_ifsc', 'phonepe_number',
     ],
     required: ['emp_no', 'first_name', 'last_name', 'phone'],
+    options: {
+      gender: ['MALE', 'FEMALE', 'OTHER'],
+      status: ['ACTIVE', 'SUSPENDED', 'EXITED'],
+    },
     example: [
       'EMP001', 'Anitha', 'Devi', 'Ramesh Devi', '1990-07-24', 'FEMALE',
       '+919876543210', '', 'anitha.devi@example.com', '12 MG Road, Hyderabad',
@@ -65,6 +79,12 @@ export const IMPORT_TEMPLATES: ImportTemplate[] = [
       'batch_tracked', 'serial_tracked', 'reorder_level', 'reorder_quantity', 'status',
     ],
     required: ['code', 'name', 'unit'],
+    options: {
+      unit: ['KG', 'GM', 'TON', 'LTR', 'ML', 'MTR', 'SQM', 'CUM', 'NOS', 'BAG', 'ROLL', 'SET'],
+      batch_tracked: ['true', 'false'],
+      serial_tracked: ['true', 'false'],
+      status: ['ACTIVE', 'INACTIVE'],
+    },
     example: [
       'CEM-OPC-53', 'OPC 53 Grade Cement', 'Civil', 'KG', 'BAG', '50',
       '2523', '28', '7.40',
@@ -87,6 +107,10 @@ export const IMPORT_TEMPLATES: ImportTemplate[] = [
       'purchase_date', 'purchase_cost', 'warranty_until', 'condition', 'status', 'notes',
     ],
     required: ['code', 'name'],
+    options: {
+      condition: ['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED'],
+      status: ['AVAILABLE', 'ASSIGNED', 'IN_REPAIR', 'RETIRED'],
+    },
     example: [
       'AST-TS-014', 'Total Station', 'Survey Equipment', 'TS2024X0914', 'Leica', 'TS07plus',
       '2024-02-11', '485000', '2027-02-10', 'GOOD', 'AVAILABLE', 'Calibrated Feb 2026',
@@ -99,6 +123,25 @@ export const IMPORT_TEMPLATES: ImportTemplate[] = [
     ],
   },
 ];
+
+/**
+ * The template as a sheet, which is what both downloads are built from.
+ *
+ * One definition rather than two means the CSV and the Excel file cannot
+ * drift apart in their columns, which is exactly the bug a reader would be
+ * least able to diagnose.
+ */
+export function templateSheet(template: ImportTemplate): SheetSpec {
+  return {
+    name: template.label,
+    columns: template.headers.map((header) => ({
+      header,
+      options: template.options?.[header],
+      width: header.length > 14 ? 24 : 16,
+    })),
+    rows: [template.example],
+  };
+}
 
 /** A CSV cell, quoted only where it has to be. */
 function cell(value: string): string {
@@ -114,6 +157,11 @@ function cell(value: string): string {
  */
 export function templateCsv(template: ImportTemplate): string {
   return `${template.headers.map(cell).join(',')}\n${template.example.map(cell).join(',')}\n`;
+}
+
+/** The same template as an Excel workbook, with the fixed columns as dropdowns. */
+export function downloadTemplateWorkbook(template: ImportTemplate): void {
+  downloadWorkbook([templateSheet(template)], template.fileName.replace(/\.csv$/, '.xlsx'));
 }
 
 /** Trigger a download of the template in the browser. */

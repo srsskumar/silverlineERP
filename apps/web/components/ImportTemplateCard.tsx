@@ -3,7 +3,11 @@
 import * as React from 'react';
 import { Download } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
-import { IMPORT_TEMPLATES, downloadTemplate, type ImportTemplate } from '@/lib/import-templates';
+import {
+  IMPORT_TEMPLATES, downloadTemplate, downloadTemplateWorkbook, templateSheet,
+  type ImportTemplate,
+} from '@/lib/import-templates';
+import { optionsNote } from '@/lib/xlsx';
 
 /**
  * The download-the-format panel.
@@ -26,10 +30,18 @@ export function TemplatePanel({ template }: { template: ImportTemplate }) {
           <h3 className="text-sm font-semibold text-text">{template.label} template</h3>
           <p className="mt-0.5 text-xs text-text-muted">{template.description}</p>
         </div>
-        <Button type="button" variant="secondary" onClick={() => downloadTemplate(template)}>
-          <Download className="size-4" />
-          Download CSV
-        </Button>
+        <div className="flex shrink-0 gap-2">
+          {/* Excel first: its dropdowns stop the mis-typed enum that causes
+              most of the rejections on a bulk upload. */}
+          <Button type="button" variant="secondary" onClick={() => downloadTemplateWorkbook(template)}>
+            <Download className="size-4" />
+            Excel
+          </Button>
+          <Button type="button" variant="ghost" onClick={() => downloadTemplate(template)}>
+            <Download className="size-4" />
+            CSV
+          </Button>
+        </div>
       </div>
 
       <div className="mt-3 space-y-2 text-xs">
@@ -50,6 +62,7 @@ export function TemplatePanel({ template }: { template: ImportTemplate }) {
           </p>
         </details>
         <ul className="ml-4 list-disc space-y-0.5 text-text-subtle">
+          {optionsNote(templateSheet(template)).map((n) => <li key={n}>{n}</li>)}
           {template.notes.map((n) => <li key={n}>{n}</li>)}
         </ul>
       </div>
