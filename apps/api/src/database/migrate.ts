@@ -32,6 +32,26 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "024_employee_pii_uniqueness", file: "024_employee_pii_uniqueness.sql" },
   { version: "025_attendance_fence_version", file: "025_attendance_fence_version.sql" },
   { version: "026_blob_storage", file: "026_blob_storage.sql" },
+  { version: "027_client_contact_master", file: "027_client_contact_master.sql" },
+  { version: "028_crm_leads", file: "028_crm_leads.sql" },
+  { version: "029_tender_bid", file: "029_tender_bid.sql" },
+  { version: "030_conversion_lineage", file: "030_conversion_lineage.sql" },
+  { version: "031_commercial_permissions", file: "031_commercial_permissions.sql" },
+  { version: "032_india_statutory", file: "032_india_statutory.sql" },
+  { version: "033_indian_tender_practice", file: "033_indian_tender_practice.sql" },
+  { version: "034_ra_billing", file: "034_ra_billing.sql" },
+  { version: "035_approvals", file: "035_approvals.sql" },
+  { version: "036_gst_invoice_model", file: "036_gst_invoice_model.sql" },
+  // Contract phase of the GSTIN move. Run only after the API build that stops
+  // touching clients.gstin / vendors.gstin is live — see the file header.
+  { version: "037_drop_client_gstin", file: "037_drop_client_gstin.sql" },
+  { version: "038_procurement", file: "038_procurement.sql" },
+  { version: "039_procurement_enhancements", file: "039_procurement_enhancements.sql" },
+  { version: "040_expense_cost_control", file: "040_expense_cost_control.sql" },
+  { version: "041_project_category_and_gst", file: "041_project_category_and_gst.sql" },
+  { version: "042_financial_control", file: "042_financial_control.sql" },
+  { version: "043_inventory_control", file: "043_inventory_control.sql" },
+  { version: "044_allocation_roster", file: "044_allocation_roster.sql" },
 ];
 
 /**

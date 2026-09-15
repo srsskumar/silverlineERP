@@ -3,6 +3,15 @@ import {transactionPool} from './common/transactionContext.js';
 import {registerOrgImport} from "./modules/org/import.js";
 import {registerIntegrationRoutes} from "./modules/integrations/routes.js";
 import {registerJobRoutes} from "./modules/jobs/routes.js";
+import { registerCrmRoutes } from "./modules/crm/routes.js";
+import { registerTenderRoutes } from "./modules/tender/routes.js";
+import { registerBillingRoutes } from "./modules/billing/routes.js";
+import { registerApprovalRoutes } from "./modules/approvals/routes.js";
+import { registerProcurementRoutes } from "./modules/procurement/routes.js";
+import { registerExpenseRoutes } from "./modules/expenses/routes.js";
+import { registerFinanceRoutes } from "./modules/finance/routes.js";
+import { registerStockRoutes } from "./modules/stock/routes.js";
+import { registerAllocationRoutes } from "./modules/allocation/routes.js";
 import { registerAutomationRoutes } from "./modules/automation/routes.js";
 import { registerInventoryRoutes } from "./modules/inventory/routes.js";
 import { registerPlanningRoutes } from "./modules/planning/routes.js";
@@ -12,7 +21,7 @@ import { registerPayrollDocuments } from "./modules/payroll/documents.js";
 import cors from "@fastify/cors";
 import Fastify, { LogController, type FastifyInstance } from "fastify";
 import type { Pool } from "pg";
-import { getConfig, type ApiConfigOverrides } from "./config.js";
+import { getConfig, originAllowed, type ApiConfigOverrides } from "./config.js";
 import { registerRequestId } from "./common/requestId.js";
 import { registerErrorHandler } from "./common/httpErrors.js";
 import { createPool, describeConnectionError } from "./database/db.js";
@@ -92,9 +101,17 @@ export async function buildApp(
   app.decorate("appConfig", config);
 
   await app.register(cors, {
-    origin: config.corsOrigin,
+    // A predicate rather than a list, so preview deployments keep working.
+    // See originAllowed: patterns must name the project, never all of
+    // *.vercel.app, because this API is called with credentials.
+    origin(origin, callback) {
+      // A missing Origin is a same-origin or non-browser caller (curl, the
+      // mobile app); CORS does not apply to those.
+      if (!origin) return callback(null, true);
+      callback(null, originAllowed(origin, [...config.corsOrigin, ...config.corsPreviewPatterns]));
+    },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-ID', 'If-Match'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-ID', 'If-Match', 'X-Record-Version'],
     exposedHeaders: ['x-request-id', 'content-disposition', 'retry-after'],
     credentials: true,
   });
@@ -179,6 +196,15 @@ export async function buildApp(
   await registerPlanningRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerAutomationRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerAnalyticsRoutes(app, { pool, jwtSecret: config.jwtSecret });
+  await registerCrmRoutes(app, { pool, jwtSecret: config.jwtSecret });
+  await registerTenderRoutes(app, { pool, jwtSecret: config.jwtSecret });
+  await registerBillingRoutes(app, { pool, jwtSecret: config.jwtSecret });
+  await registerApprovalRoutes(app, { pool, jwtSecret: config.jwtSecret });
+  await registerProcurementRoutes(app, { pool, jwtSecret: config.jwtSecret });
+  await registerExpenseRoutes(app, { pool, jwtSecret: config.jwtSecret });
+  await registerFinanceRoutes(app, { pool, jwtSecret: config.jwtSecret });
+  await registerStockRoutes(app, { pool, jwtSecret: config.jwtSecret });
+  await registerAllocationRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerAdminRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerPayrollDocuments(app, { pool, jwtSecret: config.jwtSecret });
   await registerOrgImport(app,{pool,jwtSecret:config.jwtSecret});

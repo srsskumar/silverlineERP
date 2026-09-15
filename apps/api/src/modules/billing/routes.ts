@@ -1,0 +1,448 @@
+import type { FastifyInstance } from 'fastify';
+import type { Pool, PoolClient } from 'pg';
+import {
+  boqItemSchema, raBillSchema, deductionPolicySchema, advanceSchema,
+  raBillLine, computeRaBill, recoverAdvance, retentionReleaseStatus,
+  RA_BILL_TRANSITIONS, type RaBillStatus, type RaBillLine, type DeductionPolicy,
+} from '@silverline/shared';
+import { buildAuthenticate, requirePermission } from '../../common/auth.js';
+import { actor, parse, page, inOrg, mutate, version, fail, projectAccess } from '../../common/domain.js';
+
+/**
+ * Running-account billing (§15, §37.3).
+ *
+ * The invariant this module protects: a bill claims cumulative measurement
+ * less what earlier bills already claimed. `previous_quantity` is therefore
+ * never supplied by the caller — it is read from the last certified bill
+ * inside the same transaction. A client that could set it would be able to
+ * bill the same work twice by sending zero.
+ */
+export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: Pool; jwtSecret: string }) {
+  const { pool } = opts;
+  const auth = buildAuthenticate(opts);
+  const guard = (p: string) => requirePermission(auth, p);
+
+  /** The policy that applies to a project, with the org's own defaults absent. */
+  async function policyFor(db: Pool | PoolClient, projectId: string): Promise<DeductionPolicy & { gstRatePct?: number; dlpEndDate?: string | null; firstTranchePct?: number }> {
+    const row = (await db.query('SELECT * FROM project_billing_policies WHERE project_id = $1', [projectId])).rows[0];
+    if (!row) return {};
+    return {
+      retentionPct: num(row.retention_pct),
+      retentionCapPctOfContract: num(row.retention_cap_pct_of_contract),
+      securityDepositPct: num(row.security_deposit_pct),
+      labourCessPct: num(row.labour_cess_pct),
+      tdsIncomeTaxPct: num(row.tds_income_tax_pct),
+      tdsGstPct: num(row.tds_gst_pct),
+      gstRatePct: num(row.gst_rate_pct),
+      dlpEndDate: row.dlp_end_date,
+      firstTranchePct: num(row.retention_first_tranche_pct),
+    };
+  }
+  const num = (v: unknown) => (v === null || v === undefined ? undefined : Number(v));
+
+  /**
+   * Cumulative quantity certified per BOQ item on earlier bills.
+   *
+   * Drawn from bills that are CERTIFIED or PAID only. A draft or submitted
+   * bill has not been accepted by the client, so treating its measurement as
+   * "already billed" would understate the next claim.
+   */
+  async function previouslyCertified(db: PoolClient, projectId: string, excludeBillId?: string) {
+    const rows = (await db.query(
+      `SELECT i.boq_item_id,
+              max(i.cumulative_quantity) AS qty,
+              max(i.cumulative_amount)   AS amount
+       FROM ra_bill_items i
+       JOIN ra_bills b ON b.id = i.ra_bill_id
+       WHERE b.project_id = $1 AND b.status IN ('CERTIFIED','PAID')
+         AND ($2::uuid IS NULL OR b.id <> $2)
+       GROUP BY i.boq_item_id`, [projectId, excludeBillId ?? null])).rows;
+    return new Map(rows.map(r => [String(r.boq_item_id), { qty: Number(r.qty), amount: Number(r.amount) }]));
+  }
+
+  /* ------------------------------------------------------------------ BOQ */
+
+  app.get('/api/v1/projects/:id/boq', { preHandler: guard('boq.read') }, async req => {
+    const id = (req.params as { id: string }).id;
+    await projectAccess(pool, req, id);
+    const rows = (await pool.query(
+      `SELECT * FROM boq_items WHERE project_id = $1 AND status = 'ACTIVE'
+       ORDER BY sort_order, item_code`, [id])).rows;
+    const total = rows.reduce((t, r) => t + Number(r.amount), 0);
+    return { data: rows, summary: { item_count: rows.length, boq_value: total.toFixed(2) } };
+  });
+
+  app.post('/api/v1/projects/:id/boq', { preHandler: guard('boq.manage') }, async (req, reply) => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const input = parse(boqItemSchema, req.body);
+    await projectAccess(pool, req, id);
+    const row = await mutate(pool, req, 'boq.create', 'boq_item', async db => {
+      await inOrg(db, 'projects', id, u.orgId);
+      const amount = Math.round(input.quantity * input.rate * 100) / 100;
+      return (await db.query(
+        `INSERT INTO boq_items(org_id, created_by, project_id, item_code, section, description,
+           unit, quantity, rate, amount, sort_order)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+           COALESCE((SELECT max(sort_order)+1 FROM boq_items WHERE project_id=$3),0))
+         RETURNING *`,
+        [u.orgId, u.id, id, input.item_code, input.section ?? null, input.description,
+         input.unit, input.quantity, input.rate, amount])).rows[0];
+    });
+    return reply.code(201).send({ data: row });
+  });
+
+  /* ------------------------------------------------------- billing policy */
+
+  app.put('/api/v1/projects/:id/billing-policy', { preHandler: guard('boq.manage') }, async req => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const input = parse(deductionPolicySchema, req.body) as Record<string, unknown>;
+    await projectAccess(pool, req, id);
+    return {
+      data: await mutate(pool, req, 'billing.policy', 'project', async db => {
+        await inOrg(db, 'projects', id, u.orgId);
+        // A certified bill froze its own figures, but changing the policy
+        // while a measurement is open would silently redraw that bill.
+        const open = await db.query(
+          "SELECT bill_no FROM ra_bills WHERE project_id=$1 AND status IN ('DRAFT','SUBMITTED')", [id]);
+        if (open.rowCount) {
+          fail('BILL_IN_PROGRESS',
+            `Bill ${open.rows[0].bill_no} is still open. Certify or cancel it before changing the deduction policy.`);
+        }
+        const keys = Object.keys(input);
+        const cols = ['retention_pct','retention_cap_pct_of_contract','security_deposit_pct',
+          'labour_cess_pct','tds_income_tax_pct','tds_gst_pct','gst_rate_pct'].filter(c => keys.includes(c));
+        const sets = cols.map(c => `${c} = EXCLUDED.${c}`).join(', ');
+        return (await db.query(
+          `INSERT INTO project_billing_policies(project_id, org_id, created_by, ${cols.join(',')})
+           VALUES($1,$2,$3,${cols.map((_, i) => `$${i + 4}`).join(',')})
+           ON CONFLICT (project_id) DO UPDATE SET ${sets},
+             version = project_billing_policies.version + 1, updated_at = now(), updated_by = $3
+           RETURNING *`,
+          [id, u.orgId, u.id, ...cols.map(c => input[c])])).rows[0];
+      }),
+    };
+  });
+
+  /* -------------------------------------------------------------- advances */
+
+  app.post('/api/v1/advances', { preHandler: guard('rabill.manage') }, async (req, reply) => {
+    const u = actor(req), input = parse(advanceSchema, req.body);
+    await projectAccess(pool, req, input.project_id);
+    const row = await mutate(pool, req, 'advance.create', 'advance', async db => {
+      await inOrg(db, 'projects', input.project_id, u.orgId);
+      return (await db.query(
+        `INSERT INTO project_advances(org_id, created_by, project_id, advance_type, amount,
+           paid_on, recovery_pct, bank_guarantee_id, remarks)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        [u.orgId, u.id, input.project_id, input.advance_type, input.amount,
+         input.paid_on, input.recovery_pct, input.bank_guarantee_id ?? null, input.remarks ?? null])).rows[0];
+    });
+    return reply.code(201).send({ data: row });
+  });
+
+  /* -------------------------------------------------------------- RA bills */
+
+  app.get('/api/v1/projects/:id/ra-bills', { preHandler: guard('rabill.read') }, async req => {
+    const id = (req.params as { id: string }).id;
+    await projectAccess(pool, req, id);
+    const rows = (await pool.query(
+      'SELECT * FROM ra_bills WHERE project_id = $1 ORDER BY bill_no DESC', [id])).rows;
+    return { data: rows };
+  });
+
+  app.get('/api/v1/ra-bills/:id', { preHandler: guard('rabill.read') }, async req => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const bill = await inOrg(pool, 'ra_bills', id, u.orgId);
+    await projectAccess(pool, req, String(bill.project_id));
+    const [items, deductions] = await Promise.all([
+      pool.query(
+        `SELECT i.*, b.item_code, b.description, b.unit, b.quantity AS boq_quantity
+         FROM ra_bill_items i JOIN boq_items b ON b.id = i.boq_item_id
+         WHERE i.ra_bill_id = $1 ORDER BY b.sort_order, b.item_code`, [id]),
+      pool.query('SELECT * FROM ra_bill_deductions WHERE ra_bill_id = $1 ORDER BY head', [id]),
+    ]);
+    return {
+      data: {
+        ...bill,
+        items: items.rows,
+        deductions: deductions.rows,
+        allowed_statuses: RA_BILL_TRANSITIONS[bill.status as RaBillStatus] ?? [],
+      },
+    };
+  });
+
+  /**
+   * Draw a bill.
+   *
+   * Everything — increments, deductions, advance recovery, the net — is
+   * computed server-side from the cumulative measurement the caller supplies
+   * and the policy on file. The caller states what was measured; it does not
+   * state what it is owed.
+   */
+  app.post('/api/v1/ra-bills', { preHandler: guard('rabill.manage') }, async (req, reply) => {
+    const u = actor(req), input = parse(raBillSchema, req.body);
+    await projectAccess(pool, req, input.project_id);
+    const row = await mutate(pool, req, 'rabill.create', 'ra_bill', async db => {
+      const project = await inOrg(db, 'projects', input.project_id, u.orgId, true);
+
+      const finalBill = await db.query(
+        "SELECT bill_no FROM ra_bills WHERE project_id=$1 AND bill_type='FINAL' AND status<>'CANCELLED'",
+        [input.project_id]);
+      if (finalBill.rowCount) {
+        fail('FINAL_BILL_RAISED',
+          `The final bill (${finalBill.rows[0].bill_no}) closes this account. No further bill can be raised.`);
+      }
+
+      const boq = new Map((await db.query(
+        "SELECT * FROM boq_items WHERE project_id=$1 AND status='ACTIVE'", [input.project_id])
+      ).rows.map(r => [String(r.id), r]));
+      const previous = await previouslyCertified(db, input.project_id);
+
+      const computed: (RaBillLine & { boqItemId: string; remarks?: string })[] = [];
+      for (const line of input.lines) {
+        const item = boq.get(line.boq_item_id);
+        if (!item) fail('UNKNOWN_BOQ_ITEM', 'A measured item is not on this project’s active BOQ');
+        const prior = previous.get(line.boq_item_id);
+        computed.push({
+          ...raBillLine({
+            boqQuantity: Number(item!.quantity),
+            rate: Number(item!.rate),
+            cumulativeQuantity: line.cumulative_quantity,
+            previousQuantity: prior?.qty ?? 0,
+          }),
+          boqItemId: line.boq_item_id,
+          remarks: line.remarks,
+        });
+      }
+
+      const grossValue = computed.reduce((t, l) => t + l.thisAmount, 0);
+      if (grossValue <= 0 && input.bill_type !== 'FINAL') {
+        fail('NOTHING_TO_BILL',
+          'This measurement claims no additional work. Record further progress before raising a bill.');
+      }
+
+      const policy = await policyFor(db, input.project_id);
+      // Retention already withheld feeds the contract cap.
+      const held = Number((await db.query(
+        `SELECT COALESCE(sum(CASE WHEN entry_type='WITHHELD' THEN amount ELSE -amount END),0) AS held
+         FROM retention_ledger WHERE project_id=$1`, [input.project_id])).rows[0].held);
+
+      const advances = (await db.query(
+        "SELECT * FROM project_advances WHERE project_id=$1 AND status='OUTSTANDING' ORDER BY paid_on",
+        [input.project_id])).rows;
+      const recoveries = advances.map(a => ({
+        row: a,
+        recovery: recoverAdvance(
+          Number(a.amount) - Number(a.recovered_amount), grossValue, Number(a.recovery_pct),
+          a.advance_type === 'MATERIAL' ? 'MATERIAL_ADVANCE' : 'MOBILISATION_ADVANCE'),
+      }));
+
+      const totals = computeRaBill(computed, policy, {
+        contractValue: project.contract_value ? Number(project.contract_value) : undefined,
+        retentionHeldToDate: held,
+        gstRatePct: policy.gstRatePct,
+        advances: recoveries.map(r => r.recovery),
+        fixedDeductions: input.fixed_deductions.map(d => ({ head: d.head, label: d.label, amount: d.amount })),
+      });
+
+      const billNo = Number((await db.query(
+        'SELECT COALESCE(max(bill_no),0)+1 AS next FROM ra_bills WHERE project_id=$1', [input.project_id])
+      ).rows[0].next);
+
+      let bill;
+      try {
+        bill = (await db.query(
+          `INSERT INTO ra_bills(org_id, created_by, project_id, bill_no, bill_type, period_from, period_to,
+             measurement_book_ref, cumulative_value, previous_value, gross_value, gst_amount,
+             total_deductions, net_payable, remarks)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+          [u.orgId, u.id, input.project_id, billNo, input.bill_type, input.period_from, input.period_to,
+           input.measurement_book_ref ?? null,
+           computed.reduce((t, l) => t + l.cumulativeAmount, 0),
+           computed.reduce((t, l) => t + l.previousAmount, 0),
+           totals.grossValue, totals.gstAmount, totals.totalDeductions, totals.netPayable,
+           input.remarks ?? null])).rows[0];
+      } catch (error) {
+        if ((error as { code?: string; constraint?: string }).constraint === 'uk_ra_one_open') {
+          fail('BILL_IN_PROGRESS',
+            'A bill is already open on this project. Certify or cancel it before raising another.', 409);
+        }
+        throw error;
+      }
+
+      for (const line of computed) {
+        await db.query(
+          `INSERT INTO ra_bill_items(org_id, ra_bill_id, boq_item_id, cumulative_quantity,
+             previous_quantity, rate, cumulative_amount, previous_amount, this_amount,
+             excess_quantity, remarks)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          [u.orgId, bill.id, line.boqItemId, line.cumulativeQuantity, line.previousQuantity,
+           line.rate, line.cumulativeAmount, line.previousAmount, line.thisAmount,
+           line.excessQuantity, line.remarks ?? null]);
+      }
+
+      const advanceByHead = new Map(recoveries
+        .filter(r => r.recovery.recovered > 0)
+        .map(r => [r.recovery.head + ':' + String(r.recovery.recovered), r.row.id]));
+      for (const d of totals.deductions) {
+        const reason = input.fixed_deductions.find(f => f.head === d.head && f.amount === d.amount)?.reason;
+        await db.query(
+          `INSERT INTO ra_bill_deductions(org_id, ra_bill_id, head, label, basis, rate_pct, amount, advance_id, reason)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [u.orgId, bill.id, d.head, d.label, d.basis, d.ratePct, d.amount,
+           advanceByHead.get(d.head + ':' + String(d.amount)) ?? null, reason ?? null]);
+      }
+
+      return {
+        ...bill,
+        items: computed,
+        deductions: totals.deductions,
+        excess_items: computed.filter(l => l.isExcess).length,
+        downward_revisions: computed.filter(l => l.isDownwardRevision).length,
+      };
+    });
+    return reply.code(201).send({ data: row });
+  });
+
+  /**
+   * Move a bill along its lifecycle.
+   *
+   * Certification is the hinge: it turns the measurement into a receivable, so
+   * it needs its own permission (§4.1 keeps it away from whoever measured),
+   * and it is the point at which retention is actually withheld and advances
+   * are actually recovered. Doing that at draft time would let an abandoned
+   * measurement move money.
+   */
+  app.post('/api/v1/ra-bills/:id/status', { preHandler: guard('rabill.manage') }, async req => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const body = req.body as { status?: string; reason?: string; certified_amount?: number };
+    const next = String(body.status ?? '') as RaBillStatus;
+    return {
+      data: await mutate(pool, req, 'rabill.status', 'ra_bill', async db => {
+        const bill = await inOrg(db, 'ra_bills', id, u.orgId, true);
+        version(req, bill as { version: number });
+        const from = bill.status as RaBillStatus;
+        const allowed = RA_BILL_TRANSITIONS[from] ?? [];
+        if (!allowed.includes(next)) {
+          fail('INVALID_STATUS_TRANSITION',
+            allowed.length ? `A bill at ${from} can move to ${allowed.join(', ')}`
+                           : `${from} is a final status and cannot move again`);
+        }
+        if (next === 'CERTIFIED' && !u.permissions.includes('rabill.certify')) {
+          fail('FORBIDDEN', 'Certifying a bill needs the rabill.certify permission', 403);
+        }
+        if (next === 'CANCELLED' && !body.reason) {
+          fail('VALIDATION_ERROR', 'Record why the bill is being cancelled');
+        }
+
+        if (next === 'CERTIFIED') {
+          // Retention moves into the ledger and advances are drawn down here,
+          // in the same transaction as certification.
+          const retention = (await db.query(
+            "SELECT amount FROM ra_bill_deductions WHERE ra_bill_id=$1 AND head='RETENTION'", [id])).rows[0];
+          if (retention) {
+            await db.query(
+              `INSERT INTO retention_ledger(org_id, created_by, project_id, ra_bill_id, entry_type, amount)
+               VALUES($1,$2,$3,$4,'WITHHELD',$5)`,
+              [u.orgId, u.id, bill.project_id, id, retention.amount]);
+          }
+          const advanceLines = (await db.query(
+            'SELECT advance_id, amount FROM ra_bill_deductions WHERE ra_bill_id=$1 AND advance_id IS NOT NULL', [id])).rows;
+          for (const line of advanceLines) {
+            await db.query(
+              `UPDATE project_advances
+               SET recovered_amount = recovered_amount + $2,
+                   status = CASE WHEN recovered_amount + $2 >= amount THEN 'RECOVERED' ELSE status END,
+                   version = version + 1, updated_at = now(), updated_by = $3
+               WHERE id = $1`, [line.advance_id, line.amount, u.id]);
+          }
+        }
+
+        // Decide the stamps in JS rather than with CASE expressions. Reusing
+        // one parameter as both a uuid value and a string comparison inside a
+        // CASE leaves the driver unable to infer a single type for it, which
+        // is a 500 rather than a helpful error.
+        const now = new Date();
+        const certifying = next === 'CERTIFIED';
+        return (await db.query(
+          `UPDATE ra_bills SET status = $3,
+             submitted_at     = COALESCE($4, submitted_at),
+             certified_at     = COALESCE($5, certified_at),
+             certified_by     = COALESCE($6, certified_by),
+             certified_amount = COALESCE($7, certified_amount),
+             paid_at          = COALESCE($8, paid_at),
+             cancelled_reason = COALESCE($9, cancelled_reason),
+             version = version + 1, updated_at = now(), updated_by = $2
+           WHERE id = $1 RETURNING *`,
+          [id, u.id, next,
+           next === 'SUBMITTED' ? now : null,
+           certifying ? now : null,
+           certifying ? u.id : null,
+           // The client may certify a different figure than claimed; absent
+           // that, the claimed net stands. Taken from the locked row rather
+           // than a CASE, which needed $3 to be two types at once.
+           certifying ? (body.certified_amount ?? Number(bill.net_payable)) : null,
+           next === 'PAID' ? now : null,
+           body.reason ?? null])).rows[0];
+      }),
+    };
+  });
+
+  /* ------------------------------------------------------------- retention */
+
+  app.get('/api/v1/projects/:id/retention', { preHandler: guard('retention.read') }, async req => {
+    const id = (req.params as { id: string }).id;
+    await projectAccess(pool, req, id);
+    const ledger = (await pool.query(
+      'SELECT * FROM retention_ledger WHERE project_id = $1 ORDER BY created_at', [id])).rows;
+    const held = ledger.reduce((t, e) =>
+      t + (e.entry_type === 'WITHHELD' ? Number(e.amount) : -Number(e.amount)), 0);
+    const policy = await policyFor(pool, id);
+    const status = policy.dlpEndDate
+      ? retentionReleaseStatus({
+          heldAmount: held,
+          dlpEndDate: String(policy.dlpEndDate).slice(0, 10),
+          firstTranchePct: policy.firstTranchePct,
+        })
+      : { releasable: 0, withheld: held, reason: 'No defect liability period is configured for this project' };
+    return { data: { ledger, held, ...status } };
+  });
+
+  app.post('/api/v1/projects/:id/retention/release', { preHandler: guard('retention.release') }, async (req, reply) => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const body = req.body as { amount?: number; reason?: string };
+    await projectAccess(pool, req, id);
+    const row = await mutate(pool, req, 'retention.release', 'retention', async db => {
+      await inOrg(db, 'projects', id, u.orgId, true);
+      const ledger = (await db.query(
+        'SELECT entry_type, amount FROM retention_ledger WHERE project_id = $1 FOR UPDATE', [id])).rows;
+      const held = ledger.reduce((t, e) =>
+        t + (e.entry_type === 'WITHHELD' ? Number(e.amount) : -Number(e.amount)), 0);
+      if (held <= 0) fail('NOTHING_WITHHELD', 'No retention is being held on this project');
+
+      const policy = await policyFor(db, id);
+      if (!policy.dlpEndDate) {
+        fail('DLP_NOT_CONFIGURED',
+          'Set the defect liability period before releasing retention — §6.7 forbids release before it ends');
+      }
+      const status = retentionReleaseStatus({
+        heldAmount: held,
+        dlpEndDate: String(policy.dlpEndDate).slice(0, 10),
+        firstTranchePct: policy.firstTranchePct,
+      });
+      if (status.releasable <= 0) fail('DLP_NOT_ENDED', status.reason);
+
+      const amount = body.amount ?? status.releasable;
+      if (amount > status.releasable) {
+        fail('EXCEEDS_RELEASABLE',
+          `Only ${status.releasable.toFixed(2)} may be released now. ${status.reason}`);
+      }
+      return (await db.query(
+        `INSERT INTO retention_ledger(org_id, created_by, project_id, entry_type, amount,
+           released_at, released_by, reason)
+         VALUES($1,$2,$3,'RELEASED',$4,current_date,$2,$5) RETURNING *`,
+        [u.orgId, u.id, id, amount, body.reason ?? null])).rows[0];
+    });
+    return reply.code(201).send({ data: row });
+  });
+}

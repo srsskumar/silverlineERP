@@ -12,6 +12,8 @@ import { listWorkspaces } from '@/lib/projects';
 import { queryKeys } from '@/lib/query-keys';
 import { PROJECT_STATUSES } from '@/lib/validation';
 import { ProjectStatusBadge } from '@/components/ProjectStatusBadge';
+import { Badge } from '@/components/ui/Badge';
+import { moneyIndian } from '@/lib/finance';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
@@ -136,7 +138,9 @@ function ProjectsTable() {
               <tr>
                 <th className="px-3 py-2 text-left font-medium text-text-muted">Code</th>
                 <th className="px-3 py-2 text-left font-medium text-text-muted">Name</th>
+                <th className="px-3 py-2 text-left font-medium text-text-muted">Track</th>
                 <th className="px-3 py-2 text-left font-medium text-text-muted">Status</th>
+                <th className="px-3 py-2 text-right font-medium text-text-muted">Contract value</th>
                 <th className="px-3 py-2 text-left font-medium text-text-muted">Priority</th>
                 <th className="px-3 py-2 text-left font-medium text-text-muted">Action</th>
               </tr>
@@ -147,7 +151,13 @@ function ProjectsTable() {
                   <td className="px-3 py-2 font-mono text-xs text-text">{p.code}</td>
                   <td className="px-3 py-2 text-text">{p.name}</td>
                   <td className="px-3 py-2">
+                    <ProjectKindBadge kind={p.project_kind as string | null} tenderId={p.tender_id as string | null} />
+                  </td>
+                  <td className="px-3 py-2">
                     <ProjectStatusBadge status={String(p.status)} />
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-text-muted">
+                    {moneyIndian(p.contract_value)}
                   </td>
                   <td className="px-3 py-2 text-text-muted">{p.priority ? String(p.priority) : '—'}</td>
                   <td className="px-3 py-2">
@@ -165,5 +175,25 @@ function ProjectsTable() {
         <p className="text-xs text-text-muted">{rows.length} project{rows.length === 1 ? '' : 's'} shown.</p>
       )}
     </div>
+  );
+}
+
+/**
+ * Government or private (§8, §8.8).
+ *
+ * A project converted from a tender is marked as such: it is the difference
+ * between a job with a work order and statutory deductions behind it and one
+ * negotiated directly, and it decides which documents anybody should expect
+ * to find attached.
+ */
+function ProjectKindBadge({ kind, tenderId }: { kind: string | null; tenderId: string | null }) {
+  if (!kind) return <span className="text-xs text-text-subtle">—</span>;
+  return (
+    <span className="flex items-center gap-1.5">
+      <Badge tone={kind === 'GOVERNMENT' ? 'info' : 'neutral'} size="sm">
+        {kind === 'GOVERNMENT' ? 'Government' : 'Private'}
+      </Badge>
+      {tenderId ? <span className="text-2xs text-text-subtle">tendered</span> : null}
+    </span>
   );
 }

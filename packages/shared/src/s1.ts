@@ -70,6 +70,7 @@ export const S1_ROLE_GRANTS: Record<RoleCode, string[]> = {
   EMPLOYEE: [],
   CLIENT_VIEWER: [],
   AUDITOR: [S1_PERMISSIONS.EMPLOYEE_READ],
+ SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[],
 };
 
 // ---------------------------------------------------------------------------

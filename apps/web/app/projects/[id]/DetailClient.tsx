@@ -10,8 +10,9 @@ import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 import { getProject, patchProject } from '@/lib/projects';
 import { listTasksPage, type Task } from '@/lib/tasks';
 import { queryKeys } from '@/lib/query-keys';
-import { PROJECT_STATUSES } from '@/lib/validation';
-import { shortUserId } from '@/components/ApprovalTimeline';
+import { PROJECT_STATUS_TRANSITIONS } from '@silverline/shared';
+import { statusLabel } from '@/lib/board-visuals';
+import { listPeople, peopleIndex, personLabel } from '@/lib/people';
 import { CloseProjectDialog } from '@/components/CloseProjectDialog';
 import { ConflictDialog, useConflict } from '@/components/ConflictDialog';
 import { FilterBar } from '@/components/FilterBar';
@@ -26,6 +27,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ApiClientError } from '@/lib/apiClient';
+import { Badge } from '@/components/ui/Badge';
+import { money } from '@/lib/finance';
+import { contractValueBreakdown, amountInWords } from '@silverline/shared';
 import { isConflictError, requestIdOf } from '@/lib/form-errors';
 
 const inputClass =
@@ -55,6 +59,10 @@ export function ProjectDetailView({ id }: { id: string }) {
     queryKey: queryKeys.projects.detail(id),
     queryFn: () => getProject(id),
   });
+
+  // Names, not identifiers: nobody refers to a colleague by UUID.
+  const peopleQuery = useQuery({ queryKey: ['people'], queryFn: listPeople, staleTime: 300_000 });
+  const peopleIdx = React.useMemo(() => peopleIndex(peopleQuery.data ?? []), [peopleQuery.data]);
 
   const refetchAll = React.useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(id) });
@@ -98,6 +106,11 @@ export function ProjectDetailView({ id }: { id: string }) {
                 </h1>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <ProjectStatusBadge status={String(project.status)} />
+                  {project.project_kind ? (
+                    <Badge tone={project.project_kind === 'GOVERNMENT' ? 'info' : 'neutral'} size="sm">
+                      {project.project_kind === 'GOVERNMENT' ? 'Government' : 'Private'}
+                    </Badge>
+                  ) : null}
                   {project.priority ? (
                     <span className="rounded-full bg-surface-sunken px-2.5 py-0.5 text-xs font-medium text-text-muted">
                       {String(project.priority)}
@@ -110,6 +123,14 @@ export function ProjectDetailView({ id }: { id: string }) {
                 <Link href="/projects" className="text-sm text-primary hover:underline">
                   Back to projects
                 </Link>
+                {canUpdate && (
+                  <Link
+                    href={`/projects/edit?id=${project.id}`}
+                    className="inline-flex h-8 items-center rounded border border-border bg-surface px-3 text-sm font-medium text-text shadow-sm hover:bg-surface-sunken"
+                  >
+                    Edit
+                  </Link>
+                )}
                 {canClose && <Button variant="danger" onClick={() => setCloseOpen(true)}>Close project…</Button>}
               </div>
             </div>
@@ -125,17 +146,54 @@ export function ProjectDetailView({ id }: { id: string }) {
               <DetailRow
                 label="Manager"
                 value={
-                  project.project_manager_id ? (
-                    <span className="font-mono text-xs" title={String(project.project_manager_id)}>
-                      {shortUserId(String(project.project_manager_id))}
-                      <span className="ml-2 text-text-subtle">(user id — no users directory in S4)</span>
-                    </span>
-                  ) : (
-                    '—'
-                  )
+                  project.project_manager_id
+                    ? personLabel(peopleIdx, String(project.project_manager_id))
+                    : <span className="text-text-subtle">Unassigned</span>
                 }
               />
               <DetailRow label="Description" value={project.description ? String(project.description) : '—'} />
+
+              {/*
+                The commercial facts (§8, §15.1). A project converted from a
+                tender carries these across; one keyed in directly now can too.
+                Without them the margin report at /billing has nothing to
+                measure cost against.
+              */}
+              <DetailRow
+                label="Track"
+                value={
+                  project.project_kind
+                    ? (project.project_kind === 'GOVERNMENT' ? 'Government' : 'Private')
+                    : <span className="text-text-subtle">Not set</span>
+                }
+              />
+              <DetailRow
+                label="Contract value"
+                value={<ContractValue project={project as Record<string, unknown>} />}
+              />
+              {project.work_order_number ? (
+                <DetailRow label="Work order" value={<span className="font-mono text-xs">{String(project.work_order_number)}</span>} />
+              ) : null}
+              {project.tender_id ? (
+                <DetailRow
+                  label="Won on tender"
+                  value={
+                    <Link href={`/tenders?open=${project.tender_id}`} className="text-primary hover:underline">
+                      Open the tender
+                    </Link>
+                  }
+                />
+              ) : null}
+              {project.contract_value ? (
+                <DetailRow
+                  label="Finance"
+                  value={
+                    <Link href="/billing" className="text-primary hover:underline">
+                      Bills, retention and budget versus actual
+                    </Link>
+                  }
+                />
+              ) : null}
             </dl>
           </div>
 
@@ -208,15 +266,28 @@ function ProjectStatusPanel({
   onReload: () => void;
   conflictShow: (message?: string, requestId?: string) => void;
 }) {
-  const [next, setNext] = React.useState(current);
+  // Only the moves the workflow actually permits (§12.1). The dropdown used
+  // to list every status, so a DRAFT project offered "Completed pending
+  // close" — the server refused it, correctly, and the user saw an error for
+  // a choice the screen had invited them to make.
+  const allowed = PROJECT_STATUS_TRANSITIONS[current as keyof typeof PROJECT_STATUS_TRANSITIONS] ?? [];
+  const [next, setNext] = React.useState<string>(allowed[0] ?? current);
   const [error, setError] = React.useState<unknown>(null);
+  // The version the server last confirmed. Taken from the mutation response so
+  // a second change in a row does not send the stale one and collide with the
+  // write that just succeeded.
+  const [liveVersion, setLiveVersion] = React.useState<number | string>(version);
 
-  React.useEffect(() => setNext(current), [current]);
+  React.useEffect(() => {
+    setNext(allowed[0] ?? current);
+    setLiveVersion(version);
+  }, [current, version]);
 
   const mutation = useMutation({
-    mutationFn: (status: string) => patchProject(projectId, { status }, version),
-    onSuccess: () => {
+    mutationFn: (status: string) => patchProject(projectId, { status }, liveVersion),
+    onSuccess: (updated) => {
       setError(null);
+      if (updated && typeof updated.version === 'number') setLiveVersion(updated.version);
       onReload();
     },
     onError: (err) => {
@@ -237,19 +308,29 @@ function ProjectStatusPanel({
           aria-label="Project status"
           className={`${inputClass} sm:max-w-xs`}
           value={next}
+          disabled={allowed.length === 0}
           onChange={(e) => {
             setNext(e.target.value);
             setError(null);
           }}
         >
-          {PROJECT_STATUSES.map((s) => (
-            <option key={s} value={s}>{s}</option>
+          {allowed.map((s) => (
+            <option key={s} value={s}>{statusLabel(s)}</option>
           ))}
         </select>
-        <Button disabled={next === current} loading={mutation.isPending} onClick={() => mutation.mutate(next)}>
-          Save status (v{String(version)})
+        <Button
+          disabled={allowed.length === 0 || next === current}
+          loading={mutation.isPending}
+          onClick={() => mutation.mutate(next)}
+        >
+          Save status
         </Button>
       </div>
+      {allowed.length === 0 ? (
+        <p className="mt-2 text-xs text-text-muted">
+          {statusLabel(current)} is a final state — there is nowhere further to move this project.
+        </p>
+      ) : null}
       {error ? (
         <div className="mt-3">
           <ErrorCard
@@ -264,6 +345,8 @@ function ProjectStatusPanel({
 
 function ProjectTasksTable({ projectId, canCreateTask }: { projectId: string; canCreateTask: boolean }) {
   const queryClient = useQueryClient();
+  const peopleQuery = useQuery({ queryKey: ['people'], queryFn: listPeople, staleTime: 300_000 });
+  const people = React.useMemo(() => peopleIndex(peopleQuery.data ?? []), [peopleQuery.data]);
   const [status, setStatus] = React.useState('');
   const [q, setQ] = React.useState('');
   const [mineOnly, setMineOnly] = React.useState(false);
@@ -375,7 +458,7 @@ function ProjectTasksTable({ projectId, canCreateTask }: { projectId: string; ca
                   </td>
                   <td className="px-3 py-2 font-mono text-xs text-text-muted">
                     {t.assignee_id ? (
-                      <span title={String(t.assignee_id)}>{shortUserId(String(t.assignee_id))}</span>
+                      <span title={String(t.assignee_id)}>{personLabel(people, String(t.assignee_id))}</span>
                     ) : (
                       <span className="text-text-subtle">—</span>
                     )}
@@ -395,3 +478,40 @@ function ProjectTasksTable({ projectId, canCreateTask }: { projectId: string; ca
   );
 }
 
+/**
+ * The contract value, and what it is once GST is accounted for.
+ *
+ * Shown split because the figure on the order and the project's revenue are
+ * different numbers whenever the quote was GST-inclusive, and the margin at
+ * /billing is measured on the revenue.
+ */
+function ContractValue({ project }: { project: Record<string, unknown> }) {
+  const amount = project.contract_value;
+  if (amount === null || amount === undefined) {
+    return <span className="text-text-subtle">Not recorded</span>;
+  }
+  const included = project.contract_gst_included;
+  const rate = project.contract_gst_rate;
+  if (included === null || included === undefined || rate === null || rate === undefined) {
+    return (
+      <span>
+        <span className="tabular-nums">{money(amount)}</span>
+        <span className="ml-2 text-2xs text-warning">GST treatment not stated</span>
+      </span>
+    );
+  }
+  const b = contractValueBreakdown({
+    amount: Number(amount),
+    gstIncluded: Boolean(included),
+    ratePct: Number(rate),
+  });
+  return (
+    <span className="block">
+      <span className="tabular-nums">{money(b.gross)}</span>
+      <span className="ml-2 text-2xs text-text-subtle">
+        {money(b.net)} + {money(b.gst)} GST at {b.ratePct}%
+      </span>
+      <span className="mt-0.5 block text-2xs text-text-muted">{amountInWords(b.gross)}</span>
+    </span>
+  );
+}

@@ -1281,3 +1281,340 @@ describe("UT-WORK-12 change board/filter configuration", () => {
     expect(res.statusCode).toBeGreaterThanOrEqual(400);
   });
 });
+
+/**
+ * The commercial facts on a project (§8, §8.8, §15.1, §37).
+ *
+ * These columns have existed since the conversion lineage migration, but only
+ * a tender conversion ever wrote them and the read API never returned them —
+ * so a government job and a private one looked identical in every screen, and
+ * a directly created project had no contract value for any margin report to
+ * measure cost against.
+ */
+describe("UT-WORK-13 project commercial fields", () => {
+  async function makeClient(): Promise<string> {
+    const r = await w.pool.query(
+      `INSERT INTO clients(org_id, created_by, code, name, client_type, status)
+       VALUES($1,$2,$3,$4,'GOVERNMENT','ACTIVE') RETURNING id`,
+      [w.orgId, w.adminId, uniq("CL"), `Client ${uniq()}`]);
+    return String(r.rows[0].id);
+  }
+
+  it("accepts the track, client, contract value and work order on create", async () => {
+    const clientId = await makeClient();
+    const res = await w.app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        workspace_id: w.workspaceId,
+        code: `GOV${uniq().toUpperCase().slice(-6)}`,
+        name: "District road widening",
+        project_kind: "GOVERNMENT",
+        client_id: clientId,
+        contract_value: 12_500_000,
+        work_order_number: "WO/2026/PR/118",
+      },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    const body = res.json();
+    expect(body.project_kind).toBe("GOVERNMENT");
+    expect(body.client_id).toBe(clientId);
+    expect(body.contract_value).toBe(12_500_000);
+    expect(body.work_order_number).toBe("WO/2026/PR/118");
+  });
+
+  it("returns them on read, not only on the create response", async () => {
+    // The original defect: the insert could have carried them and the GET
+    // still would not show them, because PROJECT_COLS left them out.
+    const res = await w.app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        workspace_id: w.workspaceId,
+        code: `PVT${uniq().toUpperCase().slice(-6)}`,
+        name: "Private campus works",
+        project_kind: "PRIVATE",
+        contract_value: 4_200_000,
+      },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    const id = res.json().id;
+
+    const read = await w.app.inject({
+      method: "GET", url: `/api/v1/projects/${id}`, headers: w.admin,
+    });
+    expect(read.statusCode).toBe(200);
+    expect(read.json().project_kind).toBe("PRIVATE");
+    expect(read.json().contract_value).toBe(4_200_000);
+  });
+
+  it("leaves a project with no commercial detail reading as unset, not zero", async () => {
+    // Null is "not recorded"; zero would claim the job is worth nothing.
+    const id = await project("Plain project");
+    const read = await w.app.inject({
+      method: "GET", url: `/api/v1/projects/${id}`, headers: w.admin,
+    });
+    expect(read.json().project_kind).toBeNull();
+    expect(read.json().contract_value).toBeNull();
+  });
+
+  it("refuses a track it does not recognise", async () => {
+    const res = await w.app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        workspace_id: w.workspaceId,
+        code: `BAD${uniq().toUpperCase().slice(-6)}`,
+        name: "Wrong track",
+        project_kind: "MUNICIPAL",
+      },
+    });
+    expect(res.statusCode).toBe(422);
+  });
+
+  it("refuses a client from another organisation", async () => {
+    const other = await w.pool.query(
+      `INSERT INTO clients(org_id, created_by, code, name, client_type, status)
+       VALUES($1,$2,$3,$4,'PRIVATE','ACTIVE') RETURNING id`,
+      [w.other.orgId, w.other.adminId, uniq("CL"), `Foreign ${uniq()}`]);
+    const res = await w.app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        workspace_id: w.workspaceId,
+        code: `XORG${uniq().toUpperCase().slice(-5)}`,
+        name: "Cross tenant",
+        client_id: String(other.rows[0].id),
+      },
+    });
+    // The foreign key is scoped to the row, not the tenant, so this must be
+    // caught rather than quietly linking a client nobody in this org can see.
+    expect([403, 404, 422]).toContain(res.statusCode);
+  });
+
+  it("lets a project acquire its commercial detail later", async () => {
+    // Work often starts before the award paperwork lands.
+    const id = await project("Later award");
+    const current = await w.app.inject({
+      method: "GET", url: `/api/v1/projects/${id}`, headers: w.admin,
+    });
+    const res = await w.app.inject({
+      method: "PATCH",
+      url: `/api/v1/projects/${id}`,
+      headers: { ...w.admin, "if-match": String(current.json().version), ...idem() },
+      payload: { project_kind: "GOVERNMENT", contract_value: 900_000 },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().project_kind).toBe("GOVERNMENT");
+    expect(res.json().contract_value).toBe(900_000);
+  });
+
+  it("still refuses a patch that changes nothing", async () => {
+    const id = await project("No-op patch");
+    const current = await w.app.inject({
+      method: "GET", url: `/api/v1/projects/${id}`, headers: w.admin,
+    });
+    const res = await w.app.inject({
+      method: "PATCH",
+      url: `/api/v1/projects/${id}`,
+      headers: { ...w.admin, "if-match": String(current.json().version), ...idem() },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(422);
+  });
+});
+
+/**
+ * Project categories — what the work is about (§6.2).
+ *
+ * Kept separate from the project type, which is how the work is contracted.
+ * Folding them together would multiply the type list into every combination
+ * of arrangement and subject.
+ */
+describe("UT-WORK-14 project categories", () => {
+  it("seeds the categories the business asked for", async () => {
+    const res = await w.app.inject({
+      method: "GET", url: "/api/v1/project-categories", headers: w.admin,
+    });
+    expect(res.statusCode).toBe(200);
+    const names = res.json().data.map((c: { name: string }) => c.name);
+    for (const expected of ["Electronics", "Drones", "CCTV Equipment", "Survey Equipment", "Land Survey"]) {
+      expect(names).toContain(expected);
+    }
+  });
+
+  it("creates one from the Projects screen without leaving it", async () => {
+    const res = await w.app.inject({
+      method: "POST", url: "/api/v1/project-categories",
+      headers: { ...w.admin, ...idem() },
+      payload: { name: `Thermal Imaging ${uniq()}` },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    expect(res.json().data.code).toMatch(/^thermal_imaging_/);
+  });
+
+  it("normalises the code so one category cannot become two", async () => {
+    // "CCTV Equipment" typed a second time as "cctv equipment" must land on
+    // the row that already exists, not create a rival master.
+    const label = `Drone Fleet ${uniq()}`;
+    const first = await w.app.inject({
+      method: "POST", url: "/api/v1/project-categories",
+      headers: { ...w.admin, ...idem() }, payload: { name: label },
+    });
+    expect(first.statusCode, first.body).toBe(201);
+    const again = await w.app.inject({
+      method: "POST", url: "/api/v1/project-categories",
+      headers: { ...w.admin, ...idem() },
+      payload: { code: `  ${label.toUpperCase()}  `, name: label },
+    });
+    // Returns the existing row rather than an error: the caller is a person
+    // filling in a form, and a dead end is a worse answer than the row.
+    expect(again.statusCode).toBe(200);
+    expect(again.json().data.id).toBe(first.json().data.id);
+  });
+
+  it("links a category to a project and returns it on read", async () => {
+    const cats = await w.app.inject({
+      method: "GET", url: "/api/v1/project-categories", headers: w.admin,
+    });
+    const drones = cats.json().data.find((c: { code: string }) => c.code === "drones");
+    const res = await w.app.inject({
+      method: "POST", url: "/api/v1/projects",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        workspace_id: w.workspaceId,
+        code: `CAT${uniq().toUpperCase().slice(-6)}`,
+        name: "Drone survey",
+        project_category_id: drones.id,
+      },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    expect(res.json().project_category_id).toBe(drones.id);
+  });
+
+  it("refuses a category from another organisation", async () => {
+    const foreign = await w.pool.query(
+      `INSERT INTO project_categories(org_id, code, name) VALUES($1,$2,$3) RETURNING id`,
+      [w.other.orgId, uniq("c"), "Foreign category"]);
+    const res = await w.app.inject({
+      method: "POST", url: "/api/v1/projects",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        workspace_id: w.workspaceId,
+        code: `XCAT${uniq().toUpperCase().slice(-5)}`,
+        name: "Cross tenant category",
+        project_category_id: String(foreign.rows[0].id),
+      },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("records which side of GST the contract value sits on", async () => {
+    // Booking an inclusive figure as exclusive overstates every margin on the
+    // job by the tax rate, so the answer is stored rather than assumed.
+    const res = await w.app.inject({
+      method: "POST", url: "/api/v1/projects",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        workspace_id: w.workspaceId,
+        code: `GST${uniq().toUpperCase().slice(-6)}`,
+        name: "Inclusive contract",
+        contract_value: 1_180_000,
+        contract_gst_included: true,
+        contract_gst_rate: 18,
+      },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    expect(res.json().contract_gst_included).toBe(true);
+    expect(res.json().contract_gst_rate).toBe(18);
+  });
+
+  it("refuses a rate with nobody saying which side it applies to", async () => {
+    const res = await w.app.inject({
+      method: "POST", url: "/api/v1/projects",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        workspace_id: w.workspaceId,
+        code: `GSTX${uniq().toUpperCase().slice(-5)}`,
+        name: "Rate with no side",
+        contract_value: 100000,
+        contract_gst_rate: 18,
+      },
+    });
+    // The database constraint refuses the pair; the API surfaces it rather
+    // than storing a rate that cannot be applied.
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+  });
+});
+
+/**
+ * The people directory (§4, §12.2).
+ *
+ * Tasks carry a user id, but nobody refers to a colleague as a UUID. Before
+ * this endpoint the only user list was /admin/users, gated on users.read —
+ * which a project manager does not hold — so every assign field asked for an
+ * identifier the user had to find elsewhere and paste.
+ */
+describe("UT-WORK-15 people directory", () => {
+  it("returns the employee name, not the sign-in name, where there is one", async () => {
+    const res = await w.app.inject({ method: "GET", url: "/api/v1/people", headers: w.admin });
+    expect(res.statusCode).toBe(200);
+    const rows = res.json().data as Array<{ id: string; name: string; employee_id: string | null }>;
+    const linked = rows.find((r) => r.employee_id);
+    expect(linked).toBeTruthy();
+    const employee = await w.pool.query(
+      "SELECT first_name, last_name FROM employees WHERE id = $1", [linked!.employee_id]);
+    expect(linked!.name).toBe(
+      `${employee.rows[0].first_name} ${employee.rows[0].last_name}`.trim());
+  });
+
+  it("falls back to the sign-in name for an account with no employee record", async () => {
+    // A service or administrator login still has to be selectable; showing a
+    // blank row would make it unpickable and look like data loss.
+    const res = await w.app.inject({ method: "GET", url: "/api/v1/people", headers: w.admin });
+    const rows = res.json().data as Array<{ name: string; employee_id: string | null; username: string }>;
+    for (const r of rows.filter((x) => !x.employee_id)) {
+      expect(r.name).toBe(r.username);
+    }
+    for (const r of rows) expect(r.name.trim().length).toBeGreaterThan(0);
+  });
+
+  it("is readable by a project manager, who cannot read the admin user list", async () => {
+    // The whole point: the assign field is used by people who do not hold
+    // users.read, and gating the directory on it is what forced the UUID.
+    const admin = await w.app.inject({
+      method: "GET", url: "/api/v1/admin/users", headers: w.role.PROJECT_MANAGER,
+    });
+    expect(admin.statusCode).toBe(403);
+    const people = await w.app.inject({
+      method: "GET", url: "/api/v1/people", headers: w.role.PROJECT_MANAGER,
+    });
+    expect(people.statusCode).toBe(200);
+  });
+
+  it("carries no contact details beyond what a task card already shows", async () => {
+    const res = await w.app.inject({ method: "GET", url: "/api/v1/people", headers: w.admin });
+    const keys = new Set(Object.keys(res.json().data[0] ?? {}));
+    for (const leaked of ["email", "phone", "aadhaar", "pan", "password_hash", "bank_account"]) {
+      expect(keys.has(leaked), `${leaked} must not be in the directory`).toBe(false);
+    }
+  });
+
+  it("stays inside the organisation", async () => {
+    const mine = await w.app.inject({ method: "GET", url: "/api/v1/people", headers: w.admin });
+    const theirs = await w.app.inject({ method: "GET", url: "/api/v1/people", headers: w.other.admin });
+    const mineIds = new Set((mine.json().data as Array<{ id: string }>).map((r) => r.id));
+    for (const r of theirs.json().data as Array<{ id: string }>) {
+      expect(mineIds.has(r.id)).toBe(false);
+    }
+  });
+
+  it("refuses an unauthenticated caller", async () => {
+    const res = await w.app.inject({ method: "GET", url: "/api/v1/people" });
+    expect(res.statusCode).toBe(401);
+  });
+});

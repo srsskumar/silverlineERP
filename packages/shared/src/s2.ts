@@ -48,6 +48,7 @@ export const S2_ROLE_GRANTS: Record<RoleCode, string[]> = {
   EMPLOYEE: [S2_PERMISSIONS.ATTENDANCE_PUNCH],
   CLIENT_VIEWER: [],
   AUDITOR: [S2_PERMISSIONS.ATTENDANCE_READ],
+ SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[],
 };
 
 // ---------------------------------------------------------------------------

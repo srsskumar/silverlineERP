@@ -270,6 +270,20 @@ export async function apiRequestRaw(
   if (MUTATING_METHODS.has(method) && !stableHeaders.has('Idempotency-Key')) {
     stableHeaders.set('Idempotency-Key', newIdempotencyKey());
   }
+  // The record version travels in X-Record-Version, not If-Match.
+  //
+  // If-Match is a transport-level precondition and a CDN is entitled to answer
+  // it. Vercel's edge did exactly that: it refused a bare version with 412
+  // outright, and for a quoted one it let the write through and then replaced
+  // the 200 with a 412 on the way back — so the user saw "could not save"
+  // while the change had in fact been made, and their next attempt failed with
+  // a version conflict. A header with no standard meaning is inert to every
+  // proxy in the path. The server still accepts If-Match for other callers.
+  const ifMatch = stableHeaders.get('If-Match');
+  if (ifMatch) {
+    stableHeaders.delete('If-Match');
+    stableHeaders.set('X-Record-Version', ifMatch.replace(/^W\//, '').replace(/^"(.*)"$/, '$1'));
+  }
 
   let attempt = 0;
   const doFetch = async (): Promise<Response> => {

@@ -29,6 +29,7 @@ import type { FenceShape } from "@silverline/shared";
 import { detectMovementAnomaly } from "@silverline/shared";
 import { sendError } from "../../common/httpErrors.js";
 import { emitNotification } from "../s5/notify.js";
+import { parseIfMatch } from '../../common/ifMatch.js';
 
 export interface AttendanceRoutesOptions {
   pool: Pool;
@@ -182,26 +183,6 @@ const EXCEPTION_COLS = `id, employee_id, attendance_record_id, exception_type,
   reason, document_id, source, status, version, submitted_by, reviewed_by,
   reviewed_at, review_note, created_at, updated_at`;
 
-function ifMatchVersion(req: { headers: Record<string, unknown> }): number {
-  const raw = req.headers["if-match"];
-  const text = (Array.isArray(raw) ? raw[0] : raw)?.trim();
-  const n = text === undefined || text === "" ? NaN : Number(text);
-  if (!Number.isInteger(n) || n < 1) {
-    throw new ApiError({
-      status: 422,
-      code: "VALIDATION_ERROR",
-      message: "Validation failed",
-      fieldErrors: [
-        {
-          field: "If-Match",
-          message: "If-Match header with the current version is required",
-          code: "missing_version",
-        },
-      ],
-    });
-  }
-  return n;
-}
 
 function idemKeyOr422(
   req: { headers: Record<string, unknown> },
@@ -1342,7 +1323,7 @@ export async function registerAttendanceRoutes(
           message: "Authentication required",
         });
       }
-      const expectedVersion = ifMatchVersion(req);
+      const expectedVersion = parseIfMatch(req);
       const { id } = req.params as { id: string };
       const curRes = await db.query(
         `SELECT ${EXCEPTION_COLS.split(",").map((c) => `x.${c.trim()}`).join(", ")}

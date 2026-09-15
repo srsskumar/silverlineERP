@@ -3,20 +3,26 @@
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { assignTask, type Task } from '@/lib/tasks';
 import { assignSchema, type AssignFormInput } from '@/lib/validation';
 import { applyFieldErrors } from '@/lib/form-errors';
-import { shortUserId } from './ApprovalTimeline';
+import { listPeople, peopleIndex, personLabel } from '@/lib/people';
 import { Button } from './ui/Button';
 import { ErrorCard } from './ui/ErrorCard';
 import { FormField } from './ui/FormField';
 import { Input } from './ui/Input';
 
 /**
- * Assign a task to a user. There is NO users endpoint in S4, so the assignee
- * is a user-ID (UUID) text field — paste the id. `reason` is required
- * server-side and enforced here client-side too.
+ * Assign a task to somebody, by name.
+ *
+ * This used to ask for a user UUID, on the premise that there was no users
+ * directory. There is one now, and it reports the name from the employee
+ * record — which is how everybody actually refers to a colleague. Pasting an
+ * identifier found in another screen was never a reasonable thing to ask.
+ *
+ * `reason` stays required: reassigning somebody else's work is a decision that
+ * should be explainable afterwards.
  */
 export function AssignDialog({
   taskId,
@@ -32,6 +38,14 @@ export function AssignDialog({
   onAssigned: (task: Task) => void;
 }) {
   const [submitError, setSubmitError] = React.useState<unknown>(null);
+
+  const people = useQuery({
+    queryKey: ['people'],
+    queryFn: listPeople,
+    staleTime: 300_000,
+    enabled: open,
+  });
+  const index = React.useMemo(() => peopleIndex(people.data ?? []), [people.data]);
 
   const {
     register,
@@ -73,24 +87,27 @@ export function AssignDialog({
       <div className="w-full max-w-md rounded-lg bg-surface p-6 shadow-lg">
         <h2 className="text-base font-semibold text-text">Assign task</h2>
         <p className="mt-1 text-xs text-text-muted">
-          {currentAssigneeId ? (
-            <>
-              Currently assigned to <span className="font-mono" title={String(currentAssigneeId)}>{shortUserId(String(currentAssigneeId))}</span>.
-            </>
-          ) : (
-            'Currently unassigned.'
-          )}{' '}
-          S4 has no users directory — paste the user ID (UUID).
+          {currentAssigneeId
+            ? <>Currently assigned to <span className="font-medium text-text">{personLabel(index, currentAssigneeId)}</span>.</>
+            : 'Currently unassigned.'}
         </p>
         <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="mt-4 flex flex-col gap-4" noValidate>
-          <FormField label="Assignee user ID (UUID) *" htmlFor="assign-user" error={errors.assignee_id?.message}>
-            <Input
+          <FormField label="Assign to *" htmlFor="assign-user" error={errors.assignee_id?.message}>
+            <select
               id="assign-user"
-              placeholder="e.g. 123e4567-e89b-12d3-a456-426614174000"
-              className="font-mono"
-              invalid={!!errors.assignee_id}
+              className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
+              disabled={people.isLoading}
               {...register('assignee_id')}
-            />
+            >
+              <option value="">{people.isLoading ? 'Loading people…' : 'Choose a person…'}</option>
+              {(people.data ?? [])
+                .filter((p) => p.id !== currentAssigneeId)
+                .map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}{p.emp_no ? ` · ${p.emp_no}` : ''}
+                  </option>
+                ))}
+            </select>
           </FormField>
           <FormField label="Reason *" htmlFor="assign-reason" error={errors.reason?.message}>
             <textarea

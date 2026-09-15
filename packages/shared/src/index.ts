@@ -12,5 +12,15 @@ export * from "./s6.js";
 export * from "./p1.js";
 
 export * from "./v2.js";
+export * from "./crm.js";
+export * from "./india.js";
+export * from "./ra-billing.js";
+export * from "./approvals.js";
+export * from "./procurement.js";
+export * from "./cost-control.js";
+export * from "./financial-control.js";
+export * from "./inventory.js";
+export * from "./allocation.js";
+export * from "./expenses.js";
 export * from "./geo.js";
 export * from "./antifraud.js";

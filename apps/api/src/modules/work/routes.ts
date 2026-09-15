@@ -23,6 +23,7 @@ import {
   encodeCursor,
   extractMentionUsernames,
   projectCloseSchema,
+  projectCategorySchema,
   projectCreateSchema,
   projectPatchSchema,
   taskAssignSchema,
@@ -50,6 +51,7 @@ import {
 } from "../../common/idempotency.js";
 import { encryptPii, decryptPii, redactPiiForAudit } from "../../common/crypto.js";
 import { emitNotification } from "../s5/notify.js";
+import { parseIfMatch } from '../../common/ifMatch.js';
 
 export interface WorkRoutesOptions {
   pool: Pool;
@@ -88,26 +90,6 @@ function iso(v: Date | string): string {
   return v instanceof Date ? v.toISOString() : new Date(v).toISOString();
 }
 
-function ifMatchVersion(req: { headers: Record<string, unknown> }): number {
-  const raw = req.headers["if-match"];
-  const text = (Array.isArray(raw) ? raw[0] : raw)?.trim();
-  const n = text === undefined || text === "" ? NaN : Number(text);
-  if (!Number.isInteger(n) || n < 1) {
-    throw new ApiError({
-      status: 422,
-      code: "VALIDATION_ERROR",
-      message: "Validation failed",
-      fieldErrors: [
-        {
-          field: "If-Match",
-          message: "If-Match header with the current version is required",
-          code: "missing_version",
-        },
-      ],
-    });
-  }
-  return n;
-}
 
 /** Error envelope plus a machine-readable rule detail (top-level extras). */
 function sendRuleError(
@@ -243,14 +225,31 @@ interface ProjectRow {
   planned_end_date: Date | string | null;
   priority: string;
   status: string;
+  // The commercial facts (§6.2, §8, §37). Set either by a tender or proposal
+  // conversion or directly on the project.
+  project_kind: string | null;
+  client_id: string | null;
+  project_category_id: string | null;
+  contract_value: string | number | null;
+  contract_gst_included: boolean | null;
+  contract_gst_rate: string | number | null;
+  work_order_number: string | null;
+  tender_id: string | null;
+  proposal_id: string | null;
   version: number;
   created_at: Date | string;
   updated_at: Date | string;
 }
 
+// tender_id and proposal_id are read-only here — they are written only by the
+// conversion (§8.7) and are what makes a converted project traceable. Leaving
+// them out of the response meant a government project looked identical to a
+// private one in every screen.
 const PROJECT_COLS = `id, org_id, workspace_id, code, name, description,
   project_type_id, project_manager_id, planned_start_date, planned_end_date,
-  priority, status, version, created_at, updated_at`;
+  priority, status, project_kind, client_id, project_category_id, contract_value,
+  contract_gst_included, contract_gst_rate, work_order_number,
+  tender_id, proposal_id, version, created_at, updated_at`;
 
 function toProjectShape(row: ProjectRow) {
   return {
@@ -265,6 +264,15 @@ function toProjectShape(row: ProjectRow) {
     planned_end_date: dateOnly(row.planned_end_date),
     priority: row.priority,
     status: row.status,
+    project_kind: row.project_kind,
+    client_id: row.client_id,
+    project_category_id: row.project_category_id,
+    contract_value: row.contract_value === null ? null : Number(row.contract_value),
+    contract_gst_included: row.contract_gst_included,
+    contract_gst_rate: row.contract_gst_rate === null ? null : Number(row.contract_gst_rate),
+    work_order_number: row.work_order_number,
+    tender_id: row.tender_id,
+    proposal_id: row.proposal_id,
     version: row.version,
     created_at: iso(row.created_at),
     updated_at: iso(row.updated_at),
@@ -857,6 +865,122 @@ export async function registerWorkRoutes(
     return reply.status(200).send(toWorkspaceShape(row));
   });
 
+  // ------------------------------------------------- GET /people
+  //
+  // Who work can be assigned to, by name.
+  //
+  // Tasks are assigned to a user, but people are known by their employee
+  // record, so this joins the two and returns the name the rest of the
+  // business uses. Without it the only list of users was /admin/users, gated
+  // on users.read — which a project manager does not hold — so every assign
+  // and project-manager field asked for a raw UUID that somebody had to look
+  // up elsewhere and paste.
+  //
+  // Authenticated rather than permission-gated, and deliberately narrow: it
+  // returns a colleague's display name and employee number, both of which
+  // already appear on every task card. No contact details, no identifiers,
+  // nothing that is not already on screen.
+  app.get("/api/v1/people", { preHandler: authenticate }, async (req, reply) => {
+    const user = req.authUser;
+    if (!user) {
+      return sendError(reply, req.requestId, {
+        status: 401, code: "UNAUTHENTICATED", message: "Authentication required",
+      });
+    }
+    // The same page cap as every other list. A picker wants the whole
+    // directory, but it gets there by paging like everything else rather than
+    // by this one route having a private limit nobody else knows about.
+    const q = req.query as Record<string, string>;
+    const limit = Math.min(100, Math.max(1, Number(q.limit) || 100));
+    const offset = Math.max(0, Number(q.offset) || 0);
+    const rows = (await opts.pool.query(
+      `SELECT u.id, u.username, u.employee_id,
+              e.emp_no,
+              trim(concat_ws(' ', e.first_name, e.last_name)) AS employee_name,
+              e.status AS employee_status
+       FROM users u
+       LEFT JOIN employees e ON e.id = u.employee_id AND e.org_id = u.org_id
+       WHERE u.org_id = $1 AND u.auth_status = 'ACTIVE'
+       ORDER BY COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), u.username)
+       LIMIT $2 OFFSET $3`,
+      [user.orgId, limit + 1, offset],
+    )).rows;
+    const data = rows.slice(0, limit).map((r) => ({
+      id: r.id,
+      username: r.username,
+      employee_id: r.employee_id,
+      emp_no: r.emp_no,
+      // The name to show. Falls back to the sign-in name for an account with
+      // no employee record — a service or admin login — rather than blank.
+      name: (r.employee_name && String(r.employee_name).trim()) || r.username,
+      employee_status: r.employee_status,
+    }));
+    return reply.status(200).send({ data, has_more: rows.length > limit });
+  });
+
+  // ------------------------------------- project categories (§6.2 masters)
+  //
+  // What the work is about — drones, CCTV, survey equipment — as a second
+  // dimension to the project type, which is how it is contracted. Read by
+  // anyone who can see projects; created by anyone who can create one, so the
+  // Projects screen can add a missing category without a trip to an admin
+  // area and without anybody keying a free-text value that never matches.
+  app.get("/api/v1/project-categories", { preHandler: authenticate }, async (req, reply) => {
+    const user = req.authUser;
+    if (!user) {
+      return sendError(reply, req.requestId, {
+        status: 401, code: "UNAUTHENTICATED", message: "Authentication required",
+      });
+    }
+    const res = await opts.pool.query(
+      `SELECT id, code, name, description, active, version, created_at, updated_at
+       FROM project_categories WHERE org_id = $1 ORDER BY name ASC`,
+      [user.orgId],
+    );
+    return reply.status(200).send({ data: res.rows });
+  });
+
+  app.post("/api/v1/project-categories", { preHandler: canCreateProject }, async (req, reply) => {
+    return mutationRoute(opts.pool, req, reply, async (db, reply) => {
+      if (await replayIfSeen(db, req, reply)) return;
+      const parsed = projectCategorySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return sendError(reply, req.requestId, {
+          status: 422, code: "VALIDATION_ERROR", message: "Validation failed",
+          fieldErrors: toFieldErrors(parsed.error),
+        });
+      }
+      const user = req.authUser!;
+      const d = parsed.data;
+      const clash = await db.query(
+        "SELECT id, name FROM project_categories WHERE org_id = $1 AND code = $2",
+        [user.orgId, d.code],
+      );
+      if (clash.rowCount) {
+        // Returning the existing row rather than an error: the caller is a
+        // person adding a category from a form, and "Drones already exists"
+        // with no way forward is a worse answer than simply using it.
+        return reply.status(200).send({ data: clash.rows[0] });
+      }
+      const ins = await db.query(
+        `INSERT INTO project_categories (org_id, code, name, description, active, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6::uuid, $6::uuid)
+         RETURNING id, code, name, description, active, version, created_at, updated_at`,
+        [user.orgId, d.code, d.name, d.description ?? null, d.active, user.id],
+      );
+      const row = ins.rows[0];
+      const meta = metaOf(req);
+      await writeAudit(db, {
+        orgId: user.orgId, actorId: user.id, actorIp: meta.ip,
+        actorUserAgent: meta.userAgent, action: "project_category.create",
+        entityType: "project_category", entityId: row.id,
+        afterState: row, requestId: req.requestId,
+      });
+      await storeIdempotentResponse(db, req, user.id, 201, row);
+      return reply.status(201).send({ data: row });
+    });
+  });
+
   // ------------------------------------------------ GET /project-types
   app.get("/api/v1/project-types", { preHandler: authenticate }, async (req, reply) => {
     const user = req.authUser;
@@ -949,15 +1073,46 @@ export async function registerWorkRoutes(
         });
       }
     }
+    if (d.client_id) {
+      // Scoped to the tenant, like every other foreign key here. The column's
+      // own constraint only checks that the row exists, which would happily
+      // link a client belonging to another organisation.
+      const cl = await db.query(
+        "SELECT id FROM clients WHERE id = $1::uuid AND org_id = $2",
+        [d.client_id, user.orgId],
+      );
+      if ((cl.rowCount ?? 0) === 0) {
+        return sendError(reply, req.requestId, {
+          status: 404,
+          code: "NOT_FOUND",
+          message: "Client not found",
+        });
+      }
+    }
+    if (d.project_category_id) {
+      const cat = await db.query(
+        "SELECT id FROM project_categories WHERE id = $1::uuid AND org_id = $2",
+        [d.project_category_id, user.orgId],
+      );
+      if ((cat.rowCount ?? 0) === 0) {
+        return sendError(reply, req.requestId, {
+          status: 404,
+          code: "NOT_FOUND",
+          message: "Project category not found",
+        });
+      }
+    }
     let row: ProjectRow;
     try {
       const ins = await db.query(
         `INSERT INTO projects
            (org_id, workspace_id, code, name, description, project_type_id,
             project_manager_id, planned_start_date, planned_end_date,
-            priority, status, created_by, updated_by)
+            priority, status, project_kind, client_id, project_category_id,
+            contract_value, contract_gst_included, contract_gst_rate,
+            work_order_number, created_by, updated_by)
          VALUES ($1, $2::uuid, $3, $4, $5, $6::uuid, $7::uuid, $8, $9, $10,
-           'DRAFT', $11::uuid, $11::uuid)
+           'DRAFT', $11, $12::uuid, $13::uuid, $14, $15, $16, $17, $18::uuid, $18::uuid)
          RETURNING ${PROJECT_COLS}`,
         [
           user.orgId,
@@ -970,6 +1125,13 @@ export async function registerWorkRoutes(
           d.planned_start_date ?? null,
           d.planned_end_date ?? null,
           d.priority ?? "MEDIUM",
+          d.project_kind ?? null,
+          d.client_id ?? null,
+          d.project_category_id ?? null,
+          d.contract_value ?? null,
+          d.contract_gst_included ?? null,
+          d.contract_gst_rate ?? null,
+          d.work_order_number ?? null,
           user.id,
         ],
       );
@@ -1125,7 +1287,7 @@ export async function registerWorkRoutes(
         message: "Authentication required",
       });
     }
-    const expectedVersion = ifMatchVersion(req);
+    const expectedVersion = parseIfMatch(req);
     const { id } = req.params as { id: string };
     const cur = await findProject(user.orgId, id);
     if (!cur) {
@@ -1163,6 +1325,35 @@ export async function registerWorkRoutes(
         },
       });
     }
+    if (d.client_id) {
+      // Scoped to the tenant, like every other foreign key here. The column's
+      // own constraint only checks that the row exists, which would happily
+      // link a client belonging to another organisation.
+      const cl = await db.query(
+        "SELECT id FROM clients WHERE id = $1::uuid AND org_id = $2",
+        [d.client_id, user.orgId],
+      );
+      if ((cl.rowCount ?? 0) === 0) {
+        return sendError(reply, req.requestId, {
+          status: 404,
+          code: "NOT_FOUND",
+          message: "Client not found",
+        });
+      }
+    }
+    if (d.project_category_id) {
+      const cat = await db.query(
+        "SELECT id FROM project_categories WHERE id = $1::uuid AND org_id = $2",
+        [d.project_category_id, user.orgId],
+      );
+      if ((cat.rowCount ?? 0) === 0) {
+        return sendError(reply, req.requestId, {
+          status: 404,
+          code: "NOT_FOUND",
+          message: "Project category not found",
+        });
+      }
+    }
     const upd = await db.query(
       `UPDATE projects SET
          name = COALESCE($3, name),
@@ -1171,8 +1362,15 @@ export async function registerWorkRoutes(
          planned_start_date = COALESCE($6, planned_start_date),
          planned_end_date = COALESCE($7, planned_end_date),
          status = COALESCE($8, status),
-         updated_by = $9::uuid, updated_at = NOW(), version = version + 1
-       WHERE id = $1::uuid AND org_id = $2 AND version = $10
+         project_kind = COALESCE($9, project_kind),
+         client_id = COALESCE($10::uuid, client_id),
+         project_category_id = COALESCE($11::uuid, project_category_id),
+         contract_value = COALESCE($12, contract_value),
+         contract_gst_included = COALESCE($13, contract_gst_included),
+         contract_gst_rate = COALESCE($14, contract_gst_rate),
+         work_order_number = COALESCE($15, work_order_number),
+         updated_by = $16::uuid, updated_at = NOW(), version = version + 1
+       WHERE id = $1::uuid AND org_id = $2 AND version = $17
        RETURNING ${PROJECT_COLS}`,
       [
         id,
@@ -1183,6 +1381,13 @@ export async function registerWorkRoutes(
         d.planned_start_date ?? null,
         d.planned_end_date ?? null,
         d.status ?? null,
+        d.project_kind ?? null,
+        d.client_id ?? null,
+        d.project_category_id ?? null,
+        d.contract_value ?? null,
+        d.contract_gst_included ?? null,
+        d.contract_gst_rate ?? null,
+        d.work_order_number ?? null,
         user.id,
         expectedVersion,
       ],
@@ -1635,7 +1840,7 @@ export async function registerWorkRoutes(
         message: "Authentication required",
       });
     }
-    const expectedVersion = ifMatchVersion(req);
+    const expectedVersion = parseIfMatch(req);
     const { id } = req.params as { id: string };
     const cur = await findTask(user.orgId, id);
     if (!cur) {
@@ -1745,7 +1950,7 @@ export async function registerWorkRoutes(
           message: "Authentication required",
         });
       }
-      const expectedVersion = ifMatchVersion(req);
+      const expectedVersion = parseIfMatch(req);
       const { id } = req.params as { id: string };
       const snapshot = await findTask(user.orgId, id);
       // All task lifecycle and project planning changes lock project before task.
@@ -1920,7 +2125,7 @@ export async function registerWorkRoutes(
           message: "Authentication required",
         });
       }
-      const expectedVersion = ifMatchVersion(req);
+      const expectedVersion = parseIfMatch(req);
       const { id } = req.params as { id: string };
       const cur = await findTask(user.orgId, id);
       if (!cur) {

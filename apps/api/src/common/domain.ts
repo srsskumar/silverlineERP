@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {inTransaction} from './transactionContext.js';
+import {parseIfMatch} from './ifMatch.js';
 import type { FastifyRequest } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import { ApiError, toFieldErrors } from '@silverline/shared';
@@ -14,8 +15,11 @@ export function parse<T>(schema:z.ZodType<T, z.ZodTypeDef, unknown>,body:unknown
 export function fail(code:string,message:string,status=422):never {throw new ApiError({status,code,message});}
 export function actor(req:FastifyRequest) {if(!req.authUser) fail('UNAUTHENTICATED','Sign in first',401);return req.authUser;}
 export function version(req:FastifyRequest,row:{version:number}) {
- const n=Number(String(req.headers['if-match']??'').replaceAll('"',''));
- if(!Number.isSafeInteger(n)||n<1) fail('VERSION_REQUIRED','If-Match must contain the current version');
+ // Shared with the other seven modules so every route reads the header the
+ // same way, weak validators and all.
+ let n:number;
+ try { n=parseIfMatch(req as unknown as {headers:Record<string,unknown>}); }
+ catch { fail('VERSION_REQUIRED','If-Match must contain the current version'); }
  if(n!==row.version) fail('VERSION_CONFLICT','This record changed. Reload before editing.',409);
 }
 export function page(req:FastifyRequest) {
@@ -26,7 +30,27 @@ export function page(req:FastifyRequest) {
  return {limit,offset,q};
 }
 export async function inOrg(db:Pool|PoolClient,table:string,id:string,orgId:string,lock=false):Promise<Record<string,any>> {
- const allowed=['vendors','inventory_items','invoices','assets','employees','projects','tasks','cycles','automation_rules','webhook_subscriptions','custom_field_definitions','users'];
+ // Interpolated straight into SQL below, so this allow-list is the injection
+ // guard, not a convenience. Every table a route passes here must be named.
+ const allowed=['vendors','inventory_items','invoices','assets','employees','projects','tasks','cycles','automation_rules','webhook_subscriptions','custom_field_definitions','users',
+  // Commercial spine (§6.3-6.5, §8).
+  'clients','contacts','leads','opportunities','tenders','private_proposals','bank_guarantee_instruments','workspaces','party_gst_registrations',
+  // Running-account billing (§15).
+  'boq_items','ra_bills','project_advances',
+  // Approvals (§41).
+  'approval_policies','approval_instances','approval_delegations',
+  // Procurement (§13).
+  'purchase_requisitions','purchase_orders','goods_receipt_notes',
+  // §43 enhancements.
+  'rfqs','vendor_quotes','vendor_returns',
+  // Expenses and project cost control (§15.6, §16).
+  'cost_heads','expense_policies','expense_claims',
+  // Financial control (§45).
+  'financial_periods','payments','bank_transactions',
+  // Inventory control (§44).
+  'stock_locations','stock_reservations','stock_counts',
+  // Workforce allocation (§47).
+  'resource_allocations','work_shifts','roster_entries'];
  if(!allowed.includes(table)) throw new Error('Unknown domain table');
  const r=await db.query(`SELECT * FROM ${table} WHERE id=$1 AND org_id=$2${lock?' FOR UPDATE':''}`,[id,orgId]);
  if(!r.rowCount) fail('NOT_FOUND','Record not found',404);

@@ -1,0 +1,420 @@
+import { describe, expect, it } from 'vitest';
+import {
+  resolveLadder, validateSlabs, effectiveApprovers, createsDelegationCycle,
+  nextActionableStep, canAct, requiresReapproval, overdueSteps,
+  approvalPolicySchema, approvalDecisionSchema, delegationSchema,
+  APPROVAL_ROLE_GRANTS,
+  type ApprovalLevel, type ApprovalStep, type Delegation,
+} from './approvals.js';
+
+/** A typical Indian procurement DoA: site → PM → finance head → director. */
+const LEVELS: ApprovalLevel[] = [
+  { sequence: 1, minAmount: 0, maxAmount: 50_000, approverRole: 'TEAM_LEAD', slaHours: 24 },
+  { sequence: 2, minAmount: 50_000, maxAmount: 500_000, approverRole: 'PROJECT_MANAGER', slaHours: 48 },
+  { sequence: 3, minAmount: 500_000, maxAmount: 2_500_000, approverRole: 'ADMIN', slaHours: 72 },
+  { sequence: 4, minAmount: 2_500_000, maxAmount: null, approverRole: 'SUPER_ADMIN', slaHours: 96 },
+];
+
+const step = (over: Partial<ApprovalStep> = {}): ApprovalStep => ({
+  sequence: 1, status: 'PENDING', approverRole: 'PROJECT_MANAGER', approverUserId: null, ...over,
+});
+
+describe('DoA ladder', () => {
+  it('routes a small amount to the first level only', () => {
+    expect(resolveLadder(LEVELS, 20_000).map(s => s.sequence)).toEqual([1]);
+  });
+
+  it('escalates through every level below in cumulative mode', () => {
+    // A 6 lakh order is seen by the team lead, PM and finance head — the norm
+    // for Indian procurement, not just the topmost authority.
+    expect(resolveLadder(LEVELS, 600_000).map(s => s.sequence)).toEqual([1, 2, 3]);
+  });
+
+  it('routes only to the owning level in single mode', () => {
+    expect(resolveLadder(LEVELS, 600_000, 'SINGLE').map(s => s.sequence)).toEqual([3]);
+  });
+
+  it('sends an amount on a slab boundary to the higher authority', () => {
+    // Bands are half-open, so exactly 50,000 belongs to level 2, not level 1.
+    // The conservative reading, and the one an auditor expects.
+    expect(resolveLadder(LEVELS, 49_999, 'SINGLE').map(s => s.sequence)).toEqual([1]);
+    expect(resolveLadder(LEVELS, 50_000, 'SINGLE').map(s => s.sequence)).toEqual([2]);
+  });
+
+  it('routes an unbounded amount to the open-ended top slab', () => {
+    expect(resolveLadder(LEVELS, 99_000_000, 'SINGLE').map(s => s.sequence)).toEqual([4]);
+  });
+
+  it('routes a zero-value document to the first level', () => {
+    expect(resolveLadder(LEVELS, 0).map(s => s.sequence)).toEqual([1]);
+  });
+
+  it('carries the SLA onto each step for escalation', () => {
+    expect(resolveLadder(LEVELS, 600_000).map(s => s.slaHours)).toEqual([24, 48, 72]);
+  });
+});
+
+describe('slab validation', () => {
+  it('accepts a complete ladder', () => {
+    expect(validateSlabs(LEVELS).valid).toBe(true);
+  });
+
+  it('rejects a gap that would route nothing', () => {
+    const gapped: ApprovalLevel[] = [
+      { sequence: 1, minAmount: 0, maxAmount: 50_000, approverRole: 'TEAM_LEAD' },
+      { sequence: 2, minAmount: 75_000, maxAmount: null, approverRole: 'ADMIN' },
+    ];
+    const result = validateSlabs(gapped);
+    expect(result.valid).toBe(false);
+    expect(result.problem).toContain('route to nobody');
+  });
+
+  it('rejects overlapping slabs', () => {
+    const overlapping: ApprovalLevel[] = [
+      { sequence: 1, minAmount: 0, maxAmount: 100_000, approverRole: 'TEAM_LEAD' },
+      { sequence: 2, minAmount: 50_000, maxAmount: null, approverRole: 'ADMIN' },
+    ];
+    expect(validateSlabs(overlapping).problem).toContain('overlap');
+  });
+
+  it('insists the ladder starts at zero', () => {
+    const late: ApprovalLevel[] = [{ sequence: 1, minAmount: 1000, maxAmount: null, approverRole: 'ADMIN' }];
+    expect(validateSlabs(late).problem).toContain('start at zero');
+  });
+
+  it('insists the top slab is open-ended', () => {
+    const capped: ApprovalLevel[] = [{ sequence: 1, minAmount: 0, maxAmount: 100_000, approverRole: 'ADMIN' }];
+    expect(validateSlabs(capped).problem).toContain('open-ended');
+  });
+
+  it('rejects two levels sharing a sequence', () => {
+    const clashing: ApprovalLevel[] = [
+      { sequence: 1, minAmount: 0, maxAmount: 50_000, approverRole: 'TEAM_LEAD' },
+      { sequence: 1, minAmount: 50_000, maxAmount: null, approverRole: 'ADMIN' },
+    ];
+    expect(validateSlabs(clashing).problem).toContain('sequence');
+  });
+
+  it('rejects an empty policy', () => {
+    expect(validateSlabs([]).valid).toBe(false);
+  });
+});
+
+describe('maker-checker', () => {
+  const steps = [step({ sequence: 1 })];
+
+  it('refuses to let the raiser approve their own request', () => {
+    const decision = canAct({
+      step: steps[0], steps, actorUserId: 'u1', actorRoles: ['PROJECT_MANAGER'],
+      requesterUserId: 'u1', documentType: 'PURCHASE_ORDER',
+    });
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.code).toBe('SELF_APPROVAL');
+  });
+
+  it('allows a different approver holding the role', () => {
+    const decision = canAct({
+      step: steps[0], steps, actorUserId: 'u2', actorRoles: ['PROJECT_MANAGER'],
+      requesterUserId: 'u1', documentType: 'PURCHASE_ORDER',
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it('permits self-approval only with the explicit override', () => {
+    // §4.1: an emergency override, explicitly granted and audited.
+    const decision = canAct({
+      step: steps[0], steps, actorUserId: 'u1', actorRoles: ['SUPER_ADMIN'],
+      requesterUserId: 'u1', documentType: 'PURCHASE_ORDER', hasSelfApproveOverride: true,
+    });
+    expect(decision.allowed).toBe(false); // still needs the right role
+    const withRole = canAct({
+      step: step({ approverRole: 'SUPER_ADMIN' }), steps: [step({ approverRole: 'SUPER_ADMIN' })],
+      actorUserId: 'u1', actorRoles: ['SUPER_ADMIN'], requesterUserId: 'u1',
+      documentType: 'PURCHASE_ORDER', hasSelfApproveOverride: true,
+    });
+    expect(withRole.allowed).toBe(true);
+  });
+
+  it('refuses somebody without the step’s role', () => {
+    const decision = canAct({
+      step: steps[0], steps, actorUserId: 'u2', actorRoles: ['EMPLOYEE'],
+      requesterUserId: 'u1', documentType: 'PURCHASE_ORDER',
+    });
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.code).toBe('NOT_THE_APPROVER');
+  });
+});
+
+describe('sequential gating', () => {
+  const ladder = [
+    step({ sequence: 1, status: 'PENDING', approverRole: 'TEAM_LEAD' }),
+    step({ sequence: 2, status: 'PENDING', approverRole: 'PROJECT_MANAGER' }),
+  ];
+
+  it('points at the first pending step', () => {
+    expect(nextActionableStep(ladder)!.sequence).toBe(1);
+  });
+
+  it('blocks a later level while an earlier one is pending', () => {
+    // Without this the ladder collapses into "whoever clicks first".
+    const decision = canAct({
+      step: ladder[1], steps: ladder, actorUserId: 'u2', actorRoles: ['PROJECT_MANAGER'],
+      requesterUserId: 'u1', documentType: 'PURCHASE_ORDER',
+    });
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.code).toBe('OUT_OF_SEQUENCE');
+      expect(decision.reason).toContain('Level 1 must decide');
+    }
+  });
+
+  it('opens the next level once the first approves', () => {
+    const advanced = [{ ...ladder[0], status: 'APPROVED' as const }, ladder[1]];
+    expect(nextActionableStep(advanced)!.sequence).toBe(2);
+    expect(canAct({
+      step: advanced[1], steps: advanced, actorUserId: 'u2', actorRoles: ['PROJECT_MANAGER'],
+      requesterUserId: 'u1', documentType: 'PURCHASE_ORDER',
+    }).allowed).toBe(true);
+  });
+
+  it('reports nothing actionable once every step is decided', () => {
+    const done = ladder.map(s => ({ ...s, status: 'APPROVED' as const }));
+    expect(nextActionableStep(done)).toBeNull();
+  });
+});
+
+describe('delegation', () => {
+  const delegation = (over: Partial<Delegation> = {}): Delegation => ({
+    fromUserId: 'boss', toUserId: 'deputy',
+    validFrom: '2026-09-01', validTo: '2026-09-30', ...over,
+  });
+
+  it('lets the delegate act inside the window', () => {
+    const who = effectiveApprovers('boss', [delegation()], 'PURCHASE_ORDER', '2026-09-15');
+    expect(who.map(w => w.userId)).toContain('deputy');
+    expect(who.find(w => w.userId === 'deputy')!.viaDelegation).toBe(true);
+  });
+
+  it('does not let the delegate act outside it', () => {
+    // Time-bound is the point: leave ends, authority ends.
+    expect(effectiveApprovers('boss', [delegation()], 'PURCHASE_ORDER', '2026-10-01').map(w => w.userId))
+      .toEqual(['boss']);
+    expect(effectiveApprovers('boss', [delegation()], 'PURCHASE_ORDER', '2026-08-31').map(w => w.userId))
+      .toEqual(['boss']);
+  });
+
+  it('includes both boundary days', () => {
+    for (const day of ['2026-09-01', '2026-09-30']) {
+      expect(effectiveApprovers('boss', [delegation()], 'PURCHASE_ORDER', day).map(w => w.userId))
+        .toContain('deputy');
+    }
+  });
+
+  it('honours a delegation limited to certain document types', () => {
+    const limited = [delegation({ documentTypes: ['EXPENSE_CLAIM'] })];
+    expect(effectiveApprovers('boss', limited, 'EXPENSE_CLAIM', '2026-09-15').map(w => w.userId)).toContain('deputy');
+    expect(effectiveApprovers('boss', limited, 'PURCHASE_ORDER', '2026-09-15').map(w => w.userId)).not.toContain('deputy');
+  });
+
+  it('ignores a revoked delegation', () => {
+    expect(effectiveApprovers('boss', [delegation({ revokedAt: '2026-09-10' })], 'PURCHASE_ORDER', '2026-09-15')
+      .map(w => w.userId)).toEqual(['boss']);
+  });
+
+  it('follows an onward delegation', () => {
+    const chain = [delegation(), delegation({ fromUserId: 'deputy', toUserId: 'second' })];
+    const who = effectiveApprovers('boss', chain, 'PURCHASE_ORDER', '2026-09-15');
+    expect(who.map(w => w.userId)).toEqual(['boss', 'deputy', 'second']);
+    expect(who.find(w => w.userId === 'second')!.chain).toEqual(['boss', 'deputy']);
+  });
+
+  it('does not loop on a cycle', () => {
+    const cyclic = [delegation(), delegation({ fromUserId: 'deputy', toUserId: 'boss' })];
+    const who = effectiveApprovers('boss', cyclic, 'PURCHASE_ORDER', '2026-09-15');
+    expect(who.map(w => w.userId).sort()).toEqual(['boss', 'deputy']);
+  });
+
+  it('detects a delegation that would close a cycle', () => {
+    // A→B exists; B→A would mean nobody is accountable.
+    const existing = [delegation({ fromUserId: 'a', toUserId: 'b' })];
+    expect(createsDelegationCycle(existing, delegation({ fromUserId: 'b', toUserId: 'a' }))).toBe(true);
+    expect(createsDelegationCycle(existing, delegation({ fromUserId: 'b', toUserId: 'c' }))).toBe(false);
+  });
+
+  it('detects a longer cycle', () => {
+    const existing = [
+      delegation({ fromUserId: 'a', toUserId: 'b' }),
+      delegation({ fromUserId: 'b', toUserId: 'c' }),
+    ];
+    expect(createsDelegationCycle(existing, delegation({ fromUserId: 'c', toUserId: 'a' }))).toBe(true);
+  });
+
+  it('lets a delegate act on a step assigned to the principal by name', () => {
+    const decision = canAct({
+      step: step({ approverRole: null, approverUserId: 'boss' }),
+      steps: [step({ approverRole: null, approverUserId: 'boss' })],
+      actorUserId: 'deputy', actorRoles: [], requesterUserId: 'u1',
+      delegations: [delegation()], documentType: 'PURCHASE_ORDER', today: '2026-09-15',
+    });
+    expect(decision.allowed).toBe(true);
+    if (decision.allowed) expect(decision.viaDelegation).toBe(true);
+  });
+
+  it('refuses the delegate once the window closes', () => {
+    const decision = canAct({
+      step: step({ approverRole: null, approverUserId: 'boss' }),
+      steps: [step({ approverRole: null, approverUserId: 'boss' })],
+      actorUserId: 'deputy', actorRoles: [], requesterUserId: 'u1',
+      delegations: [delegation()], documentType: 'PURCHASE_ORDER', today: '2026-10-05',
+    });
+    expect(decision.allowed).toBe(false);
+  });
+});
+
+describe('re-approval on amount change', () => {
+  it('tears up approvals when the amount rises', () => {
+    // The classic hole: approved at 4 lakh, edited to 6 lakh, ships on the
+    // old signature.
+    const result = requiresReapproval({ approvedAmount: 400_000, newAmount: 600_000, levels: LEVELS });
+    expect(result.required).toBe(true);
+    expect(result.reason).toContain('rose');
+  });
+
+  it('re-routes even a small rise that crosses a band', () => {
+    const result = requiresReapproval({ approvedAmount: 499_000, newAmount: 501_000, levels: LEVELS });
+    expect(result.required).toBe(true);
+  });
+
+  it('leaves a reduction standing when it stays in the same band', () => {
+    // Re-approving a cheaper version of something already agreed wastes time
+    // and trains people to click through.
+    const result = requiresReapproval({ approvedAmount: 400_000, newAmount: 350_000, levels: LEVELS });
+    expect(result.required).toBe(false);
+  });
+
+  it('re-routes a reduction that drops into a lower band', () => {
+    const result = requiresReapproval({ approvedAmount: 600_000, newAmount: 40_000, levels: LEVELS });
+    expect(result.required).toBe(true);
+    expect(result.reason).toContain('different authority band');
+  });
+
+  it('allows a configured tolerance for minor variation', () => {
+    // Freight or rounding on a PO should not restart the ladder.
+    const within = requiresReapproval({ approvedAmount: 100_000, newAmount: 102_000, levels: LEVELS, tolerancePct: 5 });
+    expect(within.required).toBe(false);
+    const beyond = requiresReapproval({ approvedAmount: 100_000, newAmount: 110_000, levels: LEVELS, tolerancePct: 5 });
+    expect(beyond.required).toBe(true);
+  });
+
+  it('always re-routes a rise from zero', () => {
+    expect(requiresReapproval({ approvedAmount: 0, newAmount: 1, levels: LEVELS, tolerancePct: 50 }).required).toBe(true);
+  });
+
+  it('does nothing when the amount is unchanged', () => {
+    expect(requiresReapproval({ approvedAmount: 400_000, newAmount: 400_000, levels: LEVELS }).required).toBe(false);
+  });
+});
+
+describe('SLA escalation', () => {
+  const now = new Date('2026-09-15T12:00:00Z');
+
+  it('reports a step waiting past its SLA', () => {
+    const overdue = overdueSteps([{
+      ...step(), slaHours: 24, pendingSince: '2026-09-13T12:00:00Z',
+    }], now);
+    expect(overdue).toHaveLength(1);
+    expect(overdue[0].hoursWaiting).toBe(48);
+  });
+
+  it('leaves a step inside its SLA alone', () => {
+    expect(overdueSteps([{ ...step(), slaHours: 48, pendingSince: '2026-09-15T06:00:00Z' }], now)).toHaveLength(0);
+  });
+
+  it('ignores steps already decided', () => {
+    expect(overdueSteps([{
+      ...step({ status: 'APPROVED' }), slaHours: 1, pendingSince: '2026-01-01T00:00:00Z',
+    }], now)).toHaveLength(0);
+  });
+
+  it('ignores steps with no SLA configured', () => {
+    expect(overdueSteps([{ ...step(), slaHours: null, pendingSince: '2026-01-01T00:00:00Z' }], now)).toHaveLength(0);
+  });
+});
+
+describe('schemas', () => {
+  const policy = {
+    document_type: 'PURCHASE_ORDER' as const, name: 'Procurement DoA',
+    levels: [
+      { sequence: 1, min_amount: 0, max_amount: 50_000, approver_role: 'TEAM_LEAD' },
+      { sequence: 2, min_amount: 50_000, max_amount: null, approver_role: 'ADMIN' },
+    ],
+  };
+
+  it('accepts a complete policy', () => {
+    expect(approvalPolicySchema.safeParse(policy).success).toBe(true);
+  });
+
+  it('rejects a policy whose slabs leave a gap', () => {
+    const gapped = {
+      ...policy,
+      levels: [
+        { sequence: 1, min_amount: 0, max_amount: 50_000, approver_role: 'TEAM_LEAD' },
+        { sequence: 2, min_amount: 90_000, max_amount: null, approver_role: 'ADMIN' },
+      ],
+    };
+    expect(approvalPolicySchema.safeParse(gapped).success).toBe(false);
+  });
+
+  it('rejects a level naming no approver at all', () => {
+    expect(approvalPolicySchema.safeParse({
+      ...policy,
+      levels: [{ sequence: 1, min_amount: 0, max_amount: null }],
+    }).success).toBe(false);
+  });
+
+  it('insists a rejection carries a reason', () => {
+    expect(approvalDecisionSchema.safeParse({ decision: 'REJECT' }).success).toBe(false);
+    expect(approvalDecisionSchema.safeParse({ decision: 'REJECT', comments: 'Rate too high' }).success).toBe(true);
+    expect(approvalDecisionSchema.safeParse({ decision: 'APPROVE' }).success).toBe(true);
+  });
+
+  it('insists a delegation carries a reason and a valid window', () => {
+    const base = {
+      to_user_id: '3f1a0c2e-0000-4000-8000-000000000001',
+      valid_from: '2026-09-01', valid_to: '2026-09-30', reason: 'Annual leave',
+    };
+    expect(delegationSchema.safeParse(base).success).toBe(true);
+    expect(delegationSchema.safeParse({ ...base, reason: '' }).success).toBe(false);
+    expect(delegationSchema.safeParse({ ...base, valid_to: '2026-08-01' }).success).toBe(false);
+  });
+});
+
+describe('role grants', () => {
+  it('reserves the self-approval override for Super Admin', () => {
+    const holders = Object.entries(APPROVAL_ROLE_GRANTS)
+      .filter(([, codes]) => codes.includes('approval.self_approve'))
+      .map(([role]) => role);
+    expect(holders).toEqual(['SUPER_ADMIN']);
+  });
+
+  it('lets the Auditor read everything but change nothing', () => {
+    // §4 gives the Auditor read across all domains, so read_all is required —
+    // asserting the intent rather than an exact array, because the list will
+    // grow and the rule that matters is "no mutating grant".
+    expect(APPROVAL_ROLE_GRANTS.AUDITOR).toContain('approval.read_all');
+    for (const mutating of ['approval.act', 'approval.configure', 'approval.delegate', 'approval.self_approve']) {
+      expect(APPROVAL_ROLE_GRANTS.AUDITOR).not.toContain(mutating);
+    }
+  });
+
+  it('separates seeing your own requests from seeing everybody\'s', () => {
+    // Conflating these blocked the Auditor with the check meant to stop an
+    // employee browsing other people's requests.
+    expect(APPROVAL_ROLE_GRANTS.EMPLOYEE).toContain('approval.read');
+    expect(APPROVAL_ROLE_GRANTS.EMPLOYEE).not.toContain('approval.read_all');
+  });
+
+  it('gives an employee visibility of their own requests but no authority', () => {
+    expect(APPROVAL_ROLE_GRANTS.EMPLOYEE).toEqual(['approval.read']);
+  });
+});

@@ -518,6 +518,12 @@ export const projectSchema = z
     planned_start_date: optionalS4Date,
     planned_end_date: optionalS4Date,
     priority: optionalS4Text(50),
+    // §8 / §8.8: government and private work run differently, so the track is
+    // recorded rather than inferred from whether a tender happens to be linked.
+    project_kind: z.union([z.literal(''), z.enum(['GOVERNMENT', 'PRIVATE'])]).optional(),
+    client_id: optionalUuid,
+    contract_value: optionalS4Text(20),
+    work_order_number: optionalS4Text(100),
   })
   .superRefine((v, ctx) => {
     if (v.planned_start_date && v.planned_end_date && v.planned_start_date > v.planned_end_date) {
@@ -525,6 +531,22 @@ export const projectSchema = z
         code: z.ZodIssueCode.custom,
         path: ['planned_end_date'],
         message: 'Planned end date must be on or after the planned start date',
+      });
+    }
+    if (v.contract_value && !Number.isFinite(Number(v.contract_value))) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['contract_value'],
+        message: 'Contract value must be a number',
+      });
+    }
+    // A work order is the government client's instruction to start. It has no
+    // meaning on a private job, where the equivalent is a signed proposal.
+    if (v.work_order_number && v.project_kind === 'PRIVATE') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['work_order_number'],
+        message: 'A work order number belongs to government work',
       });
     }
   });

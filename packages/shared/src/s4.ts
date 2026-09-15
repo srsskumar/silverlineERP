@@ -90,6 +90,7 @@ export const S4_ROLE_GRANTS: Record<RoleCode, string[]> = {
   HR_MANAGER: [],
   PAYROLL_OFFICER: [],
   INVENTORY_MANAGER: [],
+ SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[],
 };
 
 // ---------------------------------------------------------------------------
@@ -193,11 +194,63 @@ export const dependencyTypeSchema = z.enum(["FINISH_TO_START"]);
 
 export type DependencyType = z.infer<typeof dependencyTypeSchema>;
 
-/** Seeded project-type codes (both share the default workflow). */
+/**
+ * Seeded project types — how the work is contracted.
+ *
+ * They all share the default task workflow; the type is what the commercial
+ * arrangement is, not how the work moves. Organisations add their own from
+ * the Projects screen, so this is a starting point rather than a closed list.
+ */
 export const PROJECT_TYPE_SEEDS = [
   { code: "general", name: "General" },
   { code: "fieldwork", name: "Field Work" },
+  { code: "amc", name: "AMC" },
+  { code: "goods", name: "Goods" },
+  { code: "services", name: "Services" },
+  { code: "goods_and_services", name: "Goods and Services" },
 ] as const;
+
+/**
+ * Seeded project categories — what the work is about.
+ *
+ * Deliberately a second dimension rather than more types: an AMC on CCTV and
+ * an AMC on drones share a contract shape and nothing else, and folding the
+ * two together would multiply the type list into every combination.
+ */
+export const PROJECT_CATEGORY_SEEDS = [
+  { code: "electronics", name: "Electronics" },
+  { code: "drones", name: "Drones" },
+  { code: "cctv_equipment", name: "CCTV Equipment" },
+  { code: "survey_equipment", name: "Survey Equipment" },
+  { code: "land_survey", name: "Land Survey" },
+] as const;
+
+/**
+ * A stable key for a master record, from whatever a person typed.
+ *
+ * Codes are matched, not read, so "CCTV Equipment" and "cctv  equipment" have
+ * to land on the same key or one category quietly becomes two.
+ */
+export function slugifyCode(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+}
+
+/**
+ * POST /api/v1/project-categories
+ *
+ * The code is derived from the name when it is not given: somebody typing
+ * "Thermal Imaging" into a form should not also have to invent a key for it.
+ */
+export const projectCategorySchema = z.object({
+  code: z.string().trim().max(50).optional(),
+  name: z.string().trim().min(1).max(255),
+  description: z.string().trim().max(1000).optional(),
+  active: z.boolean().default(true),
+}).transform((v) => ({ ...v, code: slugifyCode(v.code?.trim() ? v.code : v.name) }))
+  .refine((v) => v.code.length > 0, {
+    message: "Give the category a name with at least one letter or digit",
+    path: ["name"],
+  });
 
 // ---------------------------------------------------------------------------
 // Workspaces
@@ -215,6 +268,19 @@ export type WorkspaceCreateInput = z.infer<typeof workspaceCreateSchema>;
 // Projects
 // ---------------------------------------------------------------------------
 
+/**
+ * Government and private work are run differently (§8, §8.8, §37).
+ *
+ * A government job is won on a tender, carries EMD and a work order, and bills
+ * against a BOQ; a private job comes from a proposal and is negotiated. The
+ * distinction drives which documents are expected and which reports a project
+ * appears in, so it is recorded on the project rather than inferred from
+ * whether a tender happens to be linked.
+ */
+export const PROJECT_KINDS = ["GOVERNMENT", "PRIVATE"] as const;
+export type ProjectKind = (typeof PROJECT_KINDS)[number];
+export const projectKindSchema = z.enum(PROJECT_KINDS);
+
 const projectBase = {
   description: z.string().max(5000).optional(),
   project_type_id: z.string().uuid("project_type_id must be a UUID").optional(),
@@ -225,6 +291,20 @@ const projectBase = {
   planned_start_date: dateStringSchema.optional(),
   planned_end_date: dateStringSchema.optional(),
   priority: prioritySchema.optional(),
+  // The commercial facts a project carries whether it arrived through a tender
+  // conversion or was keyed in directly. Until now only the conversion set
+  // them, so a directly created project had no client and no contract value —
+  // and nothing downstream could report on its margin.
+  project_kind: projectKindSchema.optional(),
+  client_id: z.string().uuid("client_id must be a UUID").optional(),
+  project_category_id: z.string().uuid("project_category_id must be a UUID").optional(),
+  contract_value: z.coerce.number().finite().min(0).optional(),
+  // Whether contract_value already includes GST. Recorded rather than assumed:
+  // booking an inclusive figure as exclusive overstates every margin on the
+  // job by the tax rate.
+  contract_gst_included: z.boolean().optional(),
+  contract_gst_rate: z.coerce.number().min(0).max(28).optional(),
+  work_order_number: z.string().trim().max(100).optional(),
 };
 
 /** POST /api/v1/projects */
@@ -246,15 +326,16 @@ export const projectPatchSchema = z
     planned_start_date: dateStringSchema.optional(),
     planned_end_date: dateStringSchema.optional(),
     status: projectStatusSchema.optional(),
+    project_kind: projectKindSchema.optional(),
+    client_id: z.string().uuid("client_id must be a UUID").optional(),
+    project_category_id: z.string().uuid("project_category_id must be a UUID").optional(),
+    contract_value: z.coerce.number().finite().min(0).optional(),
+    contract_gst_included: z.boolean().optional(),
+    contract_gst_rate: z.coerce.number().min(0).max(28).optional(),
+    work_order_number: z.string().trim().max(100).optional(),
   })
   .refine(
-    (v) =>
-      v.name !== undefined ||
-      v.description !== undefined ||
-      v.priority !== undefined ||
-      v.planned_start_date !== undefined ||
-      v.planned_end_date !== undefined ||
-      v.status !== undefined,
+    (v) => Object.values(v).some((field) => field !== undefined),
     { message: "Nothing to update" },
   );
 

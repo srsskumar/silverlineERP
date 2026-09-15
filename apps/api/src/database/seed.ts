@@ -4,6 +4,24 @@ import { Pool } from "pg";
 import {
   ALL_PERMISSIONS,
   V2_PERMISSIONS, V2_ROLE_GRANTS,
+  CRM_PERMISSIONS,
+  CRM_ROLE_GRANTS,
+  BILLING_PERMISSIONS,
+  BILLING_ROLE_GRANTS,
+  APPROVAL_PERMISSIONS,
+  APPROVAL_ROLE_GRANTS,
+  PROCUREMENT_PERMISSIONS,
+  PROCUREMENT_ROLE_GRANTS,
+  COST_CONTROL_PERMISSIONS,
+  COST_CONTROL_ROLE_GRANTS,
+  EXPENSE_PERMISSIONS,
+  EXPENSE_ROLE_GRANTS,
+  FINANCE_PERMISSIONS,
+  FINANCE_ROLE_GRANTS,
+  INVENTORY_PERMISSIONS,
+  INVENTORY_ROLE_GRANTS,
+  ALLOCATION_PERMISSIONS,
+  ALLOCATION_ROLE_GRANTS,
   ROLE_CODES,
   ROLE_PERMISSIONS,
   S1_ALL_PERMISSIONS,
@@ -21,6 +39,7 @@ import {
   P1_ALL_PERMISSIONS,
   P1_ROLE_GRANTS,
   PROJECT_TYPE_SEEDS,
+  PROJECT_CATEGORY_SEEDS,
   defaultTaskWorkflow,
   type RoleCode,
 } from "@silverline/shared";
@@ -60,6 +79,20 @@ const PERMISSION_MODULES: Record<string, string> = {
   dashboard: "dashboards",
   report: "reports",
   geo: "geo",
+  costhead: "cost-control",
+  budget: "cost-control",
+  cost: "cost-control",
+  expense: "expenses",
+  payment: "finance",
+  period: "finance",
+  bank: "finance",
+  invoice: "finance",
+  stock: "inventory",
+  location: "inventory",
+  reservation: "inventory",
+  stockcount: "inventory",
+  allocation: "workforce",
+  roster: "workforce",
 };
 
 function moduleFor(permission: string): string {
@@ -97,7 +130,7 @@ export async function seedDatabase(
     orgId = (org.rows[0] as { id: string }).id;
   }
 
-  for (const code of [...ALL_PERMISSIONS, ...S1_ALL_PERMISSIONS, ...S2_ALL_PERMISSIONS, ...S3_ALL_PERMISSIONS, ...S4_ALL_PERMISSIONS, ...S5_ALL_PERMISSIONS, ...S6_ALL_PERMISSIONS, ...P1_ALL_PERMISSIONS, ...V2_PERMISSIONS]) {
+  for (const code of [...ALL_PERMISSIONS, ...S1_ALL_PERMISSIONS, ...S2_ALL_PERMISSIONS, ...S3_ALL_PERMISSIONS, ...S4_ALL_PERMISSIONS, ...S5_ALL_PERMISSIONS, ...S6_ALL_PERMISSIONS, ...P1_ALL_PERMISSIONS, ...V2_PERMISSIONS, ...CRM_PERMISSIONS, ...BILLING_PERMISSIONS, ...APPROVAL_PERMISSIONS, ...PROCUREMENT_PERMISSIONS, ...COST_CONTROL_PERMISSIONS, ...EXPENSE_PERMISSIONS, ...FINANCE_PERMISSIONS, ...INVENTORY_PERMISSIONS, ...ALLOCATION_PERMISSIONS]) {
     await pool.query(
       `INSERT INTO permissions (code, description, module)
        VALUES ($1, $2, $3) ON CONFLICT (code) DO NOTHING`,
@@ -131,6 +164,15 @@ export async function seedDatabase(
       ...(S6_ROLE_GRANTS[code as RoleCode] ?? []),
       ...(P1_ROLE_GRANTS[code as RoleCode] ?? []),
       ...(V2_ROLE_GRANTS[code as RoleCode] ?? []),
+      ...(CRM_ROLE_GRANTS[code as RoleCode] ?? []),
+      ...(BILLING_ROLE_GRANTS[code as RoleCode] ?? []),
+      ...(APPROVAL_ROLE_GRANTS[code as RoleCode] ?? []),
+      ...(PROCUREMENT_ROLE_GRANTS[code as RoleCode] ?? []),
+      ...(COST_CONTROL_ROLE_GRANTS[code as RoleCode] ?? []),
+      ...(EXPENSE_ROLE_GRANTS[code as RoleCode] ?? []),
+      ...(FINANCE_ROLE_GRANTS[code as RoleCode] ?? []),
+      ...(INVENTORY_ROLE_GRANTS[code as RoleCode] ?? []),
+      ...(ALLOCATION_ROLE_GRANTS[code as RoleCode] ?? []),
     ]);
     for (const perm of grants) {
       await pool.query(
@@ -183,6 +225,18 @@ export async function seedDatabase(
          active = true,
          updated_at = NOW()`,
       [orgId, t.code, t.name, t.isPaid, t.entitlement, t.requiresBalance],
+    );
+  }
+
+  // Project categories — what the work is about, independent of how it is
+  // contracted. Re-runnable, and an organisation adds its own from the
+  // Projects screen.
+  for (const c of PROJECT_CATEGORY_SEEDS) {
+    await pool.query(
+      `INSERT INTO project_categories (org_id, code, name)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (org_id, code) DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()`,
+      [orgId, c.code, c.name],
     );
   }
 
