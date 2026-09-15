@@ -19,6 +19,7 @@ export * from "./approvals.js";
 export * from "./procurement.js";
 export * from "./cost-control.js";
 export * from "./financial-control.js";
+export * from "./inventory.js";
 export * from "./expenses.js";
 export * from "./geo.js";
 export * from "./antifraud.js";
