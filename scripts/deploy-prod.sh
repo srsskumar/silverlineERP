@@ -5,9 +5,18 @@
 # respectively, so the CLI must be pointed at each project by id rather than
 # invoked from inside the workspace.
 #
-# If a deployment comes back BLOCKED, it is the account's daily deployment
-# cap rather than the build — check with:
-#   vercel ls silverline-api --prod
+# A deployment that comes back BLOCKED is not a build failure and not a rate
+# limit: it is Vercel refusing a commit whose author it cannot verify as a
+# member of the team (blockCode TEAM_ACCESS_REQUIRED). It does not clear on
+# its own, so waiting is the one response that never works.
+#
+# Read the real reason rather than inferring it from the status:
+#   curl -s "https://api.vercel.com/v13/deployments/<url>?teamId=$ORG" \
+#     -H "Authorization: Bearer $TOKEN" | jq .readyStateReason
+#
+# The fix is to make the commit author verifiable: connect the GitHub account
+# to the Vercel login, invite it to the team, or commit as the team owner.
+# This repo takes the last of those, in its local git config.
 set -euo pipefail
 ORG=team_7OwtRsWDOIXIEYhpkIvsItUI
 API=prj_EO16yIr6JfxvmowOUibOdlfWQxjv
