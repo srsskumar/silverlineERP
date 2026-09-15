@@ -11,7 +11,7 @@ import {
   Activity, BarChart3, Boxes, Building2, CalendarDays, ClipboardList, Clock,
   FileSpreadsheet, FolderKanban, Inbox, LayoutDashboard, MapPin,
   Package, PlaneTakeoff, Settings, Shield, Users, Wallet, Workflow,
-  Briefcase, Contact, Gavel,
+  Briefcase, Contact, Gavel, Receipt, ShoppingCart, CheckSquare, IndianRupee,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { PERMISSIONS } from './permissions';
@@ -57,6 +57,18 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    // Finance and procurement (§13, §15, §16, §41). Grouped together because
+    // they are one chain of custody over money: authority, what was bought,
+    // what was spent, and what the client owes.
+    title: 'Finance',
+    items: [
+      { href: '/approvals', label: 'Approvals', permission: 'approval.read', icon: CheckSquare },
+      { href: '/procurement', label: 'Procurement', permission: 'requisition.read', icon: ShoppingCart },
+      { href: '/expenses', label: 'Expenses', permission: 'expense.read', icon: Receipt },
+      { href: '/billing', label: 'Project finance', permission: 'rabill.read', icon: IndianRupee },
+    ],
+  },
+  {
     title: 'People',
     items: [
       { href: '/employees', label: 'Directory', permission: PERMISSIONS.EMPLOYEE_READ, icon: Users },
@@ -93,6 +105,7 @@ export const QUICK_CREATE: NavItem[] = [
   { href: '/leads/new', label: 'New lead', permission: 'lead.manage', icon: Briefcase },
   { href: '/tenders/new', label: 'New tender', permission: 'tender.manage', icon: Gavel },
   { href: '/projects/new', label: 'New project', permission: PERMISSIONS.PROJECT_CREATE, icon: FolderKanban },
+  { href: '/expenses', label: 'New expense claim', permission: 'expense.manage', icon: Receipt },
   { href: '/leave/new', label: 'New leave request', permission: PERMISSIONS.LEAVE_REQUEST, icon: PlaneTakeoff },
   { href: '/payroll/new', label: 'New payroll run', permission: PERMISSIONS.PAYROLL_GENERATE, icon: Wallet },
   { href: '/employees/import', label: 'Import employees', permission: PERMISSIONS.EMPLOYEE_IMPORT, icon: Users },

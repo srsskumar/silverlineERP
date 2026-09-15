@@ -309,7 +309,7 @@ function TenderDetail({ id, onClose, onChanged }: { id: string; onClose: () => v
                   Carries the client, contract value and work order across, and keeps the tender linked for traceability.
                 </p>
                 <a
-                  href={`/tenders/${id}/convert`}
+                  href={`/tenders/convert?id=${id}`}
                   className="inline-block rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-fg hover:bg-primary-hover"
                 >
                   Convert to project

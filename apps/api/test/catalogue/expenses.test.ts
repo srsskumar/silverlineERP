@@ -303,13 +303,21 @@ describe("submission and maker-checker", () => {
   });
 
   it("will not let the raiser approve their own claim", async () => {
-    const claim = await makeClaim([{
-      category: "TRAVEL", expense_date: "2026-05-01", description: "Taxi", amount: 400,
-    }]);
-    await clearLadder(claim.id);
+    // The raiser here holds approval.act, so the refusal comes from
+    // maker-checker rather than from the permission guard.
+    const claim = await post(w.role.PROJECT_MANAGER, "/api/v1/expense-claims", {
+      claim_no: uniq("EXP"), claim_date: "2026-05-05", purpose: "Own travel",
+      lines: [{ category: "TRAVEL", expense_date: "2026-05-01", description: "Taxi", amount: 400 }],
+    });
+    expect(claim.status, JSON.stringify(claim.body)).toBe(201);
+    const submitted = await post(
+      { ...w.role.PROJECT_MANAGER, ...(await ver("expense_claims", claim.data.id)) },
+      `/api/v1/expense-claims/${claim.data.id}/submit`, {});
+    expect(submitted.status, JSON.stringify(submitted.body)).toBe(200);
+
     const res = await post(
-      { ...w.directUser, ...(await ver("expense_claims", claim.id)) },
-      `/api/v1/expense-claims/${claim.id}/decision`, { status: "APPROVED" });
+      { ...w.role.PROJECT_MANAGER, ...(await ver("expense_claims", claim.data.id)) },
+      `/api/v1/expense-claims/${claim.data.id}/decision`, { status: "APPROVED" });
     expect(res.status).toBe(403);
     expect(res.body.code).toBe("SELF_APPROVAL");
   });
@@ -342,6 +350,21 @@ describe("submission and maker-checker", () => {
       await w.pool.query("UPDATE users SET employee_id = NULL WHERE id = $1", [pmUserId]);
       await w.pool.query("UPDATE users SET employee_id = $2 WHERE id = $1", [w.directUserId, w.directEmployee]);
     }
+  });
+
+  it("will not let an ordinary employee record the outcome", async () => {
+    // Every employee holds expense.read so they can follow their own claim.
+    // Gating the decision on that would let any colleague flip a claim to
+    // approved the moment the ladder cleared, and the authority matrix would
+    // be deciding nothing.
+    const claim = await makeClaim([{
+      category: "TRAVEL", expense_date: "2026-05-01", description: "Taxi", amount: 350,
+    }]);
+    await clearLadder(claim.id);
+    const res = await post(
+      { ...w.siteUser, ...(await ver("expense_claims", claim.id)) },
+      `/api/v1/expense-claims/${claim.id}/decision`, { status: "APPROVED" });
+    expect(res.status).toBe(403);
   });
 
   it("refuses approval while the ladder is still pending", async () => {

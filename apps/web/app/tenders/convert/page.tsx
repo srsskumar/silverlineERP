@@ -1,5 +1,6 @@
 'use client';
-import {useParams} from 'next/navigation';
+import {useSearchParams} from 'next/navigation';
+import {Suspense} from 'react';
 import {Workbench,Panel,MutationForm} from '@/components/v2/Workbench';
 
 /**
@@ -9,9 +10,18 @@ import {Workbench,Panel,MutationForm} from '@/components/v2/Workbench';
  * this form does not need to guard against a double submit beyond the usual
  * idempotency key — a retry returns ALREADY_CONVERTED rather than a second
  * project.
+ *
+ * The tender arrives as `?id=`, not as a path segment. The app is built as a
+ * static export, which cannot generate a page per tender id — the route
+ * `/tenders/[id]/convert` failed the build outright rather than degrading, so
+ * nobody could produce a verified build at all. Every other deep link in the
+ * app uses a query parameter for the same reason.
  */
-export default function Page(){
- const {id}=useParams<{id:string}>();
+function ConvertForm(){
+ const id=useSearchParams().get('id');
+ if(!id) return <Workbench title="Convert to project" description="Open this from a tender.">
+  <Panel title="No tender chosen"><p className="text-sm text-text-muted">Pick an awarded tender and choose “Convert to project”.</p></Panel>
+ </Workbench>;
  return <Workbench title="Convert to project" description="Carries client, contract value and work order across, and keeps the tender permanently linked for traceability.">
   <Panel title="New project from this tender">
    <MutationForm path={`tenders/${id}/convert`} fields={[
@@ -26,4 +36,9 @@ export default function Page(){
    ]} submit="Create project"/>
   </Panel>
  </Workbench>;
+}
+
+export default function Page(){
+ // useSearchParams needs a Suspense boundary to prerender.
+ return <Suspense><ConvertForm/></Suspense>;
 }

@@ -351,9 +351,14 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
     const approval = claim.approval_id
       ? (await pool.query('SELECT * FROM approval_instances WHERE id = $1', [claim.approval_id])).rows[0]
       : null;
+    // The override is only meaningful with a name against it (§16.5).
+    const overrideBy = claim.override_by
+      ? (await pool.query('SELECT username FROM users WHERE id = $1', [claim.override_by])).rows[0]
+      : null;
     return {
       data: {
         ...claim, lines, reimbursements: payments, approval,
+        override_by_username: overrideBy?.username ?? null,
         reimbursement: reimbursementPosition(
           Number(claim.approved_amount ?? claim.total_allowed), payments.map(p => ({ amount: Number(p.amount) }))),
         allowed_statuses: EXPENSE_CLAIM_TRANSITIONS[claim.status as ExpenseClaimStatus] ?? [],
@@ -562,7 +567,15 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
 
   /* --------------------------------------------------------------- decision */
 
-  app.post('/api/v1/expense-claims/:id/decision', { preHandler: guard('expense.read') }, async req => {
+  /**
+   * Record the ladder's outcome on the claim.
+   *
+   * Guarded by `approval.act`, not by an expense permission. Every employee
+   * holds `expense.read` so they can follow their own claim, and gating the
+   * decision on that would let any colleague flip a claim to approved the
+   * moment the ladder cleared — the authority matrix would decide nothing.
+   */
+  app.post('/api/v1/expense-claims/:id/decision', { preHandler: guard('approval.act') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
     const input = parse(claimDecisionSchema, req.body);
     if (input.status !== 'APPROVED' && input.status !== 'REJECTED') {

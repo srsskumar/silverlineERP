@@ -74,6 +74,23 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     }));
   }
 
+  /**
+   * The same steps, with the audit trail attached.
+   *
+   * `stepsFor` returns the shape the decision engine wants and nothing more —
+   * deliberately, since it feeds `canAct`. But a ladder with no actor, no
+   * timestamp and no comment is not an audit trail, it is a progress bar, so
+   * the detail view reads its own richer row.
+   */
+  async function stepsWithTrail(db: Pool | PoolClient, instanceId: string) {
+    return (await db.query(
+      `SELECT s.*, a.username AS acted_by_username, b.username AS acted_on_behalf_of_username
+       FROM approval_steps s
+       LEFT JOIN users a ON a.id = s.acted_by
+       LEFT JOIN users b ON b.id = s.acted_on_behalf_of
+       WHERE s.instance_id = $1 ORDER BY s.sequence`, [instanceId])).rows;
+  }
+
   /* ---------------------------------------------------------------- policy */
 
   app.get('/api/v1/approval-policies', { preHandler: guard('approval.read') }, async req => {
@@ -181,6 +198,36 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     return reply.code(201).send({ data: row });
   });
 
+  /**
+   * The requests this actor is allowed to see.
+   *
+   * `approval.read` alone means the ones they raised; `approval.read_all` is
+   * the organisation-wide grant. Without this a requester could act on a
+   * request from the inbox but never find one they had raised themselves.
+   */
+  app.get('/api/v1/approvals', { preHandler: guard('approval.read') }, async req => {
+    const u = actor(req), { limit, offset, q } = page(req);
+    const values: unknown[] = [u.orgId, limit + 1, offset];
+    let where = 'i.org_id = $1';
+    if (q.status) { values.push(q.status); where += ` AND i.status = $${values.length}`; }
+    if (q.document_type) { values.push(q.document_type); where += ` AND i.document_type = $${values.length}`; }
+    // `mine=true` narrows an org-wide reader back to their own requests, which
+    // is what the "raised by me" view wants.
+    if (q.mine === 'true' || !u.permissions.includes('approval.read_all')) {
+      values.push(u.id);
+      where += ` AND i.requested_by = $${values.length}`;
+    }
+    const rows = (await pool.query(
+      `SELECT i.*, u.username AS requested_by_username, p.code AS project_code,
+              pol.name AS policy_name
+       FROM approval_instances i
+       LEFT JOIN users u ON u.id = i.requested_by
+       LEFT JOIN projects p ON p.id = i.project_id
+       LEFT JOIN approval_policies pol ON pol.id = i.policy_id
+       WHERE ${where} ORDER BY i.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+    return { data: rows.slice(0, limit), has_more: rows.length > limit };
+  });
+
   app.get('/api/v1/approvals/:id', { preHandler: guard('approval.read') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
     const instance = await inOrg(pool, 'approval_instances', id, u.orgId);
@@ -190,7 +237,21 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     if (String(instance.requested_by) !== u.id && !u.permissions.includes('approval.read_all')) {
       fail('FORBIDDEN', 'You can only view approvals you raised', 403);
     }
-    return { data: { ...instance, steps, next_step: nextActionableStep(steps) } };
+    const requester = (await pool.query(
+      'SELECT username FROM users WHERE id = $1', [instance.requested_by])).rows[0];
+    const policy = instance.policy_id
+      ? (await pool.query('SELECT name, mode FROM approval_policies WHERE id = $1', [instance.policy_id])).rows[0]
+      : null;
+    return {
+      data: {
+        ...instance,
+        requested_by_username: requester?.username ?? null,
+        policy_name: policy?.name ?? null,
+        policy_mode: policy?.mode ?? null,
+        steps: await stepsWithTrail(pool, id),
+        next_step: nextActionableStep(steps),
+      },
+    };
   });
 
   /** The acting user's queue, delegations included. */
