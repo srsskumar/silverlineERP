@@ -16,6 +16,7 @@
  * an employee, suspending an employee).
  */
 
+import { VOLATILE_TABLES } from "../tables.js";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -79,24 +80,7 @@ process.env["UPLOADS_DIR"] ??= join(tmpdir(), `sl-catalogue-${process.pid}`);
 // Commercial spine (§6.3–6.5, §8, §37). These must be listed: they carry
 // foreign keys into projects/users/organizations, and PostgreSQL refuses to
 // truncate a table that an unlisted table references.
-const OWNED_TABLES = `roster_entries, work_shifts, resource_allocations, stock_count_lines, stock_counts, stock_reservations, payment_run_lines, payment_runs, bank_transactions, payment_allocations, payments, financial_periods, project_categories, expense_receipt_fingerprints, expense_reimbursements, expense_lines, expense_claims, expense_policies, project_cost_entries, project_budgets, cost_heads, vendor_return_lines, vendor_returns, vendor_quote_lines, vendor_quotes, rfq_vendors, rfq_lines, rfqs, invoice_match_results, grn_lines, goods_receipt_notes, po_amendments, purchase_order_lines, purchase_orders, requisition_lines, purchase_requisitions, invoice_lines, approval_steps, approval_instances, approval_levels, approval_policies, approval_delegations, retention_ledger, ra_bill_deductions, ra_bill_items, ra_bills, project_advances, project_billing_policies, boq_items, party_gst_registrations, record_conversions, bank_guarantee_instruments,
-  competitor_bids, tender_eligibility_items, tender_corrigenda,
-  private_proposals, tenders, interactions, opportunities, leads,
-  contacts, clients,
-  provider_jobs, advisory_cases, payslip_revisions,
-  project_workflow_overrides, notification_deliveries, report_registry,
-  report_schedules, payslip_documents, vendors, inventory_items, invoices,
-  stock_transactions, stock_locations, assets, asset_assignments, asset_audits, cycles,
-  custom_field_definitions, domain_events, automation_rules,
-  automation_executions, webhook_subscriptions, webhook_deliveries,
-  insight_feedback, v2_operations, geo_fence_employee_assignments,
-  device_registrations, audit_events, sessions, idempotency_keys, user_roles,
-  users, employee_documents, employees, org_units, holidays,
-  attendance_exceptions, attendance_records, attendance_events, geo_fences,
-  leave_requests, leave_balances, leave_types, mentions, comments,
-  task_evidence, task_dependencies, tasks, projects, project_workflows,
-  project_types, workspaces, notifications, task_labels, labels, saved_filters,
-  board_columns, boards, payslips, payroll_runs, payroll_policies`;
+const OWNED_TABLES = VOLATILE_TABLES;
 
 /** A District→Mandal→Village→Site chain. */
 export interface UnitChain {

@@ -54,6 +54,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "044_allocation_roster", file: "044_allocation_roster.sql" },
   { version: "045_pipeline_classification", file: "045_pipeline_classification.sql" },
   { version: "046_payables_receivables", file: "046_payables_receivables.sql" },
+  { version: "047_document_register", file: "047_document_register.sql" },
 ];
 
 /**

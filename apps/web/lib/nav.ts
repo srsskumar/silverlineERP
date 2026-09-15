@@ -14,6 +14,7 @@ import {
   Briefcase, Contact, Gavel, Receipt, ShoppingCart, CheckSquare, IndianRupee, Download,
   ArrowDownToLine,
   ArrowUpFromLine,
+  FileCheck,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { PERMISSIONS } from './permissions';
@@ -89,6 +90,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     title: 'Operations',
     items: [
+      { href: '/documents', label: 'Documents', permission: 'document.read', icon: FileCheck },
       { href: '/inventory', label: 'Inventory', permission: 'inventory.read', icon: Package },
       { href: '/assets', label: 'Assets', permission: 'asset.read', icon: Boxes },
       { href: '/geo-fences', label: 'Geo-fences', permission: PERMISSIONS.GEO_READ, icon: MapPin },

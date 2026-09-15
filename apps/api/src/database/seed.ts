@@ -24,6 +24,9 @@ import {
   ALLOCATION_ROLE_GRANTS,
   LEDGER_PERMISSIONS,
   LEDGER_ROLE_GRANTS,
+  DOCUMENT_PERMISSIONS,
+  DOCUMENT_ROLE_GRANTS,
+  DOCUMENT_TYPE_SEEDS,
   ROLE_CODES,
   ROLE_PERMISSIONS,
   S1_ALL_PERMISSIONS,
@@ -136,7 +139,7 @@ export async function seedDatabase(
     orgId = (org.rows[0] as { id: string }).id;
   }
 
-  for (const code of [...ALL_PERMISSIONS, ...S1_ALL_PERMISSIONS, ...S2_ALL_PERMISSIONS, ...S3_ALL_PERMISSIONS, ...S4_ALL_PERMISSIONS, ...S5_ALL_PERMISSIONS, ...S6_ALL_PERMISSIONS, ...P1_ALL_PERMISSIONS, ...V2_PERMISSIONS, ...CRM_PERMISSIONS, ...BILLING_PERMISSIONS, ...APPROVAL_PERMISSIONS, ...PROCUREMENT_PERMISSIONS, ...COST_CONTROL_PERMISSIONS, ...EXPENSE_PERMISSIONS, ...FINANCE_PERMISSIONS, ...INVENTORY_PERMISSIONS, ...ALLOCATION_PERMISSIONS, ...LEDGER_PERMISSIONS]) {
+  for (const code of [...ALL_PERMISSIONS, ...S1_ALL_PERMISSIONS, ...S2_ALL_PERMISSIONS, ...S3_ALL_PERMISSIONS, ...S4_ALL_PERMISSIONS, ...S5_ALL_PERMISSIONS, ...S6_ALL_PERMISSIONS, ...P1_ALL_PERMISSIONS, ...V2_PERMISSIONS, ...CRM_PERMISSIONS, ...BILLING_PERMISSIONS, ...APPROVAL_PERMISSIONS, ...PROCUREMENT_PERMISSIONS, ...COST_CONTROL_PERMISSIONS, ...EXPENSE_PERMISSIONS, ...FINANCE_PERMISSIONS, ...INVENTORY_PERMISSIONS, ...ALLOCATION_PERMISSIONS, ...LEDGER_PERMISSIONS, ...DOCUMENT_PERMISSIONS]) {
     await pool.query(
       `INSERT INTO permissions (code, description, module)
        VALUES ($1, $2, $3) ON CONFLICT (code) DO NOTHING`,
@@ -180,6 +183,7 @@ export async function seedDatabase(
       ...(INVENTORY_ROLE_GRANTS[code as RoleCode] ?? []),
       ...(ALLOCATION_ROLE_GRANTS[code as RoleCode] ?? []),
       ...(LEDGER_ROLE_GRANTS[code as RoleCode] ?? []),
+      ...(DOCUMENT_ROLE_GRANTS[code as RoleCode] ?? []),
     ]);
     for (const perm of grants) {
       await pool.query(
@@ -244,6 +248,29 @@ export async function seedDatabase(
        VALUES ($1, $2, $3)
        ON CONFLICT (org_id, code) DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()`,
       [orgId, c.code, c.name],
+    );
+  }
+
+  // Document types (§46). The migration seeds the organisations that existed
+  // when it ran; this covers every organisation created since, which is
+  // otherwise left with an empty register and no way to file anything.
+  //
+  // Re-runnable, and an organisation may add its own. The update deliberately
+  // leaves `active` alone: a type an organisation has switched off should stay
+  // off through a redeploy.
+  for (const t of DOCUMENT_TYPE_SEEDS) {
+    await pool.query(
+      `INSERT INTO document_types (org_id, code, label, category, owners, notice_days,
+         expiry_required, blocks_operations, retention_years, confidential, basis)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       ON CONFLICT (org_id, code) DO UPDATE SET
+         label = EXCLUDED.label, category = EXCLUDED.category, owners = EXCLUDED.owners,
+         notice_days = EXCLUDED.notice_days, expiry_required = EXCLUDED.expiry_required,
+         blocks_operations = EXCLUDED.blocks_operations,
+         retention_years = EXCLUDED.retention_years, confidential = EXCLUDED.confidential,
+         basis = EXCLUDED.basis, updated_at = NOW()`,
+      [orgId, t.code, t.label, t.category, t.owners, t.noticeDays, t.expiryRequired,
+        t.blocksOperations, t.retentionYears, t.confidential, t.basis ?? null],
     );
   }
 
