@@ -152,13 +152,19 @@ export function useWorkspaces() {
 }
 
 export function useProjectTypes() {
+  const client = useQueryClient();
   const query = useQuery({
     queryKey: ['project-types', 'master'],
     queryFn: () => fetchAll('/api/v1/project-types'),
     staleTime: 300_000,
     retry: false,
   });
-  return { query };
+  const create = async (name: string) => {
+    const res = await apiRequest<Row>('/api/v1/project-types', { method: 'POST', body: { name } });
+    await client.invalidateQueries({ queryKey: ['project-types'] });
+    return { id: String(res.data.id) };
+  };
+  return { query, create };
 }
 
 export function useProjectCategories() {

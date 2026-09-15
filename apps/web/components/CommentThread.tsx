@@ -8,7 +8,7 @@ import { listComments, postComment } from '@/lib/tasks';
 import { MENTION_HINT_TEXT, commentSchema, type CommentFormInput } from '@/lib/validation';
 import { queryKeys } from '@/lib/query-keys';
 import { applyFieldErrors } from '@/lib/form-errors';
-import { shortUserId } from './ApprovalTimeline';
+import { listPeople, peopleIndex, personLabel } from '@/lib/people';
 import { Button } from './ui/Button';
 import { EmptyState } from './ui/EmptyState';
 import { ErrorCard } from './ui/ErrorCard';
@@ -33,6 +33,9 @@ export function CommentThread({
     queryKey: queryKeys.taskComments.list(taskId),
     queryFn: () => listComments(taskId),
   });
+
+  const peopleQuery = useQuery({ queryKey: ['people'], queryFn: listPeople, staleTime: 300_000 });
+  const people = React.useMemo(() => peopleIndex(peopleQuery.data ?? []), [peopleQuery.data]);
 
   const {
     register,
@@ -80,9 +83,12 @@ export function CommentThread({
           {(commentsQuery.data ?? []).map((c) => (
             <li key={c.id} className="rounded-md bg-surface-sunken px-3 py-2">
               <p className="text-xs text-text-muted">
-                <span className="font-medium text-text-muted">{c.author_username || shortUserId(c.author_user_id)}</span>
-                {' · '}
-                <span className="font-mono" title={c.author_user_id}>{shortUserId(c.author_user_id)}</span>
+                {/* The employee-directory name where there is one, the sign-in
+                    name otherwise. The raw id stays in the tooltip for anyone
+                    who needs to correlate it with an audit entry. */}
+                <span className="font-medium text-text" title={c.author_user_id}>
+                  {personLabel(people, c.author_user_id) || c.author_username}
+                </span>
                 {c.created_at ? ` · ${String(c.created_at)}` : ''}
               </p>
               <p className="mt-1 whitespace-pre-wrap text-sm text-text">{c.body}</p>

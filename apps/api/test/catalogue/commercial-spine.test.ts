@@ -648,3 +648,103 @@ describe("tenant isolation", () => {
     expect(mine.every((c: any) => c.name !== "Foreign client")).toBe(true);
   });
 });
+
+/**
+ * Project type and category across the pipeline (§6.2, §7.1, §8.1, §37.2).
+ *
+ * What the work *is* is known when the lead is first taken, and it decides who
+ * bids it and which past jobs are comparable. Capturing it there and carrying
+ * it through the conversion stops the same job being filed under a different
+ * category at each of its three stages.
+ */
+describe("UT-CRM-20 pipeline classification", () => {
+  async function category(name: string) {
+    const res = await post(w.admin, "/api/v1/project-categories", { name });
+    expect([200, 201]).toContain(res.status);
+    return res.data.id as string;
+  }
+
+  it("creates a project type from wherever one is needed", async () => {
+    const res = await post(w.admin, "/api/v1/project-types", { name: `Turnkey ${uniq()}` });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body.code).toMatch(/^turnkey_/);
+    // A type with no workflow has no statuses its tasks may move between, so
+    // the first task raised against it would be stuck immediately.
+    const workflow = await w.pool.query(
+      "SELECT statuses FROM project_workflows WHERE project_type_id = $1", [res.body.id]);
+    expect(workflow.rows[0].statuses).toContain("TO_DO");
+  });
+
+  it("returns the existing type rather than a dead end", async () => {
+    const name = `Supply Only ${uniq()}`;
+    const first = await post(w.admin, "/api/v1/project-types", { name });
+    expect(first.status).toBe(201);
+    const again = await post(w.admin, "/api/v1/project-types", { name });
+    expect(again.status).toBe(200);
+    expect(again.body.id).toBe(first.body.id);
+  });
+
+  it("records the classification on a lead", async () => {
+    const cat = await category(`Drones ${uniq()}`);
+    const type = await post(w.admin, "/api/v1/project-types", { name: `AMC ${uniq()}` });
+    expect(type.status, JSON.stringify(type.body)).toBe(201);
+    const res = await post(w.admin, "/api/v1/leads", {
+      lead_no: uniq("LD"), organization_name: `Org ${uniq()}`,
+      lead_type: "GOVERNMENT", source: "REFERRAL",
+      project_type_id: type.body.id, project_category_id: cat,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.data.project_category_id).toBe(cat);
+    expect(res.data.project_type_id).toBe(type.body.id);
+  });
+
+  it("records the classification on a tender, beside the authority's own", async () => {
+    // `category` is what the notice printed; project_category_id is ours.
+    // They are separate because theirs is evidence and ours is what every
+    // report groups by.
+    const cat = await category(`CCTV ${uniq()}`);
+    const res = await post(w.admin, "/api/v1/tenders", {
+      tender_no: uniq("TN"), tender_type: "OPEN",
+      category: "Electrical works — sub head 4",
+      project_category_id: cat,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.data.category).toContain("sub head 4");
+    expect(res.data.project_category_id).toBe(cat);
+  });
+
+  it("refuses a category from another organisation", async () => {
+    const foreign = await w.pool.query(
+      "INSERT INTO project_categories(org_id, code, name) VALUES($1,$2,$3) RETURNING id",
+      [w.other.orgId, uniq("c"), "Foreign"]);
+    const res = await post(w.admin, "/api/v1/leads", {
+      lead_no: uniq("LD"), organization_name: `Org ${uniq()}`,
+      lead_type: "PRIVATE", source: "REFERRAL",
+      project_category_id: String(foreign.rows[0].id),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("carries the classification from the tender into the project", async () => {
+    const cat = await category(`Survey ${uniq()}`);
+    const tender = await post(w.admin, "/api/v1/tenders", {
+      tender_no: uniq("TN"), tender_type: "OPEN", project_category_id: cat,
+    });
+    expect(tender.status, JSON.stringify(tender.body)).toBe(201);
+
+    for (const status of ["PUBLISHED", "IN_PROGRESS", "SUBMITTED", "UNDER_EVALUATION", "SELECTED", "AWARDED"]) {
+      const current = await w.pool.query("SELECT version FROM tenders WHERE id=$1", [tender.data.id]);
+      const moved = await post(
+        { ...w.admin, "if-match": String(current.rows[0].version) },
+        `/api/v1/tenders/${tender.data.id}/status`, { status });
+      expect(moved.status, `${status}: ${JSON.stringify(moved.body)}`).toBe(200);
+    }
+
+    const converted = await post(w.admin, `/api/v1/tenders/${tender.data.id}/convert`, {
+      workspace_id: w.workspaceId, code: uniq("PC").toUpperCase(), name: "Converted with category",
+    });
+    expect(converted.status, JSON.stringify(converted.body)).toBe(201);
+    // Set once at capture and carried the whole way, rather than re-keyed.
+    expect(converted.data.project_category_id).toBe(cat);
+  });
+});

@@ -87,6 +87,15 @@ export async function registerTenderRoutes(app: FastifyInstance, opts: { pool: P
     const row = await mutate(pool, req, 'tender.create', 'tender', async db => {
       if (input.client_id) await inOrg(db, 'clients', String(input.client_id), u.orgId);
       if (input.opportunity_id) await inOrg(db, 'opportunities', String(input.opportunity_id), u.orgId);
+      if (input.project_category_id) {
+        await inOrg(db, 'project_categories', String(input.project_category_id), u.orgId);
+      }
+      if (input.project_type_id) {
+        const t = await db.query(
+          'SELECT 1 FROM project_types WHERE id = $1::uuid AND org_id = $2',
+          [input.project_type_id, u.orgId]);
+        if (!t.rowCount) fail('NOT_FOUND', 'Project type not found', 404);
+      }
       const prepared = { ...input, jv_partners: JSON.stringify(input.jv_partners ?? []) };
       const keys = Object.keys(prepared), values = [u.orgId, u.id, ...Object.values(prepared)];
       const created = (await db.query(
@@ -411,6 +420,10 @@ export async function registerTenderRoutes(app: FastifyInstance, opts: { pool: P
       contract_value: input.contract_value ?? source.contract_value ?? source.bid_value ?? null,
       work_order_number: input.work_order_number ?? null,
       project_kind: sourceType === 'TENDER' ? 'GOVERNMENT' : 'PRIVATE',
+      // Set when the lead was first taken and carried the whole way, so the
+      // same job is not filed under a different category at each stage.
+      project_type_id: input.project_type_id ?? source.project_type_id ?? null,
+      project_category_id: input.project_category_id ?? source.project_category_id ?? null,
       source_no: source.tender_no ?? source.proposal_no,
     };
 
@@ -435,13 +448,15 @@ export async function registerTenderRoutes(app: FastifyInstance, opts: { pool: P
       project = (await db.query(
         `INSERT INTO projects(org_id, workspace_id, code, name, project_manager_id,
            planned_start_date, planned_end_date, tender_id, proposal_id, client_id,
-           project_kind, contract_value, work_order_number, status, created_by)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'DRAFT',$14) RETURNING *`,
+           project_kind, contract_value, work_order_number, project_type_id,
+           project_category_id, status, created_by)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'DRAFT',$16) RETURNING *`,
         [u.orgId, input.workspace_id, input.code, input.name, input.project_manager_id ?? null,
          input.planned_start_date ?? null, input.planned_end_date ?? null,
          sourceType === 'TENDER' ? sourceId : null,
          sourceType === 'PRIVATE_PROPOSAL' ? sourceId : null,
-         carried.client_id, carried.project_kind, carried.contract_value, carried.work_order_number, u.id])).rows[0];
+         carried.client_id, carried.project_kind, carried.contract_value, carried.work_order_number,
+         carried.project_type_id, carried.project_category_id, u.id])).rows[0];
     }
 
     // The unique index on (source_type, source_id, target_type) is what makes a

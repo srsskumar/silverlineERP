@@ -3,7 +3,7 @@ import {effectiveCustomFields,validateCustomFields} from "../../common/customFie
 import type { FastifyInstance,FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import { z } from 'zod';
-import { cycleSchema,customFieldSchema,taskWorkflowSchema,defaultTaskWorkflow } from '@silverline/shared';
+import { cycleSchema,customFieldSchema,taskWorkflowSchema,defaultTaskWorkflow, projectTypeSchema} from '@silverline/shared';
 import { buildAuthenticate,requirePermission,scopesForPermission } from '../../common/auth.js';
 import { actor,parse,page,inOrg,mutate,version,fail,projectAccess } from '../../common/domain.js';
 import { resolveScopes,taskScopeClause,employeeScopeClause } from '../../common/scopes.js';
@@ -30,7 +30,36 @@ export async function registerPlanningRoutes(app:FastifyInstance,opts:{pool:Pool
    return (await db.query('INSERT INTO project_workflow_overrides(project_id,statuses,allowed_transitions,updated_by) VALUES($1,$2,$3,$4) ON CONFLICT(project_id) DO UPDATE SET statuses=EXCLUDED.statuses,allowed_transitions=EXCLUDED.allowed_transitions,version=project_workflow_overrides.version+1,updated_at=now(),updated_by=EXCLUDED.updated_by RETURNING project_id AS id,project_id,statuses,allowed_transitions,version',[id,JSON.stringify(i.statuses),JSON.stringify(i.allowed_transitions),u.id])).rows[0];
   });
  });
- app.post('/api/v1/project-types',{preHandler:guard('admin.configure')},async(req,reply)=>{const u=actor(req),i=parse(z.object({code:z.string().regex(/^[A-Z][A-Z0-9_-]{1,49}$/),name:z.string().trim().min(1).max(255)}),req.body);const result=await mutate(pool,req,'project_type.create','project_type',async db=>{const type=(await db.query('INSERT INTO project_types(org_id,code,name) VALUES($1,$2,$3) RETURNING *',[u.orgId,i.code,i.name])).rows[0],workflow=defaultTaskWorkflow();await db.query('INSERT INTO project_workflows(project_type_id,statuses,allowed_transitions) VALUES($1,$2,$3)',[type.id,JSON.stringify(workflow.statuses),JSON.stringify(workflow.allowed_transitions)]);return type;});return reply.code(201).send(result);});
+ /**
+  * Create a project type.
+  *
+  * Gated on project.create rather than admin.configure: the point of the
+  * button is that somebody filling in a project, lead or tender form can add
+  * the type they need without leaving it. Requiring an administrator meant
+  * they picked the nearest wrong option instead, which is how a master list
+  * stops meaning anything.
+  *
+  * The code is derived from the name. Asking a person typing "Turnkey" to also
+  * invent a key for it is how one type lands in the master twice.
+  */
+ app.post('/api/v1/project-types',{preHandler:guard('project.create')},async(req,reply)=>{
+  const u=actor(req),i=parse(projectTypeSchema,req.body);
+  const result=await mutate(pool,req,'project_type.create','project_type',async db=>{
+   const existing=(await db.query('SELECT * FROM project_types WHERE org_id=$1 AND code=$2',[u.orgId,i.code])).rows[0];
+   // The caller is a person filling in a form; "AMC already exists" with no
+   // way forward is a worse answer than simply using the one that does.
+   if(existing) return {...existing,already_existed:true};
+   const type=(await db.query('INSERT INTO project_types(org_id,code,name) VALUES($1,$2,$3) RETURNING *',[u.orgId,i.code,i.name])).rows[0];
+   const workflow=defaultTaskWorkflow();
+   // A type with no workflow has no statuses its tasks may move between, so
+   // the first task raised against it would be stuck immediately.
+   await db.query('INSERT INTO project_workflows(project_type_id,statuses,allowed_transitions) VALUES($1,$2,$3)',[type.id,JSON.stringify(workflow.statuses),JSON.stringify(workflow.allowed_transitions)]);
+   return type;
+  });
+  // The bare row, as this endpoint has always returned. Changing the envelope
+  // was not part of the request and would break its existing callers.
+  return reply.code(result.already_existed?200:201).send(result);
+ });
  const slaSchema=z.object({at_risk_days:z.number().int().min(0).max(90),team_lead_after_days:z.number().int().min(0).max(365),project_manager_after_days:z.number().int().min(0).max(365),super_admin_after_days:z.number().int().min(0).max(365)}).refine(v=>v.team_lead_after_days<=v.project_manager_after_days&&v.project_manager_after_days<=v.super_admin_after_days,'Escalation delays must follow TL, PM, Super Admin order');
  app.get('/api/v1/projects/:id/sla-policy',{preHandler:guard('project.read')},async req=>{const id=(req.params as {id:string}).id;await projectAccess(pool,req,id);const p=(await pool.query('SELECT p.version,p.sla_policy,pt.sla_policy AS inherited,p.project_type_id FROM projects p LEFT JOIN project_types pt ON pt.id=p.project_type_id WHERE p.id=$1',[id])).rows[0];return {version:p.version,project_type_id:p.project_type_id,inherited:p.sla_policy===null,policy:p.sla_policy??p.inherited??{at_risk_days:2,team_lead_after_days:0,project_manager_after_days:1,super_admin_after_days:3}};});
  app.put('/api/v1/projects/:id/sla-policy',{preHandler:guard('project.update')},async req=>{const id=(req.params as {id:string}).id,u=actor(req),i=parse(z.object({policy:slaSchema,apply_to_type:z.boolean().default(false)}),req.body);await projectAccess(pool,req,id);if(i.apply_to_type&&!resolveScopes(u.scopes).global)fail('FORBIDDEN','Project-type policies require organization-wide permission',403);return mutate(pool,req,'project.sla_policy','project',async db=>{const p=await inOrg(db,'projects',id,u.orgId,true);version(req,p as {version:number});if(i.apply_to_type){if(!p.project_type_id)fail('PROJECT_TYPE_REQUIRED','Choose a project type first');await db.query('UPDATE project_types SET sla_policy=$2 WHERE id=$1',[p.project_type_id,JSON.stringify(i.policy)]);}return (await db.query('UPDATE projects SET sla_policy=$2,version=version+1,updated_at=now() WHERE id=$1 RETURNING id,version,sla_policy',[id,i.apply_to_type?null:JSON.stringify(i.policy)])).rows[0];});});

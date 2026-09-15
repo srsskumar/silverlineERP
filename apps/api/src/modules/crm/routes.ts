@@ -287,6 +287,17 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
     const u = actor(req), input = parse(leadSchema, req.body) as Record<string, unknown>;
     const row = await mutate(pool, req, 'lead.create', 'lead', async db => {
       if (input.client_id) await inOrg(db, 'clients', String(input.client_id), u.orgId);
+      // Scoped to the tenant like every other reference: the column's own
+      // foreign key only proves the row exists somewhere.
+      if (input.project_category_id) {
+        await inOrg(db, 'project_categories', String(input.project_category_id), u.orgId);
+      }
+      if (input.project_type_id) {
+        const t = await db.query(
+          'SELECT 1 FROM project_types WHERE id = $1::uuid AND org_id = $2',
+          [input.project_type_id, u.orgId]);
+        if (!t.rowCount) fail('NOT_FOUND', 'Project type not found', 404);
+      }
       const keys = Object.keys(input), values = [u.orgId, u.id, ...Object.values(input)];
       const created = (await db.query(
         `INSERT INTO leads(org_id, created_by, ${keys.join(',')})

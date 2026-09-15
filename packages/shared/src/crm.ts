@@ -154,6 +154,12 @@ export const leadSchema = z.object({
   client_id: uuid.nullable().optional(),
   contact_id: uuid.nullable().optional(),
   lead_type: z.enum(CLIENT_TYPES),
+  // What the work is, captured at the first contact rather than when a project
+  // finally exists. It decides who bids it and which past jobs are comparable,
+  // and carrying it through the conversion stops the same job being filed
+  // under three categories at three stages of its life.
+  project_type_id: uuid.nullable().optional(),
+  project_category_id: uuid.nullable().optional(),
   estimated_value: money.optional(),
   owner_id: uuid.nullable().optional(),
   next_follow_up_date: dateStringSchema.optional(),
@@ -209,7 +215,13 @@ export const TENDER_STATUS_TRANSITIONS: Record<TenderStatus, TenderStatus[]> = {
 export const tenderBaseSchema = z.object({
   tender_no: text.max(50),
   tender_type: z.enum(['OPEN','LIMITED','SINGLE','EOI','RFP']),
+  // `category` is the tendering authority's own free-text work category, as
+  // printed on the notice. project_category_id is ours, from the master, and
+  // the two are deliberately separate: theirs is evidence, ours is the
+  // classification every report groups by.
   category: optionalText(150),
+  project_type_id: uuid.nullable().optional(),
+  project_category_id: uuid.nullable().optional(),
   client_id: uuid.nullable().optional(),
   opportunity_id: uuid.nullable().optional(),
   state: optionalText(100), district: optionalText(100), location: optionalText(255),
@@ -387,6 +399,11 @@ export const conversionSchema = z.object({
   work_order_number: optionalText(100),
   planned_start_date: dateStringSchema.optional(),
   planned_end_date: dateStringSchema.optional(),
+  // Override what the tender carried, for the case where the classification
+  // was provisional at bid time and is only settled on award. Left out, the
+  // source's own values travel across.
+  project_type_id: uuid.nullable().optional(),
+  project_category_id: uuid.nullable().optional(),
   /** Link an existing draft project instead of creating one (§37.2). */
   existing_project_id: uuid.nullable().optional(),
 }).refine(v => !v.planned_end_date || !v.planned_start_date || v.planned_end_date >= v.planned_start_date, {

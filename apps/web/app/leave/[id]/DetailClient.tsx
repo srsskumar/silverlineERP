@@ -10,7 +10,8 @@ import { getRequest, formatDays } from '@/lib/leave';
 import { getMyEmployee } from '@/lib/employees';
 import { queryKeys } from '@/lib/query-keys';
 import { PERMISSIONS } from '@/lib/permissions';
-import { shortUserId, ApprovalTimeline } from '@/components/ApprovalTimeline';
+import { ApprovalTimeline } from '@/components/ApprovalTimeline';
+import { listPeople, peopleIndex, personLabel } from '@/lib/people';
 import { DecisionButtons } from '@/components/DecisionButtons';
 import { CancelButton } from '@/components/CancelButton';
 import { LeaveStatusBadge } from '@/components/LeaveStatusBadge';
@@ -37,6 +38,11 @@ export function LeaveDetailView({ id }: { id: string }) {
     queryKey: queryKeys.leave.request(id),
     queryFn: () => getRequest(id),
   });
+
+  // The approver is shown by name; an id tells the requester nothing about
+  // who is holding up their leave.
+  const peopleQuery = useQuery({ queryKey: ['people'], queryFn: listPeople, staleTime: 300_000 });
+  const people = React.useMemo(() => peopleIndex(peopleQuery.data ?? []), [peopleQuery.data]);
 
   const meQuery = useQuery({
     queryKey: queryKeys.employees.me(),
@@ -129,8 +135,8 @@ export function LeaveDetailView({ id }: { id: string }) {
                 label="Current approver"
                 value={
                   req.current_approver_id ? (
-                    <span className="font-mono text-xs" title={String(req.current_approver_id)}>
-                      {shortUserId(String(req.current_approver_id))}
+                    <span title={String(req.current_approver_id)}>
+                      {personLabel(people, String(req.current_approver_id))}
                       <span className="ml-2 text-text-subtle">(user id — names are not provided by the API)</span>
                     </span>
                   ) : (

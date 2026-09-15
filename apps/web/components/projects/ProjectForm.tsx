@@ -187,6 +187,8 @@ export function ProjectForm({
           options={(types.query.data ?? []).map((t) => ({ id: String(t.id), label: String(t.name) }))}
           isLoading={types.query.isLoading}
           placeholder="Default type…"
+          onCreate={canManageMasters ? types.create : undefined}
+          createLabel="New project type name"
           hint="How the work is contracted — AMC, goods, services."
         />
         <MasterSelect

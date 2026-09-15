@@ -2,6 +2,9 @@
 
 import { Badge } from './ui/Badge';
 import type { ApprovalStep } from '@/lib/leave';
+import * as React from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { listPeople, peopleIndex, personLabel } from '@/lib/people';
 
 function toneForStep(status: string): 'success' | 'danger' | 'warning' | 'neutral' {
   if (status === 'APPROVED') return 'success';
@@ -16,10 +19,15 @@ export function shortUserId(id: string): string {
 }
 
 /**
- * Approval chain timeline. The contract returns approver *user ids* only
- * (no names — there is no users endpoint), so steps show short ids.
+ * Approval chain timeline.
+ *
+ * The contract returns approver user ids; the names come from the employee
+ * directory. A step that says "3f9a2b1c…" tells a reader nothing about who is
+ * holding up their request.
  */
 export function ApprovalTimeline({ chain }: { chain: ApprovalStep[] }) {
+  const people = useQuery({ queryKey: ['people'], queryFn: listPeople, staleTime: 300_000 });
+  const index = React.useMemo(() => peopleIndex(people.data ?? []), [people.data]);
   if (chain.length === 0) {
     return <p className="text-sm text-text-muted">No approval steps recorded yet.</p>;
   }
@@ -34,8 +42,8 @@ export function ApprovalTimeline({ chain }: { chain: ApprovalStep[] }) {
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-medium text-text-muted">Step {s.step}</span>
               <Badge tone={toneForStep(String(s.status))}>{String(s.status)}</Badge>
-              <span className="font-mono text-xs text-text-muted" title={s.approver_user_id}>
-                {shortUserId(s.approver_user_id)}
+              <span className="text-xs font-medium text-text" title={s.approver_user_id}>
+                {personLabel(index, s.approver_user_id)}
               </span>
               {s.decided_at ? (
                 <span className="text-xs text-text-muted">{String(s.decided_at)}</span>

@@ -236,6 +236,22 @@ export function slugifyCode(value: string): string {
 }
 
 /**
+ * POST /api/v1/project-types
+ *
+ * The code is derived from the name when absent, for the same reason as a
+ * category: somebody typing "Turnkey" into a form should not have to invent a
+ * key for it, and being asked to is how one type ends up in the master twice.
+ */
+export const projectTypeSchema = z.object({
+  code: z.string().trim().max(50).optional(),
+  name: z.string().trim().min(1).max(255),
+}).transform((v) => ({ ...v, code: slugifyCode(v.code?.trim() ? v.code : v.name) }))
+  .refine((v) => v.code.length > 0, {
+    message: "Give the type a name with at least one letter or digit",
+    path: ["name"],
+  });
+
+/**
  * POST /api/v1/project-categories
  *
  * The code is derived from the name when it is not given: somebody typing

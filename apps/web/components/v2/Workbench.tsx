@@ -11,8 +11,70 @@ export function useRows(path:string,enabled=true){const {status}=useAuth();retur
 export function Workbench({title,description,children}:{title:string;description:string;children:ReactNode}){return <AppShell><div className="mx-auto max-w-7xl space-y-6"><div><p className="text-xs font-semibold uppercase tracking-wider text-primary">Silverline operations</p><h1 className="mt-2 text-3xl font-semibold text-text">{title}</h1><p className="mt-2 max-w-3xl text-text-muted">{description}</p></div>{children}</div></AppShell>;}
 export function Panel({title,children}:{title:string;children:ReactNode}){return <section className="rounded-xl border border-border bg-surface p-5 shadow-sm"><h2 className="mb-4 text-lg font-semibold">{title}</h2>{children}</section>;}
 export function Can({permission,children}:{permission:string;children:ReactNode}){const {session}=useAuth();return session?.permissions.includes(permission)?<>{children}</>:null;}
-export interface Field {key:string;label:string;type?:'text'|'date'|'number'|'password'|'email'|'checkbox'|'textarea'|'select'|'multi_select';required?:boolean;options?:{value:string;label:string}[];source?:string;labelKey?:string;default?:unknown;}
-function SelectField({field,value,onChange}:{field:Field;value:unknown;onChange:(v:unknown)=>void}){const query=useRows(field.source??'',!!field.source);return <select className="w-full rounded-md border border-border p-2" required={field.required} multiple={field.type==='multi_select'} value={field.type==='multi_select'?(Array.isArray(value)?value:[]):String(value??'')} onChange={e=>onChange(field.type==='multi_select'?Array.from(e.target.selectedOptions,o=>o.value):e.target.value)}><option value="">Select {field.label.toLowerCase()}</option>{(field.options??query.data?.rows.map(r=>({value:r.id,label:r[field.labelKey??'name']??r.title??r.username??`${r.first_name??''} ${r.last_name??''}`}))??[]).map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select>;}
+export interface Field {
+ key:string;label:string;
+ type?:'text'|'date'|'number'|'password'|'email'|'checkbox'|'textarea'|'select'|'multi_select';
+ required?:boolean;options?:{value:string;label:string}[];source?:string;labelKey?:string;default?:unknown;
+ /**
+  * Endpoint that creates a missing option, e.g. 'project-categories'.
+  *
+  * Without it the only way to add a value you need is to abandon the form and
+  * go elsewhere, and people respond by picking the nearest wrong option —
+  * which is how a master list stops meaning anything.
+  */
+ createPath?:string;
+ /** Field the create endpoint expects the typed text in. Defaults to `name`. */
+ createField?:string;
+ hint?:string;
+}
+function SelectField({field,value,onChange}:{field:Field;value:unknown;onChange:(v:unknown)=>void}){
+ const query=useRows(field.source??'',!!field.source);
+ const client=useQueryClient();
+ const [adding,setAdding]=useState(false);
+ const [name,setName]=useState('');
+ const [busy,setBusy]=useState(false);
+ const [error,setError]=useState<string|null>(null);
+
+ async function create(){
+  if(!name.trim()||!field.createPath) return;
+  setBusy(true);setError(null);
+  try{
+   const {data}=await apiRequest<Row>('/api/v1/'+field.createPath,{method:'POST',body:{[field.createField??'name']:name.trim()}});
+   await client.invalidateQueries({queryKey:['v2','/api/v1/'+(field.source??'')]});
+   await client.invalidateQueries({queryKey:['v2',field.source??'']});
+   onChange(String(data.id));
+   setName('');setAdding(false);
+  }catch(e){setError(e instanceof Error?e.message:'Could not add that');}
+  finally{setBusy(false);}
+ }
+
+ const options=field.options??query.data?.rows.map(r=>({value:r.id,label:r[field.labelKey??'name']??r.title??r.username??`${r.first_name??''} ${r.last_name??''}`}))??[];
+
+ if(adding) return <div className="space-y-1">
+  <div className="flex gap-2">
+   <input autoFocus className="w-full rounded-md border border-border p-2" placeholder={`New ${field.label.toLowerCase()}`} value={name} maxLength={255}
+    onChange={e=>setName(e.target.value)}
+    onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();void create();}if(e.key==='Escape'){setAdding(false);setName('');}}}/>
+   <Button type="button" loading={busy} disabled={!name.trim()} onClick={()=>void create()}>Add</Button>
+   <Button type="button" variant="secondary" onClick={()=>{setAdding(false);setName('');setError(null);}}>Cancel</Button>
+  </div>
+  {error?<p className="text-2xs text-danger">{error}</p>:null}
+ </div>;
+
+ return <div className="space-y-1">
+  <div className="flex gap-2">
+   <select className="w-full rounded-md border border-border p-2" required={field.required} multiple={field.type==='multi_select'}
+    value={field.type==='multi_select'?(Array.isArray(value)?value:[]):String(value??'')}
+    onChange={e=>onChange(field.type==='multi_select'?Array.from(e.target.selectedOptions,o=>o.value):e.target.value)}>
+    <option value="">Select {field.label.toLowerCase()}</option>
+    {options.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+   </select>
+   {field.createPath?<Button type="button" variant="secondary" onClick={()=>setAdding(true)}>+ New</Button>:null}
+  </div>
+  {field.hint?<p className="text-2xs text-text-subtle">{field.hint}</p>:null}
+ </div>;
+}
+
 export function MutationForm({path,fields,method='POST',version,initial={},submit='Save',transform,onSaved}:{path:string;fields:Field[];method?:string;version?:number;initial?:Row;submit?:string;transform?:(row:Row)=>Row;onSaved?:(row:Row)=>void}){
  const [values,setValues]=useState<Row>(()=>Object.fromEntries(fields.map(f=>[f.key,initial[f.key]??f.default??(f.type==='checkbox'?false:'')]))),[busy,setBusy]=useState(false),[error,setError]=useState<unknown>(),[saved,setSaved]=useState(false),client=useQueryClient();
  return <form className="space-y-4" onSubmit={async e=>{e.preventDefault();setBusy(true);setError(undefined);setSaved(false);try{const body=Object.fromEntries(Object.entries(values).filter(([,v])=>v!==''));const {data}=await apiRequest<Row>('/api/v1/'+path,{method,body:transform?transform(body):body,headers:{...(version!==undefined?{'If-Match':String(version)}:{})}});setSaved(true);await client.invalidateQueries();onSaved?.(data);}catch(e){setError(e);}finally{setBusy(false);}}}><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{fields.map(f=><label key={f.key} className="block text-sm font-medium text-text-muted"><span className="mb-1 block">{f.label}{f.required?' *':''}</span>{f.source||f.type==='select'||f.type==='multi_select'?<SelectField field={f} value={values[f.key]} onChange={v=>setValues({...values,[f.key]:v})}/>:f.type==='checkbox'?<input type="checkbox" checked={!!values[f.key]} onChange={e=>setValues({...values,[f.key]:e.target.checked})}/>:f.type==='textarea'?<textarea className="w-full rounded-md border border-border p-2" required={f.required} value={String(values[f.key])} onChange={e=>setValues({...values,[f.key]:e.target.value})}/>:<input className="w-full rounded-md border border-border p-2" type={f.type??'text'} required={f.required} step={f.type==='number'?'any':undefined} value={String(values[f.key])} onChange={e=>setValues({...values,[f.key]:e.target.value})}/>}</label>)}</div>{error?<ErrorCard error={error}/>:null}<div className="flex items-center gap-3"><Button type="submit" loading={busy}>{submit}</Button>{saved?<p role="status" className="text-sm text-success">Saved successfully.</p>:null}</div></form>;

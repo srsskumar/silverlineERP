@@ -50,8 +50,14 @@ export async function inOrg(db:Pool|PoolClient,table:string,id:string,orgId:stri
   // Inventory control (§44).
   'stock_locations','stock_reservations','stock_counts',
   // Workforce allocation (§47).
-  'resource_allocations','work_shifts','roster_entries'];
- if(!allowed.includes(table)) throw new Error('Unknown domain table');
+  'resource_allocations','work_shifts','roster_entries',
+  // Project masters (§6.2).
+  'project_categories','project_types'];
+ // The allow-list is the injection guard for the interpolated table name
+ // below, not a convenience — every table a route passes here must be named.
+ // Naming the table in the error turns a bare 500 into a one-line fix; this
+ // has cost several debugging sessions.
+ if(!allowed.includes(table)) throw new Error(`inOrg: '${table}' is not in the allowed table list in common/domain.ts`);
  const r=await db.query(`SELECT * FROM ${table} WHERE id=$1 AND org_id=$2${lock?' FOR UPDATE':''}`,[id,orgId]);
  if(!r.rowCount) fail('NOT_FOUND','Record not found',404);
  return r.rows[0];
