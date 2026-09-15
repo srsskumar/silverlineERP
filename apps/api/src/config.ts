@@ -6,6 +6,11 @@ export interface ApiConfig {
   port: number;
   /** Allowed browser origins (CORS). Comma-separated in CORS_ORIGIN env. */
   corsOrigin: string[];
+  /**
+   * Extra origin patterns, each of which must contain a `*`. Set to the
+   * project's preview hosts so a deploy does not break the running app.
+   */
+  corsPreviewPatterns: string[];
   nodeEnv: string;
   /** Pino log threshold. Request logs default to info in development. */
   logLevel: ApiLogLevel;
@@ -37,6 +42,7 @@ export interface ApiConfigOverrides {
   jwtSecret?: string;
   port?: number;
   corsOrigin?: string[];
+  corsPreviewPatterns?: string[];
   nodeEnv?: string;
   logLevel?: ApiLogLevel;
   bcryptRounds?: number;
@@ -95,6 +101,32 @@ function parseOrigins(raw: string | undefined): string[] | undefined {
   return list.length > 0 ? list : undefined;
 }
 
+/**
+ * Whether a browser origin is allowed, honouring a single `*` wildcard.
+ *
+ * Every `vercel deploy` publishes the app on a fresh preview host, so an
+ * allow-list of exact origins silently breaks the app on each deploy: the
+ * browser refuses the request and reports only "Failed to fetch", which looks
+ * to the user like the server being down rather than a configuration problem.
+ *
+ * The wildcard is deliberately not a bare `*.vercel.app`. This API is called
+ * with credentials, and any application on that shared domain would then be
+ * able to call it from a victim's browser. A pattern has to name the project,
+ * e.g. `https://silverline-*-silverline4.vercel.app`.
+ */
+export function originAllowed(origin: string, patterns: readonly string[]): boolean {
+  return patterns.some((pattern) => {
+    if (!pattern.includes("*")) return pattern === origin;
+    const escaped = pattern
+      .split("*")
+      .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      // A wildcard never matches a dot, so it cannot widen to a parent domain:
+      // `https://a-*.example.com` must not admit `https://a-x.evil.example.com`.
+      .join("[^.]*");
+    return new RegExp(`^${escaped}$`).test(origin);
+  });
+}
+
 export function getConfig(overrides: ApiConfigOverrides = {}): ApiConfig {
   const nodeEnv = overrides.nodeEnv ?? process.env.NODE_ENV ?? 'development';
   const jwtSecret = overrides.jwtSecret ?? required('JWT_SECRET', 'dev-secret-change-me');
@@ -114,6 +146,11 @@ export function getConfig(overrides: ApiConfigOverrides = {}): ApiConfig {
       "http://localhost:3000",
       "http://localhost:3002",
     ],
+    // Kept out of the list above so a deployment that sets CORS_ORIGIN still
+    // gets its own preview hosts: an operator naming the production domain
+    // should not have to remember the preview pattern as well.
+    corsPreviewPatterns: overrides.corsPreviewPatterns
+      ?? parseOrigins(process.env["CORS_PREVIEW_ORIGINS"]) ?? [],
     nodeEnv,
     logLevel: overrides.logLevel ?? parseLogLevel(process.env["LOG_LEVEL"]),
     bcryptRounds: overrides.bcryptRounds ?? Number(process.env["BCRYPT_ROUNDS"] ?? 10),

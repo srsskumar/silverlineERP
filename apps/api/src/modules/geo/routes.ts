@@ -20,6 +20,7 @@ import {
   replayIfSeen,
   storeIdempotentResponse,
 } from "../../common/idempotency.js";
+import { parseIfMatch } from '../../common/ifMatch.js';
 
 export interface GeoFenceRoutesOptions {
   pool: Pool;
@@ -182,26 +183,6 @@ async function searchPlaces(query: string): Promise<PlaceSearchResult[]> {
   }
 }
 
-function ifMatchVersion(req: { headers: Record<string, unknown> }): number {
-  const raw = req.headers["if-match"];
-  const text = (Array.isArray(raw) ? raw[0] : raw)?.trim();
-  const n = text === undefined || text === "" ? NaN : Number(text);
-  if (!Number.isInteger(n) || n < 1) {
-    throw new ApiError({
-      status: 422,
-      code: "VALIDATION_ERROR",
-      message: "Validation failed",
-      fieldErrors: [
-        {
-          field: "If-Match",
-          message: "If-Match header with the current version is required",
-          code: "missing_version",
-        },
-      ],
-    });
-  }
-  return n;
-}
 
 export async function registerGeoFenceRoutes(
   app: FastifyInstance,
@@ -529,7 +510,7 @@ export async function registerGeoFenceRoutes(
           message: "Authentication required",
         });
       }
-      const expectedVersion = ifMatchVersion(req);
+      const expectedVersion = parseIfMatch(req);
       const { id } = req.params as { id: string };
       const current = await db.query(
         `SELECT ${SELECT_COLS} FROM geo_fences WHERE id = $1::uuid AND org_id = $2`,

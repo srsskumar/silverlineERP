@@ -210,6 +210,14 @@ export async function apiFetch<T>(
   if ((method === "POST" || method === "PATCH" || method === "PUT") && !headers["Idempotency-Key"]) {
     headers["Idempotency-Key"] = idempotencyKey ?? newIdempotencyKey();
   }
+  // An entity-tag has to be quoted (RFC 7232 §2.3). A bare `3` is read by an
+  // edge proxy as a malformed precondition and answered with 412 before the
+  // request reaches the API — which is how every status advance and approval
+  // failed against the deployed backend while working against a local one.
+  const ifMatch = headers["If-Match"];
+  if (ifMatch && !ifMatch.startsWith('"') && !ifMatch.startsWith("W/")) {
+    headers["If-Match"] = `"${ifMatch}"`;
+  }
 
   let attempt = 0;
   const doFetch = async (): Promise<Response> => {

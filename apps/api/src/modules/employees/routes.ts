@@ -39,6 +39,7 @@ import {
   replayIfSeen,
   storeIdempotentResponse,
 } from "../../common/idempotency.js";
+import { parseIfMatch } from '../../common/ifMatch.js';
 
 export interface EmployeeRoutesOptions {
   pool: Pool;
@@ -204,26 +205,6 @@ function duplicateFieldError(error: unknown): { field: string; message: string }
   return { field: "emp_no", message: "emp_no already exists in this org" };
 }
 
-function ifMatchVersion(req: { headers: Record<string, unknown> }): number {
-  const raw = req.headers["if-match"];
-  const text = (Array.isArray(raw) ? raw[0] : raw)?.trim();
-  const n = text === undefined || text === "" ? NaN : Number(text);
-  if (!Number.isInteger(n) || n < 1) {
-    throw new ApiError({
-      status: 422,
-      code: "VALIDATION_ERROR",
-      message: "Validation failed",
-      fieldErrors: [
-        {
-          field: "If-Match",
-          message: "If-Match header with the current version is required",
-          code: "missing_version",
-        },
-      ],
-    });
-  }
-  return n;
-}
 
 const SELECT_COLS = `id, org_id, emp_no, first_name, last_name, father_name,
   date_of_birth, gender, phone, phone_secondary, email,
@@ -953,7 +934,7 @@ export async function registerEmployeeRoutes(
         message: "Authentication required",
       });
     }
-    const expectedVersion = ifMatchVersion(req);
+    const expectedVersion = parseIfMatch(req);
     const { id } = req.params as { id: string };
     const cur = await findInOrg(user.orgId, id);
     if (!cur) {

@@ -270,6 +270,17 @@ export async function apiRequestRaw(
   if (MUTATING_METHODS.has(method) && !stableHeaders.has('Idempotency-Key')) {
     stableHeaders.set('Idempotency-Key', newIdempotencyKey());
   }
+  // If-Match carries the record's version for optimistic concurrency, and an
+  // entity-tag has to be quoted (RFC 7232 §2.3). Sending a bare `3` is not
+  // merely untidy: an edge proxy that implements conditional requests reads it
+  // as a malformed precondition and answers 412 itself, so the request never
+  // reaches the API. Every write in the app failed that way in production
+  // while working perfectly against a local server. Quoted here, once, rather
+  // than at each of the twenty call sites.
+  const ifMatch = stableHeaders.get('If-Match');
+  if (ifMatch && !ifMatch.startsWith('"') && !ifMatch.startsWith('W/')) {
+    stableHeaders.set('If-Match', `"${ifMatch}"`);
+  }
 
   let attempt = 0;
   const doFetch = async (): Promise<Response> => {

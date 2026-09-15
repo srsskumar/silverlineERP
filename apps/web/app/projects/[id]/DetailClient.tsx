@@ -10,7 +10,8 @@ import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 import { getProject, patchProject } from '@/lib/projects';
 import { listTasksPage, type Task } from '@/lib/tasks';
 import { queryKeys } from '@/lib/query-keys';
-import { PROJECT_STATUSES } from '@/lib/validation';
+import { PROJECT_STATUS_TRANSITIONS } from '@silverline/shared';
+import { statusLabel } from '@/lib/board-visuals';
 import { shortUserId } from '@/components/ApprovalTimeline';
 import { CloseProjectDialog } from '@/components/CloseProjectDialog';
 import { ConflictDialog, useConflict } from '@/components/ConflictDialog';
@@ -261,15 +262,28 @@ function ProjectStatusPanel({
   onReload: () => void;
   conflictShow: (message?: string, requestId?: string) => void;
 }) {
-  const [next, setNext] = React.useState(current);
+  // Only the moves the workflow actually permits (§12.1). The dropdown used
+  // to list every status, so a DRAFT project offered "Completed pending
+  // close" — the server refused it, correctly, and the user saw an error for
+  // a choice the screen had invited them to make.
+  const allowed = PROJECT_STATUS_TRANSITIONS[current as keyof typeof PROJECT_STATUS_TRANSITIONS] ?? [];
+  const [next, setNext] = React.useState<string>(allowed[0] ?? current);
   const [error, setError] = React.useState<unknown>(null);
+  // The version the server last confirmed. Taken from the mutation response so
+  // a second change in a row does not send the stale one and collide with the
+  // write that just succeeded.
+  const [liveVersion, setLiveVersion] = React.useState<number | string>(version);
 
-  React.useEffect(() => setNext(current), [current]);
+  React.useEffect(() => {
+    setNext(allowed[0] ?? current);
+    setLiveVersion(version);
+  }, [current, version]);
 
   const mutation = useMutation({
-    mutationFn: (status: string) => patchProject(projectId, { status }, version),
-    onSuccess: () => {
+    mutationFn: (status: string) => patchProject(projectId, { status }, liveVersion),
+    onSuccess: (updated) => {
       setError(null);
+      if (updated && typeof updated.version === 'number') setLiveVersion(updated.version);
       onReload();
     },
     onError: (err) => {
@@ -290,19 +304,29 @@ function ProjectStatusPanel({
           aria-label="Project status"
           className={`${inputClass} sm:max-w-xs`}
           value={next}
+          disabled={allowed.length === 0}
           onChange={(e) => {
             setNext(e.target.value);
             setError(null);
           }}
         >
-          {PROJECT_STATUSES.map((s) => (
-            <option key={s} value={s}>{s}</option>
+          {allowed.map((s) => (
+            <option key={s} value={s}>{statusLabel(s)}</option>
           ))}
         </select>
-        <Button disabled={next === current} loading={mutation.isPending} onClick={() => mutation.mutate(next)}>
-          Save status (v{String(version)})
+        <Button
+          disabled={allowed.length === 0 || next === current}
+          loading={mutation.isPending}
+          onClick={() => mutation.mutate(next)}
+        >
+          Save status
         </Button>
       </div>
+      {allowed.length === 0 ? (
+        <p className="mt-2 text-xs text-text-muted">
+          {statusLabel(current)} is a final state — there is nowhere further to move this project.
+        </p>
+      ) : null}
       {error ? (
         <div className="mt-3">
           <ErrorCard

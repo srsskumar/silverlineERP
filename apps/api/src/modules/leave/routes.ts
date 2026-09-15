@@ -22,6 +22,7 @@ import { buildAuthenticate, requirePermission,scopesForPermission } from "../../
 import { writeAudit } from "../../common/audit.js";
 import { sendError } from "../../common/httpErrors.js";
 import { emitNotification } from "../s5/notify.js";
+import { parseIfMatch } from '../../common/ifMatch.js';
 
 export interface LeaveRoutesOptions {
   pool: Pool;
@@ -75,26 +76,6 @@ function iso(v: Date | string): string {
   return v instanceof Date ? v.toISOString() : new Date(v).toISOString();
 }
 
-function ifMatchVersion(req: { headers: Record<string, unknown> }): number {
-  const raw = req.headers["if-match"];
-  const text = (Array.isArray(raw) ? raw[0] : raw)?.trim();
-  const n = text === undefined || text === "" ? NaN : Number(text);
-  if (!Number.isInteger(n) || n < 1) {
-    throw new ApiError({
-      status: 422,
-      code: "VALIDATION_ERROR",
-      message: "Validation failed",
-      fieldErrors: [
-        {
-          field: "If-Match",
-          message: "If-Match header with the current version is required",
-          code: "missing_version",
-        },
-      ],
-    });
-  }
-  return n;
-}
 
 /**
  * POST /leave/requests requires a UUID Idempotency-Key (stricter than the
@@ -974,7 +955,7 @@ export async function registerLeaveRoutes(
       }
       user.scopes=await scopesForPermission(req,LEAVE_DECIDE);
       if(!user.permissions.includes(LEAVE_DECIDE))return sendError(reply,req.requestId,{status:403,code:'FORBIDDEN',message:'Insufficient permissions'});
-      const expectedVersion = ifMatchVersion(req);
+      const expectedVersion = parseIfMatch(req);
       const { id } = req.params as { id: string };
       const scopedRequest=await findRequest(user.orgId,id);if(scopedRequest)await employeeAccess(opts.pool,req,scopedRequest.employee_id);
       const { decision, note } = parsed.data;

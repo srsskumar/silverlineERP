@@ -50,6 +50,7 @@ import {
 } from "../../common/idempotency.js";
 import { encryptPii, decryptPii, redactPiiForAudit } from "../../common/crypto.js";
 import { emitNotification } from "../s5/notify.js";
+import { parseIfMatch } from '../../common/ifMatch.js';
 
 export interface WorkRoutesOptions {
   pool: Pool;
@@ -88,26 +89,6 @@ function iso(v: Date | string): string {
   return v instanceof Date ? v.toISOString() : new Date(v).toISOString();
 }
 
-function ifMatchVersion(req: { headers: Record<string, unknown> }): number {
-  const raw = req.headers["if-match"];
-  const text = (Array.isArray(raw) ? raw[0] : raw)?.trim();
-  const n = text === undefined || text === "" ? NaN : Number(text);
-  if (!Number.isInteger(n) || n < 1) {
-    throw new ApiError({
-      status: 422,
-      code: "VALIDATION_ERROR",
-      message: "Validation failed",
-      fieldErrors: [
-        {
-          field: "If-Match",
-          message: "If-Match header with the current version is required",
-          code: "missing_version",
-        },
-      ],
-    });
-  }
-  return n;
-}
 
 /** Error envelope plus a machine-readable rule detail (top-level extras). */
 function sendRuleError(
@@ -1165,7 +1146,7 @@ export async function registerWorkRoutes(
         message: "Authentication required",
       });
     }
-    const expectedVersion = ifMatchVersion(req);
+    const expectedVersion = parseIfMatch(req);
     const { id } = req.params as { id: string };
     const cur = await findProject(user.orgId, id);
     if (!cur) {
@@ -1699,7 +1680,7 @@ export async function registerWorkRoutes(
         message: "Authentication required",
       });
     }
-    const expectedVersion = ifMatchVersion(req);
+    const expectedVersion = parseIfMatch(req);
     const { id } = req.params as { id: string };
     const cur = await findTask(user.orgId, id);
     if (!cur) {
@@ -1809,7 +1790,7 @@ export async function registerWorkRoutes(
           message: "Authentication required",
         });
       }
-      const expectedVersion = ifMatchVersion(req);
+      const expectedVersion = parseIfMatch(req);
       const { id } = req.params as { id: string };
       const snapshot = await findTask(user.orgId, id);
       // All task lifecycle and project planning changes lock project before task.
@@ -1984,7 +1965,7 @@ export async function registerWorkRoutes(
           message: "Authentication required",
         });
       }
-      const expectedVersion = ifMatchVersion(req);
+      const expectedVersion = parseIfMatch(req);
       const { id } = req.params as { id: string };
       const cur = await findTask(user.orgId, id);
       if (!cur) {

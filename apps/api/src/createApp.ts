@@ -18,7 +18,7 @@ import { registerPayrollDocuments } from "./modules/payroll/documents.js";
 import cors from "@fastify/cors";
 import Fastify, { LogController, type FastifyInstance } from "fastify";
 import type { Pool } from "pg";
-import { getConfig, type ApiConfigOverrides } from "./config.js";
+import { getConfig, originAllowed, type ApiConfigOverrides } from "./config.js";
 import { registerRequestId } from "./common/requestId.js";
 import { registerErrorHandler } from "./common/httpErrors.js";
 import { createPool, describeConnectionError } from "./database/db.js";
@@ -98,7 +98,15 @@ export async function buildApp(
   app.decorate("appConfig", config);
 
   await app.register(cors, {
-    origin: config.corsOrigin,
+    // A predicate rather than a list, so preview deployments keep working.
+    // See originAllowed: patterns must name the project, never all of
+    // *.vercel.app, because this API is called with credentials.
+    origin(origin, callback) {
+      // A missing Origin is a same-origin or non-browser caller (curl, the
+      // mobile app); CORS does not apply to those.
+      if (!origin) return callback(null, true);
+      callback(null, originAllowed(origin, [...config.corsOrigin, ...config.corsPreviewPatterns]));
+    },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-ID', 'If-Match'],
     exposedHeaders: ['x-request-id', 'content-disposition', 'retry-after'],

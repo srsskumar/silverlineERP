@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {inTransaction} from './transactionContext.js';
+import {parseIfMatch} from './ifMatch.js';
 import type { FastifyRequest } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import { ApiError, toFieldErrors } from '@silverline/shared';
@@ -14,8 +15,11 @@ export function parse<T>(schema:z.ZodType<T, z.ZodTypeDef, unknown>,body:unknown
 export function fail(code:string,message:string,status=422):never {throw new ApiError({status,code,message});}
 export function actor(req:FastifyRequest) {if(!req.authUser) fail('UNAUTHENTICATED','Sign in first',401);return req.authUser;}
 export function version(req:FastifyRequest,row:{version:number}) {
- const n=Number(String(req.headers['if-match']??'').replaceAll('"',''));
- if(!Number.isSafeInteger(n)||n<1) fail('VERSION_REQUIRED','If-Match must contain the current version');
+ // Shared with the other seven modules so every route reads the header the
+ // same way, weak validators and all.
+ let n:number;
+ try { n=parseIfMatch(req as unknown as {headers:Record<string,unknown>}); }
+ catch { fail('VERSION_REQUIRED','If-Match must contain the current version'); }
  if(n!==row.version) fail('VERSION_CONFLICT','This record changed. Reload before editing.',409);
 }
 export function page(req:FastifyRequest) {
