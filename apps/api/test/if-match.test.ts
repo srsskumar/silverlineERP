@@ -13,8 +13,21 @@ import { parseIfMatch } from "../src/common/ifMatch.js";
  */
 describe("parseIfMatch", () => {
   const req = (value?: string) => ({ headers: value === undefined ? {} : { "if-match": value } });
+  const versionHeader = (value: string) => ({ headers: { "x-record-version": value } });
 
-  it("accepts the quoted entity-tag clients now send", () => {
+  it("reads the version from X-Record-Version", () => {
+    // The header the clients now send. If-Match is a transport-level
+    // precondition that a CDN is entitled to answer, and Vercel's edge did:
+    // it committed the write and then rewrote the success into a 412, so the
+    // app reported a failure that had already happened.
+    expect(parseIfMatch(versionHeader("3"))).toBe(3);
+  });
+
+  it("prefers X-Record-Version when both are present", () => {
+    expect(parseIfMatch({ headers: { "x-record-version": "5", "if-match": '"9"' } })).toBe(5);
+  });
+
+  it("still accepts a quoted entity-tag from a direct caller", () => {
     expect(parseIfMatch(req('"3"'))).toBe(3);
   });
 

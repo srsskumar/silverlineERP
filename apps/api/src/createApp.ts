@@ -108,7 +108,7 @@ export async function buildApp(
       callback(null, originAllowed(origin, [...config.corsOrigin, ...config.corsPreviewPatterns]));
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-ID', 'If-Match'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-ID', 'If-Match', 'X-Record-Version'],
     exposedHeaders: ['x-request-id', 'content-disposition', 'retry-after'],
     credentials: true,
   });

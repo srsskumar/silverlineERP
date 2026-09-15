@@ -210,13 +210,14 @@ export async function apiFetch<T>(
   if ((method === "POST" || method === "PATCH" || method === "PUT") && !headers["Idempotency-Key"]) {
     headers["Idempotency-Key"] = idempotencyKey ?? newIdempotencyKey();
   }
-  // An entity-tag has to be quoted (RFC 7232 §2.3). A bare `3` is read by an
-  // edge proxy as a malformed precondition and answered with 412 before the
-  // request reaches the API — which is how every status advance and approval
-  // failed against the deployed backend while working against a local one.
+  // The record version travels in X-Record-Version, not If-Match: a CDN is
+  // entitled to answer a transport-level precondition, and Vercel's edge did —
+  // committing the write and then rewriting the success into a 412, so the app
+  // reported a failure that had actually succeeded.
   const ifMatch = headers["If-Match"];
-  if (ifMatch && !ifMatch.startsWith('"') && !ifMatch.startsWith("W/")) {
-    headers["If-Match"] = `"${ifMatch}"`;
+  if (ifMatch) {
+    delete headers["If-Match"];
+    headers["X-Record-Version"] = ifMatch.replace(/^W\//, "").replace(/^"(.*)"$/, "$1");
   }
 
   let attempt = 0;
