@@ -95,6 +95,11 @@ export const phoneSchema = z
 
 export const orgUnitTypeSchema = z.enum([
   "district",
+  // Optional tier between district and mandal. Andhra Pradesh revenue
+  // geography is District -> Division -> Mandal -> Village, and the land
+  // survey master list (§59) arrives keyed on it. Optional because every
+  // mandal already recorded has a district for a parent.
+  "division",
   "mandal",
   "village",
   "site",
@@ -300,11 +305,12 @@ const HOLIDAY_SCOPE_RANK: Record<string, number> = {
   site: 0,
   village: 1,
   mandal: 2,
-  district: 3,
+  division: 3,
+  district: 4,
 };
 
 /** Organization-wide (unscoped) holidays rank last. */
-const ORG_WIDE_RANK = 4;
+const ORG_WIDE_RANK = 5;
 
 function holidayRank(holiday: HolidayCandidate): number {
   if (!holiday.scope_type || !holiday.scope_id) return ORG_WIDE_RANK;

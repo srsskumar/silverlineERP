@@ -28,15 +28,29 @@ export interface OrgRoutesOptions {
   jwtSecret: string;
 }
 
-const EXPECTED_PARENT: Record<OrgUnitType, OrgUnitType | null> = {
-  district: null,
-  mandal: "district",
-  village: "mandal",
-  site: "village",
+/**
+ * The parent a unit may hang off.
+ *
+ * A list rather than a single type because a mandal may sit under a district
+ * or under a division. The division tier is optional: it is how the revenue
+ * department keys its records, and every mandal recorded before it existed
+ * has a district for a parent and must keep working.
+ */
+const EXPECTED_PARENT: Record<OrgUnitType, OrgUnitType[]> = {
+  district: [],
+  division: ["district"],
+  mandal: ["district", "division"],
+  village: ["mandal"],
+  site: ["village"],
 };
 
+/** "a district", or "a district or a division" — for the error message. */
+function parentPhrase(types: OrgUnitType[]): string {
+  return types.length === 1 ? `a ${types[0]}` : `a ${types.slice(0, -1).join(", a ")} or a ${types[types.length - 1]}`;
+}
+
 const listQuerySchema = cursorPageQuerySchema.extend({
-  type: z.enum(["district", "mandal", "village", "site"]).optional(),
+  type: z.enum(["district", "division", "mandal", "village", "site"]).optional(),
   parent_id: z.string().uuid().optional(),
   q: z.string().min(1).max(200).optional(),
 });
@@ -202,7 +216,7 @@ export async function registerOrgUnitRoutes(
       }
       const { type, code, name, parent_id } = parsed.data;
       const expected = EXPECTED_PARENT[type];
-      if (expected === null && parent_id) {
+      if (expected.length === 0 && parent_id) {
         return sendError(reply, req.requestId, {
           status: 422,
           code: "VALIDATION_ERROR",
@@ -212,13 +226,13 @@ export async function registerOrgUnitRoutes(
           ],
         });
       }
-      if (expected !== null && !parent_id) {
+      if (expected.length > 0 && !parent_id) {
         return sendError(reply, req.requestId, {
           status: 422,
           code: "VALIDATION_ERROR",
           message: "Validation failed",
           fieldErrors: [
-            { field: "parent_id", message: `${type} requires a ${expected} parent` },
+            { field: "parent_id", message: `${type} requires ${parentPhrase(expected)} parent` },
           ],
         });
       }
@@ -236,7 +250,7 @@ export async function registerOrgUnitRoutes(
             fieldErrors: [{ field: "parent_id", message: "Parent unit not found" }],
           });
         }
-        if (prow.type !== expected) {
+        if (!expected.includes(prow.type as OrgUnitType)) {
           return sendError(reply, req.requestId, {
             status: 422,
             code: "VALIDATION_ERROR",
@@ -244,7 +258,7 @@ export async function registerOrgUnitRoutes(
             fieldErrors: [
               {
                 field: "parent_id",
-                message: `${type} requires a ${expected} parent, got ${prow.type}`,
+                message: `${type} requires ${parentPhrase(expected)} parent, got ${prow.type}`,
               },
             ],
           });

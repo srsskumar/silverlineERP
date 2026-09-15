@@ -1,7 +1,7 @@
 import { apiRequest, apiRequestRaw } from './apiClient';
 import { normalizeCursorPage, type CursorPage } from './employees';
 
-export type OrgUnitType = 'district' | 'mandal' | 'village' | 'site';
+export type OrgUnitType = 'district' | 'division' | 'mandal' | 'village' | 'site';
 
 export interface OrgUnit {
   id: string;

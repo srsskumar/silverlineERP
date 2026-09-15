@@ -25,9 +25,12 @@ const inputClass =
 
 const LOCATION_PATH: Record<(typeof ORG_UNIT_TYPES)[number], string> = {
   district: 'District',
-  mandal: 'District → Mandal',
-  village: 'District → Mandal → Village',
-  site: 'District → Mandal → Village → Site',
+  division: 'District → Division',
+  // A mandal may sit under a division or straight under the district, so the
+  // division is shown as the optional tier it is.
+  mandal: 'District → (Division) → Mandal',
+  village: 'District → (Division) → Mandal → Village',
+  site: 'District → (Division) → Mandal → Village → Site',
 };
 
 export interface FencePayload {

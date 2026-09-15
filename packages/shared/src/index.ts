@@ -26,3 +26,4 @@ export * from "./expenses.js";
 export * from "./geo.js";
 export * from "./antifraud.js";
 export * from "./documents.js";
+export * from "./survey.js";

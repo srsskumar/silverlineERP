@@ -234,6 +234,19 @@ describe('import templates', () => {
     for (const template of IMPORT_TEMPLATES) {
       const t = text(await bytes(buildWorkbook([templateSheet(template)])));
       expect(t, template.key).toContain('xl/workbook.xml');
+      expect(t, template.key).toContain('xl/worksheets/sheet1.xml');
+    }
+  });
+
+  it('puts a dropdown on every template that has a fixed-value column', async () => {
+    // Split from the test above: a template can legitimately have no enum
+    // columns — the survey village list is all codes and names — and
+    // requiring a dropdown everywhere would mean inventing one.
+    const withOptions = IMPORT_TEMPLATES.filter(
+      (t) => Object.keys(t.options ?? {}).length > 0);
+    expect(withOptions.length).toBeGreaterThan(0);
+    for (const template of withOptions) {
+      const t = text(await bytes(buildWorkbook([templateSheet(template)])));
       expect(t, template.key).toContain('<dataValidation type="list"');
     }
   });

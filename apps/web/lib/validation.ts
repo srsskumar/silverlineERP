@@ -69,7 +69,7 @@ const optionalDate = dateString().optional().or(z.literal('').transform(() => un
 
 export const GENDERS = ['MALE', 'FEMALE', 'OTHER'] as const;
 export const EMPLOYEE_STATUSES = ['DRAFT', 'ACTIVE', 'ON_LEAVE', 'EXITED', 'TERMINATED'] as const;
-export const ORG_UNIT_TYPES = ['district', 'mandal', 'village', 'site'] as const;
+export const ORG_UNIT_TYPES = ['district', 'division', 'mandal', 'village', 'site'] as const;
 export const ORG_UNIT_STATUSES = ['ACTIVE', 'INACTIVE'] as const;
 
 const employeeBaseFields = {

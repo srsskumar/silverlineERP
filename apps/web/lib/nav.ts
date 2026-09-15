@@ -15,6 +15,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   FileCheck,
+  Compass,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { PERMISSIONS } from './permissions';
@@ -91,6 +92,9 @@ export const NAV_GROUPS: NavGroup[] = [
     title: 'Operations',
     items: [
       { href: '/documents', label: 'Documents', permission: 'document.read', icon: FileCheck },
+      // The land survey programme (§59). Under Operations because it is field
+      // work, and the people who record it are the people on site.
+      { href: '/survey', label: 'Land survey', permission: 'survey.read', icon: Compass },
       { href: '/inventory', label: 'Inventory', permission: 'inventory.read', icon: Package },
       { href: '/assets', label: 'Assets', permission: 'asset.read', icon: Boxes },
       { href: '/geo-fences', label: 'Geo-fences', permission: PERMISSIONS.GEO_READ, icon: MapPin },

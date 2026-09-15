@@ -27,6 +27,10 @@ import {
   DOCUMENT_PERMISSIONS,
   DOCUMENT_ROLE_GRANTS,
   DOCUMENT_TYPE_SEEDS,
+  MEASURE_SEEDS,
+  STAGE_SEEDS,
+  SURVEY_ROLE_GRANTS,
+  SURVEY_PERMISSIONS,
   ROLE_CODES,
   ROLE_PERMISSIONS,
   S1_ALL_PERMISSIONS,
@@ -139,7 +143,7 @@ export async function seedDatabase(
     orgId = (org.rows[0] as { id: string }).id;
   }
 
-  for (const code of [...ALL_PERMISSIONS, ...S1_ALL_PERMISSIONS, ...S2_ALL_PERMISSIONS, ...S3_ALL_PERMISSIONS, ...S4_ALL_PERMISSIONS, ...S5_ALL_PERMISSIONS, ...S6_ALL_PERMISSIONS, ...P1_ALL_PERMISSIONS, ...V2_PERMISSIONS, ...CRM_PERMISSIONS, ...BILLING_PERMISSIONS, ...APPROVAL_PERMISSIONS, ...PROCUREMENT_PERMISSIONS, ...COST_CONTROL_PERMISSIONS, ...EXPENSE_PERMISSIONS, ...FINANCE_PERMISSIONS, ...INVENTORY_PERMISSIONS, ...ALLOCATION_PERMISSIONS, ...LEDGER_PERMISSIONS, ...DOCUMENT_PERMISSIONS]) {
+  for (const code of [...ALL_PERMISSIONS, ...S1_ALL_PERMISSIONS, ...S2_ALL_PERMISSIONS, ...S3_ALL_PERMISSIONS, ...S4_ALL_PERMISSIONS, ...S5_ALL_PERMISSIONS, ...S6_ALL_PERMISSIONS, ...P1_ALL_PERMISSIONS, ...V2_PERMISSIONS, ...CRM_PERMISSIONS, ...BILLING_PERMISSIONS, ...APPROVAL_PERMISSIONS, ...PROCUREMENT_PERMISSIONS, ...COST_CONTROL_PERMISSIONS, ...EXPENSE_PERMISSIONS, ...FINANCE_PERMISSIONS, ...INVENTORY_PERMISSIONS, ...ALLOCATION_PERMISSIONS, ...LEDGER_PERMISSIONS, ...DOCUMENT_PERMISSIONS, ...SURVEY_PERMISSIONS]) {
     await pool.query(
       `INSERT INTO permissions (code, description, module)
        VALUES ($1, $2, $3) ON CONFLICT (code) DO NOTHING`,
@@ -184,6 +188,7 @@ export async function seedDatabase(
       ...(ALLOCATION_ROLE_GRANTS[code as RoleCode] ?? []),
       ...(LEDGER_ROLE_GRANTS[code as RoleCode] ?? []),
       ...(DOCUMENT_ROLE_GRANTS[code as RoleCode] ?? []),
+      ...(SURVEY_ROLE_GRANTS[code as RoleCode] ?? []),
     ]);
     for (const perm of grants) {
       await pool.query(
@@ -271,6 +276,29 @@ export async function seedDatabase(
          basis = EXCLUDED.basis, updated_at = NOW()`,
       [orgId, t.code, t.label, t.category, t.owners, t.noticeDays, t.expiryRequired,
         t.blocksOperations, t.retentionYears, t.confidential, t.basis ?? null],
+    );
+  }
+
+  // Land survey measures and stages (§59). The migration seeds the
+  // organisations that existed when it ran; this covers every one created
+  // since, which would otherwise have nothing to record progress against.
+  for (const m of MEASURE_SEEDS) {
+    await pool.query(
+      `INSERT INTO survey_measures (org_id, code, label, group_label, unit, basis, display_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (org_id, code) DO UPDATE SET
+         label = EXCLUDED.label, group_label = EXCLUDED.group_label, unit = EXCLUDED.unit,
+         basis = EXCLUDED.basis, display_order = EXCLUDED.display_order, updated_at = NOW()`,
+      [orgId, m.code, m.label, m.groupLabel, m.unit, m.basis, m.displayOrder],
+    );
+  }
+  for (const s of STAGE_SEEDS) {
+    await pool.query(
+      `INSERT INTO survey_stages (org_id, code, label, display_order)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (org_id, code) DO UPDATE SET
+         label = EXCLUDED.label, display_order = EXCLUDED.display_order`,
+      [orgId, s.code, s.label, s.displayOrder],
     );
   }
 

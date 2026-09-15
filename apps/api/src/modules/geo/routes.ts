@@ -28,7 +28,7 @@ export interface GeoFenceRoutesOptions {
 }
 
 const listQuerySchema = cursorPageQuerySchema.extend({
-  scope_type: z.enum(["district", "mandal", "village", "site"]).optional(),
+  scope_type: z.enum(["district", "division", "mandal", "village", "site"]).optional(),
   scope_id: z.string().uuid().optional(),
 });
 
@@ -275,7 +275,8 @@ export async function registerGeoFenceRoutes(
           WHERE direct.org_id = $1 AND direct.geo_fence_id = geo_fences.id
             AND direct.status = 'ACTIVE'
         ) THEN 0 ELSE CASE scope_type
-          WHEN 'site' THEN 1 WHEN 'village' THEN 2 WHEN 'mandal' THEN 3 ELSE 4 END
+          WHEN 'site' THEN 1 WHEN 'village' THEN 2 WHEN 'mandal' THEN 3
+          WHEN 'division' THEN 4 ELSE 5 END
         END,
           created_at DESC, id DESC
         LIMIT 100`,

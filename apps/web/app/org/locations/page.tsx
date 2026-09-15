@@ -24,12 +24,25 @@ import { Skeleton } from '@/components/ui/Skeleton';
 
 export const dynamic = 'force-static';
 
-const TABS: OrgUnitType[] = ['district', 'mandal', 'village', 'site'];
+const TABS: OrgUnitType[] = ['district', 'division', 'mandal', 'village', 'site'];
+/**
+ * The tier a new unit is filed under here.
+ *
+ * A mandal may in fact sit under a district or under a division — the
+ * division tier is optional, and mandals recorded before it existed have
+ * districts. This screen offers the division when one exists and falls back
+ * to the district, which is what the server accepts either way.
+ */
 const PARENT_OF: Record<OrgUnitType, OrgUnitType | null> = {
   district: null,
-  mandal: 'district',
+  division: 'district',
+  mandal: 'division',
   village: 'mandal',
   site: 'village',
+};
+/** Where the parent picker looks when the preferred tier is empty. */
+const PARENT_FALLBACK: Partial<Record<OrgUnitType, OrgUnitType>> = {
+  mandal: 'district',
 };
 const PAGE_LIMIT = 20;
 
@@ -44,13 +57,30 @@ function CreateUnitDialog({
 }) {
   const queryClient = useQueryClient();
   const [submitError, setSubmitError] = React.useState<unknown>(null);
-  const parentType = PARENT_OF[type];
+  const preferredParent = PARENT_OF[type];
+  const fallbackParent = PARENT_FALLBACK[type];
+
+  // Both tiers are fetched where one is optional, because a mandal may hang
+  // off a division or straight off a district and the server accepts either.
+  // Offering only divisions would make it impossible to add a mandal in an
+  // organisation that has never created one.
   const parentsQuery = useQuery({
-    queryKey: parentType ? queryKeys.orgUnits.list({ type: parentType, limit: 100 }) : ['orgUnits', 'none'],
-    queryFn: () => listOrgUnits({ type: parentType!, limit: 100 }),
-    enabled: open && !!parentType,
+    queryKey: preferredParent
+      ? queryKeys.orgUnits.list({ type: preferredParent, limit: 100 })
+      : ['orgUnits', 'none'],
+    queryFn: () => listOrgUnits({ type: preferredParent!, limit: 100 }),
+    enabled: open && !!preferredParent,
     staleTime: 10 * 60_000,
   });
+  const fallbackQuery = useQuery({
+    queryKey: fallbackParent
+      ? queryKeys.orgUnits.list({ type: fallbackParent, limit: 100 })
+      : ['orgUnits', 'none-fallback'],
+    queryFn: () => listOrgUnits({ type: fallbackParent!, limit: 100 }),
+    enabled: open && !!fallbackParent,
+    staleTime: 10 * 60_000,
+  });
+  const parentType = preferredParent;
   const {
     register,
     handleSubmit,
@@ -100,16 +130,28 @@ function CreateUnitDialog({
             <Input id="unit-name" invalid={!!errors.name} {...register('name')} />
           </FormField>
           {parentType && (
-            <FormField label={`Parent ${parentType}`} htmlFor="unit-parent" error={errors.parent_id?.message}>
+            <FormField
+              label={fallbackParent ? `Parent ${parentType} or ${fallbackParent}` : `Parent ${parentType}`}
+              htmlFor="unit-parent"
+              error={errors.parent_id?.message}
+            >
               <select
                 id="unit-parent"
                 className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm"
                 {...register('parent_id')}
               >
-                <option value="">Select {parentType}</option>
+                <option value="">Select a parent</option>
                 {(parentsQuery.data?.data ?? []).map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name} ({p.code})
+                  </option>
+                ))}
+                {/* The optional tier: a mandal that belongs straight to a
+                    district, which is how every mandal recorded before
+                    divisions existed is filed. */}
+                {(fallbackQuery.data?.data ?? []).map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.code}) — {fallbackParent}
                   </option>
                 ))}
               </select>

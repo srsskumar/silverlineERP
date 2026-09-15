@@ -7,8 +7,16 @@ import { parseEmployeeCsv } from '../lib/csv';
  * round a loop of validation errors while looking authoritative.
  */
 describe('import templates', () => {
-  it('offers the three formats that are loaded from a file', () => {
-    expect(IMPORT_TEMPLATES.map((t) => t.key).sort()).toEqual(['assets', 'employees', 'inventory']);
+  it('gives every template a distinct key and a distinct file name', () => {
+    // Pinning the exact list here only compared this file to itself and had
+    // to be edited every time a format was added. What actually matters is
+    // that two templates cannot collide: a shared key makes one
+    // unreachable, and a shared file name overwrites the other on download.
+    const keys = IMPORT_TEMPLATES.map((t) => t.key);
+    const files = IMPORT_TEMPLATES.map((t) => t.fileName);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(new Set(files).size).toBe(files.length);
+    expect(keys).toContain('employees');
   });
 
   it('gives every column an example value', () => {

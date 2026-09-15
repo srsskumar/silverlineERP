@@ -56,6 +56,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "046_payables_receivables", file: "046_payables_receivables.sql" },
   { version: "047_document_register", file: "047_document_register.sql" },
   { version: "048_document_permissions", file: "048_document_permissions.sql" },
+  { version: "049_land_survey", file: "049_land_survey.sql" },
 ];
 
 /**

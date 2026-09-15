@@ -98,6 +98,32 @@ export const IMPORT_TEMPLATES: ImportTemplate[] = [
     ],
   },
   {
+    key: 'survey-villages',
+    label: 'Survey villages',
+    fileName: 'silverline-survey-villages-template.csv',
+    description: 'The villages to be surveyed, as the revenue department supplies the list.',
+    headers: [
+      'district_code', 'district_name', 'division_code', 'division_name',
+      'mandal_code', 'mandal_name', 'village_code', 'village_name', 'vill_code_old',
+      'total_extent_ac', 'dgps_base', 'dgps_rovers', 'teams',
+    ],
+    required: ['district_code', 'district_name', 'mandal_code', 'mandal_name',
+      'village_code', 'village_name'],
+    example: [
+      '15', 'Alluri Sitharama Raju', '1', 'Paderu',
+      '11', 'KOYYURU', '1511077', 'ADAKULA', '314077',
+      '16.82', '1', '3', '2',
+    ],
+    notes: [
+      'The columns match the list the revenue department issues, so it can be pasted in as it arrives.',
+      'Codes are what reconciliation is done on, not names. Two villages called Ramapuram in one district is ordinary.',
+      'vill_code_old carries the previous code, which is how the earlier records are matched.',
+      'division_code and division_name may be left blank where a mandal reports straight to the district.',
+      'total_extent_ac is the denominator for every extent-based percentage. A village without one is counted but left out of the completion figure.',
+      'Extent in square kilometres is worked out from the acres and must not be supplied — two columns holding one quantity disagree the moment either is edited.',
+    ],
+  },
+  {
     key: 'assets',
     label: 'Assets',
     fileName: 'silverline-assets-template.csv',
