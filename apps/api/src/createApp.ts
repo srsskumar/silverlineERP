@@ -8,6 +8,7 @@ import { registerTenderRoutes } from "./modules/tender/routes.js";
 import { registerBillingRoutes } from "./modules/billing/routes.js";
 import { registerApprovalRoutes } from "./modules/approvals/routes.js";
 import { registerProcurementRoutes } from "./modules/procurement/routes.js";
+import { registerExpenseRoutes } from "./modules/expenses/routes.js";
 import { registerAutomationRoutes } from "./modules/automation/routes.js";
 import { registerInventoryRoutes } from "./modules/inventory/routes.js";
 import { registerPlanningRoutes } from "./modules/planning/routes.js";
@@ -189,6 +190,7 @@ export async function buildApp(
   await registerBillingRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerApprovalRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerProcurementRoutes(app, { pool, jwtSecret: config.jwtSecret });
+  await registerExpenseRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerAdminRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerPayrollDocuments(app, { pool, jwtSecret: config.jwtSecret });
   await registerOrgImport(app,{pool,jwtSecret:config.jwtSecret});

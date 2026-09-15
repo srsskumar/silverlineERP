@@ -47,6 +47,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "037_drop_client_gstin", file: "037_drop_client_gstin.sql" },
   { version: "038_procurement", file: "038_procurement.sql" },
   { version: "039_procurement_enhancements", file: "039_procurement_enhancements.sql" },
+  { version: "040_expense_cost_control", file: "040_expense_cost_control.sql" },
 ];
 
 /**
