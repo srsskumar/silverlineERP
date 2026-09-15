@@ -132,13 +132,17 @@ export default function ReceivablesPage() {
                 <Stat
                   label="Days sales outstanding"
                   value={data.dso === null ? '—' : `${Math.round(data.dso)} days`}
-                  hint={`over ${data.period_days} days`}
+                  // The request takes period_days and the response returns
+                  // periodDays -- it comes straight out of the shared
+                  // calculation, which is camelCase throughout. Reading the
+                  // snake_case spelling here renders "over undefined days".
+                  hint={`over ${data.periodDays} days`}
                 />
               </div>
 
               <AgeingBar summary={summary} />
               <AgeingBuckets summary={summary} />
-              <p className="text-2xs text-text-subtle">{dsoNote(data.dso, data.period_days)}</p>
+              <p className="text-2xs text-text-subtle">{dsoNote(data.dso, data.periodDays)}</p>
               <OutsideBuckets summary={summary} />
             </Card>
 

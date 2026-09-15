@@ -4,6 +4,7 @@ import {
   exclusionReason, msmeNote, type AgeingSummary,
 } from '../lib/ledgers';
 import { NAV_GROUPS } from '../lib/nav';
+import { ageOutstanding, creditExposure, daysSalesOutstanding } from '@silverline/shared';
 
 const summary = (over: Partial<AgeingSummary> = {}): AgeingSummary => ({
   buckets: { NOT_DUE: 0, D1_30: 0, D31_60: 0, D61_90: 0, OVER_90: 0 },
@@ -117,5 +118,43 @@ describe('navigation', () => {
     const ap = items.find((i) => i.href === '/payables');
     expect(ar?.permission).toBe('ar.read');
     expect(ap?.permission).toBe('ap.read');
+  });
+});
+
+describe('the shape the screens actually read', () => {
+  /**
+   * These payloads are spread straight out of the shared calculations into
+   * the API response, so the response mixes snake_case envelope fields with
+   * camelCase computed ones. The receivables screen shipped reading
+   * `period_days` and would have rendered "over undefined days" — caught
+   * against production data, not by a type, because the payload is untyped
+   * JSON by the time it reaches the page.
+   */
+  it('reports the DSO window under the key the screen reads', () => {
+    const result = daysSalesOutstanding({ outstanding: 100, creditSales: 400, periodDays: 90 });
+    expect(Object.keys(result).sort()).toEqual(['dso', 'periodDays']);
+  });
+
+  it('reports the ageing summary under the keys the components read', () => {
+    const result = ageOutstanding([{ outstanding: 100, dueDate: '2026-01-01' }], '2026-03-01');
+    // Exactly the fields AgeingBar, AgeingBuckets and OutsideBuckets destructure.
+    for (const key of ['buckets', 'undated', 'disputed', 'retention', 'onHold', 'total', 'overdue']) {
+      expect(result, key).toHaveProperty(key);
+    }
+  });
+
+  it('names every bucket the UI knows how to label', () => {
+    // A bucket the server adds and the UI cannot label would be dropped from
+    // the total silently, which is worse than failing.
+    const result = ageOutstanding([], '2026-03-01');
+    expect(Object.keys(result.buckets).sort()).toEqual([...AGEING_BUCKETS].sort());
+  });
+
+  it('reports credit exposure under the keys the table reads', () => {
+    const result = creditExposure({ limit: 1000, outstanding: 1200 });
+    for (const key of ['limit', 'outstanding', 'exposure', 'headroom', 'breached', 'utilisationPct']) {
+      expect(result, key).toHaveProperty(key);
+    }
+    expect(result.breached).toBe(true);
   });
 });
