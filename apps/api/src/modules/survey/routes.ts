@@ -5,7 +5,8 @@ import {
   measureSchema, targetSchema, stageUpdateSchema,
   rollUp, villageState, completion, acresToSqKm, periodBuckets, financialYearRange,
   STAGE_CODES, REPORT_LEVELS, resolveStage, isOutOfScope, plannedTasksFor,
-  tallyByStage, roverUtilisation, pace, currentStage, outOfSequence, stageBlockedBy,
+  tallyByStage, roverUtilisation, roverWindow, rankByWaste, pace, currentStage,
+  outOfSequence, stageBlockedBy,
   crewAssignmentSchema, roverAllocationSchema, stageRemarkSchema, STAGE_PIPELINE,
   type MeasureBasis, type PeriodGrain, type ReportLevel, type StageState, type VillageProgress,
 } from '@silverline/shared';
@@ -902,6 +903,132 @@ export async function registerSurveyRoutes(
       has_more: rows.length > limit,
     };
   });
+
+  /**
+   * Which crew had instruments sitting idle, and when (§59.5).
+   *
+   * Reported per village per day and summed into instrument-days, because
+   * "six rovers" means something different over a day and over a fortnight.
+   *
+   * A day nobody filed a return is counted apart from a day reporting nothing
+   * used. The first is a reporting failure and the kit may well have been
+   * working; the second is somebody saying it sat there. They need different
+   * conversations, so the figures keep them apart.
+   */
+  app.get('/api/v1/survey/projects/:id/rover-utilisation',
+    { preHandler: guard('survey.read') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const { q } = page(req);
+      await projectOr404(pool, u.orgId, id);
+
+      const to = String(q.to ?? today());
+      const from = String(q.from ?? to);
+      if (from > to) fail('VALIDATION_ERROR', 'The window starts after it ends', 422);
+      const span = Math.round(
+        (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
+      if (span > 200) {
+        fail('RANGE_TOO_WIDE',
+          `That window is ${span} days. Narrow it — this is a day-by-day report.`, 422);
+      }
+
+      // One row per village per day an instrument was out, with what the crew
+      // reported. A LEFT JOIN on the entry is what makes "no return filed"
+      // distinguishable from "nothing used".
+      const rows = (await pool.query(
+        `WITH days AS (SELECT generate_series($3::date, $4::date, interval '1 day')::date AS d)
+         SELECT sv.id AS survey_village_id, v.name AS village_name,
+                m.name AS mandal_name, days.d AS on_date,
+                count(ra.id)::int AS allocated,
+                e.dgps_rovers AS used,
+                (e.id IS NOT NULL) AS reported
+         FROM survey_villages sv
+         JOIN org_units v ON v.id = sv.village_id
+         LEFT JOIN org_units m ON m.id = v.parent_id
+         CROSS JOIN days
+         LEFT JOIN survey_rover_allocations ra
+           ON ra.survey_village_id = sv.id
+          AND ra.allocated_on <= days.d
+          AND (ra.released_on IS NULL OR ra.released_on >= days.d)
+         LEFT JOIN survey_entries e
+           ON e.survey_village_id = sv.id AND e.entry_date = days.d
+         WHERE sv.org_id = $1 AND sv.survey_project_id = $2
+         GROUP BY sv.id, v.name, m.name, days.d, e.id, e.dgps_rovers
+         ORDER BY m.name, v.name, days.d`,
+        [u.orgId, id, from, to])).rows;
+
+      // The crew on each village, so the row names who to ask.
+      const crew = (await pool.query(
+        `SELECT c.survey_village_id,
+                COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), e.emp_no)
+                  AS employee_name
+         FROM survey_crew c
+         JOIN employees e ON e.id = c.employee_id
+         JOIN survey_villages sv ON sv.id = c.survey_village_id
+         WHERE sv.survey_project_id = $1 AND c.org_id = $2 AND c.released_on IS NULL
+         ORDER BY employee_name`, [id, u.orgId])).rows;
+      const crewBy = new Map<string, string[]>();
+      for (const c of crew) {
+        const key = String(c.survey_village_id);
+        if (!crewBy.has(key)) crewBy.set(key, []);
+        crewBy.get(key)!.push(String(c.employee_name));
+      }
+
+      const byVillage = new Map<string, {
+        village: string; mandal: string | null;
+        days: Array<{ date: string; allocated: number; used: number | null }>;
+      }>();
+      for (const r of rows) {
+        const key = String(r.survey_village_id);
+        if (!byVillage.has(key)) {
+          byVillage.set(key, {
+            village: String(r.village_name),
+            mandal: r.mandal_name ? String(r.mandal_name) : null,
+            days: [],
+          });
+        }
+        byVillage.get(key)!.days.push({
+          date: iso(r.on_date)!,
+          allocated: Number(r.allocated),
+          used: r.reported ? Number(r.used ?? 0) : null,
+        });
+      }
+
+      const villages = [...byVillage.entries()].map(([key, v]) => ({
+        survey_village_id: key,
+        village: v.village,
+        mandal: v.mandal,
+        crew: crewBy.get(key) ?? [],
+        ...roverWindow(v.days),
+        // Kept so a single bad day can be found inside a month's window.
+        days: v.days.filter(d => d.allocated > 0),
+      }));
+
+      // Worst offender first: most idle instrument-days, then the most simply
+      // unaccounted for.
+      const ranked = rankByWaste(villages);
+
+      // The same window rolled up per day, for the programme as a whole.
+      const perDay = new Map<string, { allocated: number; used: number; reported: boolean }>();
+      for (const r of rows) {
+        const d = iso(r.on_date)!;
+        if (!perDay.has(d)) perDay.set(d, { allocated: 0, used: 0, reported: false });
+        const slot = perDay.get(d)!;
+        slot.allocated += Number(r.allocated);
+        if (r.reported) { slot.used += Number(r.used ?? 0); slot.reported = true; }
+      }
+
+      return {
+        data: {
+          from, to,
+          villages: ranked,
+          days: [...perDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([date, s]) => ({
+            date, ...roverUtilisation({ allocated: s.allocated, used: s.used }),
+          })),
+          total: roverWindow(
+            [...byVillage.values()].flatMap(v => v.days)),
+        },
+      };
+    });
 
   /* ------------------------------------------------------------ report */
 

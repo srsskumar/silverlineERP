@@ -806,3 +806,84 @@ export const stageRemarkSchema = z.object({
   completed_on: isoDate.nullable().optional(),
   remarks: z.string().max(2000).nullable().optional(),
 });
+
+/* ------------------------------------------------ rover-days over a window */
+
+export interface RoverVillageDay {
+  /** Instruments allocated to this village on this date. */
+  allocated: number;
+  /** What the crew reported using, or null when no entry was filed at all. */
+  used: number | null;
+}
+
+export interface RoverWindow {
+  /** Instrument-days allocated across the window. */
+  allocatedRoverDays: number;
+  /** Instrument-days the crews reported using. */
+  usedRoverDays: number;
+  /** Allocated less used, over the days that were actually reported. */
+  idleRoverDays: number;
+  utilisationPct: number | null;
+  /** Days an instrument was out and nobody filed anything. */
+  daysNotReported: number;
+  /** Instrument-days on those days — idle as far as anyone can tell. */
+  unreportedRoverDays: number;
+  /** Days the crew reported using nothing at all. */
+  daysReportedIdle: number;
+}
+
+/**
+ * Rover utilisation over a window, in instrument-days.
+ *
+ * Instrument-days rather than instruments, because "six rovers" means
+ * something different over a day and over a fortnight, and a window figure
+ * that ignores the difference cannot be compared with anything.
+ *
+ * A day with no entry is counted apart from a day reporting nothing used.
+ * The first means nobody filed a return and the equipment may well have been
+ * working; the second is somebody saying the rovers sat there. Folding them
+ * together would turn a reporting failure into an equipment problem, and the
+ * two need different conversations.
+ */
+export function roverWindow(days: RoverVillageDay[]): RoverWindow {
+  let allocated = 0, used = 0, notReported = 0, unreported = 0, reportedIdle = 0;
+  for (const day of days) {
+    allocated += day.allocated;
+    if (day.used === null) {
+      if (day.allocated > 0) { notReported += 1; unreported += day.allocated; }
+      continue;
+    }
+    used += day.used;
+    if (day.allocated > 0 && day.used === 0) reportedIdle += 1;
+  }
+  // Idle counts only against days somebody reported on. An unreported day is
+  // reported separately rather than silently scored as waste.
+  const reportedAllocated = allocated - unreported;
+  return {
+    allocatedRoverDays: allocated,
+    usedRoverDays: used,
+    idleRoverDays: Math.max(0, reportedAllocated - used),
+    utilisationPct: reportedAllocated > 0
+      ? round((used / reportedAllocated) * 100) : null,
+    daysNotReported: notReported,
+    unreportedRoverDays: unreported,
+    daysReportedIdle: reportedIdle,
+  };
+}
+
+/**
+ * How badly a village is using what it has been given.
+ *
+ * Ranked so the worst offender surfaces first: most idle instrument-days,
+ * then the most days simply unaccounted for. A village with nothing allocated
+ * cannot be wasting anything and sorts last whatever its percentage.
+ */
+export function rankByWaste<T extends RoverWindow>(rows: T[]): T[] {
+  return [...rows].sort((a, b) => {
+    if (a.allocatedRoverDays === 0 && b.allocatedRoverDays === 0) return 0;
+    if (a.allocatedRoverDays === 0) return 1;
+    if (b.allocatedRoverDays === 0) return -1;
+    if (b.idleRoverDays !== a.idleRoverDays) return b.idleRoverDays - a.idleRoverDays;
+    return b.unreportedRoverDays - a.unreportedRoverDays;
+  });
+}

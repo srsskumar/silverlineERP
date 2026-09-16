@@ -325,3 +325,47 @@ describe("returning a rover", () => {
     expect(next.status, JSON.stringify(next.body)).toBe(201);
   });
 });
+
+describe("rover utilisation per village", () => {
+  it("reports instrument-days per village over a window", async () => {
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/rover-utilisation?from=2026-10-01&to=2026-10-01`);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.villages.length).toBeGreaterThan(0);
+    const row = r.data.villages.find((v: any) => v.village === "ADAKULA");
+    expect(row.allocatedRoverDays).toBeGreaterThan(0);
+    // The crew is named, so the row says who to ask.
+    expect(Array.isArray(row.crew)).toBe(true);
+  });
+
+  it("separates a day nobody filed from a day reporting nothing used", async () => {
+    // A missing return is a reporting failure; a zero is somebody saying the
+    // kit sat there. They need different conversations.
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/rover-utilisation?from=2026-10-01&to=2026-10-05`);
+    const row = r.data.villages.find((v: any) => v.village === "ADAKULA");
+    expect(row).toHaveProperty("daysNotReported");
+    expect(row).toHaveProperty("unreportedRoverDays");
+    expect(row.daysNotReported).toBeGreaterThan(0);
+  });
+
+  it("ranks the worst offender first", async () => {
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/rover-utilisation?from=2026-10-01&to=2026-10-05`);
+    const idle = r.data.villages.map((v: any) => v.idleRoverDays);
+    expect([...idle].sort((a: number, b: number) => b - a)).toEqual(idle);
+  });
+
+  it("refuses a window too wide to read day by day", async () => {
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/rover-utilisation?from=2020-01-01&to=2026-12-31`);
+    expect(r.status).toBe(422);
+    expect(r.body.code).toBe("RANGE_TOO_WIDE");
+  });
+
+  it("refuses a window that starts after it ends", async () => {
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/rover-utilisation?from=2026-10-05&to=2026-10-01`);
+    expect(r.status).toBe(422);
+  });
+});

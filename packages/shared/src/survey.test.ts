@@ -6,6 +6,7 @@ import {
   stageStateFromTask, isOutOfScope, resolveStage, resolveStages, plannedTasksFor,
   STAGE_PIPELINE, stageBlockedBy, currentStage, outOfSequence, tallyByStage,
   roverUtilisation, pace, crewAssignmentSchema, roverAllocationSchema, stageRemarkSchema,
+  roverWindow, rankByWaste, type RoverWindow,
   type MeasureBasis, type VillageProgress,
 } from './survey.js';
 
@@ -724,5 +725,95 @@ describe('crew and rover schemas', () => {
     expect(stageRemarkSchema.safeParse({
       stage_code: 'GT_QC', state: 'IN_PROGRESS', remarks: 'Two parcels disputed',
     }).success).toBe(true);
+  });
+});
+
+describe('roverWindow', () => {
+  it('counts instrument-days, not instruments', () => {
+    // "Six rovers" means something different over a day and a fortnight.
+    const w = roverWindow([
+      { allocated: 3, used: 2 },
+      { allocated: 3, used: 3 },
+    ]);
+    expect(w.allocatedRoverDays).toBe(6);
+    expect(w.usedRoverDays).toBe(5);
+    expect(w.idleRoverDays).toBe(1);
+  });
+
+  it('separates a day nobody reported from a day reporting nothing used', () => {
+    // The first is a reporting failure and the equipment may well have been
+    // working; the second is somebody saying the rovers sat there. Folding
+    // them together turns one into the other.
+    const w = roverWindow([
+      { allocated: 2, used: null },  // nobody filed
+      { allocated: 2, used: 0 },     // filed, nothing used
+    ]);
+    expect(w.daysNotReported).toBe(1);
+    expect(w.unreportedRoverDays).toBe(2);
+    expect(w.daysReportedIdle).toBe(1);
+    // Only the reported day counts as waste.
+    expect(w.idleRoverDays).toBe(2);
+  });
+
+  it('keeps an unreported day out of the utilisation figure', () => {
+    // Scoring it as waste would make a missing return look like idle kit.
+    const w = roverWindow([
+      { allocated: 4, used: 4 },
+      { allocated: 4, used: null },
+    ]);
+    expect(w.utilisationPct).toBe(100);
+    expect(w.unreportedRoverDays).toBe(4);
+  });
+
+  it('has no percentage when nothing was allocated', () => {
+    expect(roverWindow([{ allocated: 0, used: null }]).utilisationPct).toBeNull();
+    expect(roverWindow([]).utilisationPct).toBeNull();
+  });
+
+  it('does not report negative idle when more was used than allocated', () => {
+    const w = roverWindow([{ allocated: 2, used: 5 }]);
+    expect(w.idleRoverDays).toBe(0);
+    expect(w.utilisationPct).toBe(250);
+  });
+
+  it('ignores an unallocated day entirely', () => {
+    // No instruments out means nothing to account for, reported or not.
+    const w = roverWindow([{ allocated: 0, used: null }, { allocated: 2, used: 1 }]);
+    expect(w.daysNotReported).toBe(0);
+    expect(w.allocatedRoverDays).toBe(2);
+  });
+});
+
+describe('rankByWaste', () => {
+  const row = (over: Partial<RoverWindow>): RoverWindow => ({
+    allocatedRoverDays: 10, usedRoverDays: 5, idleRoverDays: 5, utilisationPct: 50,
+    daysNotReported: 0, unreportedRoverDays: 0, daysReportedIdle: 0, ...over,
+  });
+
+  it('surfaces the worst offender first', () => {
+    const ranked = rankByWaste([
+      row({ idleRoverDays: 2 }),
+      row({ idleRoverDays: 9 }),
+      row({ idleRoverDays: 5 }),
+    ]);
+    expect(ranked.map(r => r.idleRoverDays)).toEqual([9, 5, 2]);
+  });
+
+  it('breaks a tie on what is simply unaccounted for', () => {
+    const ranked = rankByWaste([
+      row({ idleRoverDays: 4, unreportedRoverDays: 1 }),
+      row({ idleRoverDays: 4, unreportedRoverDays: 8 }),
+    ]);
+    expect(ranked[0].unreportedRoverDays).toBe(8);
+  });
+
+  it('sorts a village with nothing allocated last, whatever its percentage', () => {
+    // It cannot be wasting what it was never given.
+    const ranked = rankByWaste([
+      row({ allocatedRoverDays: 0, idleRoverDays: 0, utilisationPct: null }),
+      row({ idleRoverDays: 1 }),
+    ]);
+    expect(ranked[0].idleRoverDays).toBe(1);
+    expect(ranked[1].allocatedRoverDays).toBe(0);
   });
 });
