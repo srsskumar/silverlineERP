@@ -37,6 +37,7 @@ export default function SurveyPage() {
   const perms = { permissions: session?.permissions };
   const canRead = hasPermission(perms, 'survey.read');
   const canEnter = hasPermission(perms, 'survey.enter');
+  const canManage = hasPermission(perms, 'survey.manage');
 
   const today = React.useMemo(() => new Date().toISOString().slice(0, 10), []);
   const fy = React.useMemo(() => financialYearToDate(today), [today]);
@@ -126,11 +127,18 @@ export default function SurveyPage() {
             This financial year
           </Button>
 
-          {canEnter ? (
-            <a href="/survey/entry" className="ml-auto">
-              <Button type="button" variant="primary">Record today’s progress</Button>
-            </a>
-          ) : null}
+          <div className="ml-auto flex gap-2">
+            {canManage ? (
+              <a href="/survey/setup">
+                <Button type="button" variant="secondary">Setup</Button>
+              </a>
+            ) : null}
+            {canEnter ? (
+              <a href="/survey/entry">
+                <Button type="button" variant="primary">Record today’s progress</Button>
+              </a>
+            ) : null}
+          </div>
         </Toolbar>
 
         {projects.isLoading ? <Skeleton className="h-64" /> : null}

@@ -1,0 +1,456 @@
+'use client';
+
+import * as React from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
+import { AppShell } from '@/components/AppShell';
+import { Button } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
+import { ErrorCard } from '@/components/ui/ErrorCard';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
+import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
+import { Badge } from '@/components/ui/Badge';
+import { useAuth } from '@/components/AuthProvider';
+import { hasPermission } from '@/lib/permissions';
+import { Notice, Section, Stat } from '@/components/finance/Primitives';
+import { readVillageCsv, missingColumns } from '@/lib/survey-import';
+import { acres, count } from '@/lib/survey';
+import { IMPORT_TEMPLATES, downloadTemplate, downloadTemplateWorkbook } from '@/lib/import-templates';
+
+type Row = Record<string, any>;
+
+/**
+ * Setting up a survey programme (§59.3).
+ *
+ * Until this existed the module could be read and not started: there was no
+ * way to create a programme or to get the village list in, so every report
+ * had nothing to report on.
+ *
+ * The import is the centre of it. The list arrives from the revenue
+ * department as a spreadsheet several thousand rows long, and it is pasted or
+ * dropped in exactly as it arrives — the column names are mapped here rather
+ * than by asking somebody to rename them.
+ */
+export default function SurveySetupPage() {
+  const { session } = useAuth();
+  const perms = { permissions: session?.permissions };
+  const canManage = hasPermission(perms, 'survey.manage');
+  const qc = useQueryClient();
+
+  const [projectId, setProjectId] = React.useState('');
+
+  const projects = useQuery({
+    queryKey: ['survey-projects'],
+    enabled: hasPermission(perms, 'survey.read'),
+    queryFn: async () =>
+      ((await apiRequestRaw('/api/v1/survey/projects?limit=100')).body as { data: Row[] }).data,
+  });
+
+  React.useEffect(() => {
+    if (!projectId && projects.data?.length) setProjectId(String(projects.data[0].id));
+  }, [projects.data, projectId]);
+
+  if (!canManage) {
+    return (
+      <AppShell>
+        <PageHeader title="Survey setup" />
+        <PageBody>
+          <Notice tone="info" title="You do not have access to set up a survey">
+            Recording daily progress needs <code>survey.enter</code>; shaping the work list needs{' '}
+            <code>survey.manage</code>. The two are separate so that a crew cannot change the list
+            its own progress is measured against.
+          </Notice>
+        </PageBody>
+      </AppShell>
+    );
+  }
+
+  return (
+    <AppShell>
+      <PageHeader
+        title="Survey setup"
+        description="Create a programme, load the villages to be surveyed, and add the columns you count."
+      />
+      <PageBody>
+        <div className="space-y-4">
+          <NewProgramme onCreated={(id) => {
+            setProjectId(id);
+            qc.invalidateQueries({ queryKey: ['survey-projects'] });
+          }} />
+
+          {projects.data?.length ? (
+            <>
+              <Toolbar>
+                <label className="flex items-center gap-2 text-xs text-text-muted">
+                  Programme
+                  <select
+                    value={projectId}
+                    onChange={(e) => setProjectId(e.target.value)}
+                    className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+                  >
+                    {projects.data.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.village_count} villages)
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <a href="/survey" className="ml-auto">
+                  <Button type="button" variant="ghost">Back to progress</Button>
+                </a>
+              </Toolbar>
+
+              {projectId ? <VillageImport projectId={projectId} /> : null}
+            </>
+          ) : (
+            <EmptyState
+              title="No programme yet"
+              description="A programme holds the villages to be surveyed and everything recorded against them."
+            />
+          )}
+
+          <NewMeasure />
+        </div>
+      </PageBody>
+    </AppShell>
+  );
+}
+
+/* ------------------------------------------------------------- programme */
+
+function NewProgramme({ onCreated }: { onCreated: (id: string) => void }) {
+  const [open, setOpen] = React.useState(false);
+  const today = new Date().toISOString().slice(0, 10);
+  const [form, setForm] = React.useState({ code: '', name: '', started_on: today });
+
+  const create = useMutation({
+    mutationFn: async () =>
+      apiRequest<{ id: string }>('/api/v1/survey/projects', {
+        method: 'POST',
+        body: { code: form.code, name: form.name, started_on: form.started_on || undefined },
+      }),
+    onSuccess: (res: any) => {
+      onCreated(String(res?.data?.id));
+      setOpen(false);
+      setForm({ code: '', name: '', started_on: today });
+    },
+  });
+
+  const field = 'w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
+
+  if (!open) {
+    return <Button type="button" variant="primary" onClick={() => setOpen(true)}>New programme</Button>;
+  }
+
+  return (
+    <Card className="space-y-3 p-4">
+      <h3 className="text-sm font-semibold text-text">New survey programme</h3>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <label className="space-y-1">
+          <span className="text-2xs uppercase tracking-wide text-text-subtle">Code</span>
+          <input className={field} value={form.code} placeholder="ASR-RESURVEY-26"
+            onChange={(e) => setForm({ ...form, code: e.target.value })} />
+        </label>
+        <label className="space-y-1">
+          <span className="text-2xs uppercase tracking-wide text-text-subtle">Name</span>
+          <input className={field} value={form.name} placeholder="Alluri Sitharama Raju resurvey"
+            onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        </label>
+        <label className="space-y-1">
+          <span className="text-2xs uppercase tracking-wide text-text-subtle">Started on</span>
+          <input type="date" className={field} value={form.started_on}
+            onChange={(e) => setForm({ ...form, started_on: e.target.value })} />
+        </label>
+      </div>
+      {create.isError ? <ErrorCard error={create.error} /> : null}
+      <div className="flex gap-2">
+        <Button type="button" variant="primary" loading={create.isPending}
+          disabled={!form.code.trim() || !form.name.trim()} onClick={() => create.mutate()}>
+          Create
+        </Button>
+        <Button type="button" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+      </div>
+    </Card>
+  );
+}
+
+/* ---------------------------------------------------------------- import */
+
+function VillageImport({ projectId }: { projectId: string }) {
+  const qc = useQueryClient();
+  const [text, setText] = React.useState('');
+  const [preview, setPreview] = React.useState<Row | null>(null);
+  const template = IMPORT_TEMPLATES.find((t) => t.key === 'survey-villages')!;
+
+  const rows = React.useMemo(() => {
+    if (!text.trim()) return [];
+    try { return readVillageCsv(text); } catch { return []; }
+  }, [text]);
+
+  const run = useMutation({
+    mutationFn: async (dryRun: boolean) =>
+      apiRequest(`/api/v1/survey/projects/${projectId}/villages/import`, {
+        method: 'POST',
+        body: { rows, dry_run: dryRun },
+      }),
+    onSuccess: (res: any) => {
+      setPreview(res?.data ?? null);
+      if (!res?.data?.dry_run) {
+        qc.invalidateQueries({ queryKey: ['survey-projects'] });
+        qc.invalidateQueries({ queryKey: ['survey-villages'] });
+        qc.invalidateQueries({ queryKey: ['survey-progress'] });
+      }
+    },
+  });
+
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file) setText(await file.text());
+  }
+
+  return (
+    <Section title="Load the villages to be surveyed">
+      <Card className="space-y-3 p-4">
+        <p className="text-xs text-text-muted">
+          Paste the list or choose the file. The column names the revenue department uses are
+          recognised as they come — District Name, MandalCode, vill_code_old and the rest — so
+          nothing needs renaming first. The district, division and mandal are created from the
+          same rows; there is no separate geography step.
+        </p>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <input type="file" accept=".csv,text/csv" onChange={onFile}
+            className="text-xs text-text-muted file:mr-2 file:rounded-md file:border file:border-border file:bg-surface file:px-2 file:py-1 file:text-xs" />
+          <Button type="button" variant="ghost" onClick={() => downloadTemplate(template)}>
+            Template (CSV)
+          </Button>
+          <Button type="button" variant="ghost" onClick={() => downloadTemplateWorkbook(template)}>
+            Template (Excel)
+          </Button>
+        </div>
+
+        <textarea
+          value={text}
+          onChange={(e) => { setText(e.target.value); setPreview(null); }}
+          rows={6}
+          placeholder="DistrictCode,District Name,DivisionCode,Division Name,MandalCode,Mandal Name,Village Code,Village Name,vill_code_old&#10;15,Alluri Sitharama Raju,1,Paderu,11,KOYYURU,1511077,ADAKULA,314077"
+          className="w-full rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-2xs text-text"
+        />
+
+        {rows.length > 0 ? (
+          <p className="text-xs text-text-muted">
+            {count(rows.length)} row{rows.length === 1 ? '' : 's'} read.{' '}
+            {missingColumns(rows).length === 0
+              ? `First: ${rows[0].village_name ?? ''} (${rows[0].village_code})`
+              : (
+                <span className="text-warning">
+                  Missing {missingColumns(rows).join(', ')} — check the header row.
+                </span>
+              )}
+          </p>
+        ) : null}
+
+        {run.isError ? <ErrorCard error={run.error} /> : null}
+
+        <div className="flex gap-2">
+          <Button type="button" variant="secondary" loading={run.isPending}
+            disabled={rows.length === 0} onClick={() => run.mutate(true)}>
+            Check the file
+          </Button>
+          <Button type="button" variant="primary"
+            // Deliberately gated on having previewed: an import that creates
+            // several thousand rows of geography on a typo in one column is
+            // not one anybody runs twice.
+            disabled={!preview?.dry_run || run.isPending}
+            onClick={() => run.mutate(false)}>
+            Import {preview?.dry_run ? `${preview.validated} village${preview.validated === 1 ? '' : 's'}` : ''}
+          </Button>
+        </div>
+
+        {preview ? <ImportResult result={preview} /> : null}
+      </Card>
+    </Section>
+  );
+}
+
+function ImportResult({ result }: { result: Row }) {
+  const problems: Row[] = (result.results ?? []).filter(
+    (r: Row) => r.status === 'REJECTED' || r.status === 'ALREADY_LISTED');
+
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-2 sm:grid-cols-4">
+        <Stat label={result.dry_run ? 'Would import' : 'Imported'}
+          value={result.dry_run ? result.validated : result.imported}
+          tone={(result.dry_run ? result.validated : result.imported) > 0 ? 'success' : undefined} />
+        <Stat label="Already listed" value={result.already_listed}
+          hint="Left alone, not duplicated" />
+        <Stat label="Rejected" value={result.rejected}
+          tone={result.rejected > 0 ? 'danger' : undefined} />
+        <Stat label="New geography"
+          value={`${result.geography_created?.villages ?? 0}`}
+          hint={`${result.geography_created?.districts ?? 0} districts, ${result.geography_created?.divisions ?? 0} divisions, ${result.geography_created?.mandals ?? 0} mandals`} />
+      </div>
+
+      {result.dry_run ? (
+        <Notice tone="info" title="Nothing has been written yet">
+          This was a check. Nothing was created — press Import to commit it.
+        </Notice>
+      ) : (
+        <Notice tone="info" title="Imported">
+          The villages are in the programme and every report now counts them.
+        </Notice>
+      )}
+
+      {problems.length ? (
+        <TableWrap>
+          <Table>
+            <THead>
+              <TR><TH>Row</TH><TH>Village</TH><TH>Status</TH><TH>Why</TH></TR>
+            </THead>
+            <TBody>
+              {problems.slice(0, 50).map((r) => (
+                <TR key={r.row}>
+                  <TD className="tabular-nums">{r.row}</TD>
+                  <TD className="font-mono text-2xs">{r.village_code ?? '—'}</TD>
+                  <TD>
+                    <Badge tone={r.status === 'REJECTED' ? 'danger' : 'neutral'}>
+                      {r.status === 'REJECTED' ? 'Rejected' : 'Already listed'}
+                    </Badge>
+                  </TD>
+                  <TD className="text-2xs text-text-muted">{r.message}</TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </TableWrap>
+      ) : null}
+      {problems.length > 50 ? (
+        <p className="text-2xs text-text-subtle">
+          Showing the first 50 of {problems.length}.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------- measures */
+
+/**
+ * Adding a column on the fly (§59.4.3).
+ *
+ * The requirement is explicit that more get added as the work goes on, which
+ * is why a measure is a row rather than a database column — and why this is a
+ * form rather than a deployment.
+ */
+function NewMeasure() {
+  const qc = useQueryClient();
+  const [open, setOpen] = React.useState(false);
+  const [form, setForm] = React.useState({
+    code: '', label: '', group_label: '', unit: 'COUNT', basis: 'TARGET',
+  });
+
+  const catalogue = useQuery({
+    queryKey: ['survey-measures'],
+    queryFn: async () =>
+      ((await apiRequestRaw('/api/v1/survey/measures')).body as { data: Row }).data,
+  });
+
+  const create = useMutation({
+    mutationFn: async () =>
+      apiRequest('/api/v1/survey/measures', {
+        method: 'POST',
+        body: {
+          code: form.code.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_'),
+          label: form.label,
+          group_label: form.group_label || undefined,
+          unit: form.unit,
+          basis: form.basis,
+        },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['survey-measures'] });
+      setOpen(false);
+      setForm({ code: '', label: '', group_label: '', unit: 'COUNT', basis: 'TARGET' });
+    },
+  });
+
+  const field = 'w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
+  const measures: Row[] = catalogue.data?.measures ?? [];
+
+  return (
+    <Section title="What gets counted">
+      <Card className="space-y-3 p-4">
+        <p className="text-xs text-text-muted">
+          {measures.length} column{measures.length === 1 ? '' : 's'} on the entry form. Adding one
+          takes effect immediately — it does not need a release.
+        </p>
+
+        <div className="flex flex-wrap gap-1">
+          {measures.map((m) => (
+            <span key={m.code} className="rounded bg-surface-sunken px-2 py-0.5 text-2xs text-text-muted">
+              {m.group_label ? `${m.group_label} · ` : ''}{m.label}
+            </span>
+          ))}
+        </div>
+
+        {open ? (
+          <>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="space-y-1">
+                <span className="text-2xs uppercase tracking-wide text-text-subtle">Column name</span>
+                <input className={field} value={form.label} placeholder="Drone images"
+                  onChange={(e) => setForm({
+                    ...form, label: e.target.value,
+                    code: form.code || e.target.value.toUpperCase().replace(/[^A-Z0-9]+/g, '_'),
+                  })} />
+              </label>
+              <label className="space-y-1">
+                <span className="text-2xs uppercase tracking-wide text-text-subtle">Group it sits under</span>
+                <input className={field} value={form.group_label} placeholder="Imagery"
+                  onChange={(e) => setForm({ ...form, group_label: e.target.value })} />
+              </label>
+              <label className="space-y-1">
+                <span className="text-2xs uppercase tracking-wide text-text-subtle">Measured in</span>
+                <select className={field} value={form.unit}
+                  onChange={(e) => setForm({ ...form, unit: e.target.value })}>
+                  <option value="COUNT">a count</option>
+                  <option value="POINTS">points</option>
+                  <option value="PARCELS">parcels</option>
+                  <option value="ACRES">acres</option>
+                </select>
+              </label>
+            </div>
+            <label className="space-y-1">
+              <span className="text-2xs uppercase tracking-wide text-text-subtle">
+                Percentage complete measured against
+              </span>
+              <select className={field} value={form.basis}
+                onChange={(e) => setForm({ ...form, basis: e.target.value })}>
+                <option value="TARGET">a target set per village</option>
+                <option value="EXTENT">the village extent in acres</option>
+                <option value="NONE">nothing — it is a count, not progress</option>
+              </select>
+              <span className="block text-2xs text-text-subtle">
+                Where there is nothing to divide by, the report says so rather than showing 0%.
+              </span>
+            </label>
+            {create.isError ? <ErrorCard error={create.error} /> : null}
+            <div className="flex gap-2">
+              <Button type="button" variant="primary" loading={create.isPending}
+                disabled={!form.label.trim()} onClick={() => create.mutate()}>
+                Add the column
+              </Button>
+              <Button type="button" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+            </div>
+          </>
+        ) : (
+          <Button type="button" variant="secondary" onClick={() => setOpen(true)}>
+            Add a column
+          </Button>
+        )}
+      </Card>
+    </Section>
+  );
+}
