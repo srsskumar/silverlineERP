@@ -9,6 +9,7 @@ import {
   outOfSequence, stageBlockedBy,
   crewAssignmentSchema, roverAllocationSchema, stageRemarkSchema, STAGE_PIPELINE,
   checkRoverDay, checkLowProgress, villageStatus, projectEmployeeSchema,
+  forecast, findBottlenecks, delayReasonLabel as reasonLabel,
   villageStatusSchema, villagePlanSchema, delayReasonLabel, DELAY_REASONS,
   type MeasureBasis, type PeriodGrain, type ReportLevel, type StageState, type VillageProgress,
   businessDay,
@@ -41,6 +42,7 @@ export async function registerSurveyRoutes(
   const iso = (v: unknown) =>
     v instanceof Date ? businessDay(v) : v ? String(v).slice(0, 10) : null;
   const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+  const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
   /** The organisation's measures, by id and by code. */
   async function measures(db: Pool | PoolClient, orgId: string) {
@@ -1278,6 +1280,280 @@ export async function registerSurveyRoutes(
         });
       reply.code(201);
       return { data: row };
+    });
+
+  /**
+   * What each employee produced (§28 of the specification).
+   *
+   * Derived entirely from the daily returns. Nothing here is entered: an
+   * output figure somebody types is a figure somebody chose.
+   */
+  app.get('/api/v1/survey/projects/:id/employee-productivity',
+    { preHandler: guard('survey.read') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const { q } = page(req);
+      await projectOr404(pool, u.orgId, id);
+      const to = String(q.to ?? today());
+      const from = String(q.from ?? '1900-01-01');
+
+      const rows = (await pool.query(
+        `SELECT e.id AS employee_id, e.emp_no,
+                COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), e.emp_no)
+                  AS employee_name,
+                count(DISTINCT er.entry_id)::int             AS days_worked,
+                count(DISTINCT se.survey_village_id)::int    AS villages_worked,
+                COALESCE(sum(er.area_ac), 0)::numeric        AS area_ac,
+                count(*) FILTER (WHERE er.status = 'UTILIZED')::int AS rover_days_used,
+                count(*) FILTER (WHERE er.status = 'IDLE')::int     AS rover_days_idle,
+                count(DISTINCT er.asset_id)::int             AS rovers_used,
+                count(DISTINCT se.id) FILTER (WHERE se.low_progress_reason IS NOT NULL)::int
+                  AS low_progress_days
+         FROM survey_entry_rovers er
+         JOIN survey_entries se ON se.id = er.entry_id
+         JOIN employees e ON e.id = er.employee_id
+         WHERE se.org_id = $1 AND se.survey_project_id = $2
+           AND se.entry_date BETWEEN $3::date AND $4::date
+         GROUP BY e.id, e.emp_no, e.first_name, e.last_name
+         ORDER BY area_ac DESC`, [u.orgId, id, from, to])).rows;
+
+      return {
+        data: {
+          from, to,
+          employees: rows.map(r => {
+            const days = Number(r.days_worked);
+            const area = Number(r.area_ac);
+            const roverDays = Number(r.rover_days_used) + Number(r.rover_days_idle);
+            return {
+              ...r,
+              area_ac: round2(area),
+              // Per day worked, not per calendar day: this measures the
+              // person, and the days they were not out are not theirs.
+              avg_daily_ac: days > 0 ? round2(area / days) : null,
+              rover_utilisation_pct: roverDays > 0
+                ? round2((Number(r.rover_days_used) / roverDays) * 100) : null,
+            };
+          }),
+        },
+      };
+    });
+
+  /**
+   * What each rover did (§29 of the specification).
+   *
+   * Idle days are grouped by the reason given, because "three idle days" is
+   * a number and "three idle days, all rover fault" is a maintenance job.
+   */
+  app.get('/api/v1/survey/projects/:id/rover-productivity',
+    { preHandler: guard('survey.read') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const { q } = page(req);
+      await projectOr404(pool, u.orgId, id);
+      const to = String(q.to ?? today());
+      const from = String(q.from ?? '1900-01-01');
+
+      const rows = (await pool.query(
+        `SELECT a.id AS asset_id, a.asset_code, a.name AS asset_name, a.serial_number,
+                count(*) FILTER (WHERE er.status = 'UTILIZED')::int AS utilized_days,
+                count(*) FILTER (WHERE er.status = 'IDLE')::int     AS idle_days,
+                COALESCE(sum(er.area_ac), 0)::numeric               AS area_ac,
+                count(DISTINCT se.survey_village_id)::int           AS villages,
+                count(DISTINCT er.employee_id)::int                 AS employees
+         FROM survey_entry_rovers er
+         JOIN survey_entries se ON se.id = er.entry_id
+         JOIN assets a ON a.id = er.asset_id
+         WHERE se.org_id = $1 AND se.survey_project_id = $2
+           AND se.entry_date BETWEEN $3::date AND $4::date
+         GROUP BY a.id, a.asset_code, a.name, a.serial_number
+         ORDER BY idle_days DESC, area_ac DESC`, [u.orgId, id, from, to])).rows;
+
+      const reasons = (await pool.query(
+        `SELECT er.asset_id, er.idle_reason, count(*)::int AS days
+         FROM survey_entry_rovers er
+         JOIN survey_entries se ON se.id = er.entry_id
+         WHERE se.org_id = $1 AND se.survey_project_id = $2
+           AND se.entry_date BETWEEN $3::date AND $4::date
+           AND er.status = 'IDLE'
+         GROUP BY er.asset_id, er.idle_reason`, [u.orgId, id, from, to])).rows;
+      const byAsset = new Map<string, Array<{ reason: string; label: string; days: number }>>();
+      for (const r of reasons) {
+        const key = String(r.asset_id);
+        if (!byAsset.has(key)) byAsset.set(key, []);
+        byAsset.get(key)!.push({
+          reason: String(r.idle_reason), label: reasonLabel(r.idle_reason), days: Number(r.days),
+        });
+      }
+
+      return {
+        data: {
+          from, to,
+          rovers: rows.map(r => {
+            const assigned = Number(r.utilized_days) + Number(r.idle_days);
+            return {
+              ...r,
+              area_ac: round2(Number(r.area_ac)),
+              assigned_days: assigned,
+              utilisation_pct: assigned > 0
+                ? round2((Number(r.utilized_days) / assigned) * 100) : null,
+              idle_reasons: (byAsset.get(String(r.asset_id)) ?? [])
+                .sort((a, b) => b.days - a.days),
+            };
+          }),
+        },
+      };
+    });
+
+  /**
+   * Where the work has stalled (§26 of the specification).
+   *
+   * Every reason a village is stuck is reported, not just the first: past its
+   * date *and* with idle rovers is a different conversation from merely late.
+   */
+  app.get('/api/v1/survey/projects/:id/bottlenecks',
+    { preHandler: guard('survey.read') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const { q } = page(req);
+      const programme = await projectOr404(pool, u.orgId, id);
+      const asOf = String(q.as_of ?? today());
+
+      const [pipeline, pos] = await Promise.all([
+        stagePipeline(pool, u.orgId), positions(pool, u.orgId, id, { asOf }),
+      ]);
+      const codes = pipeline.map(p => p.code);
+
+      // When each village last filed anything, and how long its current stage
+      // has been sitting.
+      const activity = (await pool.query(
+        `SELECT sv.id,
+                max(se.entry_date) AS last_entry_on,
+                (SELECT max(h.changed_at) FROM survey_stage_history h
+                  WHERE h.survey_village_id = sv.id) AS last_move_at,
+                (SELECT COALESCE(sum(CASE WHEN er.status='IDLE' THEN 1 ELSE 0 END),0)
+                   FROM survey_entry_rovers er
+                   JOIN survey_entries e2 ON e2.id = er.entry_id
+                  WHERE e2.survey_village_id = sv.id)::int AS idle_rover_days
+         FROM survey_villages sv
+         LEFT JOIN survey_entries se ON se.survey_village_id = sv.id
+         WHERE sv.org_id = $1 AND sv.survey_project_id = $2
+         GROUP BY sv.id`, [u.orgId, id])).rows;
+      const act = new Map(activity.map(a => [String(a.id), a]));
+
+      const asOfMs = Date.parse(`${asOf}T00:00:00Z`);
+      const found = findBottlenecks(pos.map(p => {
+        const a = act.get(p.villageId);
+        const lastMove = a?.last_move_at ? iso(a.last_move_at) : null;
+        return {
+          villageId: p.villageId,
+          village: String(p.row.village_name),
+          mandal: p.row.mandal_name ? String(p.row.mandal_name) : null,
+          status: villageStatus(p.stages ?? {}, codes, p.row.status_override),
+          currentStageCode: currentStage(p.stages ?? {}, pipeline)?.code ?? null,
+          daysInStage: lastMove
+            ? Math.round((asOfMs - Date.parse(`${lastMove}T00:00:00Z`)) / 86_400_000)
+            : null,
+          plannedStartOn: iso(p.row.planned_start_on),
+          expectedCompletionOn: iso(p.row.expected_completion_on),
+          lastEntryOn: a?.last_entry_on ? iso(a.last_entry_on) : null,
+          idleRoverDays: Number(a?.idle_rover_days ?? 0),
+        };
+      }), {
+        asOf,
+        stageSlaDays: Number(programme.stage_sla_days ?? 14),
+        silentDays: Number(q.silent_days) || 7,
+      });
+
+      return {
+        data: {
+          as_of: asOf,
+          stage_sla_days: Number(programme.stage_sla_days ?? 14),
+          bottlenecks: found,
+          // Counted by kind, so a dashboard can say what sort of trouble the
+          // programme is in rather than only how much.
+          by_kind: found.reduce<Record<string, number>>((acc, b) => {
+            for (const k of b.kinds) acc[k] = (acc[k] ?? 0) + 1;
+            return acc;
+          }, {}),
+        },
+      };
+    });
+
+  /**
+   * Where the work will land (§25 of the specification).
+   *
+   * Behind its own permission. The specification is explicit that a GT user
+   * does not see management forecasting, and a forecast that leaks to the
+   * crew being measured by it stops being a planning tool.
+   */
+  app.get('/api/v1/survey/projects/:id/forecast',
+    { preHandler: guard('survey.forecast') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const { q } = page(req);
+      const programme = await projectOr404(pool, u.orgId, id);
+      const asOf = String(q.as_of ?? today());
+
+      const [m, codes, pos] = await Promise.all([
+        measures(pool, u.orgId), stageCodes(pool, u.orgId),
+        positions(pool, u.orgId, id, { asOf }),
+      ]);
+      const whole = rollUp(pos, m.codes, codes, m.basis);
+
+      const window = (await pool.query(
+        `SELECT count(DISTINCT entry_date)::int AS active_days, min(entry_date) AS first_day
+         FROM survey_entries
+         WHERE org_id = $1 AND survey_project_id = $2 AND entry_date <= $3::date`,
+        [u.orgId, id, asOf])).rows[0];
+      const firstDay = iso(window.first_day) ?? asOf;
+      const calendarDays = Math.max(1, Math.round(
+        (Date.parse(`${asOf}T00:00:00Z`) - Date.parse(`${firstDay}T00:00:00Z`)) / 86_400_000) + 1);
+
+      const paceFigures = pace({
+        surveyedAc: whole.surveyedAc,
+        remainingAc: Math.max(0, whole.extentAc - whole.surveyedAc),
+        villagesCompleted: whole.completed,
+        activeDays: Number(window.active_days),
+        calendarDays,
+        asOf,
+      });
+
+      // The recent rates the specification asks for. A programme that has
+      // sped up or slowed down is invisible in a lifetime average.
+      const recent: Record<string, number | null> = {};
+      for (const days of [7, 14, 30]) {
+        const since = new Date(Date.parse(`${asOf}T00:00:00Z`) - days * 86_400_000)
+          .toISOString().slice(0, 10);
+        const row = (await pool.query(
+          `SELECT COALESCE(sum(ev.quantity), 0)::numeric AS total
+           FROM survey_entries e
+           JOIN survey_entry_values ev ON ev.entry_id = e.id
+           JOIN survey_measures mm ON mm.id = ev.measure_id AND mm.basis = 'EXTENT'
+           WHERE e.org_id = $1 AND e.survey_project_id = $2
+             AND e.entry_date > $3::date AND e.entry_date <= $4::date`,
+          [u.orgId, id, since, asOf])).rows[0];
+        recent[`last_${days}_days_ac_per_day`] = round2(Number(row.total) / days);
+      }
+
+      const projected = forecast({
+        targetDate: iso(programme.target_completion_on),
+        remainingAc: Math.max(0, whole.extentAc - whole.surveyedAc),
+        acresPerCalendarDay: paceFigures.acresPerCalendarDay,
+        asOf,
+      });
+
+      return {
+        data: {
+          as_of: asOf,
+          extent_ac: whole.extentAc,
+          surveyed_ac: whole.surveyedAc,
+          remaining_ac: round2(Math.max(0, whole.extentAc - whole.surveyedAc)),
+          // Village completion and area completion are different figures and
+          // the specification is explicit that they must not be conflated.
+          village_completion_pct: whole.villages > 0
+            ? round2((whole.completed / whole.villages) * 100) : null,
+          area_completion_pct: whole.overallPct,
+          pace: paceFigures,
+          recent_pace: recent,
+          forecast: projected,
+        },
+      };
     });
 
   /* ------------------------------------------------------------ report */

@@ -9,6 +9,7 @@ import {
   roverWindow, rankByWaste, type RoverWindow,
   DELAY_REASONS, delayReasonLabel, reasonNeedsRemarks, checkRoverDay, checkLowProgress,
   villageStatus, programmeVisible, SURVEY_PROJECT_STATUSES, SURVEY_PROJECT_STATUS_LABELS,
+  forecast, findBottlenecks, BOTTLENECK_KINDS, BOTTLENECK_LABELS, type BottleneckInput,
   type MeasureBasis, type VillageProgress,
 } from './survey.js';
 
@@ -1003,5 +1004,136 @@ describe('programme visibility', () => {
 
   it('labels every status the specification names', () => {
     for (const s of SURVEY_PROJECT_STATUSES) expect(SURVEY_PROJECT_STATUS_LABELS[s], s).toBeTruthy();
+  });
+});
+
+describe('forecast', () => {
+  const base = {
+    targetDate: '2026-09-30', remainingAc: 1000,
+    acresPerCalendarDay: 50, asOf: '2026-09-17',
+  };
+
+  it('keeps the promise and the arithmetic apart', () => {
+    // The specification is right that these are different kinds of claim, and
+    // presenting the forecast as a target is how a slipping programme keeps
+    // looking fine.
+    const f = forecast(base);
+    expect(f.targetDate).toBe('2026-09-30');
+    expect(f.forecastDate).toBe('2026-10-07');
+    expect(f.state).toBe('BEHIND');
+    expect(f.slipDays).toBe(7);
+  });
+
+  it('gives the required pace, which is the half worth arguing with', () => {
+    // "You are behind" invites argument; "you need 77 a day and you are doing
+    // 50" does not.
+    const f = forecast(base);
+    expect(f.currentPaceAcPerDay).toBe(50);
+    expect(f.requiredPaceAcPerDay).toBe(76.92);
+  });
+
+  it('reports being ahead as its own state, not as merely not-behind', () => {
+    const f = forecast({ ...base, acresPerCalendarDay: 200 });
+    expect(f.state).toBe('AHEAD');
+    expect(f.slipDays).toBeLessThan(0);
+  });
+
+  it('is on track when the two dates meet', () => {
+    // 1000 acres, 13 days to the target, so 77 a day lands exactly.
+    const f = forecast({ ...base, acresPerCalendarDay: 1000 / 13 });
+    expect(f.state).toBe('ON_TRACK');
+  });
+
+  it('forecasts nothing from a pace of nothing', () => {
+    // Dividing by a zero rate gives a date in the year 275760.
+    const f = forecast({ ...base, acresPerCalendarDay: 0 });
+    expect(f.forecastDate).toBeNull();
+    expect(f.state).toBe('NO_PACE');
+  });
+
+  it('says there is no target rather than inventing one', () => {
+    expect(forecast({ ...base, targetDate: null }).state).toBe('NO_TARGET');
+  });
+
+  it('asks for no pace once the work is done', () => {
+    const f = forecast({ ...base, remainingAc: 0 });
+    expect(f.forecastDate).toBe('2026-09-17');
+    expect(f.requiredPaceAcPerDay).toBeNull();
+  });
+
+  it('reports no required pace for a target already past', () => {
+    // No rate satisfies "finish yesterday", and a vast number is not read.
+    const f = forecast({ ...base, targetDate: '2026-09-01' });
+    expect(f.requiredPaceAcPerDay).toBeNull();
+    expect(f.state).toBe('BEHIND');
+  });
+});
+
+describe('findBottlenecks', () => {
+  const opts = { asOf: '2026-09-17', stageSlaDays: 14 };
+  const village = (over: Partial<BottleneckInput> = {}): BottleneckInput => ({
+    villageId: 'v', village: 'V', status: 'IN_PROGRESS',
+    currentStageCode: 'GROUND_TRUTHING', daysInStage: 3, ...over,
+  });
+
+  it('says nothing about a village that is fine', () => {
+    expect(findBottlenecks([village()], opts)).toEqual([]);
+  });
+
+  it('finds a village that should have started and has not', () => {
+    const [b] = findBottlenecks(
+      [village({ status: 'TO_DO', plannedStartOn: '2026-09-01', daysInStage: null })], opts);
+    expect(b.kinds).toContain('NOT_STARTED_BY_PLAN');
+    expect(b.severityDays).toBe(16);
+  });
+
+  it('finds a village sitting in one stage past the SLA', () => {
+    const [b] = findBottlenecks([village({ daysInStage: 20 })], opts);
+    expect(b.kinds).toContain('STAGE_OVERDUE');
+    expect(b.severityDays).toBe(6);
+  });
+
+  it('reports every reason a village is stuck, not just the first', () => {
+    // Past its date *and* with idle rovers is a different conversation from
+    // merely late.
+    const [b] = findBottlenecks([village({
+      daysInStage: 30, expectedCompletionOn: '2026-09-01', idleRoverDays: 4,
+    })], opts);
+    expect(b.kinds).toEqual(expect.arrayContaining([
+      'STAGE_OVERDUE', 'PAST_EXPECTED_COMPLETION', 'ROVERS_IDLE',
+    ]));
+  });
+
+  it('treats silence as a finding only for work under way', () => {
+    // A village nobody has started is not "silent", it is waiting.
+    const started = findBottlenecks([village({ lastEntryOn: '2026-09-01' })], opts);
+    expect(started[0].kinds).toContain('NO_PROGRESS_RECORDED');
+    const waiting = findBottlenecks(
+      [village({ status: 'TO_DO', lastEntryOn: '2026-09-01', daysInStage: null })], opts);
+    expect(waiting).toEqual([]);
+  });
+
+  it('does not call a finished village overdue', () => {
+    expect(findBottlenecks([village({
+      status: 'COMPLETED', daysInStage: 40, expectedCompletionOn: '2026-09-01',
+    })], opts)).toEqual([]);
+  });
+
+  it('flags a village in rework', () => {
+    expect(findBottlenecks([village({ status: 'REWORK' })], opts)[0].kinds)
+      .toContain('IN_REWORK');
+  });
+
+  it('puts the worst first, measured in days rather than a score', () => {
+    const found = findBottlenecks([
+      village({ villageId: 'a', daysInStage: 20 }),
+      village({ villageId: 'b', daysInStage: 60 }),
+      village({ villageId: 'c', daysInStage: 30 }),
+    ], opts);
+    expect(found.map(b => b.villageId)).toEqual(['b', 'c', 'a']);
+  });
+
+  it('labels every kind it can report', () => {
+    for (const k of BOTTLENECK_KINDS) expect(BOTTLENECK_LABELS[k], k).toBeTruthy();
   });
 });

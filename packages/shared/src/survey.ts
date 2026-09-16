@@ -1149,3 +1149,177 @@ export const SURVEY_PROJECT_STATUS_LABELS: Record<SurveyProjectStatus, string> =
 export function programmeVisible(status: string | null | undefined): boolean {
   return status !== 'DISABLED';
 }
+
+/* ---------------------------------------------------------- the forecast */
+
+export interface Forecast {
+  /** What somebody committed to, by hand. */
+  targetDate: string | null;
+  /** What the observed pace implies. Arithmetic, and nobody's promise. */
+  forecastDate: string | null;
+  currentPaceAcPerDay: number | null;
+  /** The pace needed to hit the target, if there is a target to hit. */
+  requiredPaceAcPerDay: number | null;
+  /** Days between the target and the forecast. Negative is early. */
+  slipDays: number | null;
+  state: 'ON_TRACK' | 'BEHIND' | 'AHEAD' | 'NO_TARGET' | 'NO_PACE';
+}
+
+/**
+ * Where the work will land, against where somebody said it would.
+ *
+ * The two are kept apart throughout and labelled differently, because the
+ * specification is right that they are different kinds of claim: one is a
+ * commitment and the other is arithmetic on the last few weeks. Presenting
+ * the forecast as a target is how a slipping programme keeps looking fine.
+ *
+ * The required pace is the more useful half. "You are behind" invites
+ * argument; "you need 105 acres a day and you are doing 82" does not.
+ */
+export function forecast(args: {
+  targetDate: string | null | undefined;
+  remainingAc: number;
+  acresPerCalendarDay: number | null;
+  asOf: string;
+}): Forecast {
+  const target = args.targetDate ?? null;
+  const pace = args.acresPerCalendarDay;
+  const asOfMs = Date.parse(`${args.asOf}T00:00:00Z`);
+
+  let forecastDate: string | null = null;
+  if (pace !== null && pace > 0 && args.remainingAc > 0) {
+    const days = Math.ceil(args.remainingAc / pace);
+    forecastDate = new Date(asOfMs + days * 86_400_000).toISOString().slice(0, 10);
+  } else if (args.remainingAc <= 0) {
+    forecastDate = args.asOf;
+  }
+
+  let requiredPace: number | null = null;
+  if (target && args.remainingAc > 0) {
+    const daysLeft = Math.round((Date.parse(`${target}T00:00:00Z`) - asOfMs) / 86_400_000);
+    // A target already past needs the work done today, which no pace
+    // satisfies. Reported as null rather than as a vast number nobody reads.
+    requiredPace = daysLeft > 0 ? round(args.remainingAc / daysLeft) : null;
+  }
+
+  let slipDays: number | null = null;
+  if (target && forecastDate) {
+    slipDays = Math.round(
+      (Date.parse(`${forecastDate}T00:00:00Z`) - Date.parse(`${target}T00:00:00Z`)) / 86_400_000);
+  }
+
+  let state: Forecast['state'] = 'NO_TARGET';
+  if (!target) state = pace === null ? 'NO_PACE' : 'NO_TARGET';
+  else if (forecastDate === null) state = 'NO_PACE';
+  else if (slipDays === null) state = 'NO_TARGET';
+  else if (slipDays > 0) state = 'BEHIND';
+  else if (slipDays < 0) state = 'AHEAD';
+  else state = 'ON_TRACK';
+
+  return {
+    targetDate: target,
+    forecastDate,
+    currentPaceAcPerDay: pace,
+    requiredPaceAcPerDay: requiredPace,
+    slipDays,
+    state,
+  };
+}
+
+/* -------------------------------------------------------- bottlenecks */
+
+export const BOTTLENECK_KINDS = [
+  'NOT_STARTED_BY_PLAN', 'STAGE_OVERDUE', 'PAST_EXPECTED_COMPLETION',
+  'ROVERS_IDLE', 'NO_PROGRESS_RECORDED', 'IN_REWORK',
+] as const;
+export type BottleneckKind = (typeof BOTTLENECK_KINDS)[number];
+
+export const BOTTLENECK_LABELS: Record<BottleneckKind, string> = {
+  NOT_STARTED_BY_PLAN: 'Not started by its planned date',
+  STAGE_OVERDUE: 'Sitting in one stage too long',
+  PAST_EXPECTED_COMPLETION: 'Past the date it was expected to finish',
+  ROVERS_IDLE: 'Rovers allocated and idle',
+  NO_PROGRESS_RECORDED: 'Nothing recorded for days',
+  IN_REWORK: 'Sent back for rework',
+};
+
+export interface BottleneckInput {
+  villageId: string;
+  village: string;
+  mandal?: string | null;
+  status: VillageStatus;
+  currentStageCode: string | null;
+  /** Days the village has sat in its current stage. */
+  daysInStage: number | null;
+  plannedStartOn?: string | null;
+  expectedCompletionOn?: string | null;
+  lastEntryOn?: string | null;
+  idleRoverDays?: number;
+}
+
+export interface Bottleneck extends BottleneckInput {
+  kinds: BottleneckKind[];
+  /** Worst first: how many days past whichever threshold it broke. */
+  severityDays: number;
+}
+
+/**
+ * Villages where the work has stalled, and why.
+ *
+ * One village can be stuck for several reasons at once and all of them are
+ * reported: a village past its date *and* with idle rovers is a different
+ * conversation from one that is merely late.
+ *
+ * Severity is measured in days past a threshold rather than as a score,
+ * because a score is arbitrary and a number of days is something somebody can
+ * check.
+ */
+export function findBottlenecks(
+  villages: BottleneckInput[],
+  opts: { asOf: string; stageSlaDays: number; silentDays?: number },
+): Bottleneck[] {
+  const asOf = Date.parse(`${opts.asOf}T00:00:00Z`);
+  const silentDays = opts.silentDays ?? 7;
+  const daysSince = (d: string | null | undefined): number | null =>
+    d ? Math.round((asOf - Date.parse(`${d}T00:00:00Z`)) / 86_400_000) : null;
+
+  const out: Bottleneck[] = [];
+  for (const v of villages) {
+    const kinds: BottleneckKind[] = [];
+    let severity = 0;
+
+    if (v.status === 'REWORK') kinds.push('IN_REWORK');
+
+    const lateStart = daysSince(v.plannedStartOn);
+    if (v.status === 'TO_DO' && lateStart !== null && lateStart > 0) {
+      kinds.push('NOT_STARTED_BY_PLAN');
+      severity = Math.max(severity, lateStart);
+    }
+
+    if (v.daysInStage !== null && v.daysInStage > opts.stageSlaDays && v.status !== 'COMPLETED') {
+      kinds.push('STAGE_OVERDUE');
+      severity = Math.max(severity, v.daysInStage - opts.stageSlaDays);
+    }
+
+    const overdue = daysSince(v.expectedCompletionOn);
+    if (v.status !== 'COMPLETED' && overdue !== null && overdue > 0) {
+      kinds.push('PAST_EXPECTED_COMPLETION');
+      severity = Math.max(severity, overdue);
+    }
+
+    // Silence is only a finding for work that is supposed to be under way.
+    const silent = daysSince(v.lastEntryOn);
+    if (v.status === 'IN_PROGRESS' && silent !== null && silent > silentDays) {
+      kinds.push('NO_PROGRESS_RECORDED');
+      severity = Math.max(severity, silent - silentDays);
+    }
+
+    if ((v.idleRoverDays ?? 0) > 0) {
+      kinds.push('ROVERS_IDLE');
+      severity = Math.max(severity, v.idleRoverDays ?? 0);
+    }
+
+    if (kinds.length) out.push({ ...v, kinds, severityDays: severity });
+  }
+  return out.sort((a, b) => b.severityDays - a.severityDays);
+}

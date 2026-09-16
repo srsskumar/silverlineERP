@@ -335,3 +335,123 @@ describe("who is on the programme", () => {
     expect(r.status).toBe(403);
   });
 });
+
+describe("productivity and forecasting", () => {
+  it("measures an employee from the daily returns, not from anything typed", async () => {
+    // An output figure somebody types is a figure somebody chose.
+    const entry = await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: villageA, entry_date: day(-4),
+      values: { GOVT_LAND_EXTENT_AC: 8 },
+      rovers: [
+        { asset_id: roverA, status: "UTILIZED", area_ac: 8, employee_id: w.directEmployee },
+        { asset_id: roverB, status: "IDLE", idle_reason: "ROVER",
+          employee_id: w.directEmployee },
+      ],
+    });
+    expect(entry.status, JSON.stringify(entry.body)).toBe(201);
+
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/employee-productivity`);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const row = r.data.employees.find((e: any) => e.employee_id === w.directEmployee);
+    expect(row.employee_name).toBeTruthy();
+    expect(Number(row.area_ac)).toBe(8);
+    expect(row.rover_days_used).toBe(1);
+    expect(row.rover_days_idle).toBe(1);
+    expect(row.rover_utilisation_pct).toBe(50);
+  });
+
+  it("averages an employee over days worked, not calendar days", async () => {
+    // The days they were not out are not theirs.
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/employee-productivity`);
+    const row = r.data.employees.find((e: any) => e.employee_id === w.directEmployee);
+    expect(row.avg_daily_ac).toBe(8);
+  });
+
+  it("groups a rover's idle days by the reason given", async () => {
+    // "Three idle days" is a number; "three idle days, all rover fault" is a
+    // maintenance job.
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/rover-productivity`);
+    expect(r.status).toBe(200);
+    const rover = r.data.rovers.find((x: any) => x.asset_id === roverB);
+    expect(rover.idle_days).toBeGreaterThan(0);
+    // Contains rather than first: two reasons with one day each have no
+    // meaningful order between them, and asserting one would be asserting
+    // the sort's tie-breaking rather than the grouping.
+    expect(rover.idle_reasons).toContainEqual(
+      expect.objectContaining({ reason: "ROVER", label: "Rover issue" }));
+  });
+
+  it("reports a rover's utilisation against the days it was assigned", async () => {
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/rover-productivity`);
+    const rover = r.data.rovers.find((x: any) => x.asset_id === roverA);
+    expect(rover.assigned_days).toBe(rover.utilized_days + rover.idle_days);
+    expect(rover.utilisation_pct).toBeGreaterThan(0);
+  });
+});
+
+describe("bottlenecks", () => {
+  it("finds a village sitting past its expected completion", async () => {
+    await patch({ ...w.admin, ...(await ver("survey_villages", villageA)) },
+      `/api/v1/survey/villages/${villageA}/plan`, { expected_completion_on: day(-5) });
+
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/bottlenecks`);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const stuck = r.data.bottlenecks.find((b: any) => b.villageId === villageA);
+    expect(stuck.kinds).toContain("PAST_EXPECTED_COMPLETION");
+  });
+
+  it("counts the kinds, so a dashboard can say what sort of trouble it is in", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/bottlenecks`);
+    expect(r.data.by_kind).toHaveProperty("PAST_EXPECTED_COMPLETION");
+  });
+
+  it("reports idle rovers as a bottleneck in their own right", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/bottlenecks`);
+    const stuck = r.data.bottlenecks.find((b: any) => b.villageId === villageA);
+    expect(stuck.kinds).toContain("ROVERS_IDLE");
+  });
+});
+
+describe("the forecast is management information", () => {
+  it("keeps the target and the projection apart", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/forecast`);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.forecast).toHaveProperty("targetDate");
+    expect(r.data.forecast).toHaveProperty("forecastDate");
+    expect(r.data.forecast).toHaveProperty("requiredPaceAcPerDay");
+  });
+
+  it("reports village completion and area completion separately", async () => {
+    // The specification is explicit that these are not interchangeable.
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/forecast`);
+    expect(r.data).toHaveProperty("village_completion_pct");
+    expect(r.data).toHaveProperty("area_completion_pct");
+  });
+
+  it("gives the recent rates, because a lifetime average hides a slowdown", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/forecast`);
+    for (const k of ["last_7_days_ac_per_day", "last_14_days_ac_per_day", "last_30_days_ac_per_day"]) {
+      expect(r.data.recent_pace, k).toHaveProperty(k);
+    }
+  });
+
+  it("is refused to a crew member", async () => {
+    // "Employees should not see management-only forecast information."
+    const r = await get(w.role.EMPLOYEE, `/api/v1/survey/projects/${programmeId}/forecast`);
+    expect(r.status).toBe(403);
+  });
+
+  it("is refused to a team lead", async () => {
+    const r = await get(w.role.TEAM_LEAD, `/api/v1/survey/projects/${programmeId}/forecast`);
+    expect(r.status).toBe(403);
+  });
+
+  it("is allowed to a project manager", async () => {
+    const r = await get(w.role.PROJECT_MANAGER, `/api/v1/survey/projects/${programmeId}/forecast`);
+    expect(r.status).toBe(200);
+  });
+});
