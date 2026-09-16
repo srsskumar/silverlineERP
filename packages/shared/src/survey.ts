@@ -103,14 +103,29 @@ export interface StageSeedOrdered extends StageSeed {
   requires?: string;
   /** Daily progress is recorded against this stage. */
   tracksDailyProgress?: boolean;
+  /**
+   * Not a step on the forward sequence.
+   *
+   * Rework is the case: it is entered from wherever the work failed rather
+   * than reached in order, and it is not something every village passes
+   * through. Counting it as a step would mean no village ever completed,
+   * because a village that never needed rework never completes it.
+   */
+  offSequence?: boolean;
 }
 
 export const STAGE_PIPELINE: StageSeedOrdered[] = [
   { code: 'GROUND_TRUTHING', label: 'Ground truthing', displayOrder: 10, tracksDailyProgress: true },
   { code: 'GT_QC', label: 'GT quality check', displayOrder: 20, requires: 'GROUND_TRUTHING' },
   { code: 'VECTORIZATION', label: 'Vectorization', displayOrder: 30, requires: 'GT_QC' },
-  { code: 'RECORDS_PREPARATION', label: 'Records preparation', displayOrder: 40, requires: 'VECTORIZATION' },
-  { code: 'LPM_GENERATION', label: 'LPM generation', displayOrder: 50, requires: 'RECORDS_PREPARATION' },
+  { code: 'VECTORIZATION_QC', label: 'Vectorization QC', displayOrder: 40, requires: 'VECTORIZATION' },
+  { code: 'RECORDS_PREPARATION', label: 'Records preparation', displayOrder: 50, requires: 'VECTORIZATION_QC' },
+  { code: 'LPM_GENERATION', label: 'LPM generation', displayOrder: 60, requires: 'RECORDS_PREPARATION' },
+  { code: 'SUBMISSION', label: 'Submission of deliverables', displayOrder: 70, requires: 'LPM_GENERATION' },
+  // Entered from wherever the work failed rather than reached in sequence, so
+  // it waits on nothing. A village that comes back has a start and an end
+  // like any other work, and the history has to show it happened.
+  { code: 'REWORK', label: 'Rework', displayOrder: 80, offSequence: true },
 ];
 
 /**
@@ -186,10 +201,18 @@ export interface VillageProgress {
  */
 export function villageState(v: VillageProgress, stageCodes: string[]): VillageState {
   const stages = v.stages ?? {};
-  const known = stageCodes.map(c => stages[c] ?? 'NOT_STARTED');
+  // Off-sequence stages are excluded from "every stage complete". Rework is
+  // the case: a village that never needed it would otherwise never complete,
+  // because it never completes a stage it never entered.
+  const offSequence = new Set(
+    STAGE_PIPELINE.filter(s => s.offSequence).map(s => s.code));
+  const counted = stageCodes.filter(c => !offSequence.has(c));
+  const known = counted.map(c => stages[c] ?? 'NOT_STARTED');
   if (known.length > 0 && known.every(s => s === 'COMPLETED')) return 'COMPLETED';
 
-  const anyStageStarted = known.some(s => s !== 'NOT_STARTED');
+  // A village in rework has started, whatever the forward stages say.
+  const anyStageStarted = known.some(s => s !== 'NOT_STARTED')
+    || stageCodes.some(c => offSequence.has(c) && (stages[c] ?? 'NOT_STARTED') !== 'NOT_STARTED');
   const anyQuantity = Object.values(v.done).some(q => q > 0);
   return anyStageStarted || anyQuantity ? 'IN_PROGRESS' : 'NOT_STARTED';
 }
@@ -352,6 +375,88 @@ export function financialYearRange(on: string): Period {
   };
 }
 
+/* ------------------------------------------------------ why a day went badly */
+
+/**
+ * The reasons a rover sat idle or a day produced little.
+ *
+ * One list for both, because in the field they are the same causes: the
+ * weather that stopped the rover is the weather that stopped the crew. Two
+ * lists would drift and make the two reports incomparable.
+ *
+ * `OTHER` is last and demands remarks. A free-text reason on every row would
+ * be unanalysable; a fixed list with no escape hatch gets the nearest wrong
+ * option picked, which is worse than the truth in a sentence.
+ */
+export const DELAY_REASONS = [
+  { code: 'WEATHER', label: 'Weather' },
+  { code: 'ACCESS', label: 'Local or access issue' },
+  { code: 'EQUIPMENT', label: 'Equipment problem' },
+  { code: 'ROVER', label: 'Rover issue' },
+  { code: 'DATA_TECHNICAL', label: 'Data or technical issue' },
+  { code: 'EMPLOYEE', label: 'Employee issue' },
+  { code: 'FIELD_CONDITIONS', label: 'Field conditions' },
+  { code: 'DEPENDENCY', label: 'Dependency on another team' },
+  { code: 'NO_DEPT_STAFF', label: 'No departmental staff' },
+  { code: 'OTHER', label: 'Other' },
+] as const;
+
+export const DELAY_REASON_CODES = DELAY_REASONS.map(r => r.code);
+export type DelayReason = (typeof DELAY_REASONS)[number]['code'];
+
+export function delayReasonLabel(code: string | null | undefined): string {
+  return DELAY_REASONS.find(r => r.code === code)?.label ?? String(code ?? '—');
+}
+
+/** Remarks are required when the reason is "other" — otherwise nothing is said. */
+export function reasonNeedsRemarks(code: string | null | undefined): boolean {
+  return code === 'OTHER';
+}
+
+/* --------------------------------------------------------- rover day status */
+
+export const ROVER_DAY_STATUSES = ['UTILIZED', 'IDLE'] as const;
+export type RoverDayStatus = (typeof ROVER_DAY_STATUSES)[number];
+
+export interface RoverDayEntry {
+  assetId: string;
+  status: RoverDayStatus;
+  idleReason?: string | null;
+  remarks?: string | null;
+  areaAc?: number | null;
+}
+
+/**
+ * What is wrong with a day's rover returns, in words.
+ *
+ * Returns an empty list when the day is properly accounted for. The rules are
+ * the specification's: an idle rover must say why, and "other" must say what.
+ */
+export function checkRoverDay(rows: RoverDayEntry[]): string[] {
+  const problems: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (seen.has(row.assetId)) {
+      problems.push('The same rover is reported twice on one day.');
+    }
+    seen.add(row.assetId);
+
+    if (row.status === 'IDLE') {
+      if (!row.idleReason) {
+        problems.push('An idle rover must say why it was idle.');
+      } else if (!DELAY_REASON_CODES.includes(row.idleReason as DelayReason)) {
+        problems.push(`"${row.idleReason}" is not a reason this system knows.`);
+      } else if (reasonNeedsRemarks(row.idleReason) && !row.remarks?.trim()) {
+        problems.push('An idle rover recorded as "other" must say what happened.');
+      }
+    }
+    if (row.status === 'UTILIZED' && row.idleReason) {
+      problems.push('A rover in use cannot also carry an idle reason.');
+    }
+  }
+  return problems;
+}
+
 /* --------------------------------------------------------------- schemas */
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
@@ -381,6 +486,16 @@ export const surveyVillageSchema = z.object({
  * Only today's figures. There is no cumulative field to fill in, because a
  * typed cumulative is the thing that goes wrong.
  */
+/** One rover's day: used or idle, and if idle, why. */
+export const roverDaySchema = z.object({
+  asset_id: z.string().uuid(),
+  status: z.enum(ROVER_DAY_STATUSES),
+  idle_reason: z.enum(DELAY_REASON_CODES as unknown as [string, ...string[]]).nullable().optional(),
+  remarks: z.string().max(1000).nullable().optional(),
+  area_ac: z.number().finite().min(0).nullable().optional(),
+  employee_id: z.string().uuid().nullable().optional(),
+});
+
 export const surveyEntrySchema = z.object({
   survey_village_id: z.string().uuid(),
   entry_date: isoDate,
@@ -389,6 +504,18 @@ export const surveyEntrySchema = z.object({
   dgps_rovers: z.number().int().min(0).optional(),
   notes: z.string().max(2000).nullable().optional(),
   values: z.record(z.string(), quantity).default({}),
+  // A row per rover. The count above is kept for returns filed before this
+  // existed, and is derived from these when they are given.
+  rovers: z.array(roverDaySchema).optional(),
+  low_progress_reason: z.enum(DELAY_REASON_CODES as unknown as [string, ...string[]])
+    .nullable().optional(),
+  low_progress_remarks: z.string().max(2000).nullable().optional(),
+  punch_in_at: z.string().nullable().optional(),
+  punch_out_at: z.string().nullable().optional(),
+  punch_in_lat: z.number().min(-90).max(90).nullable().optional(),
+  punch_in_lng: z.number().min(-180).max(180).nullable().optional(),
+  punch_out_lat: z.number().min(-90).max(90).nullable().optional(),
+  punch_out_lng: z.number().min(-180).max(180).nullable().optional(),
 });
 
 export const surveyEntryPatchSchema = surveyEntrySchema
@@ -430,18 +557,24 @@ export type ReportLevel = (typeof REPORT_LEVELS)[number];
 
 export const SURVEY_PERMISSIONS = [
   'survey.read', 'survey.enter', 'survey.manage', 'survey.target',
+  // A forecast is management information. The specification is explicit that
+  // a GT user does not see it, so it is its own permission.
+  'survey.forecast', 'survey.assign', 'survey.qc', 'survey.vectorize',
 ] as const;
 
 export const SURVEY_ROLE_GRANTS: Record<RoleCode, string[]> = {
   SUPER_ADMIN: [...SURVEY_PERMISSIONS],
   ADMIN: [...SURVEY_PERMISSIONS],
-  // Runs the programme: sets the work list and the targets.
-  PROJECT_MANAGER: ['survey.read', 'survey.enter', 'survey.manage', 'survey.target'],
-  // Records what the crew did. Deliberately cannot set the target its own
-  // completion is measured against.
-  TEAM_LEAD: ['survey.read', 'survey.enter'],
+  // Runs the programme: sets the work list, the targets and who is on it, and
+  // is the first role the specification lets see a forecast.
+  PROJECT_MANAGER: ['survey.read', 'survey.enter', 'survey.manage', 'survey.target',
+    'survey.forecast', 'survey.assign', 'survey.qc', 'survey.vectorize'],
+  // Records what the crew did and puts people on villages. Deliberately
+  // cannot set the target its own completion is measured against, and does
+  // not see the forecast.
+  TEAM_LEAD: ['survey.read', 'survey.enter', 'survey.assign'],
   EMPLOYEE: ['survey.read', 'survey.enter'],
-  AUDITOR: ['survey.read'],
+  AUDITOR: ['survey.read', 'survey.forecast'],
   HR_MANAGER: ['survey.read'],
   PAYROLL_OFFICER: [],
   INVENTORY_MANAGER: ['survey.read'],
@@ -615,12 +748,20 @@ export function currentStage(
   states: Record<string, StageState>,
   pipeline: StageSeedOrdered[] = STAGE_PIPELINE,
 ): { code: string; state: StageState } | null {
-  for (const stage of pipeline) {
+  // Rework, where it is under way, is where the village actually is —
+  // whatever the forward sequence says about it.
+  const rework = pipeline.find(s => s.offSequence);
+  if (rework) {
+    const state = states[rework.code] ?? 'NOT_STARTED';
+    if (state === 'IN_PROGRESS' || state === 'ON_HOLD') return { code: rework.code, state };
+  }
+  const sequence = pipeline.filter(s => !s.offSequence);
+  for (const stage of sequence) {
     const state = states[stage.code] ?? 'NOT_STARTED';
     if (state !== 'COMPLETED') return { code: stage.code, state };
   }
-  return pipeline.length
-    ? { code: pipeline[pipeline.length - 1].code, state: 'COMPLETED' }
+  return sequence.length
+    ? { code: sequence[sequence.length - 1].code, state: 'COMPLETED' }
     : null;
 }
 
@@ -636,6 +777,7 @@ export function outOfSequence(
   pipeline: StageSeedOrdered[] = STAGE_PIPELINE,
 ): string[] {
   return pipeline
+    .filter(s => !s.offSequence)
     .filter(s => {
       const state = states[s.code] ?? 'NOT_STARTED';
       if (state === 'NOT_STARTED') return false;
@@ -799,6 +941,27 @@ export const roverAllocationSchema = z.object({
 });
 
 /** A stage update now carries the remarks the workflow asks for. */
+export const projectEmployeeSchema = z.object({
+  employee_id: z.string().uuid(),
+  project_role: z.enum(['GT_USER','QC_USER','QGIS_USER','TEAM_LEAD','PROJECT_MANAGER'])
+    .default('GT_USER'),
+  assigned_on: isoDate.optional(),
+});
+
+export const villageStatusSchema = z.object({
+  status_override: z.enum(['ON_HOLD','REWORK']).nullable(),
+  status_remarks: z.string().max(2000).nullable().optional(),
+}).refine(v => v.status_override === null || (v.status_remarks ?? '').trim().length >= 3, {
+  message: 'A hold or a rework decision needs a reason recorded with it',
+  path: ['status_remarks'],
+});
+
+export const villagePlanSchema = z.object({
+  total_extent_ac: z.number().finite().positive().nullable().optional(),
+  expected_completion_on: isoDate.nullable().optional(),
+  planned_start_on: isoDate.nullable().optional(),
+});
+
 export const stageRemarkSchema = z.object({
   stage_code: z.string().min(1).max(64),
   state: z.enum(STAGE_STATES),
@@ -886,4 +1049,103 @@ export function rankByWaste<T extends RoverWindow>(rows: T[]): T[] {
     if (b.idleRoverDays !== a.idleRoverDays) return b.idleRoverDays - a.idleRoverDays;
     return b.unreportedRoverDays - a.unreportedRoverDays;
   });
+}
+
+/* ------------------------------------------------------------ low progress */
+
+export interface LowProgressCheck {
+  isLow: boolean;
+  /** The figure the day is measured against, where one is configured. */
+  threshold: number | null;
+  needsReason: boolean;
+}
+
+/**
+ * Whether a day counts as low progress.
+ *
+ * Measured against a threshold set on the programme. With no threshold there
+ * is nothing to be below, so no day is low and no reason is demanded — the
+ * alternative is nagging every crew for an explanation of a rule nobody set.
+ *
+ * A day with no rovers out is not low progress either. Nothing was expected
+ * of it.
+ */
+export function checkLowProgress(args: {
+  areaToday: number;
+  threshold: number | null | undefined;
+  roversOut: number;
+}): LowProgressCheck {
+  const threshold = args.threshold ?? null;
+  if (threshold === null || threshold <= 0 || args.roversOut === 0) {
+    return { isLow: false, threshold, needsReason: false };
+  }
+  const isLow = args.areaToday < threshold;
+  return { isLow, threshold, needsReason: isLow };
+}
+
+/* ------------------------------------------------------------ village status */
+
+/**
+ * The village statuses the specification names.
+ *
+ * `REWORK` and `ON_HOLD` are not points on the pipeline — a village in rework
+ * has been through it and come back — so they sit beside the derived progress
+ * rather than inside it, and are set deliberately rather than inferred.
+ */
+export const VILLAGE_STATUSES = [
+  'TO_DO', 'IN_PROGRESS', 'COMPLETED', 'ON_HOLD', 'REWORK',
+] as const;
+export type VillageStatus = (typeof VILLAGE_STATUSES)[number];
+
+export const VILLAGE_STATUS_LABELS: Record<VillageStatus, string> = {
+  TO_DO: 'To do',
+  IN_PROGRESS: 'In progress',
+  COMPLETED: 'Completed',
+  ON_HOLD: 'On hold',
+  REWORK: 'Rework',
+};
+
+/**
+ * A village's status, from its stages and whatever was set by hand.
+ *
+ * An explicit hold or rework wins over the derived answer, because both are
+ * statements somebody made about work the stages cannot see: a hold is a
+ * decision, and rework is a judgement that finished work was not good enough.
+ */
+export function villageStatus(
+  stages: Record<string, StageState>,
+  stageCodes: string[],
+  override?: VillageStatus | null,
+): VillageStatus {
+  if (override === 'ON_HOLD' || override === 'REWORK') return override;
+  const derived = villageState({ villageId: '', extentAc: null, done: {}, stages }, stageCodes);
+  if (derived === 'COMPLETED') return 'COMPLETED';
+  if (derived === 'IN_PROGRESS') return 'IN_PROGRESS';
+  return 'TO_DO';
+}
+
+/**
+ * The statuses a survey programme moves through.
+ *
+ * Named apart from S4's PROJECT_STATUSES, which describe an ERP project and
+ * are a different thing with a different vocabulary. `DISABLED` is the one
+ * the specification asks for by name: visibility is switched off without the
+ * data going anywhere.
+ */
+export const SURVEY_PROJECT_STATUSES = [
+  'DRAFT', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'DISABLED',
+] as const;
+export type SurveyProjectStatus = (typeof SURVEY_PROJECT_STATUSES)[number];
+
+export const SURVEY_PROJECT_STATUS_LABELS: Record<SurveyProjectStatus, string> = {
+  DRAFT: 'Draft',
+  ACTIVE: 'Active',
+  ON_HOLD: 'On hold',
+  COMPLETED: 'Completed',
+  DISABLED: 'Disabled',
+};
+
+/** A disabled programme is hidden, not deleted. Its data stays exactly where it is. */
+export function programmeVisible(status: string | null | undefined): boolean {
+  return status !== 'DISABLED';
 }

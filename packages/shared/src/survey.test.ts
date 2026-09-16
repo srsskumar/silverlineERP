@@ -7,6 +7,8 @@ import {
   STAGE_PIPELINE, stageBlockedBy, currentStage, outOfSequence, tallyByStage,
   roverUtilisation, pace, crewAssignmentSchema, roverAllocationSchema, stageRemarkSchema,
   roverWindow, rankByWaste, type RoverWindow,
+  DELAY_REASONS, delayReasonLabel, reasonNeedsRemarks, checkRoverDay, checkLowProgress,
+  villageStatus, programmeVisible, SURVEY_PROJECT_STATUSES, SURVEY_PROJECT_STATUS_LABELS,
   type MeasureBasis, type VillageProgress,
 } from './survey.js';
 
@@ -411,8 +413,21 @@ describe('role grants', () => {
     }
   });
 
-  it('gives an auditor reading and nothing else', () => {
-    expect(SURVEY_ROLE_GRANTS.AUDITOR).toEqual(['survey.read']);
+  it('gives an auditor reading and the forecast, and no way to change anything', () => {
+    // An auditor reads management information including the projection; what
+    // they must not have is any of the write permissions.
+    expect(SURVEY_ROLE_GRANTS.AUDITOR).toEqual(['survey.read', 'survey.forecast']);
+    for (const write of ['survey.enter', 'survey.manage', 'survey.target', 'survey.assign']) {
+      expect(SURVEY_ROLE_GRANTS.AUDITOR, write).not.toContain(write);
+    }
+  });
+
+  it('keeps the forecast from the roles the specification excludes', () => {
+    // "Employees should not see management-only forecast information."
+    for (const role of ['EMPLOYEE', 'TEAM_LEAD'] as const) {
+      expect(SURVEY_ROLE_GRANTS[role], role).not.toContain('survey.forecast');
+    }
+    expect(SURVEY_ROLE_GRANTS.PROJECT_MANAGER).toContain('survey.forecast');
   });
 });
 
@@ -523,11 +538,27 @@ describe('the stage pipeline', () => {
     expect(codes.indexOf('GT_QC')).toBeLessThan(codes.indexOf('VECTORIZATION'));
   });
 
-  it('chains every stage after the first to its predecessor', () => {
-    for (const [i, stage] of STAGE_PIPELINE.entries()) {
+  it('chains every stage on the forward sequence to the one before it', () => {
+    const sequence = STAGE_PIPELINE.filter(s => !s.offSequence);
+    for (const [i, stage] of sequence.entries()) {
       if (i === 0) expect(stage.requires).toBeUndefined();
-      else expect(stage.requires, stage.code).toBe(STAGE_PIPELINE[i - 1].code);
+      else expect(stage.requires, stage.code).toBe(sequence[i - 1].code);
     }
+  });
+
+  it('runs the stages the specification names, in order', () => {
+    expect(STAGE_PIPELINE.filter(s => !s.offSequence).map(s => s.code)).toEqual([
+      'GROUND_TRUTHING', 'GT_QC', 'VECTORIZATION', 'VECTORIZATION_QC',
+      'RECORDS_PREPARATION', 'LPM_GENERATION', 'SUBMISSION',
+    ]);
+  });
+
+  it('keeps rework off the forward sequence', () => {
+    // It is entered from wherever the work failed, not reached in order, and
+    // not something every village passes through.
+    const rework = STAGE_PIPELINE.find(s => s.code === 'REWORK')!;
+    expect(rework.offSequence).toBe(true);
+    expect(rework.requires).toBeUndefined();
   });
 
   it('records daily progress against ground truthing only', () => {
@@ -568,9 +599,31 @@ describe('currentStage', () => {
     expect(currentStage({})).toEqual({ code: 'GROUND_TRUTHING', state: 'NOT_STARTED' });
   });
 
-  it('reports the last stage once everything is complete', () => {
+  it('reports the last stage of the sequence once everything is complete', () => {
     const all = Object.fromEntries(STAGE_PIPELINE.map(s => [s.code, 'COMPLETED' as const]));
-    expect(currentStage(all)).toEqual({ code: 'LPM_GENERATION', state: 'COMPLETED' });
+    expect(currentStage(all)).toEqual({ code: 'SUBMISSION', state: 'COMPLETED' });
+  });
+
+  it('says a village in rework is in rework, whatever the sequence says', () => {
+    const all = Object.fromEntries(
+      STAGE_PIPELINE.filter(s => !s.offSequence).map(s => [s.code, 'COMPLETED' as const]));
+    expect(currentStage({ ...all, REWORK: 'IN_PROGRESS' }))
+      .toEqual({ code: 'REWORK', state: 'IN_PROGRESS' });
+  });
+
+  it('completes a village that never needed rework', () => {
+    // The trap: counting rework as a step means no village ever completes,
+    // because one that never needed it never completes it.
+    const codes = STAGE_PIPELINE.map(s => s.code);
+    const done = Object.fromEntries(
+      STAGE_PIPELINE.filter(s => !s.offSequence).map(s => [s.code, 'COMPLETED' as const]));
+    expect(villageState(village({ stages: done }), codes)).toBe('COMPLETED');
+  });
+
+  it('counts a village in rework as still in progress', () => {
+    const codes = STAGE_PIPELINE.map(s => s.code);
+    expect(villageState(village({ stages: { REWORK: 'IN_PROGRESS' } }), codes))
+      .toBe('IN_PROGRESS');
   });
 
   it('stops at a stage that is on hold rather than walking past it', () => {
@@ -815,5 +868,140 @@ describe('rankByWaste', () => {
     ]);
     expect(ranked[0].idleRoverDays).toBe(1);
     expect(ranked[1].allocatedRoverDays).toBe(0);
+  });
+});
+
+describe('delay reasons', () => {
+  it('covers every reason the specification lists', () => {
+    for (const label of ['Weather', 'Local or access issue', 'Equipment problem',
+      'Rover issue', 'Data or technical issue', 'Employee issue', 'Field conditions',
+      'Dependency on another team', 'No departmental staff', 'Other']) {
+      expect(DELAY_REASONS.map(r => r.label), label).toContain(label);
+    }
+  });
+
+  it('puts "other" last, where an escape hatch belongs', () => {
+    expect(DELAY_REASONS[DELAY_REASONS.length - 1].code).toBe('OTHER');
+  });
+
+  it('demands remarks only for "other"', () => {
+    // A free-text reason on every row is unanalysable; a fixed list with no
+    // escape hatch gets the nearest wrong option picked.
+    expect(reasonNeedsRemarks('OTHER')).toBe(true);
+    expect(reasonNeedsRemarks('WEATHER')).toBe(false);
+  });
+
+  it('labels an unknown code rather than showing nothing', () => {
+    expect(delayReasonLabel('MYSTERY')).toBe('MYSTERY');
+    expect(delayReasonLabel(null)).toBe('—');
+  });
+});
+
+describe('checkRoverDay', () => {
+  it('accepts a properly accounted day', () => {
+    expect(checkRoverDay([
+      { assetId: 'a', status: 'UTILIZED', areaAc: 4 },
+      { assetId: 'b', status: 'IDLE', idleReason: 'WEATHER' },
+    ])).toEqual([]);
+  });
+
+  it('refuses an idle rover with no reason', () => {
+    // The specification makes this mandatory, and it is the whole value of
+    // the idle count: nineteen idle rovers with no reasons is not a finding.
+    const problems = checkRoverDay([{ assetId: 'a', status: 'IDLE' }]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('must say why');
+  });
+
+  it('refuses "other" with nothing written', () => {
+    expect(checkRoverDay([
+      { assetId: 'a', status: 'IDLE', idleReason: 'OTHER' },
+    ])[0]).toContain('must say what happened');
+  });
+
+  it('accepts "other" once something is written', () => {
+    expect(checkRoverDay([
+      { assetId: 'a', status: 'IDLE', idleReason: 'OTHER', remarks: 'Landowner dispute' },
+    ])).toEqual([]);
+  });
+
+  it('refuses a reason it does not know', () => {
+    expect(checkRoverDay([
+      { assetId: 'a', status: 'IDLE', idleReason: 'BECAUSE' },
+    ])[0]).toContain('not a reason this system knows');
+  });
+
+  it('refuses a rover reported twice on one day', () => {
+    // It would be counted twice in the utilisation and the idle figures both.
+    expect(checkRoverDay([
+      { assetId: 'a', status: 'UTILIZED' },
+      { assetId: 'a', status: 'IDLE', idleReason: 'WEATHER' },
+    ])[0]).toContain('reported twice');
+  });
+
+  it('refuses a rover both in use and idle', () => {
+    expect(checkRoverDay([
+      { assetId: 'a', status: 'UTILIZED', idleReason: 'WEATHER' },
+    ])[0]).toContain('cannot also carry an idle reason');
+  });
+});
+
+describe('checkLowProgress', () => {
+  it('flags a day under the threshold and demands a reason', () => {
+    const c = checkLowProgress({ areaToday: 2, threshold: 5, roversOut: 3 });
+    expect(c).toMatchObject({ isLow: true, threshold: 5, needsReason: true });
+  });
+
+  it('is satisfied by a day that meets the threshold', () => {
+    expect(checkLowProgress({ areaToday: 5, threshold: 5, roversOut: 3 }).isLow).toBe(false);
+  });
+
+  it('demands nothing when no threshold is configured', () => {
+    // The alternative is nagging every crew to explain a rule nobody set.
+    expect(checkLowProgress({ areaToday: 0, threshold: null, roversOut: 3 }))
+      .toMatchObject({ isLow: false, needsReason: false });
+  });
+
+  it('does not call a day with no rovers out low progress', () => {
+    // Nothing was expected of it.
+    expect(checkLowProgress({ areaToday: 0, threshold: 5, roversOut: 0 }).isLow).toBe(false);
+  });
+});
+
+describe('villageStatus', () => {
+  const codes = STAGE_PIPELINE.map(s => s.code);
+  const allDone = Object.fromEntries(codes.map(c => [c, 'COMPLETED' as const]));
+
+  it('derives to-do, in progress and completed from the stages', () => {
+    expect(villageStatus({}, codes)).toBe('TO_DO');
+    expect(villageStatus({ GROUND_TRUTHING: 'IN_PROGRESS' }, codes)).toBe('IN_PROGRESS');
+    expect(villageStatus(allDone, codes)).toBe('COMPLETED');
+  });
+
+  it('lets a hold override the derived answer', () => {
+    // A hold is a decision somebody made, which the stages cannot see.
+    expect(villageStatus({ GROUND_TRUTHING: 'IN_PROGRESS' }, codes, 'ON_HOLD')).toBe('ON_HOLD');
+  });
+
+  it('lets rework override a completed village', () => {
+    // Rework is a judgement that finished work was not good enough, and the
+    // stages still say it is finished.
+    expect(villageStatus(allDone, codes, 'REWORK')).toBe('REWORK');
+  });
+
+  it('ignores an override that is not a hold or rework', () => {
+    expect(villageStatus(allDone, codes, 'TO_DO')).toBe('COMPLETED');
+  });
+});
+
+describe('programme visibility', () => {
+  it('hides a disabled programme without touching its data', () => {
+    expect(programmeVisible('DISABLED')).toBe(false);
+    expect(programmeVisible('ACTIVE')).toBe(true);
+    expect(programmeVisible(null)).toBe(true);
+  });
+
+  it('labels every status the specification names', () => {
+    for (const s of SURVEY_PROJECT_STATUSES) expect(SURVEY_PROJECT_STATUS_LABELS[s], s).toBeTruthy();
   });
 });

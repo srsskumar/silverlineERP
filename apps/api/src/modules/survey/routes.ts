@@ -8,6 +8,8 @@ import {
   tallyByStage, roverUtilisation, roverWindow, rankByWaste, pace, currentStage,
   outOfSequence, stageBlockedBy,
   crewAssignmentSchema, roverAllocationSchema, stageRemarkSchema, STAGE_PIPELINE,
+  checkRoverDay, checkLowProgress, villageStatus, projectEmployeeSchema,
+  villageStatusSchema, villagePlanSchema, delayReasonLabel, DELAY_REASONS,
   type MeasureBasis, type PeriodGrain, type ReportLevel, type StageState, type VillageProgress,
   businessDay,
 } from '@silverline/shared';
@@ -470,6 +472,14 @@ export async function registerSurveyRoutes(
         planned_start_date: iso(p.row.planned_start_date),
         planned_end_date: iso(p.row.planned_end_date),
         state: villageState(p, codes),
+        // The specification's five statuses: a hold or a rework decision
+        // overrides what the stages would say, because both are judgements
+        // the stages cannot see.
+        status: villageStatus(p.stages ?? {}, codes, p.row.status_override),
+        status_override: p.row.status_override ?? null,
+        status_remarks: p.row.status_remarks ?? null,
+        expected_completion_on: iso(p.row.expected_completion_on),
+        planned_start_on: iso(p.row.planned_start_on),
         stages: p.stages,
         stage_dates: p.row.stage_dates,
         done: p.done,
@@ -595,6 +605,21 @@ export async function registerSurveyRoutes(
             fail('STAGE_BLOCKED',
               `${stage.label} cannot start until ${label} is complete.`, 422);
           }
+        }
+
+        // What it was, before it becomes what it is. The specification asks
+        // where time is being spent; the current state has forgotten how long
+        // it sat in the last one.
+        const previous = (await db.query(
+          'SELECT state FROM survey_village_stages WHERE survey_village_id = $1 AND stage_id = $2',
+          [id, stage.id])).rows[0];
+        if (!previous || previous.state !== input.state) {
+          await db.query(
+            `INSERT INTO survey_stage_history(org_id, survey_village_id, stage_id,
+               from_state, to_state, remarks, changed_by)
+             VALUES($1,$2,$3,$4,$5,$6,$7)`,
+            [u.orgId, id, stage.id, previous?.state ?? null, input.state,
+              input.remarks ?? null, u.id]);
         }
 
         return (await db.query(
@@ -812,13 +837,71 @@ export async function registerSurveyRoutes(
           409);
       }
 
+      // A row per rover, with a reason for every idle one. Checked before
+      // anything is written so the refusal names every problem at once rather
+      // than one per attempt.
+      const roverRows = input.rovers ?? [];
+      if (roverRows.length) {
+        const problems = checkRoverDay(roverRows.map(r => ({
+          assetId: r.asset_id, status: r.status,
+          idleReason: r.idle_reason, remarks: r.remarks, areaAc: r.area_ac,
+        })));
+        if (problems.length) fail('ROVER_DAY_INVALID', problems.join(' '), 422);
+        for (const r of roverRows) await inOrg(db, 'assets', r.asset_id, u.orgId);
+      }
+
+      // Low progress wants a reason, and what counts as low is the
+      // programme's to say. With no threshold configured nothing is demanded.
+      const programme = await inOrg(db, 'survey_projects', village.survey_project_id, u.orgId);
+      const areaToday = Object.entries(input.values)
+        .filter(([code]) => m.byCode.get(code)?.basis === 'EXTENT')
+        .reduce((t, [, v]) => t + Number(v ?? 0), 0);
+      const roversOut = roverRows.length || Number(input.dgps_rovers ?? 0);
+      const low = checkLowProgress({
+        areaToday,
+        threshold: programme.low_progress_threshold_ac === null
+          ? null : Number(programme.low_progress_threshold_ac),
+        roversOut,
+      });
+      if (low.needsReason && !input.low_progress_reason) {
+        fail('LOW_PROGRESS_REASON_REQUIRED',
+          `${areaToday} acres is below the ${low.threshold} acre threshold for this programme. Say why.`,
+          422);
+      }
+      if (input.low_progress_reason === 'OTHER' && !input.low_progress_remarks?.trim()) {
+        fail('VALIDATION_ERROR', 'A low-progress reason of "other" must say what happened', 422);
+      }
+
+      // The count is derived from the rows when they are given, so the two can
+      // never disagree.
+      const roversUsed = roverRows.length
+        ? roverRows.filter(r => r.status === 'UTILIZED').length
+        : (input.dgps_rovers ?? 0);
+
       const entry = (await db.query(
         `INSERT INTO survey_entries(org_id, survey_project_id, survey_village_id, entry_date,
-           teams_deployed, dgps_base, dgps_rovers, notes, created_by, updated_by)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9) RETURNING *`,
+           teams_deployed, dgps_base, dgps_rovers, notes,
+           low_progress_reason, low_progress_remarks,
+           punch_in_at, punch_out_at, punch_in_lat, punch_in_lng,
+           punch_out_lat, punch_out_lng, created_by, updated_by)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17) RETURNING *`,
         [u.orgId, village.survey_project_id, input.survey_village_id, input.entry_date,
-          input.teams_deployed ?? 0, input.dgps_base ?? 0, input.dgps_rovers ?? 0,
-          input.notes ?? null, u.id])).rows[0];
+          input.teams_deployed ?? 0, input.dgps_base ?? 0, roversUsed,
+          input.notes ?? null,
+          input.low_progress_reason ?? null, input.low_progress_remarks ?? null,
+          input.punch_in_at ?? null, input.punch_out_at ?? null,
+          input.punch_in_lat ?? null, input.punch_in_lng ?? null,
+          input.punch_out_lat ?? null, input.punch_out_lng ?? null, u.id])).rows[0];
+
+      for (const r of roverRows) {
+        await db.query(
+          `INSERT INTO survey_entry_rovers(org_id, entry_id, asset_id, status,
+             idle_reason, remarks, area_ac, employee_id)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [u.orgId, entry.id, r.asset_id, r.status,
+            r.idle_reason ?? null, r.remarks ?? null, r.area_ac ?? null,
+            r.employee_id ?? null]);
+      }
 
       for (const [code, quantity] of Object.entries(input.values)) {
         if (!quantity) continue;
@@ -1035,6 +1118,166 @@ export async function registerSurveyRoutes(
             [...byVillage.values()].flatMap(v => v.days)),
         },
       };
+    });
+
+  /**
+   * A village's whole stage history (§59.5).
+   *
+   * The worked example in the specification is a village that took nine days
+   * in GT, two in QC and five in vectorization. None of that is answerable
+   * from the current state of a stage, which has forgotten everything before
+   * now.
+   */
+  app.get('/api/v1/survey/villages/:id/history', { preHandler: guard('survey.read') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      await inOrg(pool, 'survey_villages', id, u.orgId);
+      const rows = (await pool.query(
+        `SELECT h.*, s.code AS stage_code, s.label AS stage_label, s.display_order,
+                COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), us.username)
+                  AS changed_by_name
+         FROM survey_stage_history h
+         JOIN survey_stages s ON s.id = h.stage_id
+         LEFT JOIN users us ON us.id = h.changed_by
+         LEFT JOIN employees e ON e.id = us.employee_id
+         WHERE h.survey_village_id = $1 AND h.org_id = $2
+         ORDER BY h.changed_at`, [id, u.orgId])).rows;
+
+      // How long each stage has taken, which is the question behind the
+      // history rather than the list of movements itself.
+      const durations: Record<string, { startedOn: string | null; completedOn: string | null; days: number | null }> = {};
+      for (const r of rows) {
+        const code = String(r.stage_code);
+        if (!durations[code]) durations[code] = { startedOn: null, completedOn: null, days: null };
+        const at = iso(r.changed_at);
+        if (r.to_state === 'IN_PROGRESS' && !durations[code].startedOn) durations[code].startedOn = at;
+        if (r.to_state === 'COMPLETED') durations[code].completedOn = at;
+      }
+      for (const d of Object.values(durations)) {
+        if (d.startedOn && d.completedOn) {
+          d.days = Math.round(
+            (Date.parse(`${d.completedOn}T00:00:00Z`) - Date.parse(`${d.startedOn}T00:00:00Z`))
+            / 86_400_000);
+        }
+      }
+
+      return {
+        data: {
+          movements: rows.map(r => ({ ...r, changed_at: r.changed_at, on_date: iso(r.changed_at) })),
+          durations,
+        },
+      };
+    });
+
+  /**
+   * Put a village on hold, or send it back for rework.
+   *
+   * Neither is a point on the pipeline: a village in rework has been through
+   * it and come back. Both are decisions somebody made, so both demand a
+   * reason and both are recorded in the history.
+   */
+  app.post('/api/v1/survey/villages/:id/status', { preHandler: guard('survey.manage') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(villageStatusSchema, req.body);
+      return {
+        data: await mutate(pool, req, 'survey.village.status', 'survey_village', async db => {
+          const row = await inOrg(db, 'survey_villages', id, u.orgId, true);
+          version(req, row as { version: number });
+          await db.query(
+            `INSERT INTO survey_stage_history(org_id, survey_village_id, stage_id,
+               from_state, to_state, remarks, changed_by)
+             SELECT $1, $2, s.id, $3, $4, $5, $6 FROM survey_stages s
+             WHERE s.org_id = $1 AND s.code = 'REWORK' LIMIT 1`,
+            [u.orgId, id, row.status_override ?? 'DERIVED',
+              input.status_override ?? 'DERIVED', input.status_remarks ?? null, u.id]);
+          return (await db.query(
+            `UPDATE survey_villages SET status_override = $2, status_remarks = $3,
+               version = version + 1, updated_at = now(), updated_by = $4
+             WHERE id = $1 RETURNING *`,
+            [id, input.status_override, input.status_remarks ?? null, u.id])).rows[0];
+        }),
+      };
+    });
+
+  /**
+   * The extent and the date somebody expects (§59, §25 of the specification).
+   *
+   * Entered when ground truthing starts, because the import often arrives
+   * with the extent column empty, and editable afterwards. Kept apart from
+   * the projected date, which is arithmetic and belongs to nobody.
+   */
+  app.patch('/api/v1/survey/villages/:id/plan', { preHandler: guard('survey.manage') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(villagePlanSchema, req.body);
+      return {
+        data: await mutate(pool, req, 'survey.village.plan', 'survey_village', async db => {
+          const row = await inOrg(db, 'survey_villages', id, u.orgId, true);
+          version(req, row as { version: number });
+          const sets: string[] = [], values: unknown[] = [id];
+          for (const key of ['total_extent_ac', 'expected_completion_on', 'planned_start_on'] as const) {
+            if (input[key] !== undefined) { values.push(input[key]); sets.push(`${key} = $${values.length}`); }
+          }
+          if (!sets.length) return row;
+          values.push(u.id);
+          return (await db.query(
+            `UPDATE survey_villages SET ${sets.join(', ')}, version = version + 1,
+               updated_at = now(), updated_by = $${values.length}
+             WHERE id = $1 RETURNING *`, values)).rows[0];
+        }),
+      };
+    });
+
+  /* ------------------------------------------- who is on the programme */
+
+  app.get('/api/v1/survey/projects/:id/employees', { preHandler: guard('survey.read') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      await projectOr404(pool, u.orgId, id);
+      const rows = (await pool.query(
+        `SELECT pe.*, e.emp_no,
+                COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), e.emp_no)
+                  AS employee_name,
+                e.phone
+         FROM survey_project_employees pe
+         JOIN employees e ON e.id = pe.employee_id
+         WHERE pe.survey_project_id = $1 AND pe.org_id = $2
+         ORDER BY pe.project_role, employee_name`, [id, u.orgId])).rows;
+      return {
+        data: rows.map(r => ({
+          ...r, assigned_on: iso(r.assigned_on), released_on: iso(r.released_on),
+          active: !r.released_on,
+        })),
+      };
+    });
+
+  /**
+   * Put an employee on a programme (§33 of the specification).
+   *
+   * An employee belongs to several and sees only those. Without this there
+   * was nothing for project-scoped visibility to scope by.
+   */
+  app.post('/api/v1/survey/projects/:id/employees', { preHandler: guard('survey.assign') },
+    async (req, reply) => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(projectEmployeeSchema, req.body);
+      const row = await mutate(pool, req, 'survey.project.assign', 'survey_project_employee',
+        async db => {
+          await projectOr404(db, u.orgId, id);
+          await inOrg(db, 'employees', input.employee_id, u.orgId);
+          return (await db.query(
+            `INSERT INTO survey_project_employees(org_id, survey_project_id, employee_id,
+               project_role, assigned_on, created_by)
+             VALUES($1,$2,$3,$4,COALESCE($5::date, CURRENT_DATE),$6)
+             ON CONFLICT (survey_project_id, employee_id)
+             DO UPDATE SET project_role = EXCLUDED.project_role, released_on = NULL
+             RETURNING *`,
+            [u.orgId, id, input.employee_id, input.project_role,
+              input.assigned_on ?? null, u.id])).rows[0];
+        });
+      reply.code(201);
+      return { data: row };
     });
 
   /* ------------------------------------------------------------ report */

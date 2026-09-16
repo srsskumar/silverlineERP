@@ -340,8 +340,10 @@ describe("§59.5 stages and village state", () => {
 
   it("is complete only when every stage is complete", async () => {
     const sv = await listed("Finished village", 20);
-    // Every stage but the last, so the village is nearly-but-not-finished.
-    const stages = STAGE_PIPELINE.map(st => st.code);
+    // Every stage on the forward sequence but the last, so the village is
+    // nearly-but-not-finished. Rework is excluded: it is not a step every
+    // village passes through, and counting it would mean none ever completes.
+    const stages = STAGE_PIPELINE.filter(st => !st.offSequence).map(st => st.code);
     for (const code of stages.slice(0, -1)) {
       await post(w.admin, `/api/v1/survey/villages/${sv}/stage`,
         { stage_code: code, state: "COMPLETED", started_on: "2026-09-01", completed_on: "2026-09-10" });
