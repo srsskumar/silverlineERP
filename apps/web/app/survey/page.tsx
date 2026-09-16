@@ -430,6 +430,7 @@ function Summary({ projectId }: { projectId: string }) {
             <TH className="text-right">LPMs</TH>
             <TH className="text-right">Actual extent</TH>
             <TH>GT dates</TH>
+            <TH>Assigned to</TH>
           </TR>
         </THead>
         <TBody>
@@ -466,6 +467,9 @@ function Summary({ projectId }: { projectId: string }) {
                 {r.gt_started_on ? day(r.gt_started_on) : '—'}
                 {r.gt_completed_on ? ` → ${day(r.gt_completed_on)}` : ''}
               </TD>
+              {/* Who is on it, by employee name. The daily entry records a
+                  team count; the task records the person. */}
+              <TD className="text-xs text-text-muted">{r.assignee_name ?? '—'}</TD>
             </TR>
           ))}
         </TBody>

@@ -102,6 +102,11 @@ export default function SurveySetupPage() {
               </Toolbar>
 
               {projectId ? <VillageImport projectId={projectId} /> : null}
+              {projectId ? (
+                <BoardLink
+                  programme={projects.data.find((p) => String(p.id) === projectId)!}
+                />
+              ) : null}
             </>
           ) : (
             <EmptyState
@@ -332,6 +337,129 @@ function ImportResult({ result }: { result: Row }) {
         </p>
       ) : null}
     </div>
+  );
+}
+
+/* ----------------------------------------------------------- task board */
+
+/**
+ * Putting the village work on the task board (§59 with §S4).
+ *
+ * Once generated, the task's status is what a village's state means. That is
+ * a one-way door worth stating plainly on the screen: the stage columns stop
+ * being written, and moving a card is how a village progresses from then on.
+ */
+function BoardLink({ programme }: { programme: Row }) {
+  const qc = useQueryClient();
+  const [preview, setPreview] = React.useState<Row | null>(null);
+
+  const projects = useQuery({
+    queryKey: ['projects', 'for-survey'],
+    queryFn: async () =>
+      ((await apiRequestRaw('/api/v1/projects?limit=100')).body as { data: Row[] }).data,
+    staleTime: 300_000,
+  });
+
+  const link = useMutation({
+    mutationFn: async (projectId: string) =>
+      apiRequest(`/api/v1/survey/projects/${programme.id}`, {
+        method: 'PATCH',
+        headers: { 'If-Match': String(programme.version) },
+        body: { project_id: projectId },
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['survey-projects'] }),
+  });
+
+  const generate = useMutation({
+    mutationFn: async (dryRun: boolean) =>
+      apiRequest(`/api/v1/survey/projects/${programme.id}/generate-tasks`, {
+        method: 'POST',
+        body: { dry_run: dryRun, include_stages: true },
+      }),
+    onSuccess: (res: any) => {
+      setPreview(res?.data ?? null);
+      if (!res?.data?.dry_run) {
+        qc.invalidateQueries({ queryKey: ['survey-villages'] });
+        qc.invalidateQueries({ queryKey: ['survey-progress'] });
+      }
+    },
+  });
+
+  const field = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
+
+  return (
+    <Section title="Put the work on the task board">
+      <Card className="space-y-3 p-4">
+        <p className="text-xs text-text-muted">
+          Each village becomes a task and each of its stages a subtask, so survey work appears on
+          the board and in the task list like any other work — with an assignee and planned dates,
+          which a survey row has nowhere else to keep.
+        </p>
+
+        <label className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
+          Project the tasks belong to
+          <select
+            className={field}
+            value={programme.project_id ?? ''}
+            onChange={(e) => e.target.value && link.mutate(e.target.value)}
+          >
+            <option value="">Not linked yet</option>
+            {(projects.data ?? []).map((p) => (
+              <option key={p.id} value={p.id}>{p.code} — {p.name}</option>
+            ))}
+          </select>
+          {link.isPending ? <span>linking…</span> : null}
+        </label>
+
+        {link.isError ? <ErrorCard error={link.error} /> : null}
+
+        {programme.project_id ? (
+          <>
+            <Notice tone="warning" title="This changes where a village's state lives">
+              {/* Worth saying before, not after. */}
+              Once a village is on the board, its task's status <em>is</em> its survey state — the
+              stage fields stop being used for it. Moving a card is how the village progresses from
+              then on, and a completion date is stamped when the card moves rather than typed.
+            </Notice>
+
+            {generate.isError ? <ErrorCard error={generate.error} /> : null}
+
+            <div className="flex gap-2">
+              <Button type="button" variant="secondary" loading={generate.isPending}
+                onClick={() => generate.mutate(true)}>
+                Count what would be created
+              </Button>
+              <Button type="button" variant="primary"
+                disabled={!preview?.dry_run || generate.isPending}
+                onClick={() => generate.mutate(false)}>
+                {preview?.dry_run
+                  ? `Create ${preview.village_tasks + preview.stage_tasks} tasks`
+                  : 'Create the tasks'}
+              </Button>
+            </div>
+
+            {preview ? (
+              <div className="grid gap-2 sm:grid-cols-4">
+                <Stat label="Villages" value={preview.villages_considered} />
+                <Stat label="Village tasks" value={preview.village_tasks} />
+                <Stat label="Stage subtasks" value={preview.stage_tasks} />
+                <Stat label="Already on the board" value={preview.already_linked}
+                  hint="Left alone, not duplicated" />
+              </div>
+            ) : null}
+            {preview && !preview.dry_run ? (
+              <Notice tone="info" title="On the board">
+                Open the project's board to assign them and set dates.
+              </Notice>
+            ) : null}
+          </>
+        ) : (
+          <p className="text-2xs text-text-subtle">
+            A task belongs to a project, so pick one above before generating.
+          </p>
+        )}
+      </Card>
+    </Section>
   );
 }
 

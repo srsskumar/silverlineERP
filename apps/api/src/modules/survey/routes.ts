@@ -4,10 +4,11 @@ import {
   surveyProjectSchema, surveyVillageSchema, surveyEntrySchema, surveyEntryPatchSchema,
   measureSchema, targetSchema, stageUpdateSchema,
   rollUp, villageState, completion, acresToSqKm, periodBuckets, financialYearRange,
-  STAGE_CODES, REPORT_LEVELS,
+  STAGE_CODES, REPORT_LEVELS, resolveStage, isOutOfScope, plannedTasksFor,
   type MeasureBasis, type PeriodGrain, type ReportLevel, type StageState, type VillageProgress,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
+import { z } from 'zod';
 import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
 
 /**
@@ -73,11 +74,18 @@ export async function registerSurveyRoutes(
 
     const rows = (await db.query(
       `SELECT sv.*,
+              vt.status AS task_status, vt.assignee_id,
+              COALESCE(NULLIF(trim(concat_ws(' ', emp.first_name, emp.last_name)), ''), au.username)
+                AS assignee_name,
+              vt.planned_start_date, vt.planned_end_date,
               v.name AS village_name, v.code AS village_code, v.source_code AS village_source_code,
               m.id AS mandal_id, m.name AS mandal_name, m.code AS mandal_code,
               p.id AS parent_id, p.type AS parent_type, p.name AS parent_name,
               gp.id AS grandparent_id, gp.type AS grandparent_type, gp.name AS grandparent_name
        FROM survey_villages sv
+       LEFT JOIN tasks vt ON vt.id = sv.task_id
+       LEFT JOIN users au ON au.id = vt.assignee_id
+       LEFT JOIN employees emp ON emp.id = au.employee_id
        JOIN org_units v ON v.id = sv.village_id
        LEFT JOIN org_units m ON m.id = v.parent_id
        LEFT JOIN org_units p ON p.id = m.parent_id
@@ -99,10 +107,18 @@ export async function registerSurveyRoutes(
        JOIN survey_measures mm ON mm.id = t.measure_id
        WHERE t.org_id = $1`, [orgId])).rows;
 
+    // Stage state comes from the linked task where there is one, and from the
+    // stage row's own columns where there is not. `task_id` says which, so the
+    // two can never both be in play for the same stage.
     const stages = (await db.query(
-      `SELECT vs.survey_village_id, s.code AS stage_code, vs.state, vs.started_on, vs.completed_on
+      `SELECT vs.survey_village_id, s.code AS stage_code,
+              vs.state AS own_state, vs.started_on AS own_started_on,
+              vs.completed_on AS own_completed_on,
+              vs.task_id,
+              t.status AS task_status, t.actual_start_at, t.actual_end_at
        FROM survey_village_stages vs
        JOIN survey_stages s ON s.id = vs.stage_id
+       LEFT JOIN tasks t ON t.id = vs.task_id
        WHERE vs.org_id = $1`, [orgId])).rows;
 
     const done = new Map<string, Record<string, number>>();
@@ -122,9 +138,19 @@ export async function registerSurveyRoutes(
     for (const s of stages) {
       const key = String(s.survey_village_id);
       if (!stage.has(key)) { stage.set(key, {}); stageDates.set(key, {}); }
-      stage.get(key)![String(s.stage_code)] = String(s.state) as StageState;
+      const resolved = resolveStage({
+        stageCode: String(s.stage_code),
+        linked: Boolean(s.task_id),
+        taskStatus: s.task_status,
+        taskStartedAt: iso(s.actual_start_at),
+        taskCompletedAt: iso(s.actual_end_at),
+        ownState: s.own_state as StageState,
+        ownStartedOn: iso(s.own_started_on),
+        ownCompletedOn: iso(s.own_completed_on),
+      });
+      stage.get(key)![String(s.stage_code)] = resolved.state;
       stageDates.get(key)![String(s.stage_code)] = {
-        started: iso(s.started_on), completed: iso(s.completed_on),
+        started: resolved.startedOn, completed: resolved.completedOn,
       };
     }
 
@@ -200,6 +226,141 @@ export async function registerSurveyRoutes(
     return { data: row };
   });
 
+  /**
+   * Link the programme to an ordinary project (§59.8).
+   *
+   * Tasks belong to a project, so the link has to exist before any survey work
+   * can appear on a board. Kept as a patch rather than forced at creation:
+   * a programme is often set up before anybody decides which project carries
+   * its cost.
+   */
+  app.patch('/api/v1/survey/projects/:id', { preHandler: guard('survey.manage') }, async req => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const input = parse(surveyProjectSchema.partial(), req.body);
+    return {
+      data: await mutate(pool, req, 'survey.project.update', 'survey_project', async db => {
+        const row = await inOrg(db, 'survey_projects', id, u.orgId, true);
+        version(req, row as { version: number });
+        if (input.project_id) await inOrg(db, 'projects', input.project_id, u.orgId);
+
+        const sets: string[] = [], values: unknown[] = [id];
+        for (const key of ['code', 'name', 'project_id', 'started_on',
+          'target_completion_on', 'notes'] as const) {
+          if (input[key] !== undefined) {
+            values.push(input[key]);
+            sets.push(`${key} = $${values.length}`);
+          }
+        }
+        if (!sets.length) return row;
+        values.push(u.id);
+        return (await db.query(
+          `UPDATE survey_projects SET ${sets.join(', ')}, version = version + 1,
+             updated_at = now(), updated_by = $${values.length}
+           WHERE id = $1 RETURNING *`, values)).rows[0];
+      }),
+    };
+  });
+
+  /**
+   * Put the village work on the task board (§59, extending §S4).
+   *
+   * One task per village and one subtask per stage. From then on the task's
+   * status is what the village's state means, which is why this is the only
+   * place the two are wired together — a stage row and a task each holding a
+   * status is the spreadsheet's `Today` and `Cumulative` problem one level up.
+   *
+   * Idempotent, and previewed by default. A full district is thousands of
+   * villages and five times as many rows once the stages are counted, so the
+   * count is reported before anything is written.
+   */
+  app.post('/api/v1/survey/projects/:id/generate-tasks',
+    { preHandler: guard('survey.manage') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(z.object({
+        dry_run: z.boolean().default(true),
+        // Limit to one mandal at a time, because generating for a whole
+        // district in one go is rarely what somebody means the first time.
+        mandal_id: z.string().uuid().optional(),
+        include_stages: z.boolean().default(true),
+      }), req.body ?? {});
+
+      return mutate(pool, req, 'survey.tasks.generate', 'survey_project', async db => {
+        const programme = await inOrg(db, 'survey_projects', id, u.orgId, true);
+        if (!programme.project_id) {
+          fail('PROJECT_NOT_LINKED',
+            'Link this programme to a project first — a task has to belong to one.', 422);
+        }
+        await db.query('SAVEPOINT preview');
+
+        const stages = (await db.query(
+          `SELECT id, code, label FROM survey_stages
+           WHERE org_id = $1 AND active ORDER BY display_order`, [u.orgId])).rows;
+
+        const values: unknown[] = [u.orgId, id];
+        let where = 'sv.org_id = $1 AND sv.survey_project_id = $2';
+        if (input.mandal_id) { values.push(input.mandal_id); where += ` AND v.parent_id = $${values.length}`; }
+
+        const villages = (await db.query(
+          `SELECT sv.id, sv.task_id, v.id AS village_id, v.name AS village_name,
+                  m.name AS mandal_name
+           FROM survey_villages sv
+           JOIN org_units v ON v.id = sv.village_id
+           LEFT JOIN org_units m ON m.id = v.parent_id
+           WHERE ${where} ORDER BY m.name, v.name`, values)).rows;
+
+        let villageTasks = 0, stageTasks = 0, skipped = 0;
+
+        for (const village of villages) {
+          if (village.task_id) { skipped += 1; continue; }
+          const plan = plannedTasksFor(
+            { name: String(village.village_name), mandalName: village.mandal_name },
+            stages.map(st => ({ code: String(st.code), label: String(st.label) })));
+
+          const parent = (await db.query(
+            `INSERT INTO tasks(org_id, project_id, title, status, village_id,
+               created_by, updated_by)
+             VALUES($1,$2,$3,'TO_DO',$4,$5,$5) RETURNING id`,
+            [u.orgId, programme.project_id, plan.parent, village.village_id, u.id])).rows[0];
+          villageTasks += 1;
+          await db.query('UPDATE survey_villages SET task_id = $2 WHERE id = $1',
+            [village.id, parent.id]);
+
+          if (!input.include_stages) continue;
+          for (const child of plan.children) {
+            const stage = stages.find(st => String(st.code) === child.stageCode)!;
+            const sub = (await db.query(
+              `INSERT INTO tasks(org_id, project_id, title, status, parent_task_id,
+                 village_id, created_by, updated_by)
+               VALUES($1,$2,$3,'TO_DO',$4,$5,$6,$6) RETURNING id`,
+              [u.orgId, programme.project_id, child.title, parent.id,
+                village.village_id, u.id])).rows[0];
+            stageTasks += 1;
+            // The stage row now exists only to carry the link; its state is
+            // the task's from here on.
+            await db.query(
+              `INSERT INTO survey_village_stages(org_id, survey_village_id, stage_id, task_id, updated_by)
+               VALUES($1,$2,$3,$4,$5)
+               ON CONFLICT (survey_village_id, stage_id)
+               DO UPDATE SET task_id = EXCLUDED.task_id, updated_at = now()`,
+              [u.orgId, village.id, stage.id, sub.id, u.id]);
+          }
+        }
+
+        if (input.dry_run) await db.query('ROLLBACK TO SAVEPOINT preview');
+
+        return {
+          dry_run: input.dry_run,
+          villages_considered: villages.length,
+          village_tasks: villageTasks,
+          stage_tasks: stageTasks,
+          // Already on the board; generating again leaves them alone rather
+          // than making a second card for the same village.
+          already_linked: skipped,
+          project_id: programme.project_id,
+        };
+      });
+    });
+
   /* ---------------------------------------------------------- measures */
 
   app.get('/api/v1/survey/measures', { preHandler: guard('survey.read') }, async req => {
@@ -264,6 +425,14 @@ export async function registerSurveyRoutes(
         total_extent_sq_km: p.extentAc === null ? null : acresToSqKm(p.extentAc),
         dgps_base: p.row.dgps_base, dgps_rovers: p.row.dgps_rovers, teams: p.row.teams,
         vill_code_old: p.row.vill_code_old,
+        // The task this village stands on the board as, and what it carries
+        // that a survey row has nowhere else: who is doing it and when.
+        task_id: p.row.task_id ?? null,
+        task_status: p.row.task_status ?? null,
+        assignee_id: p.row.assignee_id ?? null,
+        assignee_name: p.row.assignee_name ?? null,
+        planned_start_date: iso(p.row.planned_start_date),
+        planned_end_date: iso(p.row.planned_end_date),
         state: villageState(p, codes),
         stages: p.stages,
         stage_dates: p.row.stage_dates,
@@ -670,6 +839,11 @@ export async function registerSurveyRoutes(
             // between the two is the point of the column.
             actual_extent_ac: Math.round(surveyed * 10000) / 10000,
             state: villageState(p, codes),
+            // From the linked task, where there is one. The daily entry
+            // records a team count; the task records the person.
+            assignee_name: p.row.assignee_name ?? null,
+            planned_start_date: iso(p.row.planned_start_date),
+            planned_end_date: iso(p.row.planned_end_date),
           };
         }),
       };

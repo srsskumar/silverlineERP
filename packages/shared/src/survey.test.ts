@@ -3,6 +3,7 @@ import {
   MEASURE_CODES, MEASURE_SEEDS, STAGE_CODES, STAGE_SEEDS, SQ_KM_PER_ACRE,
   SURVEY_ROLE_GRANTS, acresToSqKm, completion, financialYearRange, measureSchema,
   periodBuckets, rollUp, stageUpdateSchema, surveyEntrySchema, villageState,
+  stageStateFromTask, isOutOfScope, resolveStage, resolveStages, plannedTasksFor,
   type MeasureBasis, type VillageProgress,
 } from './survey.js';
 
@@ -409,5 +410,103 @@ describe('role grants', () => {
 
   it('gives an auditor reading and nothing else', () => {
     expect(SURVEY_ROLE_GRANTS.AUDITOR).toEqual(['survey.read']);
+  });
+});
+
+describe('tasks driving survey state', () => {
+  it('maps every task status onto a stage state', () => {
+    // A status the mapping does not know would silently read as not started,
+    // which is the most flattering possible answer and therefore the worst.
+    expect(stageStateFromTask('TO_DO')).toBe('NOT_STARTED');
+    expect(stageStateFromTask('IN_PROGRESS')).toBe('IN_PROGRESS');
+    expect(stageStateFromTask('DONE')).toBe('COMPLETED');
+    expect(stageStateFromTask('BLOCKED')).toBe('ON_HOLD');
+  });
+
+  it('treats a stage under review as still in progress', () => {
+    // A village whose ground truthing is being checked is not finished, and
+    // the survey report has no third thing to say about it.
+    expect(stageStateFromTask('IN_REVIEW')).toBe('IN_PROGRESS');
+  });
+
+  it('takes a cancelled village out of the denominator rather than scoring it zero', () => {
+    // Left in, it would hold the percentage down for ever and the programme
+    // would never reach a hundred.
+    expect(isOutOfScope('CANCELLED')).toBe(true);
+    expect(isOutOfScope('DONE')).toBe(false);
+    expect(isOutOfScope(null)).toBe(false);
+  });
+
+  it('reads an unlinked stage from its own columns', () => {
+    const r = resolveStage({
+      stageCode: 'GROUND_TRUTHING', linked: false,
+      ownState: 'COMPLETED', ownStartedOn: '2026-09-01', ownCompletedOn: '2026-09-10',
+    });
+    expect(r).toMatchObject({
+      state: 'COMPLETED', startedOn: '2026-09-01', completedOn: '2026-09-10', source: 'STAGE',
+    });
+  });
+
+  it('reads a linked stage from the task and ignores its own columns', () => {
+    // The whole point of the choice: one fact, one home. The stale columns
+    // below must not win, or the two disagree within a week.
+    const r = resolveStage({
+      stageCode: 'GROUND_TRUTHING', linked: true,
+      taskStatus: 'DONE',
+      taskStartedAt: '2026-09-02T06:00:00Z', taskCompletedAt: '2026-09-11T14:00:00Z',
+      ownState: 'NOT_STARTED', ownStartedOn: null, ownCompletedOn: null,
+    });
+    expect(r).toMatchObject({
+      state: 'COMPLETED', startedOn: '2026-09-02', completedOn: '2026-09-11', source: 'TASK',
+    });
+  });
+
+  it('uses when the work happened, not when it was planned', () => {
+    // The summary sheet reports the actual GT start and completion dates.
+    const r = resolveStage({
+      stageCode: 'GROUND_TRUTHING', linked: true, taskStatus: 'IN_PROGRESS',
+      taskStartedAt: '2026-09-05T09:30:00Z', taskCompletedAt: null,
+    });
+    expect(r.startedOn).toBe('2026-09-05');
+    expect(r.completedOn).toBeNull();
+  });
+
+  it('reports a linked stage with no task status as not started', () => {
+    expect(resolveStage({ stageCode: 'X', linked: true, taskStatus: null }).state)
+      .toBe('NOT_STARTED');
+  });
+
+  it('feeds the village state, so a linked village completes when its tasks do', () => {
+    const stages = resolveStages(STAGE_CODES.map(code => ({
+      stageCode: code, linked: true, taskStatus: 'DONE',
+    })));
+    expect(villageState(village({ stages }), STAGE_CODES)).toBe('COMPLETED');
+  });
+
+  it('keeps a village open while one linked stage is still blocked', () => {
+    const stages = resolveStages(STAGE_CODES.map((code, i) => ({
+      stageCode: code, linked: true, taskStatus: i === 0 ? 'BLOCKED' : 'DONE',
+    })));
+    expect(villageState(village({ stages }), STAGE_CODES)).toBe('IN_PROGRESS');
+  });
+});
+
+describe('plannedTasksFor', () => {
+  it('names the village task by where the work is', () => {
+    const plan = plannedTasksFor({ name: 'ADAKULA', mandalName: 'KOYYURU' },
+      STAGE_SEEDS.map(s => ({ code: s.code, label: s.label })));
+    expect(plan.parent).toBe('Survey ADAKULA, KOYYURU');
+  });
+
+  it('makes one subtask per stage, in the order the work runs', () => {
+    const plan = plannedTasksFor({ name: 'ADAKULA' },
+      STAGE_SEEDS.map(s => ({ code: s.code, label: s.label })));
+    expect(plan.children.map(c => c.stageCode)).toEqual(STAGE_CODES);
+    expect(plan.children[0].title).toBe('Ground truthing — ADAKULA');
+  });
+
+  it('copes with a village whose mandal is not recorded', () => {
+    expect(plannedTasksFor({ name: 'Orphan', mandalName: null }, []).parent)
+      .toBe('Survey Orphan');
   });
 });

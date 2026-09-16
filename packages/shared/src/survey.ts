@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { RoleCode } from './rbac.js';
+import type { TaskStatus } from './s4.js';
 
 /**
  * Land survey progress (§59).
@@ -431,3 +432,127 @@ export const SURVEY_ROLE_GRANTS: Record<RoleCode, string[]> = {
   SALES_BD_EXECUTIVE: ['survey.read'],
   CLIENT_VIEWER: ['survey.read'],
 };
+
+/* ------------------------------------------------- tasks drive the state */
+
+/**
+ * Linking survey work to the task board.
+ *
+ * A village becomes a task and each of its stages a subtask, and from then on
+ * the task's status is what the village's state means. The alternative —
+ * letting a stage row and its task each hold a status — is the `Today` and
+ * `Cumulative` problem one level up: two places to write the same fact, and
+ * they disagree within a week.
+ *
+ * Which one applies is never ambiguous. A stage with a task linked reads its
+ * state from the task and its own columns are left alone; a stage with no
+ * task keeps using them. Only one is ever in play.
+ */
+
+// The task statuses are S4's; redefining them here would give the survey its
+// own idea of what a task can be, which is exactly the drift this link exists
+// to avoid.
+/**
+ * What a task's status means for the survey stage it stands for.
+ *
+ * IN_REVIEW folds into IN_PROGRESS: a village whose ground truthing is being
+ * checked is not finished, and the survey report has no third thing to say
+ * about it. CANCELLED is deliberately absent — see `isOutOfScope`.
+ */
+const STATUS_TO_STAGE: Record<Exclude<TaskStatus, 'CANCELLED'>, StageState> = {
+  TO_DO: 'NOT_STARTED',
+  IN_PROGRESS: 'IN_PROGRESS',
+  IN_REVIEW: 'IN_PROGRESS',
+  DONE: 'COMPLETED',
+  BLOCKED: 'ON_HOLD',
+};
+
+export function stageStateFromTask(status: string | null | undefined): StageState {
+  if (!status) return 'NOT_STARTED';
+  return STATUS_TO_STAGE[status as Exclude<TaskStatus, 'CANCELLED'>] ?? 'NOT_STARTED';
+}
+
+/**
+ * A cancelled task means the village left the programme.
+ *
+ * It is not "nought per cent done" — it is no longer work anybody owes, so it
+ * comes out of the denominator entirely. Leaving it in would hold a
+ * percentage down for ever and the report would never reach a hundred.
+ */
+export function isOutOfScope(status: string | null | undefined): boolean {
+  return status === 'CANCELLED';
+}
+
+export interface LinkedStage {
+  stageCode: string;
+  /** The task standing for this stage, where one has been created. */
+  taskStatus?: string | null;
+  taskStartedAt?: string | null;
+  taskCompletedAt?: string | null;
+  /** The stage row's own columns, used only when no task is linked. */
+  ownState?: StageState | null;
+  ownStartedOn?: string | null;
+  ownCompletedOn?: string | null;
+  linked: boolean;
+}
+
+export interface ResolvedStage {
+  stageCode: string;
+  state: StageState;
+  startedOn: string | null;
+  completedOn: string | null;
+  /** Where the answer came from, so a screen can say so. */
+  source: 'TASK' | 'STAGE';
+}
+
+const day = (v: string | null | undefined): string | null =>
+  v ? String(v).slice(0, 10) : null;
+
+/**
+ * One stage's state, from whichever source governs it.
+ *
+ * The summary sheet reports a start and a completion date per stage, so the
+ * task's actual timestamps are what those become — not its planned dates,
+ * which are when somebody intended to do the work rather than when it
+ * happened.
+ */
+export function resolveStage(stage: LinkedStage): ResolvedStage {
+  if (stage.linked) {
+    return {
+      stageCode: stage.stageCode,
+      state: stageStateFromTask(stage.taskStatus),
+      startedOn: day(stage.taskStartedAt),
+      completedOn: day(stage.taskCompletedAt),
+      source: 'TASK',
+    };
+  }
+  return {
+    stageCode: stage.stageCode,
+    state: stage.ownState ?? 'NOT_STARTED',
+    startedOn: day(stage.ownStartedOn),
+    completedOn: day(stage.ownCompletedOn),
+    source: 'STAGE',
+  };
+}
+
+/** Every stage resolved, keyed by code, for the roll-up to consume. */
+export function resolveStages(stages: LinkedStage[]): Record<string, StageState> {
+  return Object.fromEntries(stages.map(s => [s.stageCode, resolveStage(s).state]));
+}
+
+/**
+ * What a village's task hierarchy should look like.
+ *
+ * One task for the village and one subtask per stage, in the order the stages
+ * are defined, so the board reads the way the work runs.
+ */
+export function plannedTasksFor(
+  village: { name: string; mandalName?: string | null },
+  stages: Array<{ code: string; label: string }>,
+): { parent: string; children: Array<{ stageCode: string; title: string }> } {
+  const where = village.mandalName ? `${village.name}, ${village.mandalName}` : village.name;
+  return {
+    parent: `Survey ${where}`,
+    children: stages.map(s => ({ stageCode: s.code, title: `${s.label} — ${village.name}` })),
+  };
+}
