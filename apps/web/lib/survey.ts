@@ -152,3 +152,79 @@ export const GRAINS = [
   { value: 'MONTH', label: 'Monthly' },
   { value: 'YEAR', label: 'Yearly' },
 ] as const;
+
+/* ---------------------------------------------------- the stage pipeline */
+
+/**
+ * How a stage tally reads.
+ *
+ * The four states are shown in the order work moves through them — not
+ * started, in progress, on hold, completed — so a row can be scanned left to
+ * right as a queue rather than read as four unrelated numbers.
+ */
+export const TALLY_ORDER = ['notStarted', 'inProgress', 'onHold', 'completed'] as const;
+export type TallyKey = (typeof TALLY_ORDER)[number];
+
+export const TALLY_LABELS: Record<TallyKey, string> = {
+  notStarted: 'To start',
+  inProgress: 'In progress',
+  onHold: 'On hold',
+  completed: 'Done',
+};
+
+export function tallyTone(key: TallyKey): 'neutral' | 'warning' | 'danger' | 'success' {
+  if (key === 'completed') return 'success';
+  if (key === 'onHold') return 'danger';
+  if (key === 'inProgress') return 'warning';
+  return 'neutral';
+}
+
+/** A stage code as a readable label, falling back to the code itself. */
+export function stageLabel(code: string, pipeline?: Array<{ code: string; label: string }>): string {
+  return pipeline?.find(s => s.code === code)?.label
+    ?? code.replaceAll('_', ' ').toLowerCase().replace(/^./, c => c.toUpperCase());
+}
+
+/**
+ * What the rover position means, in a sentence.
+ *
+ * Idle is the number worth saying out loud. Thirty allocated and eleven used
+ * is not eleven rovers of progress, it is nineteen sitting in a store while
+ * the schedule assumes otherwise.
+ */
+export function roverNote(rovers: {
+  allocated: number; used: number; idle: number;
+  utilisationPct: number | null; overUsed: boolean;
+} | undefined): string {
+  if (!rovers || rovers.allocated === 0) {
+    return 'No rovers are allocated for this date.';
+  }
+  if (rovers.overUsed) {
+    return `${rovers.used} rovers reported in use against ${rovers.allocated} allocated. `
+      + 'Something is being run that is not on the books — check the allocations.';
+  }
+  if (rovers.idle === 0) return `All ${rovers.allocated} rovers were in use.`;
+  return `${rovers.idle} of ${rovers.allocated} rovers sat idle — ${pct(rovers.utilisationPct)} utilised.`;
+}
+
+/**
+ * The pace, stated so the two rates cannot be confused.
+ *
+ * A schedule built on how fast a crew works and delivered on how fast the
+ * work actually goes is how a programme slips without anybody watching it.
+ */
+export function paceNote(p: {
+  activeDays: number; acresPerActiveDay: number | null;
+  acresPerCalendarDay: number | null; projectedFinish: string | null;
+} | undefined): string {
+  if (!p || p.acresPerCalendarDay === null) {
+    return 'Not enough recorded progress yet to measure a pace.';
+  }
+  const parts = [
+    `${p.acresPerCalendarDay} acres a day overall, ${p.acresPerActiveDay ?? '—'} on the ${p.activeDays} days work was recorded.`,
+  ];
+  if (p.projectedFinish) {
+    parts.push(`At that rate the remaining extent runs out around ${p.projectedFinish}.`);
+  }
+  return parts.join(' ');
+}

@@ -284,3 +284,44 @@ describe("controls", () => {
     expect(r.status).toBe(403);
   });
 });
+
+describe("returning a rover", () => {
+  it("closes the allocation instead of writing a second row", async () => {
+    // Two rows for one instrument would double it in the allocated total,
+    // which is exactly what the exclusion constraint prevents elsewhere.
+    const asset = await makeAsset(uniq("ROV"));
+    const made = await post(w.admin, `/api/v1/survey/villages/${villageA}/rovers`,
+      { asset_id: asset, allocated_on: "2026-11-01" });
+    expect(made.status).toBe(201);
+
+    const r = await post(w.admin, `/api/v1/survey/rovers/${made.data.id}/release`,
+      { released_on: "2026-11-10" });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+
+    const rows = await w.pool.query(
+      "SELECT count(*)::int AS n, max(released_on) AS back FROM survey_rover_allocations WHERE asset_id = $1",
+      [asset]);
+    expect(rows.rows[0].n).toBe(1);
+    expect(String(rows.rows[0].back).slice(0, 10)).toBe("2026-11-10");
+  });
+
+  it("refuses to close an allocation that is already closed", async () => {
+    const asset = await makeAsset(uniq("ROV"));
+    const made = await post(w.admin, `/api/v1/survey/villages/${villageA}/rovers`,
+      { asset_id: asset, allocated_on: "2026-11-01", released_on: "2026-11-05" });
+    const r = await post(w.admin, `/api/v1/survey/rovers/${made.data.id}/release`, {});
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe("ALREADY_RETURNED");
+  });
+
+  it("frees the instrument for the next village once it is back", async () => {
+    const asset = await makeAsset(uniq("ROV"));
+    const made = await post(w.admin, `/api/v1/survey/villages/${villageA}/rovers`,
+      { asset_id: asset, allocated_on: "2026-12-01" });
+    await post(w.admin, `/api/v1/survey/rovers/${made.data.id}/release`,
+      { released_on: "2026-12-10" });
+    const next = await post(w.admin, `/api/v1/survey/villages/${villageB}/rovers`,
+      { asset_id: asset, allocated_on: "2026-12-11" });
+    expect(next.status, JSON.stringify(next.body)).toBe(201);
+  });
+});

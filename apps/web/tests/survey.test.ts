@@ -3,6 +3,7 @@ import {
   GRAINS, LEVEL_LABELS, REPORT_LEVELS, STAGE_STATE_LABELS, VILLAGE_STATE_LABELS,
   acres, barWidth, count, financialYearToDate, groupMeasures, hasPct, pct,
   pctTone, progressHeadline, sqKm, stateTone,
+  TALLY_ORDER, TALLY_LABELS, tallyTone, stageLabel, roverNote, paceNote,
 } from '../lib/survey';
 import { NAV_GROUPS } from '../lib/nav';
 import { IMPORT_TEMPLATES } from '../lib/import-templates';
@@ -219,5 +220,89 @@ describe('navigation', () => {
     const item = NAV_GROUPS.flatMap(g => g.items).find(i => i.href === '/survey');
     expect(item).toBeTruthy();
     expect([...SURVEY_PERMISSIONS]).toContain(item!.permission);
+  });
+});
+
+describe('stage tallies', () => {
+  it('reads left to right as the queue work moves through', () => {
+    // Not four unrelated numbers: to start, in progress, on hold, done.
+    expect([...TALLY_ORDER]).toEqual(['notStarted', 'inProgress', 'onHold', 'completed']);
+    for (const k of TALLY_ORDER) expect(TALLY_LABELS[k], k).toBeTruthy();
+  });
+
+  it('colours a held village as a problem and a done one as finished', () => {
+    expect(tallyTone('onHold')).toBe('danger');
+    expect(tallyTone('completed')).toBe('success');
+    expect(tallyTone('notStarted')).toBe('neutral');
+  });
+});
+
+describe('stageLabel', () => {
+  it('prefers the label the server gives', () => {
+    expect(stageLabel('GT_QC', [{ code: 'GT_QC', label: 'GT quality check' }]))
+      .toBe('GT quality check');
+  });
+
+  it('makes a readable label from a code it does not know', () => {
+    // Better than printing GROUND_TRUTHING at somebody.
+    expect(stageLabel('GROUND_TRUTHING')).toBe('Ground truthing');
+  });
+});
+
+describe('roverNote', () => {
+  it('leads with what is sitting idle', () => {
+    // Thirty allocated and eleven used is nineteen in a store, not eleven
+    // rovers of progress.
+    const note = roverNote({
+      allocated: 30, used: 11, idle: 19, utilisationPct: 36.67, overUsed: false,
+    });
+    expect(note).toContain('19 of 30');
+    expect(note).toContain('idle');
+  });
+
+  it('says so plainly when everything is out working', () => {
+    expect(roverNote({ allocated: 8, used: 8, idle: 0, utilisationPct: 100, overUsed: false }))
+      .toContain('All 8');
+  });
+
+  it('flags equipment being run off the books', () => {
+    const note = roverNote({
+      allocated: 5, used: 7, idle: 0, utilisationPct: 140, overUsed: true,
+    });
+    expect(note).toContain('not on the books');
+  });
+
+  it('says there is nothing allocated rather than showing a zero ratio', () => {
+    expect(roverNote({ allocated: 0, used: 0, idle: 0, utilisationPct: null, overUsed: false }))
+      .toContain('No rovers are allocated');
+    expect(roverNote(undefined)).toContain('No rovers are allocated');
+  });
+});
+
+describe('paceNote', () => {
+  it('states both rates so they cannot be confused', () => {
+    // A schedule built on how fast a crew works and delivered on how fast the
+    // work goes is how a programme slips unnoticed.
+    const note = paceNote({
+      activeDays: 10, acresPerActiveDay: 30, acresPerCalendarDay: 10,
+      projectedFinish: '2026-11-25',
+    });
+    expect(note).toContain('10 acres a day overall');
+    expect(note).toContain('30 on the 10 days');
+    expect(note).toContain('2026-11-25');
+  });
+
+  it('says there is not enough to measure rather than showing zero', () => {
+    expect(paceNote({
+      activeDays: 0, acresPerActiveDay: null, acresPerCalendarDay: null, projectedFinish: null,
+    })).toContain('Not enough recorded progress');
+    expect(paceNote(undefined)).toContain('Not enough recorded progress');
+  });
+
+  it('omits the projection when there is nothing to project', () => {
+    const note = paceNote({
+      activeDays: 3, acresPerActiveDay: 5, acresPerCalendarDay: 2, projectedFinish: null,
+    });
+    expect(note).not.toContain('runs out');
   });
 });

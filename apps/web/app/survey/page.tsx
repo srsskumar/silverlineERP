@@ -17,13 +17,15 @@ import { hasPermission } from '@/lib/permissions';
 import { Notice, Section, Stat } from '@/components/finance/Primitives';
 import { day } from '@/lib/finance';
 import {
-  GRAINS, LEVEL_LABELS, REPORT_LEVELS, STAGE_STATE_LABELS, VILLAGE_STATE_LABELS,
-  acres, barWidth, count, financialYearToDate, groupMeasures, hasPct, pct, pctTone,
-  progressHeadline, sqKm, stateTone, type ReportLevel,
+  GRAINS, LEVEL_LABELS, REPORT_LEVELS, STAGE_STATE_LABELS, TALLY_LABELS, TALLY_ORDER,
+  VILLAGE_STATE_LABELS, acres, barWidth, count, financialYearToDate, groupMeasures,
+  hasPct, paceNote, pct, pctTone, progressHeadline, roverNote, sqKm, stageLabel,
+  stateTone, tallyTone, type ReportLevel,
 } from '@/lib/survey';
+import { VillageDetail } from '@/components/survey/VillageDetail';
 
 type Row = Record<string, any>;
-type Tab = 'progress' | 'timeline' | 'summary';
+type Tab = 'progress' | 'villages' | 'timeline' | 'summary';
 
 /**
  * Land survey progress (§59).
@@ -103,10 +105,12 @@ export default function SurveyPage() {
           </select>
 
           <div className="flex gap-1">
-            {(['progress', 'timeline', 'summary'] as const).map((t) => (
+            {(['progress', 'villages', 'timeline', 'summary'] as const).map((t) => (
               <Button key={t} type="button" variant={tab === t ? 'secondary' : 'ghost'}
                 onClick={() => setTab(t)}>
-                {t === 'progress' ? 'Progress' : t === 'timeline' ? 'Over time' : 'Summary'}
+                {t === 'progress' ? 'Progress'
+                  : t === 'villages' ? 'Villages'
+                    : t === 'timeline' ? 'Over time' : 'Summary'}
               </Button>
             ))}
           </div>
@@ -153,6 +157,9 @@ export default function SurveyPage() {
         {projectId && tab === 'progress' ? (
           <Progress query={progress} level={level} setLevel={setLevel} range={range} />
         ) : null}
+        {projectId && tab === 'villages' ? (
+          <Villages projectId={projectId} canManage={canManage} canEnter={canEnter} />
+        ) : null}
         {projectId && tab === 'timeline' ? (
           <Timeline projectId={projectId} range={range} grain={grain} setGrain={setGrain} />
         ) : null}
@@ -197,6 +204,79 @@ function Progress({
             tone={total.notStarted > 0 ? 'warning' : 'success'}
             hint="Nobody has visited these" />
         </div>
+        <p className="text-2xs text-text-subtle">{paceNote(data.pace)}</p>
+      </Card>
+
+      {/* The question asked at any moment: how many villages are yet to
+          start, how many have GT in progress, how many are waiting on QC.
+          The overall village state cannot answer it. */}
+      <Card className="space-y-2 p-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h3 className="text-sm font-semibold text-text">Villages at each stage</h3>
+          <span className="text-2xs text-text-subtle">{roverNote(data.rovers)}</span>
+        </div>
+        <TableWrap>
+          <Table>
+            <THead>
+              <TR>
+                <TH>Stage</TH>
+                {TALLY_ORDER.map((k) => <TH key={k} className="text-right">{TALLY_LABELS[k]}</TH>)}
+              </TR>
+            </THead>
+            <TBody>
+              {(data.pipeline ?? []).map((stage: Row) => {
+                const t = data.by_stage?.[String(stage.code)];
+                if (!t) return null;
+                return (
+                  <TR key={String(stage.code)}>
+                    <TD>
+                      <span className="text-text">{stage.label}</span>
+                      {stage.tracks_daily_progress ? (
+                        <span className="ml-1 text-2xs text-text-subtle">daily</span>
+                      ) : null}
+                    </TD>
+                    {TALLY_ORDER.map((k) => (
+                      <TD key={k} className="text-right tabular-nums">
+                        <span className={
+                          t[k] === 0 ? 'text-text-subtle'
+                            : tallyTone(k) === 'danger' ? 'font-semibold text-danger'
+                              : tallyTone(k) === 'success' ? 'text-success'
+                                : tallyTone(k) === 'warning' ? 'text-warning' : 'text-text'
+                        }>
+                          {t[k]}
+                        </span>
+                      </TD>
+                    ))}
+                  </TR>
+                );
+              })}
+            </TBody>
+          </Table>
+        </TableWrap>
+      </Card>
+
+      <Card className="space-y-3 p-4">
+        <h3 className="text-sm font-semibold text-text">Equipment and pace</h3>
+        <div className="grid gap-2 sm:grid-cols-4">
+          <Stat label="Rovers allocated" value={data.rovers?.allocated ?? 0} />
+          <Stat label="In use" value={data.rovers?.used ?? 0}
+            tone={data.rovers?.overUsed ? 'danger' : undefined} />
+          <Stat label="Idle" value={data.rovers?.idle ?? 0}
+            tone={(data.rovers?.idle ?? 0) > 0 ? 'warning' : 'success'}
+            hint={pct(data.rovers?.utilisationPct)} />
+          <Stat label="Projected finish"
+            value={data.pace?.projectedFinish ? day(data.pace.projectedFinish) : '—'}
+            hint={data.pace?.daysToFinish ? `${data.pace.daysToFinish} days at this rate` : undefined} />
+        </div>
+        {data.rovers?.overUsed ? (
+          <Notice tone="danger" title="More rovers reported in use than allocated">
+            Something is being run that is not on the books. Check the allocations against what
+            the crews reported.
+          </Notice>
+        ) : null}
+      </Card>
+
+      <Card className="space-y-3 p-4">
         {total.unweighted > 0 ? (
           <Notice tone="warning" title={`${total.unweighted} village${total.unweighted === 1 ? '' : 's'} with no extent recorded`}>
             {/* Giving a missing extent a weight of one would distort every
@@ -303,6 +383,142 @@ function Progress({
           </p>
         </Section>
       )}
+    </div>
+  );
+}
+
+/* --------------------------------------------------------------- villages */
+
+/**
+ * The village list, and everything about one of them.
+ *
+ * Opens as a list because the question is comparative — which of these is
+ * stuck — and drills into a single village for the crew, the instruments and
+ * the stage remarks.
+ */
+function Villages({
+  projectId, canManage, canEnter,
+}: {
+  projectId: string; canManage: boolean; canEnter: boolean;
+}) {
+  const [open, setOpen] = React.useState<string | null>(null);
+  const [filter, setFilter] = React.useState('');
+
+  const villages = useQuery({
+    queryKey: ['survey-villages', projectId],
+    queryFn: async () =>
+      ((await apiRequestRaw(
+        `/api/v1/survey/projects/${projectId}/villages`)).body as { data: Row[] }).data,
+  });
+
+  const progress = useQuery({
+    queryKey: ['survey-progress', projectId, 'pipeline'],
+    queryFn: async () =>
+      ((await apiRequestRaw(
+        `/api/v1/survey/projects/${projectId}/progress`)).body as { data: Row }).data,
+    staleTime: 300_000,
+  });
+
+  if (villages.isLoading) return <Skeleton className="h-64" />;
+  if (villages.isError) return <ErrorCard error={villages.error} onRetry={() => villages.refetch()} />;
+
+  const pipeline: Row[] = progress.data?.pipeline ?? [];
+  const all: Row[] = villages.data ?? [];
+  const needle = filter.trim().toLowerCase();
+  const rows = needle
+    ? all.filter((v) => [v.village_name, v.mandal_name, v.village_code]
+      .some((f) => String(f ?? '').toLowerCase().includes(needle)))
+    : all;
+
+  if (all.length === 0) {
+    return (
+      <EmptyState
+        title="No villages in this programme"
+        description="Load the village list from Setup before recording anything against it."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <Toolbar>
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Find a village or mandal…"
+          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+        />
+        <span className="text-2xs text-text-subtle">
+          {rows.length} of {all.length} villages
+        </span>
+      </Toolbar>
+
+      <TableWrap>
+        <Table>
+          <THead>
+            <TR>
+              <TH>Village</TH>
+              <TH>Mandal</TH>
+              <TH className="text-right">Extent</TH>
+              <TH>Where it has got to</TH>
+              <TH>Assigned to</TH>
+              <TH />
+            </TR>
+          </THead>
+          <TBody>
+            {rows.map((v) => {
+              const isOpen = open === String(v.id);
+              // The furthest stage not yet complete: the work waiting, which
+              // is what somebody means by "where is this village".
+              const at = pipeline.find((s) => (v.stages?.[String(s.code)] ?? 'NOT_STARTED') !== 'COMPLETED');
+              const atState = at ? (v.stages?.[String(at.code)] ?? 'NOT_STARTED') : 'COMPLETED';
+              return (
+                <React.Fragment key={String(v.id)}>
+                  <TR>
+                    <TD>
+                      <span className="font-medium text-text">{v.village_name}</span>
+                      {v.village_code ? (
+                        <span className="ml-1 text-2xs text-text-subtle">{v.village_code}</span>
+                      ) : null}
+                    </TD>
+                    <TD className="text-xs text-text-muted">{v.mandal_name ?? '—'}</TD>
+                    <TD className="text-right tabular-nums">{acres(v.total_extent_ac)}</TD>
+                    <TD>
+                      <Badge tone={stateTone(atState)}>
+                        {at ? stageLabel(String(at.code), pipeline as any) : 'Finished'}
+                      </Badge>
+                      {at && atState !== 'NOT_STARTED' ? (
+                        <span className="ml-1 text-2xs text-text-subtle">
+                          {STAGE_STATE_LABELS[atState]?.toLowerCase()}
+                        </span>
+                      ) : null}
+                    </TD>
+                    <TD className="text-xs text-text-muted">{v.assignee_name ?? '—'}</TD>
+                    <TD className="text-right">
+                      <Button type="button" variant="ghost"
+                        onClick={() => setOpen(isOpen ? null : String(v.id))}>
+                        {isOpen ? 'Hide' : 'Open'}
+                      </Button>
+                    </TD>
+                  </TR>
+                  {isOpen ? (
+                    <TR>
+                      <TD colSpan={6} className="bg-surface-sunken p-0">
+                        <VillageDetail
+                          village={v}
+                          pipeline={pipeline}
+                          canManage={canManage}
+                          canEnter={canEnter}
+                        />
+                      </TD>
+                    </TR>
+                  ) : null}
+                </React.Fragment>
+              );
+            })}
+          </TBody>
+        </Table>
+      </TableWrap>
     </div>
   );
 }

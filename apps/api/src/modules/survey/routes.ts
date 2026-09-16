@@ -741,6 +741,35 @@ export async function registerSurveyRoutes(
       return { data: row };
     });
 
+  /**
+   * Bring a rover back.
+   *
+   * Closes the allocation rather than writing a second one: two rows for one
+   * instrument would double it in the allocated total, which is precisely
+   * what the exclusion constraint exists to prevent elsewhere.
+   */
+  app.post('/api/v1/survey/rovers/:id/release', { preHandler: guard('survey.manage') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(z.object({ released_on: z.string().optional() }), req.body ?? {});
+      return {
+        data: await mutate(pool, req, 'survey.rover.release', 'survey_rover_allocation',
+          async db => {
+            const row = (await db.query(
+              'SELECT * FROM survey_rover_allocations WHERE id = $1 AND org_id = $2',
+              [id, u.orgId])).rows[0];
+            if (!row) fail('NOT_FOUND', 'Not found', 404);
+            if (row.released_on) {
+              fail('ALREADY_RETURNED', 'That allocation is already closed', 409);
+            }
+            return (await db.query(
+              `UPDATE survey_rover_allocations
+               SET released_on = COALESCE($2::date, CURRENT_DATE)
+               WHERE id = $1 RETURNING *`, [id, input.released_on ?? null])).rows[0];
+          }),
+      };
+    });
+
   /* ------------------------------------------------------- daily entry */
 
   /**
