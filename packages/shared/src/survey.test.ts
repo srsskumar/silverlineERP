@@ -4,6 +4,8 @@ import {
   SURVEY_ROLE_GRANTS, acresToSqKm, completion, financialYearRange, measureSchema,
   periodBuckets, rollUp, stageUpdateSchema, surveyEntrySchema, villageState,
   stageStateFromTask, isOutOfScope, resolveStage, resolveStages, plannedTasksFor,
+  STAGE_PIPELINE, stageBlockedBy, currentStage, outOfSequence, tallyByStage,
+  roverUtilisation, pace, crewAssignmentSchema, roverAllocationSchema, stageRemarkSchema,
   type MeasureBasis, type VillageProgress,
 } from './survey.js';
 
@@ -508,5 +510,219 @@ describe('plannedTasksFor', () => {
   it('copes with a village whose mandal is not recorded', () => {
     expect(plannedTasksFor({ name: 'Orphan', mandalName: null }, []).parent)
       .toBe('Survey Orphan');
+  });
+});
+
+describe('the stage pipeline', () => {
+  it('puts quality control between ground truthing and vectorization', () => {
+    // Without it, a village whose GT had failed QC looked exactly like one
+    // whose GT was simply done.
+    const codes = STAGE_PIPELINE.map(s => s.code);
+    expect(codes.indexOf('GT_QC')).toBeGreaterThan(codes.indexOf('GROUND_TRUTHING'));
+    expect(codes.indexOf('GT_QC')).toBeLessThan(codes.indexOf('VECTORIZATION'));
+  });
+
+  it('chains every stage after the first to its predecessor', () => {
+    for (const [i, stage] of STAGE_PIPELINE.entries()) {
+      if (i === 0) expect(stage.requires).toBeUndefined();
+      else expect(stage.requires, stage.code).toBe(STAGE_PIPELINE[i - 1].code);
+    }
+  });
+
+  it('records daily progress against ground truthing only', () => {
+    // The crews count parcels and points while ground truthing; the later
+    // stages are done or not.
+    const tracking = STAGE_PIPELINE.filter(s => s.tracksDailyProgress).map(s => s.code);
+    expect(tracking).toEqual(['GROUND_TRUTHING']);
+  });
+});
+
+describe('stageBlockedBy', () => {
+  it('names the stage in the way rather than just refusing', () => {
+    expect(stageBlockedBy('GT_QC', { GROUND_TRUTHING: 'IN_PROGRESS' })).toBe('GROUND_TRUTHING');
+  });
+
+  it('lets a stage start once its predecessor is complete', () => {
+    expect(stageBlockedBy('GT_QC', { GROUND_TRUTHING: 'COMPLETED' })).toBeNull();
+  });
+
+  it('never blocks the first stage', () => {
+    expect(stageBlockedBy('GROUND_TRUTHING', {})).toBeNull();
+  });
+
+  it('treats a stage on hold as not complete', () => {
+    expect(stageBlockedBy('VECTORIZATION', { GT_QC: 'ON_HOLD' })).toBe('GT_QC');
+  });
+});
+
+describe('currentStage', () => {
+  it('is where the work is waiting, not where it finished', () => {
+    // A village whose GT is done and whose QC has not begun is at QC.
+    expect(currentStage({ GROUND_TRUTHING: 'COMPLETED' })).toEqual({
+      code: 'GT_QC', state: 'NOT_STARTED',
+    });
+  });
+
+  it('is the first stage for an untouched village', () => {
+    expect(currentStage({})).toEqual({ code: 'GROUND_TRUTHING', state: 'NOT_STARTED' });
+  });
+
+  it('reports the last stage once everything is complete', () => {
+    const all = Object.fromEntries(STAGE_PIPELINE.map(s => [s.code, 'COMPLETED' as const]));
+    expect(currentStage(all)).toEqual({ code: 'LPM_GENERATION', state: 'COMPLETED' });
+  });
+
+  it('stops at a stage that is on hold rather than walking past it', () => {
+    expect(currentStage({ GROUND_TRUTHING: 'ON_HOLD' })).toEqual({
+      code: 'GROUND_TRUTHING', state: 'ON_HOLD',
+    });
+  });
+});
+
+describe('outOfSequence', () => {
+  it('finds a stage started before its predecessor finished', () => {
+    // Reported rather than prevented: the task board is not the survey
+    // module's to police, and a card moved out of order is worth surfacing.
+    expect(outOfSequence({ GROUND_TRUTHING: 'IN_PROGRESS', VECTORIZATION: 'IN_PROGRESS' }))
+      .toContain('VECTORIZATION');
+  });
+
+  it('says nothing about a properly ordered village', () => {
+    expect(outOfSequence({
+      GROUND_TRUTHING: 'COMPLETED', GT_QC: 'COMPLETED', VECTORIZATION: 'IN_PROGRESS',
+    })).toEqual([]);
+  });
+
+  it('says nothing about an untouched village', () => {
+    expect(outOfSequence({})).toEqual([]);
+  });
+});
+
+describe('tallyByStage', () => {
+  it('answers how many villages sit at each state of each stage', () => {
+    // The overall village state cannot: "in progress" covers a village on its
+    // first day of GT and one waiting for its LPM.
+    const tally = tallyByStage([
+      { stages: {} },
+      { stages: { GROUND_TRUTHING: 'IN_PROGRESS' } },
+      { stages: { GROUND_TRUTHING: 'COMPLETED', GT_QC: 'IN_PROGRESS' } },
+      { stages: { GROUND_TRUTHING: 'COMPLETED', GT_QC: 'ON_HOLD' } },
+    ]);
+    expect(tally.GROUND_TRUTHING).toEqual({
+      notStarted: 1, inProgress: 1, completed: 2, onHold: 0,
+    });
+    expect(tally.GT_QC).toEqual({ notStarted: 2, inProgress: 1, completed: 0, onHold: 1 });
+  });
+
+  it('counts every village into exactly one state per stage', () => {
+    const villages = Array.from({ length: 7 }, () => ({ stages: {} }));
+    const tally = tallyByStage(villages);
+    for (const stage of STAGE_PIPELINE) {
+      const t = tally[stage.code];
+      expect(t.notStarted + t.inProgress + t.completed + t.onHold, stage.code).toBe(7);
+    }
+  });
+
+  it('reports every stage even when nothing has reached it', () => {
+    const tally = tallyByStage([]);
+    expect(Object.keys(tally).sort()).toEqual(STAGE_PIPELINE.map(s => s.code).sort());
+  });
+});
+
+describe('roverUtilisation', () => {
+  it('reports what is sitting idle, which is the point of the figure', () => {
+    // Thirty allocated and eleven used is nineteen in a store while the
+    // schedule assumes otherwise.
+    const r = roverUtilisation({ allocated: 30, used: 11 });
+    expect(r.idle).toBe(19);
+    expect(r.utilisationPct).toBe(36.67);
+  });
+
+  it('reports full utilisation without an idle count', () => {
+    expect(roverUtilisation({ allocated: 8, used: 8 })).toMatchObject({
+      idle: 0, utilisationPct: 100, overUsed: false,
+    });
+  });
+
+  it('flags equipment used beyond what was allocated rather than going negative', () => {
+    // Somebody is running a rover that is not on the books.
+    const r = roverUtilisation({ allocated: 5, used: 7 });
+    expect(r.overUsed).toBe(true);
+    expect(r.idle).toBe(0);
+  });
+
+  it('has no percentage when nothing is allocated', () => {
+    expect(roverUtilisation({ allocated: 0, used: 0 }).utilisationPct).toBeNull();
+  });
+});
+
+describe('pace', () => {
+  const base = {
+    surveyedAc: 300, remainingAc: 700, villagesCompleted: 6,
+    activeDays: 10, calendarDays: 30, asOf: '2026-09-16',
+  };
+
+  it('separates how fast a crew works from how fast the work goes', () => {
+    // A schedule built on the first and delivered on the second is how a
+    // programme slips without anybody seeing it happen.
+    const p = pace(base);
+    expect(p.acresPerActiveDay).toBe(30);
+    expect(p.acresPerCalendarDay).toBe(10);
+  });
+
+  it('projects the finish from the calendar rate, not the working rate', () => {
+    const p = pace(base);
+    expect(p.daysToFinish).toBe(70);
+    expect(p.projectedFinish).toBe('2026-11-25');
+  });
+
+  it('projects nothing when no progress has been made', () => {
+    // Dividing by a zero rate would produce Infinity and a date in the year
+    // 275760, which is worse than saying nothing.
+    const p = pace({ ...base, surveyedAc: 0 });
+    expect(p.daysToFinish).toBeNull();
+    expect(p.projectedFinish).toBeNull();
+  });
+
+  it('projects nothing when the work is already done', () => {
+    expect(pace({ ...base, remainingAc: 0 }).projectedFinish).toBeNull();
+  });
+
+  it('survives a window with no days in it', () => {
+    const p = pace({ ...base, activeDays: 0, calendarDays: 0 });
+    expect(p.acresPerActiveDay).toBeNull();
+    expect(p.acresPerCalendarDay).toBeNull();
+    expect(p.projectedFinish).toBeNull();
+  });
+});
+
+describe('crew and rover schemas', () => {
+  it('assigns an employee to a village for a named stage', () => {
+    // Several employees work one village; the crew is per stage because the
+    // GT crew is not the vectorization team.
+    expect(crewAssignmentSchema.safeParse({
+      employee_id: '11111111-1111-4111-8111-111111111111',
+      stage_code: 'GROUND_TRUTHING',
+    }).success).toBe(true);
+  });
+
+  it('refuses a rover released before it was allocated', () => {
+    expect(roverAllocationSchema.safeParse({
+      asset_id: '11111111-1111-4111-8111-111111111111',
+      allocated_on: '2026-09-10', released_on: '2026-09-01',
+    }).success).toBe(false);
+  });
+
+  it('accepts a rover still out', () => {
+    expect(roverAllocationSchema.safeParse({
+      asset_id: '11111111-1111-4111-8111-111111111111',
+      allocated_on: '2026-09-10',
+    }).success).toBe(true);
+  });
+
+  it('carries the remarks the workflow asks for on every stage', () => {
+    expect(stageRemarkSchema.safeParse({
+      stage_code: 'GT_QC', state: 'IN_PROGRESS', remarks: 'Two parcels disputed',
+    }).success).toBe(true);
   });
 });

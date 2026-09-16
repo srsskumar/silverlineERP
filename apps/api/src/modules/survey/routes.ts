@@ -5,6 +5,8 @@ import {
   measureSchema, targetSchema, stageUpdateSchema,
   rollUp, villageState, completion, acresToSqKm, periodBuckets, financialYearRange,
   STAGE_CODES, REPORT_LEVELS, resolveStage, isOutOfScope, plannedTasksFor,
+  tallyByStage, roverUtilisation, pace, currentStage, outOfSequence, stageBlockedBy,
+  crewAssignmentSchema, roverAllocationSchema, stageRemarkSchema, STAGE_PIPELINE,
   type MeasureBasis, type PeriodGrain, type ReportLevel, type StageState, type VillageProgress,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
@@ -43,6 +45,30 @@ export async function registerSurveyRoutes(
       basis: Object.fromEntries(
         rows.map(r => [String(r.code), String(r.basis) as MeasureBasis])),
     };
+  }
+
+  /**
+   * The stage pipeline as this organisation has it, in order.
+   *
+   * Read from the database rather than the seeded constant, because a stage
+   * may be added or switched off per organisation and the report must follow
+   * what is actually configured.
+   */
+  async function stagePipeline(db: Pool | PoolClient, orgId: string) {
+    const rows = (await db.query(
+      `SELECT s.code, s.label, s.display_order, s.tracks_daily_progress,
+              p.code AS requires
+       FROM survey_stages s
+       LEFT JOIN survey_stages p ON p.id = s.requires_stage_id
+       WHERE s.org_id = $1 AND s.active ORDER BY s.display_order`, [orgId])).rows;
+    return rows.length
+      ? rows.map(r => ({
+        code: String(r.code), label: String(r.label),
+        displayOrder: Number(r.display_order),
+        requires: r.requires ? String(r.requires) : undefined,
+        tracksDailyProgress: Boolean(r.tracks_daily_progress),
+      }))
+      : STAGE_PIPELINE;
   }
 
   async function stageCodes(db: Pool | PoolClient, orgId: string): Promise<string[]> {
@@ -111,7 +137,7 @@ export async function registerSurveyRoutes(
     // stage row's own columns where there is not. `task_id` says which, so the
     // two can never both be in play for the same stage.
     const stages = (await db.query(
-      `SELECT vs.survey_village_id, s.code AS stage_code,
+      `SELECT vs.survey_village_id, s.code AS stage_code, vs.remarks,
               vs.state AS own_state, vs.started_on AS own_started_on,
               vs.completed_on AS own_completed_on,
               vs.task_id,
@@ -134,7 +160,8 @@ export async function registerSurveyRoutes(
       target.get(key)![String(t.measure_code)] = Number(t.target_quantity);
     }
     const stage = new Map<string, Record<string, StageState>>();
-    const stageDates = new Map<string, Record<string, { started: string | null; completed: string | null }>>();
+    const stageDates = new Map<string, Record<string,
+      { started: string | null; completed: string | null; remarks?: string | null }>>();
     for (const s of stages) {
       const key = String(s.survey_village_id);
       if (!stage.has(key)) { stage.set(key, {}); stageDates.set(key, {}); }
@@ -151,6 +178,7 @@ export async function registerSurveyRoutes(
       stage.get(key)![String(s.stage_code)] = resolved.state;
       stageDates.get(key)![String(s.stage_code)] = {
         started: resolved.startedOn, completed: resolved.completedOn,
+        remarks: s.remarks ?? null,
       };
     }
 
@@ -511,9 +539,21 @@ export async function registerSurveyRoutes(
       };
     });
 
+  /**
+   * Move a stage (§59.5).
+   *
+   * Enforces the pipeline: ground truthing is checked before the drawing is
+   * vectorised, so a stage cannot start until the one before it is complete.
+   * The refusal names the stage in the way rather than saying "not allowed".
+   *
+   * Only enforced here. Where the task board drives the state, a card moved
+   * out of order is reported in the progress figures instead — the board is
+   * not this module's to police, and a fact worth surfacing is better than
+   * one hidden behind a rule that cannot be applied.
+   */
   app.post('/api/v1/survey/villages/:id/stage', { preHandler: guard('survey.enter') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const input = parse(stageUpdateSchema, req.body);
+    const input = parse(stageRemarkSchema, req.body);
     return {
       data: await mutate(pool, req, 'survey.stage.set', 'survey_village_stage', async db => {
         await inOrg(db, 'survey_villages', id, u.orgId);
@@ -521,20 +561,185 @@ export async function registerSurveyRoutes(
           'SELECT * FROM survey_stages WHERE org_id = $1 AND code = $2 AND active',
           [u.orgId, input.stage_code])).rows[0];
         if (!stage) fail('UNKNOWN_STAGE', `There is no stage ${input.stage_code}`, 422);
+        if (input.state === 'COMPLETED' && !input.completed_on) {
+          fail('VALIDATION_ERROR', 'A completed stage needs the date it was completed', 422);
+        }
+
+        if (input.state !== 'NOT_STARTED') {
+          const pipeline = await stagePipeline(db, u.orgId);
+          const current = (await db.query(
+            `SELECT s.code, vs.state, vs.task_id, t.status AS task_status
+             FROM survey_village_stages vs
+             JOIN survey_stages s ON s.id = vs.stage_id
+             LEFT JOIN tasks t ON t.id = vs.task_id
+             WHERE vs.survey_village_id = $1`, [id])).rows;
+          const states: Record<string, StageState> = {};
+          for (const row of current) {
+            states[String(row.code)] = row.task_id
+              ? resolveStage({
+                stageCode: String(row.code), linked: true, taskStatus: row.task_status,
+              }).state
+              : (row.state as StageState);
+          }
+          const blocker = stageBlockedBy(input.stage_code, states, pipeline);
+          if (blocker) {
+            const label = pipeline.find(st => st.code === blocker)?.label ?? blocker;
+            fail('STAGE_BLOCKED',
+              `${stage.label} cannot start until ${label} is complete.`, 422);
+          }
+        }
+
         return (await db.query(
           `INSERT INTO survey_village_stages(org_id, survey_village_id, stage_id, state,
-             started_on, completed_on, updated_by)
-           VALUES($1,$2,$3,$4,$5,$6,$7)
+             started_on, completed_on, remarks, updated_by)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8)
            ON CONFLICT (survey_village_id, stage_id)
            DO UPDATE SET state = EXCLUDED.state, started_on = EXCLUDED.started_on,
                          completed_on = EXCLUDED.completed_on,
+                         remarks = EXCLUDED.remarks,
                          updated_at = now(), updated_by = EXCLUDED.updated_by
            RETURNING *`,
           [u.orgId, id, stage.id, input.state,
-            input.started_on ?? null, input.completed_on ?? null, u.id])).rows[0];
+            input.started_on ?? null, input.completed_on ?? null,
+            input.remarks ?? null, u.id])).rows[0];
       }),
     };
   });
+
+  /* --------------------------------------------------------- crew */
+
+  /**
+   * Who is working a village, and at which stage (§59.5).
+   *
+   * Several employees to one village-stage, which is why this is its own
+   * table rather than the task's assignee. A task has one owner; a ground
+   * truthing crew has six, and the GT crew is not the vectorization team.
+   */
+  app.get('/api/v1/survey/villages/:id/crew', { preHandler: guard('survey.read') }, async req => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    await inOrg(pool, 'survey_villages', id, u.orgId);
+    const rows = (await pool.query(
+      `SELECT c.*, s.code AS stage_code, s.label AS stage_label,
+              e.emp_no,
+              COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), e.emp_no)
+                AS employee_name
+       FROM survey_crew c
+       JOIN survey_stages s ON s.id = c.stage_id
+       JOIN employees e ON e.id = c.employee_id
+       WHERE c.survey_village_id = $1 AND c.org_id = $2
+       ORDER BY s.display_order, employee_name`, [id, u.orgId])).rows;
+    return {
+      data: rows.map(r => ({
+        ...r, assigned_on: iso(r.assigned_on), released_on: iso(r.released_on),
+        active: !r.released_on,
+      })),
+    };
+  });
+
+  app.post('/api/v1/survey/villages/:id/crew', { preHandler: guard('survey.manage') },
+    async (req, reply) => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(crewAssignmentSchema, req.body);
+      const row = await mutate(pool, req, 'survey.crew.assign', 'survey_crew', async db => {
+        await inOrg(db, 'survey_villages', id, u.orgId);
+        await inOrg(db, 'employees', input.employee_id, u.orgId);
+        const stage = (await db.query(
+          'SELECT id FROM survey_stages WHERE org_id = $1 AND code = $2 AND active',
+          [u.orgId, input.stage_code])).rows[0];
+        if (!stage) fail('UNKNOWN_STAGE', `There is no stage ${input.stage_code}`, 422);
+
+        const clash = await db.query(
+          `SELECT 1 FROM survey_crew
+           WHERE survey_village_id = $1 AND stage_id = $2 AND employee_id = $3
+             AND released_on IS NULL`, [id, stage.id, input.employee_id]);
+        if (clash.rowCount) {
+          fail('ALREADY_ASSIGNED', 'That employee is already on this stage here', 409);
+        }
+        return (await db.query(
+          `INSERT INTO survey_crew(org_id, survey_village_id, stage_id, employee_id,
+             assigned_on, released_on, created_by)
+           VALUES($1,$2,$3,$4,COALESCE($5::date, CURRENT_DATE),$6,$7) RETURNING *`,
+          [u.orgId, id, stage.id, input.employee_id,
+            input.assigned_on ?? null, input.released_on ?? null, u.id])).rows[0];
+      });
+      reply.code(201);
+      return { data: row };
+    });
+
+  app.post('/api/v1/survey/crew/:id/release', { preHandler: guard('survey.manage') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(z.object({ released_on: z.string().optional() }), req.body ?? {});
+      return {
+        data: await mutate(pool, req, 'survey.crew.release', 'survey_crew', async db => {
+          const row = (await db.query(
+            'SELECT * FROM survey_crew WHERE id = $1 AND org_id = $2', [id, u.orgId])).rows[0];
+          if (!row) fail('NOT_FOUND', 'Not found', 404);
+          // Released rather than deleted, so who surveyed a village last
+          // season is still answerable.
+          return (await db.query(
+            `UPDATE survey_crew SET released_on = COALESCE($2::date, CURRENT_DATE)
+             WHERE id = $1 RETURNING *`, [id, input.released_on ?? null])).rows[0];
+        }),
+      };
+    });
+
+  /* -------------------------------------------------------- rovers */
+
+  /**
+   * Which instruments are out, and where (§59.5).
+   *
+   * Rovers are assets, not a number. Naming the instrument is what makes
+   * "nineteen idle" a fact somebody can act on rather than arithmetic on two
+   * guesses.
+   */
+  app.get('/api/v1/survey/villages/:id/rovers', { preHandler: guard('survey.read') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      await inOrg(pool, 'survey_villages', id, u.orgId);
+      const rows = (await pool.query(
+        `SELECT r.*, a.asset_code, a.name AS asset_name, a.serial_number, a.condition
+         FROM survey_rover_allocations r
+         JOIN assets a ON a.id = r.asset_id
+         WHERE r.survey_village_id = $1 AND r.org_id = $2
+         ORDER BY r.allocated_on DESC`, [id, u.orgId])).rows;
+      return {
+        data: rows.map(r => ({
+          ...r, allocated_on: iso(r.allocated_on), released_on: iso(r.released_on),
+          out: !r.released_on,
+        })),
+      };
+    });
+
+  app.post('/api/v1/survey/villages/:id/rovers', { preHandler: guard('survey.manage') },
+    async (req, reply) => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(roverAllocationSchema, req.body);
+      const row = await mutate(pool, req, 'survey.rover.allocate', 'survey_rover_allocation',
+        async db => {
+          await inOrg(db, 'survey_villages', id, u.orgId);
+          await inOrg(db, 'assets', input.asset_id, u.orgId);
+          try {
+            return (await db.query(
+              `INSERT INTO survey_rover_allocations(org_id, survey_village_id, asset_id,
+                 allocated_on, released_on, created_by)
+               VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,
+              [u.orgId, id, input.asset_id, input.allocated_on,
+                input.released_on ?? null, u.id])).rows[0];
+          } catch (error) {
+            // The database refuses an overlap outright; translate it, because
+            // "exclusion_violation" tells a user nothing.
+            if ((error as { code?: string }).code === '23P01') {
+              fail('ROVER_ALREADY_OUT',
+                'That rover is already allocated elsewhere for those dates. Release it first.',
+                409);
+            }
+            throw error;
+          }
+        });
+      reply.code(201);
+      return { data: row };
+    });
 
   /* ------------------------------------------------------- daily entry */
 
@@ -691,10 +896,53 @@ export async function registerSurveyRoutes(
       const asOf = String(q.to ?? q.as_of ?? today());
       const from = q.from ? String(q.from) : undefined;
 
-      const [m, codes, pos] = await Promise.all([
+      const [m, codes, pos, pipeline] = await Promise.all([
         measures(pool, u.orgId), stageCodes(pool, u.orgId),
         positions(pool, u.orgId, id, { asOf }),
+        stagePipeline(pool, u.orgId),
       ]);
+
+      // Rovers: allocated on the day against what the crews reported using.
+      // Idle is the figure worth having, and neither half of it means
+      // anything without the other.
+      const roverRow = (await pool.query(
+        `SELECT
+           (SELECT count(*)::int FROM survey_rover_allocations ra
+             JOIN survey_villages sv ON sv.id = ra.survey_village_id
+            WHERE sv.survey_project_id = $2 AND ra.org_id = $1
+              AND ra.allocated_on <= $3::date
+              AND (ra.released_on IS NULL OR ra.released_on >= $3::date)) AS allocated,
+           (SELECT COALESCE(sum(e.dgps_rovers), 0)::int FROM survey_entries e
+            WHERE e.org_id = $1 AND e.survey_project_id = $2 AND e.entry_date = $3::date)
+             AS used`,
+        [u.orgId, id, asOf])).rows[0];
+      const rovers = {
+        as_of: asOf,
+        ...roverUtilisation({
+          allocated: Number(roverRow.allocated), used: Number(roverRow.used),
+        }),
+      };
+
+      // Pace over the window asked for, defaulting to the programme's life.
+      const paceWindow = (await pool.query(
+        `SELECT count(DISTINCT e.entry_date)::int AS active_days,
+                min(e.entry_date) AS first_day
+         FROM survey_entries e
+         WHERE e.org_id = $1 AND e.survey_project_id = $2
+           AND e.entry_date <= $3::date ${from ? 'AND e.entry_date >= $4::date' : ''}`,
+        from ? [u.orgId, id, asOf, from] : [u.orgId, id, asOf])).rows[0];
+      const firstDay = iso(paceWindow.first_day) ?? asOf;
+      const calendarDays = Math.max(1, Math.round(
+        (Date.parse(`${asOf}T00:00:00Z`) - Date.parse(`${firstDay}T00:00:00Z`)) / 86_400_000) + 1);
+      const whole = rollUp(pos, m.codes, codes, m.basis);
+      const paceFigures = pace({
+        surveyedAc: whole.surveyedAc,
+        remainingAc: Math.max(0, whole.extentAc - whole.surveyedAc),
+        villagesCompleted: whole.completed,
+        activeDays: Number(paceWindow.active_days),
+        calendarDays,
+        asOf,
+      });
 
       // A second pass bounded by `from` gives what was done *in* the period,
       // reported beside the position rather than instead of it.
@@ -722,6 +970,15 @@ export async function registerSurveyRoutes(
           id: key === '__unattributed__' ? null : key,
           name: g.name,
           ...summary,
+          // How many villages sit at each state of each stage. The overall
+          // village state cannot answer this: "in progress" covers a village
+          // on its first day of GT and one waiting for its LPM.
+          by_stage: tallyByStage(g.items, pipeline),
+          // Villages whose stages have been moved out of order. Reported
+          // rather than prevented, because the task board drives the state
+          // and the board is not this module's to police.
+          out_of_sequence: g.items
+            .filter(i => outOfSequence(i.stages ?? {}, pipeline).length > 0).length,
           period_done: from
             ? Object.fromEntries(m.codes.map(code => [
               code,
@@ -740,6 +997,13 @@ export async function registerSurveyRoutes(
           // The whole programme, computed from the same villages, so the
           // headline and the rows below it cannot disagree.
           total: rollUp(pos, m.codes, codes, m.basis),
+          by_stage: tallyByStage(pos, pipeline),
+          rovers,
+          pace: paceFigures,
+          pipeline: pipeline.map(st => ({
+            code: st.code, label: st.label, requires: st.requires ?? null,
+            tracks_daily_progress: Boolean(st.tracksDailyProgress),
+          })),
           measures: m.rows.map(r => ({
             code: r.code, label: r.label, group_label: r.group_label,
             unit: r.unit, basis: r.basis,
@@ -815,20 +1079,34 @@ export async function registerSurveyRoutes(
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       await projectOr404(pool, u.orgId, id);
-      const [codes, pos] = await Promise.all([
+      const [codes, pos, pipeline] = await Promise.all([
         stageCodes(pool, u.orgId), positions(pool, u.orgId, id),
+        stagePipeline(pool, u.orgId),
       ]);
 
       return {
         data: pos.map(p => {
-          const dates = p.row.stage_dates as Record<string, { started: string | null; completed: string | null }>;
+          const dates = p.row.stage_dates as Record<string,
+            { started: string | null; completed: string | null; remarks?: string | null }>;
           const surveyed = (p.done.GOVT_LAND_EXTENT_AC ?? 0) + (p.done.PRIVATE_LAND_EXTENT_AC ?? 0);
           return {
             mandal: p.row.mandal_name,
             village: p.row.village_name,
             extent_ac: p.extentAc,
             extent_sq_km: p.extentAc === null ? null : acresToSqKm(p.extentAc),
+            // Where the village has actually got to, which is the work
+            // waiting rather than the work finished.
+            current_stage: currentStage(p.stages ?? {}, pipeline)?.code ?? null,
+            current_stage_state: currentStage(p.stages ?? {}, pipeline)?.state ?? null,
+            // Why a village is stuck. "Two parcels disputed" is the reason it
+            // sits at QC for three weeks, and it belongs on the sheet.
+            stage_remarks: Object.fromEntries(
+              Object.entries(dates).map(([code, d]) => [code, d.remarks ?? null])
+                .filter(([, v]) => v !== null)),
+            stages: p.stages ?? {},
+            out_of_sequence: outOfSequence(p.stages ?? {}, pipeline),
             gt_status: p.stages?.GROUND_TRUTHING ?? 'NOT_STARTED',
+            gt_qc_status: p.stages?.GT_QC ?? 'NOT_STARTED',
             gt_started_on: dates.GROUND_TRUTHING?.started ?? null,
             gt_completed_on: dates.GROUND_TRUTHING?.completed ?? null,
             vectorization_status: p.stages?.VECTORIZATION ?? 'NOT_STARTED',

@@ -8,6 +8,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { STAGE_PIPELINE } from "@silverline/shared";
 import { buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
 
 let w: CatalogueWorld;
@@ -112,7 +113,10 @@ describe("generating the board", () => {
       { dry_run: true });
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect(r.data.village_tasks).toBe(2);
-    expect(r.data.stage_tasks).toBe(8); // two villages, four stages each
+    // Two villages, one subtask per stage each. Derived rather than a fixed
+    // number, so adding a stage to the pipeline does not break the test that
+    // is meant to be about previewing.
+    expect(r.data.stage_tasks).toBe(2 * STAGE_PIPELINE.length);
 
     const tasks = await w.pool.query(
       "SELECT count(*)::int AS n FROM tasks WHERE project_id = $1 AND title LIKE 'Survey %'",
@@ -124,14 +128,14 @@ describe("generating the board", () => {
     const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/generate-tasks`,
       { dry_run: false });
     expect(r.data.village_tasks).toBe(2);
-    expect(r.data.stage_tasks).toBe(8);
+    expect(r.data.stage_tasks).toBe(2 * STAGE_PIPELINE.length);
 
     const adakula = await villageRow("ADAKULA");
     expect(adakula.task_id).toBeTruthy();
 
     const subtasks = await w.pool.query(
       "SELECT count(*)::int AS n FROM tasks WHERE parent_task_id = $1", [adakula.task_id]);
-    expect(subtasks.rows[0].n).toBe(4);
+    expect(subtasks.rows[0].n).toBe(STAGE_PIPELINE.length);
   });
 
   it("names the task by where the work is", async () => {
@@ -223,7 +227,7 @@ describe("the task is the single source of the village's state", () => {
 
   it("completes the village only when every stage task is done", async () => {
     const adakula = await villageRow("ADAKULA");
-    for (const code of ["GROUND_TRUTHING", "VECTORIZATION", "RECORDS_PREPARATION", "LPM_GENERATION"]) {
+    for (const code of STAGE_PIPELINE.map(st => st.code)) {
       await setTaskStatus(await stageTaskId(adakula.id, code), "DONE",
         { end: "2026-09-12T10:00:00Z" });
     }

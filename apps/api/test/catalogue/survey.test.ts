@@ -7,6 +7,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { STAGE_PIPELINE } from "@silverline/shared";
 import { buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
 
 let w: CatalogueWorld;
@@ -339,8 +340,9 @@ describe("§59.5 stages and village state", () => {
 
   it("is complete only when every stage is complete", async () => {
     const sv = await listed("Finished village", 20);
-    const stages = ["GROUND_TRUTHING", "VECTORIZATION", "RECORDS_PREPARATION", "LPM_GENERATION"];
-    for (const code of stages.slice(0, 3)) {
+    // Every stage but the last, so the village is nearly-but-not-finished.
+    const stages = STAGE_PIPELINE.map(st => st.code);
+    for (const code of stages.slice(0, -1)) {
       await post(w.admin, `/api/v1/survey/villages/${sv}/stage`,
         { stage_code: code, state: "COMPLETED", started_on: "2026-09-01", completed_on: "2026-09-10" });
     }
@@ -348,7 +350,8 @@ describe("§59.5 stages and village state", () => {
     expect(r.data.find((v: any) => v.id === sv).state).toBe("IN_PROGRESS");
 
     await post(w.admin, `/api/v1/survey/villages/${sv}/stage`,
-      { stage_code: "LPM_GENERATION", state: "COMPLETED", started_on: "2026-09-01", completed_on: "2026-09-12" });
+      { stage_code: stages[stages.length - 1], state: "COMPLETED",
+        started_on: "2026-09-01", completed_on: "2026-09-12" });
     r = await get(w.admin, `/api/v1/survey/projects/${projectId}/villages`);
     expect(r.data.find((v: any) => v.id === sv).state).toBe("COMPLETED");
   });

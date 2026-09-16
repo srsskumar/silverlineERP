@@ -99,12 +99,29 @@ export interface StageSeed { code: string; label: string; displayOrder: number }
  * would say nothing. They carry start and completion dates because the
  * summary reports both.
  */
-export const STAGE_SEEDS: StageSeed[] = [
-  { code: 'GROUND_TRUTHING', label: 'Ground truthing', displayOrder: 10 },
-  { code: 'VECTORIZATION', label: 'Vectorization', displayOrder: 20 },
-  { code: 'RECORDS_PREPARATION', label: 'Records preparation', displayOrder: 30 },
-  { code: 'LPM_GENERATION', label: 'LPM generation', displayOrder: 40 },
+export interface StageSeedOrdered extends StageSeed {
+  requires?: string;
+  /** Daily progress is recorded against this stage. */
+  tracksDailyProgress?: boolean;
+}
+
+export const STAGE_PIPELINE: StageSeedOrdered[] = [
+  { code: 'GROUND_TRUTHING', label: 'Ground truthing', displayOrder: 10, tracksDailyProgress: true },
+  { code: 'GT_QC', label: 'GT quality check', displayOrder: 20, requires: 'GROUND_TRUTHING' },
+  { code: 'VECTORIZATION', label: 'Vectorization', displayOrder: 30, requires: 'GT_QC' },
+  { code: 'RECORDS_PREPARATION', label: 'Records preparation', displayOrder: 40, requires: 'VECTORIZATION' },
+  { code: 'LPM_GENERATION', label: 'LPM generation', displayOrder: 50, requires: 'RECORDS_PREPARATION' },
 ];
+
+/**
+ * The same list, in the shape the seed writes.
+ *
+ * One list rather than two. They were two briefly, and the seed quietly
+ * overwrote what the migration had just written — GT QC vanished from every
+ * freshly seeded database.
+ */
+export const STAGE_SEEDS: StageSeed[] = STAGE_PIPELINE.map(
+  ({ code, label, displayOrder }) => ({ code, label, displayOrder }));
 
 export const STAGE_CODES = STAGE_SEEDS.map(s => s.code);
 
@@ -556,3 +573,236 @@ export function plannedTasksFor(
     children: stages.map(s => ({ stageCode: s.code, title: `${s.label} — ${village.name}` })),
   };
 }
+
+/* ------------------------------------------------------- the stage pipeline */
+
+/**
+ * The stages a village moves through, in order (§59.5).
+ *
+ * Ground truthing is checked before the drawing is vectorised, which is why
+ * GT QC sits between them. Leaving it out made the pipeline look like a
+ * two-step where the field actually runs four, and a village whose GT had
+ * failed QC was indistinguishable from one whose GT was simply done.
+ *
+ * `requires` is the stage that must be complete before this one starts. It is
+ * a single predecessor rather than a graph because that is what the work is:
+ * a line, not a network.
+ */
+/**
+ * Whether a stage may start yet.
+ *
+ * Returns the blocking predecessor rather than a bare false, so the refusal
+ * can say which stage is in the way instead of "not allowed".
+ */
+export function stageBlockedBy(
+  stageCode: string,
+  states: Record<string, StageState>,
+  pipeline: StageSeedOrdered[] = STAGE_PIPELINE,
+): string | null {
+  const stage = pipeline.find(s => s.code === stageCode);
+  if (!stage?.requires) return null;
+  return states[stage.requires] === 'COMPLETED' ? null : stage.requires;
+}
+
+/**
+ * Where a village has actually got to.
+ *
+ * The furthest stage that has been started, which is what somebody means by
+ * "where is this village". A village whose GT is done and whose QC has not
+ * begun is at GT QC — the work waiting, not the work finished.
+ */
+export function currentStage(
+  states: Record<string, StageState>,
+  pipeline: StageSeedOrdered[] = STAGE_PIPELINE,
+): { code: string; state: StageState } | null {
+  for (const stage of pipeline) {
+    const state = states[stage.code] ?? 'NOT_STARTED';
+    if (state !== 'COMPLETED') return { code: stage.code, state };
+  }
+  return pipeline.length
+    ? { code: pipeline[pipeline.length - 1].code, state: 'COMPLETED' }
+    : null;
+}
+
+/**
+ * A stage whose predecessor is not finished.
+ *
+ * Reported rather than prevented where the task board drives the state: the
+ * board is not the survey module's to police, and a card moved out of order
+ * is a fact worth surfacing rather than one to hide.
+ */
+export function outOfSequence(
+  states: Record<string, StageState>,
+  pipeline: StageSeedOrdered[] = STAGE_PIPELINE,
+): string[] {
+  return pipeline
+    .filter(s => {
+      const state = states[s.code] ?? 'NOT_STARTED';
+      if (state === 'NOT_STARTED') return false;
+      return s.requires !== undefined && states[s.requires] !== 'COMPLETED';
+    })
+    .map(s => s.code);
+}
+
+/* ------------------------------------------------- counts by stage */
+
+export interface StageTally {
+  notStarted: number;
+  inProgress: number;
+  completed: number;
+  onHold: number;
+}
+
+const emptyTally = (): StageTally => ({ notStarted: 0, inProgress: 0, completed: 0, onHold: 0 });
+
+/**
+ * How many villages sit at each state of each stage.
+ *
+ * This is the question the request asks to be answerable at any moment: how
+ * many villages are yet to start, how many have GT in progress, how many are
+ * waiting on QC. The overall village state cannot answer it — "in progress"
+ * covers a village on its first day of GT and one waiting for its LPM.
+ */
+export function tallyByStage(
+  villages: Array<{ stages?: Record<string, StageState> }>,
+  pipeline: StageSeedOrdered[] = STAGE_PIPELINE,
+): Record<string, StageTally> {
+  const out: Record<string, StageTally> = {};
+  for (const stage of pipeline) out[stage.code] = emptyTally();
+  for (const village of villages) {
+    for (const stage of pipeline) {
+      const state = village.stages?.[stage.code] ?? 'NOT_STARTED';
+      const tally = out[stage.code];
+      if (state === 'NOT_STARTED') tally.notStarted += 1;
+      else if (state === 'IN_PROGRESS') tally.inProgress += 1;
+      else if (state === 'COMPLETED') tally.completed += 1;
+      else if (state === 'ON_HOLD') tally.onHold += 1;
+    }
+  }
+  return out;
+}
+
+/* ----------------------------------------------------------------- rovers */
+
+export interface RoverDay {
+  /** Rovers allocated to the work on this date, from the asset register. */
+  allocated: number;
+  /** Rovers the crews reported using. */
+  used: number;
+}
+
+export interface RoverUtilisation extends RoverDay {
+  idle: number;
+  /** Null rather than zero when nothing is allocated — there is no ratio. */
+  utilisationPct: number | null;
+  /** Used exceeds allocated: somebody is running equipment off the books. */
+  overUsed: boolean;
+}
+
+/**
+ * What the rovers did on a day.
+ *
+ * Idle is the point of the figure. A programme with thirty rovers allocated
+ * and eleven used is not "eleven rovers of progress", it is nineteen sitting
+ * in a store while the schedule assumes otherwise — and nothing in the
+ * spreadsheet this replaces would ever have shown that.
+ */
+export function roverUtilisation(day: RoverDay): RoverUtilisation {
+  const allocated = Math.max(0, Math.round(day.allocated));
+  const used = Math.max(0, Math.round(day.used));
+  return {
+    allocated,
+    used,
+    // Never negative: more used than allocated is its own signal, reported
+    // below rather than folded into a negative idle count.
+    idle: Math.max(0, allocated - used),
+    utilisationPct: allocated > 0 ? round((used / allocated) * 100) : null,
+    overUsed: used > allocated,
+  };
+}
+
+/* ------------------------------------------------------------------ pace */
+
+export interface Pace {
+  /** Days in the window that had any progress recorded. */
+  activeDays: number;
+  /** Extent surveyed per active day. */
+  acresPerActiveDay: number | null;
+  /** Extent surveyed per calendar day in the window. */
+  acresPerCalendarDay: number | null;
+  /** Villages finished per calendar day. */
+  villagesPerCalendarDay: number | null;
+  /** Calendar days to finish the remaining extent at the observed pace. */
+  daysToFinish: number | null;
+  /** The date the work runs out at this pace, if it can be projected. */
+  projectedFinish: string | null;
+}
+
+/**
+ * How fast the work is actually going, and when it would finish at that rate.
+ *
+ * Two rates, deliberately. Per active day is how fast a crew works when it is
+ * working; per calendar day includes the rain, the holidays and the days
+ * nobody went out. A schedule built on the first and delivered on the second
+ * is how a programme slips without anybody seeing it happen.
+ *
+ * The projection is arithmetic, not a forecast: it says what happens if the
+ * last stretch repeats. It is null when there is nothing to extrapolate from.
+ */
+export function pace(args: {
+  surveyedAc: number;
+  remainingAc: number;
+  villagesCompleted: number;
+  activeDays: number;
+  calendarDays: number;
+  asOf: string;
+}): Pace {
+  const calendar = Math.max(0, args.calendarDays);
+  const perActive = args.activeDays > 0 ? round(args.surveyedAc / args.activeDays) : null;
+  const perCalendar = calendar > 0 ? round(args.surveyedAc / calendar) : null;
+  const villagesPer = calendar > 0 ? round(args.villagesCompleted / calendar, 3) : null;
+
+  let daysToFinish: number | null = null;
+  let projectedFinish: string | null = null;
+  if (perCalendar !== null && perCalendar > 0 && args.remainingAc > 0) {
+    daysToFinish = Math.ceil(args.remainingAc / perCalendar);
+    const end = new Date(`${args.asOf}T00:00:00Z`);
+    end.setUTCDate(end.getUTCDate() + daysToFinish);
+    projectedFinish = end.toISOString().slice(0, 10);
+  }
+  return {
+    activeDays: args.activeDays,
+    acresPerActiveDay: perActive,
+    acresPerCalendarDay: perCalendar,
+    villagesPerCalendarDay: villagesPer,
+    daysToFinish,
+    projectedFinish,
+  };
+}
+
+/* ------------------------------------------------------------- schemas */
+
+export const crewAssignmentSchema = z.object({
+  employee_id: z.string().uuid(),
+  stage_code: z.string().min(1).max(64),
+  assigned_on: isoDate.optional(),
+  released_on: isoDate.nullable().optional(),
+});
+
+export const roverAllocationSchema = z.object({
+  asset_id: z.string().uuid(),
+  allocated_on: isoDate,
+  released_on: isoDate.nullable().optional(),
+}).refine(v => !v.released_on || v.released_on >= v.allocated_on, {
+  message: 'A rover cannot be released before it was allocated',
+  path: ['released_on'],
+});
+
+/** A stage update now carries the remarks the workflow asks for. */
+export const stageRemarkSchema = z.object({
+  stage_code: z.string().min(1).max(64),
+  state: z.enum(STAGE_STATES),
+  started_on: isoDate.nullable().optional(),
+  completed_on: isoDate.nullable().optional(),
+  remarks: z.string().max(2000).nullable().optional(),
+});

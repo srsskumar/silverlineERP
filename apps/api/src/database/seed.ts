@@ -28,7 +28,7 @@ import {
   DOCUMENT_ROLE_GRANTS,
   DOCUMENT_TYPE_SEEDS,
   MEASURE_SEEDS,
-  STAGE_SEEDS,
+  STAGE_PIPELINE,
   SURVEY_ROLE_GRANTS,
   SURVEY_PERMISSIONS,
   ROLE_CODES,
@@ -292,13 +292,26 @@ export async function seedDatabase(
       [orgId, m.code, m.label, m.groupLabel, m.unit, m.basis, m.displayOrder],
     );
   }
-  for (const s of STAGE_SEEDS) {
+  for (const s of STAGE_PIPELINE) {
     await pool.query(
-      `INSERT INTO survey_stages (org_id, code, label, display_order)
-       VALUES ($1,$2,$3,$4)
+      `INSERT INTO survey_stages (org_id, code, label, display_order, tracks_daily_progress)
+       VALUES ($1,$2,$3,$4,$5)
        ON CONFLICT (org_id, code) DO UPDATE SET
-         label = EXCLUDED.label, display_order = EXCLUDED.display_order`,
-      [orgId, s.code, s.label, s.displayOrder],
+         label = EXCLUDED.label, display_order = EXCLUDED.display_order,
+         tracks_daily_progress = EXCLUDED.tracks_daily_progress`,
+      [orgId, s.code, s.label, s.displayOrder, Boolean(s.tracksDailyProgress)],
+    );
+  }
+  // The chain, once every stage exists. Ground truthing is checked before the
+  // drawing is vectorised, so the order is part of the definition.
+  for (const s of STAGE_PIPELINE) {
+    if (!s.requires) continue;
+    await pool.query(
+      `UPDATE survey_stages child SET requires_stage_id = parent.id
+       FROM survey_stages parent
+       WHERE child.org_id = $1 AND child.code = $2
+         AND parent.org_id = $1 AND parent.code = $3`,
+      [orgId, s.code, s.requires],
     );
   }
 

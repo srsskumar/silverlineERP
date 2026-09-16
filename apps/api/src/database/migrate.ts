@@ -58,6 +58,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "048_document_permissions", file: "048_document_permissions.sql" },
   { version: "049_land_survey", file: "049_land_survey.sql" },
   { version: "050_survey_task_link", file: "050_survey_task_link.sql" },
+  { version: "051_survey_crew_and_rovers", file: "051_survey_crew_and_rovers.sql" },
 ];
 
 /**
