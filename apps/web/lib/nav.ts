@@ -23,7 +23,18 @@ import { PERMISSIONS } from './permissions';
 export interface NavItem {
   href: string;
   label: string;
+  /** The permission that names this destination. */
   permission?: string;
+  /**
+   * Everything the page actually needs to render, where that is more than the
+   * one permission it is named after.
+   *
+   * The dashboard is the case this exists for: it is gated on `dashboard.read`
+   * but reads projects and boards, so an HR or payroll officer held the naming
+   * permission, was shown the link, and got a page that could not load. A
+   * destination has to declare what it needs, not what it is called.
+   */
+  requires?: string[];
   icon: LucideIcon;
 }
 
@@ -36,7 +47,17 @@ export interface NavGroup {
 // groups render only when at least one child is visible.
 export const NAV_GROUPS: NavGroup[] = [
   {
-    items: [{ href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard }],
+    // Gated like every other destination. A role without dashboard.read is
+    // sent to the first place it can actually open (lib/landing.ts) instead of
+    // to a page that answers every request with a refusal.
+    items: [{
+      href: '/dashboard', label: 'Dashboard',
+      permission: PERMISSIONS.DASHBOARD_READ,
+      // The board reads projects and boards. Without both, the page has
+      // nothing to show, so the link is not offered.
+      requires: [PERMISSIONS.PROJECT_READ, PERMISSIONS.BOARD_READ],
+      icon: LayoutDashboard,
+    }],
   },
   {
     title: 'Work',
@@ -44,8 +65,8 @@ export const NAV_GROUPS: NavGroup[] = [
     // the inbox is per-user. Reports needs report.generate (per-type gates
     // live inside ReportForm). The shell renders these once a session exists.
     items: [
-      { href: '/my-work', label: 'My work', icon: ClipboardList },
-      { href: '/inbox', label: 'Inbox', icon: Inbox },
+      { href: '/my-work', label: 'My work', permission: PERMISSIONS.TASK_READ, icon: ClipboardList },
+      { href: '/inbox', label: 'Inbox', permission: 'notification.read', icon: Inbox },
       { href: '/projects', label: 'Projects', permission: PERMISSIONS.PROJECT_READ, icon: FolderKanban },
       { href: '/planning', label: 'Planning', permission: 'cycle.read', icon: CalendarDays },
       { href: '/reports', label: 'Reports', permission: PERMISSIONS.REPORT_GENERATE, icon: FileSpreadsheet },

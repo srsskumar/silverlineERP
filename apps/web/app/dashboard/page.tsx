@@ -10,7 +10,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { WorkforceStrip } from '@/components/WorkforceStrip';
-import { PERMISSIONS } from '@/lib/permissions';
+import { PERMISSIONS, hasPermission } from '@/lib/permissions';
+import { useAuth } from '@/components/AuthProvider';
+import { landingRoute } from '@/lib/landing';
 import { getProject, listProjects } from '@/lib/projects';
 import { getBoard, listBoards } from '@/lib/boards';
 import { TASK_STATUSES } from '@/lib/validation';
@@ -28,6 +30,15 @@ const selectClass =
  * (used by /my-work); this page is boards, end to end.
  */
 export default function DashboardPage() {
+  const { session } = useAuth();
+  const actor = { permissions: session?.permissions };
+  // The board needs both: the project list to choose from, and the board
+  // itself. An HR or payroll officer holds dashboard.read and neither of
+  // these, and the page used to fire the project query regardless and show
+  // them nothing but "Insufficient permissions".
+  const canSeeBoards =
+    hasPermission(actor, PERMISSIONS.PROJECT_READ) && hasPermission(actor, PERMISSIONS.BOARD_READ);
+
   const [projectId, setProjectId] = React.useState<string | null>(null);
   const [boardId, setBoardId] = React.useState<string | null>(null);
   const [mineOnly, setMineOnly] = React.useState(false);
@@ -35,6 +46,7 @@ export default function DashboardPage() {
   const projectsQuery = useQuery({
     queryKey: queryKeys.projects.list(),
     queryFn: () => listProjects(),
+    enabled: canSeeBoards,
     staleTime: 60_000,
   });
   const projects = projectsQuery.data ?? [];
@@ -49,7 +61,7 @@ export default function DashboardPage() {
   const boardsQuery = useQuery({
     queryKey: projectId ? queryKeys.boards.list({ project_id: projectId }) : ['boards', 'list', 'none'],
     queryFn: () => listBoards(projectId as string),
-    enabled: !!projectId,
+    enabled: canSeeBoards && !!projectId,
     staleTime: 30_000,
   });
   const boards = boardsQuery.data ?? [];
@@ -63,14 +75,14 @@ export default function DashboardPage() {
   const boardQuery = useQuery({
     queryKey: boardId ? queryKeys.boards.detail(boardId) : ['boards', 'detail', 'none'],
     queryFn: () => getBoard(boardId as string),
-    enabled: !!boardId,
+    enabled: canSeeBoards && !!boardId,
     staleTime: 30_000,
   });
 
   const projectQuery = useQuery({
     queryKey: projectId ? queryKeys.projects.detail(projectId) : ['projects', 'detail', 'none'],
     queryFn: () => getProject(projectId as string),
-    enabled: !!projectId,
+    enabled: canSeeBoards && !!projectId,
     staleTime: 60_000,
   });
   const workflowStatuses: string[] = React.useMemo(() => {
@@ -81,6 +93,40 @@ export default function DashboardPage() {
     }
     return [...TASK_STATUSES];
   }, [projectQuery.data]);
+
+  // Somebody who cannot see boards still gets a dashboard: the workforce
+  // summary their role does entitle them to, and a way on to the work they
+  // can actually do. Previously this page fired a project query at them and
+  // rendered a refusal.
+  if (!canSeeBoards) {
+    const onward = landingRoute(session?.permissions);
+    return (
+      <AppShell>
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-lg font-semibold text-text">Dashboard</h1>
+        </div>
+        <div className="mt-3">
+          <WorkforceStrip />
+        </div>
+        <div className="mt-4">
+          <EmptyState
+            title="No project boards for your role"
+            description="Boards are part of project delivery, which your account is not set up for. Everything you do have access to is in the sidebar."
+            action={
+              onward !== '/dashboard' ? (
+                <Link
+                  href={onward}
+                  className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-fg hover:bg-primary-hover"
+                >
+                  Go to my work
+                </Link>
+              ) : undefined
+            }
+          />
+        </div>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell>

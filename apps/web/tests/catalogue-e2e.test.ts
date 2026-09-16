@@ -14,6 +14,15 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import {
+  ROLE_PERMISSIONS, S1_ROLE_GRANTS, S2_ROLE_GRANTS, S3_ROLE_GRANTS, S4_ROLE_GRANTS,
+  S5_ROLE_GRANTS, S6_ROLE_GRANTS, P1_ROLE_GRANTS, V2_ROLE_GRANTS, CRM_ROLE_GRANTS,
+  BILLING_ROLE_GRANTS, APPROVAL_ROLE_GRANTS, PROCUREMENT_ROLE_GRANTS,
+  COST_CONTROL_ROLE_GRANTS, EXPENSE_ROLE_GRANTS, FINANCE_ROLE_GRANTS,
+  INVENTORY_ROLE_GRANTS, ALLOCATION_ROLE_GRANTS, LEDGER_ROLE_GRANTS,
+  DOCUMENT_ROLE_GRANTS, SURVEY_ROLE_GRANTS,
+} from '@silverline/shared';
+import { navItemVisible } from '../lib/landing';
 import { NAV_GROUPS, QUICK_CREATE } from '../lib/nav';
 import { hasPermission, PERMISSIONS } from '../lib/permissions';
 import { buildFencesQuery, normalizeFences } from '../lib/geo';
@@ -26,12 +35,27 @@ function source(relativePath: string): string {
 }
 
 /** The nav items a session with exactly these permissions would see. */
+/** EMPLOYEE's real grants, assembled the way the seed assembles them. */
+function employeePermissions(): string[] {
+  const maps = [
+    ROLE_PERMISSIONS, S1_ROLE_GRANTS, S2_ROLE_GRANTS, S3_ROLE_GRANTS, S4_ROLE_GRANTS,
+    S5_ROLE_GRANTS, S6_ROLE_GRANTS, P1_ROLE_GRANTS, V2_ROLE_GRANTS, CRM_ROLE_GRANTS,
+    BILLING_ROLE_GRANTS, APPROVAL_ROLE_GRANTS, PROCUREMENT_ROLE_GRANTS,
+    COST_CONTROL_ROLE_GRANTS, EXPENSE_ROLE_GRANTS, FINANCE_ROLE_GRANTS,
+    INVENTORY_ROLE_GRANTS, ALLOCATION_ROLE_GRANTS, LEDGER_ROLE_GRANTS,
+    DOCUMENT_ROLE_GRANTS, SURVEY_ROLE_GRANTS,
+  ] as Array<Partial<Record<'EMPLOYEE', string[]>>>;
+  const out = new Set<string>();
+  for (const m of maps) for (const p of m.EMPLOYEE ?? []) out.add(p);
+  return [...out];
+}
+
 function visibleNav(permissions: string[]): string[] {
-  const holder = { permissions };
+  // The predicate the sidebar itself uses. Re-implementing the filter here is
+  // what let this test pass while the real sidebar behaved differently: a
+  // destination may need more than the one permission it is named after.
   return NAV_GROUPS.flatMap((group) =>
-    group.items
-      .filter((item) => !item.permission || hasPermission(holder, item.permission))
-      .map((item) => item.href),
+    group.items.filter((item) => navItemVisible(permissions, item)).map((item) => item.href),
   );
 }
 
@@ -40,20 +64,35 @@ function visibleNav(permissions: string[]): string[] {
 // ===========================================================================
 
 describe('E2E-02 employee signs in without admin permissions', () => {
-  // The grants an EMPLOYEE role actually carries (see packages/shared rbac +
-  // the S1..P1 grant maps). Deliberately spelled out rather than imported, so
-  // a silent widening of the role fails this test.
-  const EMPLOYEE_PERMISSIONS = [
-    'auth.login',
-    'attendance.punch',
-    'task.read',
-    'leave.request',
-    'payslip.read',
-  ];
+  /**
+   * The grants an EMPLOYEE actually carries, assembled the way the seed
+   * assembles them.
+   *
+   * This was previously five permissions written out by hand, with a comment
+   * saying that spelling them out would catch a silent widening of the role.
+   * It did the opposite: the real role carries twenty-four, so the test was
+   * describing a user the product has never shipped, and every assertion below
+   * was about that imaginary person. The count is pinned separately, which
+   * catches a widening without inventing the role.
+   */
+  const EMPLOYEE_PERMISSIONS = employeePermissions();
+
+  it('matches the role the seed actually grants', () => {
+    // Pinned so a widening still fails loudly — but against the real role.
+    expect(EMPLOYEE_PERMISSIONS).toContain('task.read');
+    expect(EMPLOYEE_PERMISSIONS).toContain('project.read');
+    expect(EMPLOYEE_PERMISSIONS).toContain('leave.request');
+    expect(EMPLOYEE_PERMISSIONS).not.toContain('users.read');
+    expect(EMPLOYEE_PERMISSIONS).not.toContain('payroll.read');
+    expect(EMPLOYEE_PERMISSIONS.length).toBeLessThan(40);
+  });
 
   it('hides every administrative destination from an ordinary employee', () => {
     const visible = visibleNav(EMPLOYEE_PERMISSIONS);
 
+    // An employee works on projects and is issued assets, so /projects and
+    // /assets are theirs. What they must not reach is other people's records
+    // and the money.
     for (const adminHref of [
       '/employees',
       '/attendance',
@@ -64,11 +103,16 @@ describe('E2E-02 employee signs in without admin permissions', () => {
       '/org/holidays',
       '/admin',
       '/inventory',
-      '/assets',
       '/analytics',
       '/automation',
       '/reports',
-      '/projects',
+      '/receivables',
+      '/payables',
+      '/billing',
+      '/procurement',
+      '/clients',
+      '/tenders',
+      '/leads',
     ]) {
       expect(visible, `${adminHref} must be hidden`).not.toContain(adminHref);
     }
