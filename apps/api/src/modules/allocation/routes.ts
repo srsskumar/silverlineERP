@@ -5,6 +5,7 @@ import {
   findCapacityConflict, utilisation, shiftHours, isRestDay, dayPay,
   ALLOCATION_TRANSITIONS,
   type Allocation, type AllocationState, type Weekday,
+  businessDay,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail, employeeAccess } from '../../common/domain.js';
@@ -22,7 +23,9 @@ export async function registerAllocationRoutes(app: FastifyInstance, opts: { poo
   const guard = (p: string) => requirePermission(auth, p);
   const iso = (v: unknown) =>
     v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10);
-  const today = () => new Date().toISOString().slice(0, 10);
+  // The calendar day where the work happens, not in UTC. For the first
+  // five and a half hours of every Indian day, UTC is still yesterday.
+  const today = () => businessDay();
 
   /** Live allocations for a person, in the shape the pure layer wants. */
   async function allocationsFor(db: Pool | PoolClient, orgId: string, employeeId: string): Promise<Allocation[]> {

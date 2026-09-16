@@ -9,7 +9,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { STAGE_PIPELINE } from "@silverline/shared";
-import { buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
+import { workDate, buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
 
 let w: CatalogueWorld;
 let programmeId: string;
@@ -184,7 +184,7 @@ describe("the task is the single source of the village's state", () => {
     // The start date was supplied before the trigger had anything to stamp,
     // so it survives.
     expect(row.gt_started_on).toBe("2026-09-02");
-    expect(row.gt_completed_on).toBe(new Date().toISOString().slice(0, 10));
+    expect(row.gt_completed_on).toBe(workDate());
   });
 
   it("lets a wrongly dated completion be corrected on the task, not the survey row", async () => {

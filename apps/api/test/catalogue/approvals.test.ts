@@ -9,7 +9,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
+import { workDate, buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
 
 let w: CatalogueWorld;
 
@@ -258,7 +258,7 @@ describe("delegation", () => {
   beforeAll(async () => { await ladderPolicy(); });
 
   it("lets the delegate act inside the window and records on whose authority", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = workDate();
     const policy = await post(w.admin, "/api/v1/approval-policies", {
       document_type: "PAYMENT", name: "Named approver",
       levels: [{ sequence: 1, min_amount: 0, max_amount: null, approver_user_id: w.roleUserId.PROJECT_MANAGER }],
@@ -286,7 +286,7 @@ describe("delegation", () => {
   it("refuses a delegation that would close a cycle", async () => {
     // Both roles hold approval.delegate — delegating authority is a narrower
     // grant than exercising it, so most approvers cannot delegate at all.
-    const today = new Date().toISOString().slice(0, 10);
+    const today = workDate();
     const out = await post(w.role.ADMIN, "/api/v1/approval-delegations", {
       to_user_id: w.roleUserId.PROJECT_MANAGER, valid_from: today, valid_to: today, reason: "Cover",
     });
@@ -299,7 +299,7 @@ describe("delegation", () => {
   });
 
   it("refuses to let an approver without the grant delegate at all", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = workDate();
     const res = await post(w.role.HR_MANAGER, "/api/v1/approval-delegations", {
       to_user_id: w.roleUserId.TEAM_LEAD, valid_from: today, valid_to: today, reason: "Cover",
     });
@@ -307,7 +307,7 @@ describe("delegation", () => {
   });
 
   it("refuses delegating to yourself", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = workDate();
     const res = await post(w.role.PROJECT_MANAGER, "/api/v1/approval-delegations", {
       to_user_id: w.roleUserId.PROJECT_MANAGER, valid_from: today, valid_to: today, reason: "No-op",
     });
@@ -315,7 +315,7 @@ describe("delegation", () => {
   });
 
   it("stops the delegate acting once revoked", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = workDate();
     const policy = await post(w.admin, "/api/v1/approval-policies", {
       document_type: "LEAVE_REQUEST", name: "Named",
       levels: [{ sequence: 1, min_amount: 0, max_amount: null, approver_user_id: w.roleUserId.SUPER_ADMIN }],

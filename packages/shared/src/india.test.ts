@@ -5,7 +5,7 @@ import {
   financialYearOf, sameFinancialYear, gstDocumentNumber, isValidGstDocumentNumber,
   splitGst, msmeDueDate, msmeDelayInterest, tdsOn, computeInvoice, isValidGstRate,
   MSME_DAYS_WITH_AGREEMENT, MSME_DAYS_WITHOUT_AGREEMENT,
-  contractValueBreakdown, amountInWords,
+  contractValueBreakdown, amountInWords, businessDay,
 } from './india.js';
 
 /**
@@ -422,5 +422,34 @@ describe('amountInWords', () => {
     // 1,00,00,007 — the classic case where a naive implementation emits
     // "One Crore Seven" and loses nothing, or emits stray empty groups.
     expect(amountInWords(10_000_007)).toBe('One Crore Seven Rupees only');
+  });
+});
+
+describe('businessDay', () => {
+  it('is the Indian calendar day, not the UTC one', () => {
+    // 2026-09-16 20:00 UTC is already the 17th in India. A crew filing at
+    // half past one in the morning is filing on the 17th, and UTC would date
+    // it to the 16th.
+    expect(businessDay(new Date('2026-09-16T20:00:00Z'))).toBe('2026-09-17');
+  });
+
+  it('gets the first hours of an Indian day right', () => {
+    // 00:30 IST on the 17th is 19:00 UTC on the 16th. This is the window the
+    // bug lived in: five and a half hours of every day reporting yesterday.
+    expect(businessDay(new Date('2026-09-16T19:00:00Z'))).toBe('2026-09-17');
+    expect(businessDay(new Date('2026-09-16T18:29:00Z'))).toBe('2026-09-16');
+  });
+
+  it('agrees with UTC in the middle of the working day', () => {
+    expect(businessDay(new Date('2026-09-16T09:00:00Z'))).toBe('2026-09-16');
+  });
+
+  it('honours a timezone that is given', () => {
+    expect(businessDay(new Date('2026-09-16T20:00:00Z'), 'UTC')).toBe('2026-09-16');
+  });
+
+  it('crosses a month and a year boundary', () => {
+    expect(businessDay(new Date('2026-03-31T19:00:00Z'))).toBe('2026-04-01');
+    expect(businessDay(new Date('2026-12-31T19:00:00Z'))).toBe('2027-01-01');
   });
 });

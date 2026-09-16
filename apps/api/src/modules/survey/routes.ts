@@ -9,6 +9,7 @@ import {
   outOfSequence, stageBlockedBy,
   crewAssignmentSchema, roverAllocationSchema, stageRemarkSchema, STAGE_PIPELINE,
   type MeasureBasis, type PeriodGrain, type ReportLevel, type StageState, type VillageProgress,
+  businessDay,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { z } from 'zod';
@@ -28,9 +29,15 @@ export async function registerSurveyRoutes(
   const { pool } = opts;
   const auth = buildAuthenticate(opts);
   const guard = (p: string) => requirePermission(auth, p);
-  const today = () => new Date().toISOString().slice(0, 10);
+  // The calendar day where the work happens, not in UTC. For the first
+  // five and a half hours of every Indian day, UTC is still yesterday.
+  const today = () => businessDay();
+  // A timestamp becomes the calendar day it fell on *here*, not in UTC. A
+  // stage completed at half past midnight would otherwise be dated to the day
+  // before on the summary sheet. Date columns land on the same answer either
+  // way, so one helper serves both.
   const iso = (v: unknown) =>
-    v instanceof Date ? v.toISOString().slice(0, 10) : v ? String(v).slice(0, 10) : null;
+    v instanceof Date ? businessDay(v) : v ? String(v).slice(0, 10) : null;
   const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
 
   /** The organisation's measures, by id and by code. */

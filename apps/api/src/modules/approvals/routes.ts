@@ -4,6 +4,7 @@ import {
   approvalPolicySchema, approvalDecisionSchema, delegationSchema,
   resolveLadder, canAct, nextActionableStep, createsDelegationCycle, requiresReapproval,
   type ApprovalDocumentType, type ApprovalStep, type Delegation, type LadderMode,
+  businessDay,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
@@ -19,7 +20,9 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
   const { pool } = opts;
   const auth = buildAuthenticate(opts);
   const guard = (p: string) => requirePermission(auth, p);
-  const today = () => new Date().toISOString().slice(0, 10);
+  // The calendar day where the work happens, not in UTC. For the first
+  // five and a half hours of every Indian day, UTC is still yesterday.
+  const today = () => businessDay();
 
   /** Live delegations in the org, as the pure layer wants them. */
   async function delegationsFor(db: Pool | PoolClient, orgId: string): Promise<Delegation[]> {

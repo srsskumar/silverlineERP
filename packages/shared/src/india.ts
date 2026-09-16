@@ -523,3 +523,35 @@ export function amountInWords(amount: number): string {
     : `${rupeeWords} Rupees only`;
   return `${negative ? 'Minus ' : ''}${words}`;
 }
+
+/* ------------------------------------------------------- the business day */
+
+/**
+ * The organisation's default working timezone.
+ *
+ * The whole deployment operates in one country, and the SQL in this codebase
+ * already hardcodes `AT TIME ZONE 'Asia/Kolkata'` wherever it computes a
+ * calendar day. This constant is the same decision made once, where the
+ * application layer can see it.
+ */
+export const DEFAULT_TIME_ZONE = 'Asia/Kolkata';
+
+/**
+ * Today's calendar date where the work happens.
+ *
+ * `new Date().toISOString().slice(0, 10)` is UTC, and for the first five and a
+ * half hours of every Indian day that is *yesterday*. A crew filing daily
+ * progress at nine in the morning would have it dated to the day before; an
+ * ageing report run before lunch would age everything a day short; a licence
+ * expiring today would read as having a day left.
+ *
+ * Nothing that means "today" to a user should be computed in UTC.
+ */
+export function businessDay(
+  at: Date = new Date(), timeZone: string = DEFAULT_TIME_ZONE,
+): string {
+  // en-CA formats as YYYY-MM-DD, which is what every date column here wants.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(at);
+}

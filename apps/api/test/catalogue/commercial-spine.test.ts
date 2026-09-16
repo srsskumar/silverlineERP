@@ -10,7 +10,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { gstinCheckDigit } from "@silverline/shared";
-import {
+import { workDate,
   buildWorld,
   idem,
   uniq,
@@ -448,7 +448,7 @@ describe("§6.4 instruments", () => {
     const soon = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
     const created = await post(w.admin, "/api/v1/instruments", {
       instrument_type: "EMD", issuing_bank: "SBI", instrument_number: uniq("BG"),
-      amount: "100000", issue_date: new Date().toISOString().slice(0, 10),
+      amount: "100000", issue_date: workDate(),
       expiry_date: soon, tender_id: tender.id,
     });
     expect(created.status).toBe(201);

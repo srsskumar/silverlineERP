@@ -6,6 +6,7 @@ import {
   settlementPosition, unallocated, checkAllocation, periodAllows, findPeriodOverlap,
   reconcileImport, INVOICE_TRANSITIONS,
   type FinancialPeriod, type AllocationLine, type InvoiceLifecycle,
+  businessDay,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail, projectAccess } from '../../common/domain.js';
@@ -490,7 +491,7 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
    */
   app.get('/api/v1/finance/outstanding', { preHandler: guard('payment.read') }, async req => {
     const u = actor(req), { q } = page(req);
-    const asOf = String(q.as_of ?? new Date().toISOString().slice(0, 10));
+    const asOf = String(q.as_of ?? businessDay());
     const rows = (await pool.query(
       `SELECT i.id, i.serial_number, i.total, i.due_date, i.disputed, i.lifecycle_status,
               v.name AS vendor_name,

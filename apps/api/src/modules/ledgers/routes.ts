@@ -5,6 +5,7 @@ import {
   ageOutstanding, payableDue, msmeInterestOn, creditExposure, daysSalesOutstanding,
   selectForRun, settlementPosition, PAYMENT_RUN_TRANSITIONS,
   type PayableCandidate, type PaymentRunState, type AgeingItem,
+  businessDay,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
@@ -19,7 +20,9 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
   const { pool } = opts;
   const auth = buildAuthenticate(opts);
   const guard = (p: string) => requirePermission(auth, p);
-  const today = () => new Date().toISOString().slice(0, 10);
+  // The calendar day where the work happens, not in UTC. For the first
+  // five and a half hours of every Indian day, UTC is still yesterday.
+  const today = () => businessDay();
   const iso = (v: unknown) =>
     v instanceof Date ? v.toISOString().slice(0, 10) : v ? String(v).slice(0, 10) : null;
 
