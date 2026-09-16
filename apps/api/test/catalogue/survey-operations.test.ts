@@ -455,3 +455,62 @@ describe("the forecast is management information", () => {
     expect(r.status).toBe(200);
   });
 });
+
+describe("project-scoped visibility", () => {
+  it("shows an administrator every programme", async () => {
+    const r = await get(w.admin, "/api/v1/survey/projects");
+    expect(r.data.length).toBeGreaterThan(1);
+  });
+
+  it("shows an employee only the programmes they are on", async () => {
+    // Without this an employee could read every district's figures.
+    const mine = await get(w.directUser, "/api/v1/survey/projects");
+    expect(mine.status).toBe(200);
+    const ids = mine.data.map((p: any) => p.id);
+    expect(ids).toContain(programmeId);
+    // The other programmes created in this file are not theirs.
+    const all = await get(w.admin, "/api/v1/survey/projects");
+    expect(ids.length).toBeLessThan(all.data.length);
+  });
+
+  it("shows nothing to an employee on no programme at all", async () => {
+    // An empty list must be an empty result, not every programme, which is
+    // what a missing filter silently produces.
+    const r = await get(w.siteUser, "/api/v1/survey/projects");
+    expect(r.status).toBe(200);
+    expect(r.data).toEqual([]);
+  });
+
+  it("answers 404 rather than 403 for a programme they may not see", async () => {
+    // Telling somebody a programme exists that they may not see is itself a
+    // disclosure.
+    const other = await post(w.admin, "/api/v1/survey/projects",
+      { code: uniq("SP"), name: "Not theirs" });
+    const r = await get(w.directUser, `/api/v1/survey/projects/${other.data.id}/progress`);
+    expect(r.status).toBe(404);
+  });
+
+  it("lets them read the programme they are on", async () => {
+    const r = await get(w.directUser, `/api/v1/survey/projects/${programmeId}/progress`);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+  });
+
+  it("hides a disabled programme from the crew but not from an administrator", async () => {
+    // Disabling is a visibility decision; the data stays exactly where it is.
+    await w.pool.query("UPDATE survey_projects SET status = 'DISABLED' WHERE id = $1",
+      [programmeId]);
+    const crew = await get(w.directUser, "/api/v1/survey/projects");
+    expect(crew.data.map((p: any) => p.id)).not.toContain(programmeId);
+
+    const admin = await get(w.admin, "/api/v1/survey/projects");
+    expect(admin.data.map((p: any) => p.id)).toContain(programmeId);
+
+    // And nothing was deleted.
+    const villages = await w.pool.query(
+      "SELECT count(*)::int AS n FROM survey_villages WHERE survey_project_id = $1",
+      [programmeId]);
+    expect(villages.rows[0].n).toBeGreaterThan(0);
+    await w.pool.query("UPDATE survey_projects SET status = 'ACTIVE' WHERE id = $1",
+      [programmeId]);
+  });
+});

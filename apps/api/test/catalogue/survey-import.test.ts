@@ -179,7 +179,10 @@ describe("§59.3.3 importing the work list", () => {
     ]);
     expect(r.data.imported).toBe(1);
     expect(r.data.rejected).toBe(1);
-    expect(r.data.results[1].message).toContain("district_code");
+    // The village code is the one field the row cannot do without: the
+    // district and mandal are optional now, because the source file arrives
+    // with gaps and losing the village is worse than losing its district.
+    expect(r.data.results[1].message).toContain("village_code");
   });
 
   it("refuses a negative extent", async () => {
@@ -223,5 +226,53 @@ describe("§59.3.3 importing the work list", () => {
     expect(progress.status).toBe(200);
     expect(progress.data.rows.some((r: any) => r.name === "Paderu")).toBe(true);
     expect(progress.data.total.villages).toBeGreaterThanOrEqual(5);
+  });
+});
+
+describe("§48 a list with empty columns", () => {
+  it("imports a village whose district and mandal are blank", async () => {
+    // The file arrives from the revenue department with gaps, and refusing
+    // the row means the village never gets surveyed in the system at all.
+    const r = await importRows([{
+      district_code: "", district_name: "", division_code: "", division_name: "",
+      mandal_code: "", mandal_name: "",
+      village_code: "9900001", village_name: "Gap village",
+    }]);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.imported).toBe(1);
+    expect(r.data.rejected).toBe(0);
+  });
+
+  it("says what the row was missing rather than staying silent", async () => {
+    const r = await importRows([{
+      village_code: "9900002", village_name: "Another gap",
+    }]);
+    expect(r.data.results[0].message).toContain("Imported without");
+    expect(r.data.results[0].message).toContain("district");
+  });
+
+  it("files it under a placeholder so the hierarchy still resolves", async () => {
+    // A visible gap somebody can fill in, rather than a silent absence.
+    const chain = await w.pool.query(
+      `SELECT d.name AS district, m.name AS mandal
+       FROM org_units v JOIN org_units m ON m.id = v.parent_id
+       JOIN org_units d ON d.id = m.parent_id
+       WHERE v.org_id = $1 AND v.source_code = '9900001'`, [w.orgId]);
+    expect(chain.rows[0]).toMatchObject({
+      district: "Not attributed", mandal: "Not attributed",
+    });
+  });
+
+  it("still refuses a row with no village at all", async () => {
+    // A village code is the one thing the row cannot do without: there is
+    // nothing to survey and nothing to reconcile against.
+    const r = await importRows([{ district_code: "15", district_name: "Alluri" }]);
+    expect(r.data.rejected).toBe(1);
+    expect(r.data.results[0].message).toContain("village_code");
+  });
+
+  it("counts the placeholder villages in the programme", async () => {
+    const villages = await get(w.admin, `/api/v1/survey/projects/${projectId}/villages`);
+    expect(villages.data.some((v: any) => v.village_name === "Gap village")).toBe(true);
   });
 });

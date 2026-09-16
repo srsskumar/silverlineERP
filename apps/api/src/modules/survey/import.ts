@@ -18,15 +18,28 @@ import { writeAudit } from '../../common/audit.js';
  * spreadsheet twice into two screens and keeping them in step by hand.
  */
 
+/**
+ * A row of the village list.
+ *
+ * Only the village itself is required. §48 of the specification asks that a
+ * list upload where columns are empty, and it is right: the file arrives from
+ * the revenue department with gaps, and refusing the whole row because a
+ * division was not filled in means the village never gets surveyed in the
+ * system at all. What is missing is reported, not fatal.
+ *
+ * A village with no district or mandal is filed under a placeholder for that
+ * tier so the hierarchy still resolves, and appears in the report as
+ * unattributed rather than silently lost.
+ */
 const rowSchema = z.object({
-  district_code: z.string().trim().min(1).max(64),
-  district_name: z.string().trim().min(1).max(255),
+  district_code: z.string().trim().max(64).optional().or(z.literal('')),
+  district_name: z.string().trim().max(255).optional().or(z.literal('')),
   // The division tier is optional: some mandals report straight to the
   // district, and the source list leaves those columns empty.
   division_code: z.string().trim().max(64).optional().or(z.literal('')),
   division_name: z.string().trim().max(255).optional().or(z.literal('')),
-  mandal_code: z.string().trim().min(1).max(64),
-  mandal_name: z.string().trim().min(1).max(255),
+  mandal_code: z.string().trim().max(64).optional().or(z.literal('')),
+  mandal_name: z.string().trim().max(255).optional().or(z.literal('')),
   village_code: z.string().trim().min(1).max(64),
   village_name: z.string().trim().min(1).max(255),
   vill_code_old: z.string().trim().max(64).optional().or(z.literal('')),
@@ -131,8 +144,16 @@ export async function registerSurveyImport(
           const v: Row = parsed.data;
           await db.query('SAVEPOINT import_row');
           try {
+            // A missing tier gets a placeholder rather than losing the village.
+            // It shows up as "Not attributed" in every report, which is a
+            // visible gap somebody can fill in rather than a silent absence.
+            const districtCode = v.district_code || 'UNATTRIBUTED';
+            const districtName = v.district_name || 'Not attributed';
+            const mandalCode = v.mandal_code || `${districtCode}-UNATTRIBUTED`;
+            const mandalName = v.mandal_name || 'Not attributed';
+
             const district = await upsertUnit(
-              db, u.orgId, u.id, 'district', v.district_code, v.district_name, null);
+              db, u.orgId, u.id, 'district', districtCode, districtName, null);
             if (district.created) created.districts += 1;
 
             // The mandal hangs off the division where the source list gives
@@ -146,7 +167,7 @@ export async function registerSurveyImport(
             }
 
             const mandal = await upsertUnit(
-              db, u.orgId, u.id, 'mandal', v.mandal_code, v.mandal_name, parentOfMandal);
+              db, u.orgId, u.id, 'mandal', mandalCode, mandalName, parentOfMandal);
             if (mandal.created) created.mandals += 1;
 
             const village = await upsertUnit(
@@ -177,9 +198,15 @@ export async function registerSurveyImport(
                 v.dgps_base ?? 0, v.dgps_rovers ?? 0, v.teams ?? 0,
                 v.vill_code_old || null, u.id]);
 
+            // What the row did not carry, so somebody can come back to it.
+            const missing = [
+              !v.district_code && 'district', !v.mandal_code && 'mandal',
+              !v.total_extent_ac && 'extent',
+            ].filter(Boolean) as string[];
             results.push({
               row: rowNo, village_code: v.village_code,
               status: input.dry_run ? 'VALIDATED' : 'IMPORTED',
+              ...(missing.length ? { message: `Imported without ${missing.join(', ')}` } : {}),
             });
             await db.query('RELEASE SAVEPOINT import_row');
           } catch (error) {

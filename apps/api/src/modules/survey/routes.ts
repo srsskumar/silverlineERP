@@ -232,19 +232,76 @@ export async function registerSurveyRoutes(
     return null;
   }
 
-  async function projectOr404(db: Pool | PoolClient, orgId: string, id: string) {
-    return inOrg(db, 'survey_projects', id, orgId);
+  /**
+   * The programmes this user may see.
+   *
+   * Null means all of them. The test is organisation-wide oversight rather
+   * than any one role: somebody who may shape a programme (`survey.manage`)
+   * or who may see management forecasting (`survey.forecast`) is by
+   * definition looking across the whole organisation — that covers the
+   * administrator, the project manager and the auditor, whose entire job is
+   * to read everything.
+   *
+   * Everyone else — the team lead, the GT user, the QC user — sees the
+   * programmes they are assigned to and nothing else, which is what §33 asks
+   * for. Without it an employee could read every district's figures.
+   *
+   * A disabled programme is hidden from everyone but the roles that can
+   * re-enable it. Disabling is a visibility decision, and the data stays
+   * exactly where it is.
+   */
+  async function visibleProgrammes(
+    db: Pool | PoolClient, u: { orgId: string; id: string; permissions: string[] },
+  ): Promise<string[] | null> {
+    if (u.permissions.includes('survey.manage')
+      || u.permissions.includes('survey.forecast')) return null;
+    const rows = (await db.query(
+      `SELECT pe.survey_project_id AS id
+       FROM survey_project_employees pe
+       JOIN users usr ON usr.employee_id = pe.employee_id
+       WHERE usr.id = $1 AND pe.org_id = $2 AND pe.released_on IS NULL`,
+      [u.id, u.orgId])).rows;
+    return rows.map(r => String(r.id));
+  }
+
+  async function projectOr404(
+    db: Pool | PoolClient, orgId: string, id: string,
+    u?: { orgId: string; id: string; permissions: string[] },
+  ) {
+    const row = await inOrg(db, 'survey_projects', id, orgId);
+    if (u) {
+      const allowed = await visibleProgrammes(db, u);
+      if (allowed !== null && !allowed.includes(String(id))) {
+        // 404 rather than 403: telling somebody a programme exists that they
+        // may not see is itself a disclosure.
+        fail('NOT_FOUND', 'Not found', 404);
+      }
+    }
+    return row;
   }
 
   /* ------------------------------------------------------- programmes */
 
   app.get('/api/v1/survey/projects', { preHandler: guard('survey.read') }, async req => {
     const u = actor(req), { limit, offset } = page(req);
+    const allowed = await visibleProgrammes(pool, u);
+    const values: unknown[] = [u.orgId];
+    let where = 'sp.org_id = $1';
+    if (allowed !== null) {
+      // An employee sees the programmes they are on. An empty list is an
+      // empty result rather than every programme, which is what a missing
+      // filter would silently produce.
+      values.push(allowed);
+      where += ` AND sp.id = ANY($${values.length}::uuid[])`;
+      where += " AND sp.status <> 'DISABLED'";
+    }
+    values.push(limit + 1, offset);
     const rows = (await pool.query(
       `SELECT sp.*, (SELECT count(*)::int FROM survey_villages sv
                       WHERE sv.survey_project_id = sp.id) AS village_count
-       FROM survey_projects sp WHERE sp.org_id = $1
-       ORDER BY sp.created_at DESC LIMIT $2 OFFSET $3`, [u.orgId, limit + 1, offset])).rows;
+       FROM survey_projects sp WHERE ${where}
+       ORDER BY sp.created_at DESC
+       LIMIT $${values.length - 1} OFFSET $${values.length}`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 
@@ -445,7 +502,7 @@ export async function registerSurveyRoutes(
   app.get('/api/v1/survey/projects/:id/villages', { preHandler: guard('survey.read') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
     const { q } = page(req);
-    await projectOr404(pool, u.orgId, id);
+    await projectOr404(pool, u.orgId, id, u);
     const [m, codes, pos] = await Promise.all([
       measures(pool, u.orgId), stageCodes(pool, u.orgId),
       positions(pool, u.orgId, id, { asOf: String(q.as_of ?? today()) }),
@@ -1011,7 +1068,7 @@ export async function registerSurveyRoutes(
     { preHandler: guard('survey.read') }, async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
-      await projectOr404(pool, u.orgId, id);
+      await projectOr404(pool, u.orgId, id, u);
 
       const to = String(q.to ?? today());
       const from = String(q.from ?? to);
@@ -1236,7 +1293,7 @@ export async function registerSurveyRoutes(
   app.get('/api/v1/survey/projects/:id/employees', { preHandler: guard('survey.read') },
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
-      await projectOr404(pool, u.orgId, id);
+      await projectOr404(pool, u.orgId, id, u);
       const rows = (await pool.query(
         `SELECT pe.*, e.emp_no,
                 COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), e.emp_no)
@@ -1292,7 +1349,7 @@ export async function registerSurveyRoutes(
     { preHandler: guard('survey.read') }, async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
-      await projectOr404(pool, u.orgId, id);
+      await projectOr404(pool, u.orgId, id, u);
       const to = String(q.to ?? today());
       const from = String(q.from ?? '1900-01-01');
 
@@ -1347,7 +1404,7 @@ export async function registerSurveyRoutes(
     { preHandler: guard('survey.read') }, async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
-      await projectOr404(pool, u.orgId, id);
+      await projectOr404(pool, u.orgId, id, u);
       const to = String(q.to ?? today());
       const from = String(q.from ?? '1900-01-01');
 
@@ -1412,7 +1469,7 @@ export async function registerSurveyRoutes(
     { preHandler: guard('survey.read') }, async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
-      const programme = await projectOr404(pool, u.orgId, id);
+      const programme = await projectOr404(pool, u.orgId, id, u);
       const asOf = String(q.as_of ?? today());
 
       const [pipeline, pos] = await Promise.all([
@@ -1487,7 +1544,7 @@ export async function registerSurveyRoutes(
     { preHandler: guard('survey.forecast') }, async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
-      const programme = await projectOr404(pool, u.orgId, id);
+      const programme = await projectOr404(pool, u.orgId, id, u);
       const asOf = String(q.as_of ?? today());
 
       const [m, codes, pos] = await Promise.all([
@@ -1571,7 +1628,7 @@ export async function registerSurveyRoutes(
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
-      await projectOr404(pool, u.orgId, id);
+      await projectOr404(pool, u.orgId, id, u);
 
       const level = (REPORT_LEVELS as readonly string[]).includes(String(q.level))
         ? String(q.level) as ReportLevel : 'mandal';
@@ -1705,7 +1762,7 @@ export async function registerSurveyRoutes(
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
-      await projectOr404(pool, u.orgId, id);
+      await projectOr404(pool, u.orgId, id, u);
 
       const grain = (['DAY', 'WEEK', 'MONTH', 'YEAR'] as const).includes(String(q.grain) as PeriodGrain)
         ? String(q.grain) as PeriodGrain : 'MONTH';
@@ -1760,7 +1817,7 @@ export async function registerSurveyRoutes(
   app.get('/api/v1/survey/projects/:id/summary', { preHandler: guard('survey.read') },
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
-      await projectOr404(pool, u.orgId, id);
+      await projectOr404(pool, u.orgId, id, u);
       const [codes, pos, pipeline] = await Promise.all([
         stageCodes(pool, u.orgId), positions(pool, u.orgId, id),
         stagePipeline(pool, u.orgId),
