@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Combobox } from '@/components/ui/Combobox';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Notice } from '@/components/finance/Primitives';
-import { day } from '@/lib/finance';
+import { day, businessToday } from '@/lib/finance';
 import { STAGE_STATE_LABELS, stageLabel, stateTone } from '@/lib/survey';
 
 type Row = Record<string, any>;
@@ -351,7 +351,7 @@ function Crew({
 function Rovers({ villageId, canManage }: { villageId: string; canManage: boolean }) {
   const qc = useQueryClient();
   const [adding, setAdding] = React.useState(false);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = businessToday();
   const [form, setForm] = React.useState({ asset_id: '', allocated_on: today });
 
   const rovers = useQuery({

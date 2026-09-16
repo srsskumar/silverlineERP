@@ -18,8 +18,7 @@ import { hasPermission } from '@/lib/permissions';
 import { Field, Notice, RecordSheet, Section, StatusBadge, Stat } from '@/components/finance/Primitives';
 import {
   categoryLabel, creditBlockLabel, day, money, percent, PAYMENT_MODES,
-  EXPENSE_CATEGORY_LABELS,
-} from '@/lib/finance';
+  EXPENSE_CATEGORY_LABELS, businessToday } from '@/lib/finance';
 
 type Row = Record<string, any>;
 
@@ -227,7 +226,7 @@ function ClaimDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
   const [error, setError] = React.useState<unknown>(null);
   const [reason, setReason] = React.useState('');
   const [overrideReason, setOverrideReason] = React.useState('');
-  const [payment, setPayment] = React.useState({ amount: '', paid_on: new Date().toISOString().slice(0, 10), mode: 'NEFT', reference: '' });
+  const [payment, setPayment] = React.useState({ amount: '', paid_on: businessToday(), mode: 'NEFT', reference: '' });
 
   const detail = useQuery({
     queryKey: ['expense-claim', id],
@@ -548,7 +547,7 @@ interface DraftLine {
 
 const emptyLine = (): DraftLine => ({
   category: 'TRAVEL',
-  expense_date: new Date().toISOString().slice(0, 10),
+  expense_date: businessToday(),
   description: '',
   amount: '',
   units: '',
@@ -569,7 +568,7 @@ const emptyLine = (): DraftLine => ({
  */
 function NewClaim({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
   const [claimNo, setClaimNo] = React.useState(`EXP-${Date.now().toString().slice(-6)}`);
-  const [claimDate, setClaimDate] = React.useState(new Date().toISOString().slice(0, 10));
+  const [claimDate, setClaimDate] = React.useState(businessToday());
   const [purpose, setPurpose] = React.useState('');
   const [projectId, setProjectId] = React.useState('');
   const [lines, setLines] = React.useState<DraftLine[]>([emptyLine()]);

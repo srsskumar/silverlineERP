@@ -16,9 +16,9 @@ import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Tabl
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Notice, Stat } from '@/components/finance/Primitives';
-import { day } from '@/lib/finance';
+import { day, businessToday } from '@/lib/finance';
 import {
-  VILLAGE_STATE_LABELS, acres, count, groupMeasures, pct, stateTone,
+  DELAY_REASON_OPTIONS, VILLAGE_STATE_LABELS, acres, count, groupMeasures, pct, stateTone,
 } from '@/lib/survey';
 
 type Row = Record<string, any>;
@@ -40,13 +40,20 @@ export default function SurveyEntryPage() {
   const canEnter = hasPermission(perms, 'survey.enter');
   const qc = useQueryClient();
 
-  const today = React.useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const today = React.useMemo(() => businessToday(), []);
   const [projectId, setProjectId] = React.useState('');
   const [villageId, setVillageId] = React.useState('');
   const [date, setDate] = React.useState(today);
   const [deployed, setDeployed] = React.useState({ teams: 0, base: 0, rovers: 0 });
   const [values, setValues] = React.useState<Record<string, string>>({});
   const [notes, setNotes] = React.useState('');
+  // One row per rover allocated to this village. The specification asks for
+  // the update to be against each rover, and an idle one must say why.
+  const [roverDays, setRoverDays] = React.useState<Record<string, {
+    status: 'UTILIZED' | 'IDLE'; idle_reason: string; remarks: string; area_ac: string;
+  }>>({});
+  const [lowReason, setLowReason] = React.useState('');
+  const [lowRemarks, setLowRemarks] = React.useState('');
   const [saved, setSaved] = React.useState<string | null>(null);
 
   const projects = useQuery({
@@ -78,6 +85,29 @@ export default function SurveyEntryPage() {
   }, [projects.data, projectId]);
 
   const village = villages.data?.find((v) => String(v.id) === villageId);
+
+  // The instruments out on this village, so the form lists the real ones
+  // rather than asking somebody to remember which.
+  const rovers = useQuery({
+    queryKey: ['survey-rovers', villageId],
+    enabled: canEnter && !!villageId,
+    queryFn: async () =>
+      ((await apiRequestRaw(
+        `/api/v1/survey/villages/${villageId}/rovers`)).body as { data: Row[] }).data,
+  });
+  const outToday: Row[] = (rovers.data ?? []).filter((r) => r.out);
+
+  React.useEffect(() => {
+    // Default every allocated rover to "in use". The common day is that they
+    // all worked, and a form that starts with everything idle trains people
+    // to click past it.
+    const next: typeof roverDays = {};
+    for (const r of outToday) {
+      next[String(r.asset_id)] = roverDays[String(r.asset_id)]
+        ?? { status: 'UTILIZED', idle_reason: '', remarks: '', area_ac: '' };
+    }
+    setRoverDays(next);
+  }, [villageId, rovers.data]); // eslint-disable-line react-hooks/exhaustive-deps
   const measures: Row[] = catalogue.data?.measures ?? [];
   const groups = groupMeasures(measures as Array<{ code: string; group_label?: string | null; label: string }>);
 
@@ -110,6 +140,15 @@ export default function SurveyEntryPage() {
           dgps_rovers: deployed.rovers,
           notes: notes || undefined,
           values: numeric,
+          rovers: Object.entries(roverDays).map(([asset_id, r]) => ({
+            asset_id,
+            status: r.status,
+            idle_reason: r.status === 'IDLE' ? (r.idle_reason || undefined) : undefined,
+            remarks: r.remarks || undefined,
+            area_ac: r.area_ac === '' ? undefined : Number(r.area_ac),
+          })),
+          low_progress_reason: lowReason || undefined,
+          low_progress_remarks: lowRemarks || undefined,
         },
       });
     },
@@ -117,6 +156,8 @@ export default function SurveyEntryPage() {
       setSaved(`${village?.village_name ?? 'Village'} — ${day(date)}`);
       setValues({});
       setNotes('');
+      setLowReason('');
+      setLowRemarks('');
       qc.invalidateQueries({ queryKey: ['survey-villages'] });
       qc.invalidateQueries({ queryKey: ['survey-progress'] });
     },
@@ -226,6 +267,85 @@ export default function SurveyEntryPage() {
                 </label>
               </div>
 
+              {outToday.length > 0 ? (
+                <section className="rounded-lg border border-border bg-surface-sunken p-3">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <h3 className="text-xs font-semibold text-text">
+                      Rovers out on this village
+                    </h3>
+                    <span className="text-2xs text-text-subtle">
+                      An idle rover has to say why — that is what makes the idle count useful.
+                    </span>
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    {outToday.map((r) => {
+                      const key = String(r.asset_id);
+                      const row = roverDays[key] ?? {
+                        status: 'UTILIZED' as const, idle_reason: '', remarks: '', area_ac: '',
+                      };
+                      const set = (patch: Partial<typeof row>) =>
+                        setRoverDays({ ...roverDays, [key]: { ...row, ...patch } });
+                      return (
+                        <div key={key}
+                          className="rounded-md border border-border bg-surface px-3 py-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium text-text">{r.asset_name}</span>
+                            <span className="text-2xs text-text-subtle">{r.asset_code}</span>
+                            <div className="ml-auto flex gap-1">
+                              {(['UTILIZED', 'IDLE'] as const).map((st) => (
+                                <Button key={st} type="button"
+                                  variant={row.status === st ? 'secondary' : 'ghost'}
+                                  onClick={() => set({
+                                    status: st,
+                                    // Clearing the reason on the way back to
+                                    // "in use": a rover in use carrying an
+                                    // idle reason is refused by the server.
+                                    idle_reason: st === 'UTILIZED' ? '' : row.idle_reason,
+                                  })}>
+                                  {st === 'UTILIZED' ? 'In use' : 'Idle'}
+                                </Button>
+                              ))}
+                            </div>
+                          </div>
+
+                          {row.status === 'UTILIZED' ? (
+                            <label className="mt-2 flex items-center gap-2 text-2xs text-text-subtle">
+                              Acres covered with this rover
+                              <input type="number" min={0} step="any"
+                                className="w-28 rounded-md border border-border bg-surface px-2 py-1 text-sm text-text"
+                                value={row.area_ac}
+                                onChange={(e) => set({ area_ac: e.target.value })} />
+                            </label>
+                          ) : (
+                            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                              <select
+                                className={field}
+                                value={row.idle_reason}
+                                onChange={(e) => set({ idle_reason: e.target.value })}>
+                                <option value="">Why was it idle?</option>
+                                {DELAY_REASON_OPTIONS.map((o) => (
+                                  <option key={o.code} value={o.code}>{o.label}</option>
+                                ))}
+                              </select>
+                              {row.idle_reason === 'OTHER' ? (
+                                <input className={field} value={row.remarks}
+                                  placeholder="What happened?"
+                                  onChange={(e) => set({ remarks: e.target.value })} />
+                              ) : null}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              ) : (
+                <p className="text-2xs text-text-subtle">
+                  No rovers are allocated to this village, so there is nothing to account for.
+                  Allocate them from the village screen.
+                </p>
+              )}
+
               {groups.map((g) => (
                 <section key={g.group} className="rounded-lg border border-border bg-surface-sunken p-3">
                   <h3 className="text-xs font-semibold text-text">{g.group}</h3>
@@ -258,6 +378,33 @@ export default function SurveyEntryPage() {
                   </div>
                 </section>
               ))}
+
+              {/* Offered rather than forced: the server decides whether the
+                  day is below the programme's threshold, and says so if it
+                  refuses. Asking here saves the round trip. */}
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-2xs uppercase tracking-wide text-text-subtle">
+                    If today was thin, why?
+                  </span>
+                  <select className={field} value={lowReason}
+                    onChange={(e) => setLowReason(e.target.value)}>
+                    <option value="">Not a low day</option>
+                    {DELAY_REASON_OPTIONS.map((o) => (
+                      <option key={o.code} value={o.code}>{o.label}</option>
+                    ))}
+                  </select>
+                </label>
+                {lowReason === 'OTHER' ? (
+                  <label className="space-y-1">
+                    <span className="text-2xs uppercase tracking-wide text-text-subtle">
+                      What happened?
+                    </span>
+                    <input className={field} value={lowRemarks}
+                      onChange={(e) => setLowRemarks(e.target.value)} />
+                  </label>
+                ) : null}
+              </div>
 
               <label className="space-y-1">
                 <span className="text-2xs uppercase tracking-wide text-text-subtle">Notes</span>

@@ -15,17 +15,18 @@ import { Badge } from '@/components/ui/Badge';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Notice, Section, Stat } from '@/components/finance/Primitives';
-import { day } from '@/lib/finance';
+import { day, businessToday } from '@/lib/finance';
 import {
   GRAINS, LEVEL_LABELS, REPORT_LEVELS, STAGE_STATE_LABELS, TALLY_LABELS, TALLY_ORDER,
   VILLAGE_STATE_LABELS, acres, barWidth, count, financialYearToDate, groupMeasures,
   hasPct, paceNote, pct, pctTone, progressHeadline, roverNote, sqKm, stageLabel,
   stateTone, tallyTone, type ReportLevel,
+  BOTTLENECK_LABELS, VILLAGE_STATUS_LABELS, forecastNote, villageStatusTone,
 } from '@/lib/survey';
 import { VillageDetail } from '@/components/survey/VillageDetail';
 
 type Row = Record<string, any>;
-type Tab = 'progress' | 'villages' | 'timeline' | 'summary';
+type Tab = 'progress' | 'villages' | 'bottlenecks' | 'timeline' | 'summary';
 
 /**
  * Land survey progress (§59).
@@ -40,8 +41,11 @@ export default function SurveyPage() {
   const canRead = hasPermission(perms, 'survey.read');
   const canEnter = hasPermission(perms, 'survey.enter');
   const canManage = hasPermission(perms, 'survey.manage');
+  // Management information. The specification is explicit that a GT user
+  // does not see forecasting.
+  const canForecast = hasPermission(perms, 'survey.forecast');
 
-  const today = React.useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const today = React.useMemo(() => businessToday(), []);
   const fy = React.useMemo(() => financialYearToDate(today), [today]);
 
   const [tab, setTab] = React.useState<Tab>('progress');
@@ -105,12 +109,13 @@ export default function SurveyPage() {
           </select>
 
           <div className="flex gap-1">
-            {(['progress', 'villages', 'timeline', 'summary'] as const).map((t) => (
+            {(['progress', 'villages', 'bottlenecks', 'timeline', 'summary'] as const).map((t) => (
               <Button key={t} type="button" variant={tab === t ? 'secondary' : 'ghost'}
                 onClick={() => setTab(t)}>
                 {t === 'progress' ? 'Progress'
                   : t === 'villages' ? 'Villages'
-                    : t === 'timeline' ? 'Over time' : 'Summary'}
+                    : t === 'bottlenecks' ? 'Bottlenecks'
+                      : t === 'timeline' ? 'Over time' : 'Summary'}
               </Button>
             ))}
           </div>
@@ -159,6 +164,9 @@ export default function SurveyPage() {
         ) : null}
         {projectId && tab === 'villages' ? (
           <Villages projectId={projectId} canManage={canManage} canEnter={canEnter} />
+        ) : null}
+        {projectId && tab === 'bottlenecks' ? (
+          <Bottlenecks projectId={projectId} canForecast={canForecast} />
         ) : null}
         {projectId && tab === 'timeline' ? (
           <Timeline projectId={projectId} range={range} grain={grain} setGrain={setGrain} />
@@ -380,6 +388,122 @@ function Progress({
             Percentages are weighted by extent, not averaged across villages — a five-acre village
             cannot count as much as a five-hundred-acre one. Completion is as at {day(range.to)};
             the “in period” figures are what was done between {day(range.from)} and {day(range.to)}.
+          </p>
+        </Section>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ bottlenecks */
+
+/**
+ * Where the work has stalled, and the forecast beside it.
+ *
+ * The two belong together: a projection that says the programme finishes a
+ * fortnight late is a number, and the list of villages causing it is what
+ * somebody does about it.
+ */
+function Bottlenecks({ projectId, canForecast }: { projectId: string; canForecast: boolean }) {
+  const stuck = useQuery({
+    queryKey: ['survey-bottlenecks', projectId],
+    queryFn: async () =>
+      ((await apiRequestRaw(
+        `/api/v1/survey/projects/${projectId}/bottlenecks`)).body as { data: Row }).data,
+  });
+
+  const forecast = useQuery({
+    queryKey: ['survey-forecast', projectId],
+    enabled: canForecast,
+    queryFn: async () =>
+      ((await apiRequestRaw(
+        `/api/v1/survey/projects/${projectId}/forecast`)).body as { data: Row }).data,
+  });
+
+  if (stuck.isLoading) return <Skeleton className="h-64" />;
+  if (stuck.isError) return <ErrorCard error={stuck.error} onRetry={() => stuck.refetch()} />;
+  const rows: Row[] = stuck.data?.bottlenecks ?? [];
+
+  return (
+    <div className="space-y-4">
+      {canForecast && forecast.data ? (
+        <Card className="space-y-3 p-4">
+          <h3 className="text-sm font-semibold text-text">Where this lands</h3>
+          <p className="text-sm text-text">{forecastNote(forecast.data.forecast)}</p>
+          <div className="grid gap-2 sm:grid-cols-4">
+            <Stat label="Target date"
+              value={forecast.data.forecast?.targetDate ? day(forecast.data.forecast.targetDate) : '—'}
+              hint="What was committed to" />
+            <Stat label="Projected"
+              value={forecast.data.forecast?.forecastDate ? day(forecast.data.forecast.forecastDate) : '—'}
+              tone={forecast.data.forecast?.state === 'BEHIND' ? 'danger'
+                : forecast.data.forecast?.state === 'AHEAD' ? 'success' : undefined}
+              hint="What the pace implies" />
+            <Stat label="Village completion" value={pct(forecast.data.village_completion_pct)} />
+            {/* Kept apart from village completion on purpose: the
+                specification is explicit they are not interchangeable. */}
+            <Stat label="Area completion" value={pct(forecast.data.area_completion_pct)} />
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {[7, 14, 30].map((d) => (
+              <Stat key={d} label={`Last ${d} days`}
+                value={`${forecast.data.recent_pace?.[`last_${d}_days_ac_per_day`] ?? 0} Ac/day`}
+                hint="A lifetime average hides a slowdown" />
+            ))}
+          </div>
+        </Card>
+      ) : null}
+
+      {rows.length === 0 ? (
+        <EmptyState
+          title="Nothing is stuck"
+          description="No village is past its dates, sitting in a stage too long, silent, or holding idle rovers."
+        />
+      ) : (
+        <Section title={`${rows.length} village${rows.length === 1 ? '' : 's'} needing attention`}>
+          <TableWrap>
+            <Table>
+              <THead>
+                <TR>
+                  <TH>Village</TH><TH>Mandal</TH><TH>Status</TH>
+                  <TH>Stage</TH><TH>Why</TH><TH className="text-right">Days over</TH>
+                </TR>
+              </THead>
+              <TBody>
+                {rows.map((b) => (
+                  <TR key={b.villageId}>
+                    <TD className="font-medium text-text">{b.village}</TD>
+                    <TD className="text-xs text-text-muted">{b.mandal ?? '—'}</TD>
+                    <TD>
+                      <Badge tone={villageStatusTone(b.status)}>
+                        {VILLAGE_STATUS_LABELS[b.status] ?? b.status}
+                      </Badge>
+                    </TD>
+                    <TD className="text-xs text-text-muted">
+                      {b.currentStageCode ? stageLabel(b.currentStageCode) : '—'}
+                    </TD>
+                    <TD>
+                      {/* Every reason, not the first: past its date *and*
+                          holding idle rovers is a different conversation. */}
+                      <ul className="space-y-0.5">
+                        {b.kinds.map((k: string) => (
+                          <li key={k} className="text-2xs text-warning">
+                            {BOTTLENECK_LABELS[k] ?? k}
+                          </li>
+                        ))}
+                      </ul>
+                    </TD>
+                    <TD className="text-right font-semibold tabular-nums text-danger">
+                      {b.severityDays}
+                    </TD>
+                  </TR>
+                ))}
+              </TBody>
+            </Table>
+          </TableWrap>
+          <p className="mt-2 text-2xs text-text-subtle">
+            A stage counts as overdue after {stuck.data?.stage_sla_days} days.
+            Severity is days past whichever threshold the village broke.
           </p>
         </Section>
       )}

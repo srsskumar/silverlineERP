@@ -233,3 +233,21 @@ export function creditBlockLabel(reason: string | null | undefined): string | nu
 }
 
 export const PAYMENT_MODES = ['NEFT', 'RTGS', 'IMPS', 'UPI', 'CHEQUE', 'CASH', 'PAYROLL'] as const;
+
+/**
+ * Today, where the work happens.
+ *
+ * `new Date().toISOString()` is UTC, and for the first five and a half hours
+ * of every Indian day that is yesterday. A crew opening the daily progress
+ * form at nine in the morning would find it defaulted to the day before, and
+ * most would simply file it.
+ *
+ * The browser's own timezone is not used: a manager travelling would
+ * otherwise see different dates from the crew, and the figures are the
+ * organisation's, not the reader's.
+ */
+export function businessToday(at: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(at);
+}

@@ -146,6 +146,83 @@ export function financialYearToDate(today: string): { from: string; to: string }
   return { from: `${start}-04-01`, to: today };
 }
 
+/**
+ * The reasons a rover sat idle or a day produced little.
+ *
+ * Mirrors the server's list. Kept here as a constant rather than fetched
+ * because the form has to render before any request completes, and a
+ * dropdown that fills in late is one people click through empty.
+ */
+export const DELAY_REASON_OPTIONS = [
+  { code: 'WEATHER', label: 'Weather' },
+  { code: 'ACCESS', label: 'Local or access issue' },
+  { code: 'EQUIPMENT', label: 'Equipment problem' },
+  { code: 'ROVER', label: 'Rover issue' },
+  { code: 'DATA_TECHNICAL', label: 'Data or technical issue' },
+  { code: 'EMPLOYEE', label: 'Employee issue' },
+  { code: 'FIELD_CONDITIONS', label: 'Field conditions' },
+  { code: 'DEPENDENCY', label: 'Dependency on another team' },
+  { code: 'NO_DEPT_STAFF', label: 'No departmental staff' },
+  { code: 'OTHER', label: 'Other' },
+] as const;
+
+export function reasonLabel(code: string | null | undefined): string {
+  return DELAY_REASON_OPTIONS.find(r => r.code === code)?.label ?? String(code ?? '—');
+}
+
+export const VILLAGE_STATUS_LABELS: Record<string, string> = {
+  TO_DO: 'To do',
+  IN_PROGRESS: 'In progress',
+  COMPLETED: 'Completed',
+  ON_HOLD: 'On hold',
+  REWORK: 'Rework',
+};
+
+export function villageStatusTone(status: string): 'success' | 'warning' | 'danger' | 'neutral' {
+  if (status === 'COMPLETED') return 'success';
+  if (status === 'REWORK' || status === 'ON_HOLD') return 'danger';
+  if (status === 'IN_PROGRESS') return 'warning';
+  return 'neutral';
+}
+
+export const BOTTLENECK_LABELS: Record<string, string> = {
+  NOT_STARTED_BY_PLAN: 'Not started by its planned date',
+  STAGE_OVERDUE: 'Sitting in one stage too long',
+  PAST_EXPECTED_COMPLETION: 'Past the date it was expected to finish',
+  ROVERS_IDLE: 'Rovers allocated and idle',
+  NO_PROGRESS_RECORDED: 'Nothing recorded for days',
+  IN_REWORK: 'Sent back for rework',
+};
+
+/**
+ * What the forecast means, said so the two dates cannot be confused.
+ *
+ * The required pace is the half worth leading with: "you are behind" invites
+ * argument, a number does not.
+ */
+export function forecastNote(f: {
+  state: string; targetDate: string | null; forecastDate: string | null;
+  currentPaceAcPerDay: number | null; requiredPaceAcPerDay: number | null;
+  slipDays: number | null;
+} | undefined): string {
+  if (!f) return 'No forecast available.';
+  if (f.state === 'NO_PACE') return 'Not enough recorded progress to project a finish date.';
+  if (f.state === 'NO_TARGET') {
+    return f.forecastDate
+      ? `At the current pace the work finishes around ${f.forecastDate}. No target date has been set to compare it with.`
+      : 'No target date has been set.';
+  }
+  const gap = Math.abs(f.slipDays ?? 0);
+  const direction = f.state === 'BEHIND' ? 'later than' : f.state === 'AHEAD' ? 'ahead of' : 'on';
+  const lead = f.state === 'ON_TRACK'
+    ? `On track to finish on ${f.targetDate}.`
+    : `Projected to finish ${gap} day${gap === 1 ? '' : 's'} ${direction} the ${f.targetDate} target.`;
+  if (f.requiredPaceAcPerDay !== null && f.currentPaceAcPerDay !== null) {
+    return `${lead} Current pace ${f.currentPaceAcPerDay} acres a day; ${f.requiredPaceAcPerDay} a day would hit the target.`;
+  }
+  return lead;
+}
+
 export const GRAINS = [
   { value: 'DAY', label: 'Daily' },
   { value: 'WEEK', label: 'Weekly' },

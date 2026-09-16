@@ -4,7 +4,9 @@ import {
   acres, barWidth, count, financialYearToDate, groupMeasures, hasPct, pct,
   pctTone, progressHeadline, sqKm, stateTone,
   TALLY_ORDER, TALLY_LABELS, tallyTone, stageLabel, roverNote, paceNote,
+  DELAY_REASON_OPTIONS, reasonLabel, villageStatusTone, BOTTLENECK_LABELS, forecastNote,
 } from '../lib/survey';
+import { businessToday } from '../lib/finance';
 import { NAV_GROUPS } from '../lib/nav';
 import { IMPORT_TEMPLATES } from '../lib/import-templates';
 import {
@@ -304,5 +306,84 @@ describe('paceNote', () => {
       activeDays: 3, acresPerActiveDay: 5, acresPerCalendarDay: 2, projectedFinish: null,
     });
     expect(note).not.toContain('runs out');
+  });
+});
+
+describe('businessToday', () => {
+  it('is the Indian calendar day, not the browser\'s and not UTC', () => {
+    // A crew opening the form at nine in the morning would otherwise find it
+    // defaulted to yesterday, and most would simply file it.
+    expect(businessToday(new Date('2026-09-16T20:00:00Z'))).toBe('2026-09-17');
+    expect(businessToday(new Date('2026-09-16T18:29:00Z'))).toBe('2026-09-16');
+  });
+
+  it('gives every reader the same day, wherever they are', () => {
+    // The figures are the organisation's, not the reader's. A manager
+    // travelling must not see different dates from the crew.
+    const at = new Date('2026-09-16T20:00:00Z');
+    expect(businessToday(at)).toBe('2026-09-17');
+  });
+});
+
+describe('reasons and statuses on screen', () => {
+  it('offers every reason the specification lists', () => {
+    expect(DELAY_REASON_OPTIONS).toHaveLength(10);
+    expect(DELAY_REASON_OPTIONS.map(o => o.code)).toContain('OTHER');
+    expect(DELAY_REASON_OPTIONS[DELAY_REASON_OPTIONS.length - 1].code).toBe('OTHER');
+  });
+
+  it('labels a reason, and shows the code rather than nothing for an unknown one', () => {
+    expect(reasonLabel('ROVER')).toBe('Rover issue');
+    expect(reasonLabel('MYSTERY')).toBe('MYSTERY');
+  });
+
+  it('colours a village on hold or in rework as a problem', () => {
+    // Both mean the work has stopped, whatever the stages say.
+    expect(villageStatusTone('ON_HOLD')).toBe('danger');
+    expect(villageStatusTone('REWORK')).toBe('danger');
+    expect(villageStatusTone('COMPLETED')).toBe('success');
+    expect(villageStatusTone('TO_DO')).toBe('neutral');
+  });
+
+  it('labels every bottleneck kind', () => {
+    for (const k of ['NOT_STARTED_BY_PLAN', 'STAGE_OVERDUE', 'PAST_EXPECTED_COMPLETION',
+      'ROVERS_IDLE', 'NO_PROGRESS_RECORDED', 'IN_REWORK']) {
+      expect(BOTTLENECK_LABELS[k], k).toBeTruthy();
+    }
+  });
+});
+
+describe('forecastNote', () => {
+  it('leads with the required pace, which is the half worth arguing with', () => {
+    const note = forecastNote({
+      state: 'BEHIND', targetDate: '2026-09-30', forecastDate: '2026-10-04',
+      currentPaceAcPerDay: 82, requiredPaceAcPerDay: 105, slipDays: 4,
+    });
+    expect(note).toContain('4 days later than');
+    expect(note).toContain('82 acres a day');
+    expect(note).toContain('105 a day would hit the target');
+  });
+
+  it('says being ahead is being ahead', () => {
+    expect(forecastNote({
+      state: 'AHEAD', targetDate: '2026-09-30', forecastDate: '2026-09-20',
+      currentPaceAcPerDay: 200, requiredPaceAcPerDay: 50, slipDays: -10,
+    })).toContain('ahead of');
+  });
+
+  it('says there is not enough progress rather than showing a date', () => {
+    expect(forecastNote({
+      state: 'NO_PACE', targetDate: '2026-09-30', forecastDate: null,
+      currentPaceAcPerDay: null, requiredPaceAcPerDay: null, slipDays: null,
+    })).toContain('Not enough recorded progress');
+  });
+
+  it('offers the projection even with no target to compare it against', () => {
+    const note = forecastNote({
+      state: 'NO_TARGET', targetDate: null, forecastDate: '2026-10-04',
+      currentPaceAcPerDay: 82, requiredPaceAcPerDay: null, slipDays: null,
+    });
+    expect(note).toContain('2026-10-04');
+    expect(note).toContain('No target date has been set');
   });
 });

@@ -16,7 +16,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Notice, Section, Stat } from '@/components/finance/Primitives';
 import { AgeingBar, AgeingBuckets, BucketCells, OutsideBuckets } from '@/components/finance/Ageing';
-import { day, money } from '@/lib/finance';
+import { day, money, businessToday } from '@/lib/finance';
 import { AGEING_BUCKETS, BUCKET_LABELS, msmeNote, type AgeingSummary } from '@/lib/ledgers';
 
 type Row = Record<string, any>;
@@ -41,7 +41,7 @@ export default function PayablesPage() {
   const canRead = hasPermission(perms, 'ap.read');
   const canHold = hasPermission(perms, 'payable.hold');
   const [tab, setTab] = React.useState<'ageing' | 'runs'>('ageing');
-  const [asOf, setAsOf] = React.useState(() => new Date().toISOString().slice(0, 10));
+  const [asOf, setAsOf] = React.useState(() => businessToday());
   const [openVendor, setOpenVendor] = React.useState<string | null>(null);
   const qc = useQueryClient();
 
@@ -552,7 +552,7 @@ function RunLines({ id }: { id: string }) {
 
 /** Building a run: a date to pay through, and what to include. */
 function RunForm({ onDone }: { onDone: () => void }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = businessToday();
   const [form, setForm] = React.useState({
     run_no: '', run_date: today, due_through: today,
     bank_account: '', notes: '', include_not_yet_due: false,

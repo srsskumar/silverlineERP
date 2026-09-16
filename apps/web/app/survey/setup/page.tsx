@@ -1,5 +1,6 @@
 'use client';
 
+import { businessToday } from '@/lib/finance';
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
@@ -126,7 +127,7 @@ export default function SurveySetupPage() {
 
 function NewProgramme({ onCreated }: { onCreated: (id: string) => void }) {
   const [open, setOpen] = React.useState(false);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = businessToday();
   const [form, setForm] = React.useState({ code: '', name: '', started_on: today });
 
   const create = useMutation({

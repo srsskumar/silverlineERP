@@ -15,7 +15,7 @@ import { Badge } from '@/components/ui/Badge';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Notice, Section } from '@/components/finance/Primitives';
-import { categoryLabel, day, money, EXPENSE_CATEGORY_LABELS } from '@/lib/finance';
+import { categoryLabel, day, money, EXPENSE_CATEGORY_LABELS, businessToday } from '@/lib/finance';
 
 type Row = Record<string, any>;
 
@@ -42,7 +42,7 @@ export default function ExpensePoliciesPage() {
 
   const [form, setForm] = React.useState({
     category: 'TRAVEL',
-    effective_from: new Date().toISOString().slice(0, 10),
+    effective_from: businessToday(),
     per_line_limit: '',
     per_claim_limit: '',
     unit_rate: '',
@@ -74,7 +74,7 @@ export default function ExpensePoliciesPage() {
   });
 
   const rows = list.data ?? [];
-  const today = new Date().toISOString().slice(0, 10);
+  const today = businessToday();
   const ready = form.effective_from && (!isEntitlement || Number(form.unit_rate) > 0);
 
   return (

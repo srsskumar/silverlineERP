@@ -16,7 +16,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Notice, Section, Stat } from '@/components/finance/Primitives';
 import { AgeingBar, AgeingBuckets, BucketCells, OutsideBuckets } from '@/components/finance/Ageing';
-import { day, money, percent } from '@/lib/finance';
+import { day, money, percent, businessToday } from '@/lib/finance';
 import { AGEING_BUCKETS, BUCKET_LABELS, dsoNote, type AgeingSummary } from '@/lib/ledgers';
 
 type Row = Record<string, any>;
@@ -38,7 +38,7 @@ export default function ReceivablesPage() {
   const perms = { permissions: session?.permissions };
   const canRead = hasPermission(perms, 'ar.read');
 
-  const [asOf, setAsOf] = React.useState(() => new Date().toISOString().slice(0, 10));
+  const [asOf, setAsOf] = React.useState(() => businessToday());
   const [periodDays, setPeriodDays] = React.useState(90);
   const [openClient, setOpenClient] = React.useState<string | null>(null);
 
