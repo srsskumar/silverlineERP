@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Rebuild and restart Silverline from whatever source is in /opt/silverline.
+#
+# Push new source with rsync from a workstation, then run this:
+#   rsync -az --delete --exclude=.git --exclude=node_modules \
+#         --exclude=.next --exclude=.next-verify --exclude=dist \
+#         --exclude=apps/mobile/android --exclude=.env --exclude=".env.*" \
+#         ./ dev-thor:/opt/silverline/
+#   ssh dev-thor sudo silverline-deploy
+#
+# Runtime data lives in /var/lib/silverline, deliberately outside the tree
+# rsync --delete owns. Uploads used to sit under /opt/silverline and a deploy
+# removed them, which stopped the API dead: its unit mounts that path through
+# ReadWritePaths, so systemd failed at namespace setup and never reached node.
+# Every request 502d and the log said only "No such file or directory".
+set -euo pipefail
+cd /opt/silverline
+
+# NEXT_PUBLIC_API_URL is baked into the bundle at build time, so it has to be
+# the origin the browser will use. Change it here if a domain is put in front.
+API_ORIGIN="${API_ORIGIN:-http://34.131.134.217}"
+
+echo "==> installing dependencies"
+sudo -u dev-thor npm ci --workspace=@silverline/shared --workspace=api --workspace=web --include-workspace-root
+
+echo "==> building shared"
+sudo -u dev-thor npm run build --workspace=@silverline/shared
+echo "==> building api"
+sudo -u dev-thor npm run build --workspace=api
+echo "==> building web (API origin: $API_ORIGIN)"
+sudo -u dev-thor env NEXT_VERIFY_BUILD=1 NEXT_PUBLIC_API_URL="$API_ORIGIN" npm run build --workspace=web
+
+echo "==> restarting"
+systemctl restart silverline-api
+systemctl reload nginx
+
+sleep 3
+systemctl is-active --quiet silverline-api || { echo "API did not come back:"; journalctl -u silverline-api -n 30 --no-pager; exit 1; }
+curl -fsS http://127.0.0.1/health >/dev/null && echo "==> live: $API_ORIGIN"
