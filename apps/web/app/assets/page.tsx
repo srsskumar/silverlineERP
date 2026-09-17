@@ -8,6 +8,7 @@ import {
   Workbench, Panel, Can, Collection, MutationForm, choices, type Row,
 } from '@/components/v2/Workbench';
 import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
+import { useReveal } from '@/lib/use-reveal';
 import { Combobox } from '@/components/ui/Combobox';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
@@ -27,6 +28,10 @@ const CONDITIONS = ASSET_CONDITIONS.map((c) => ({ value: c.code, label: c.label 
 export default function Page() {
   const [asset, setAsset] = useState<Row | null>(null);
   const [audit, setAudit] = useState<Row | null>(null);
+
+  // Selecting an asset opens its detail below a register of hundreds of
+  // rows; without this the click reads as doing nothing.
+  const detail = useReveal(asset ? String(asset.id) : null);
 
   return (
     <Workbench
@@ -63,6 +68,11 @@ export default function Page() {
           onSelect={setAsset}
         />
       </Panel>
+
+      {/* The anchor the page scrolls to, so the click and its result are in
+          the same place. scroll-mt keeps the heading clear of the top edge
+          rather than flush against it. */}
+      <div ref={detail} className="scroll-mt-4" />
 
       {asset ? <AssetHistory asset={asset} /> : null}
 
