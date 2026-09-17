@@ -31,7 +31,7 @@ type Row = Record<string, any>;
 
 /** One decimal, which is as fine as an acre figure is ever read on a chart. */
 const round1 = (n: number) => Math.round(n * 10) / 10;
-type Tab = 'progress' | 'report' | 'villages' | 'bottlenecks' | 'timeline' | 'summary';
+type Tab = 'progress' | 'report' | 'villages' | 'people' | 'bottlenecks' | 'timeline' | 'summary';
 
 /**
  * Land survey progress (§59).
@@ -66,7 +66,7 @@ export default function SurveyPage() {
   React.useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const wanted = q.get('tab');
-    if (wanted && (['progress', 'report', 'villages', 'bottlenecks', 'timeline', 'summary'] as string[])
+    if (wanted && (['progress', 'report', 'villages', 'people', 'bottlenecks', 'timeline', 'summary'] as string[])
       .includes(wanted)) setTab(wanted as Tab);
     const village = q.get('village');
     if (village) { setTab('villages'); setOpenVillage(village); }
@@ -132,14 +132,15 @@ export default function SurveyPage() {
           </select>
 
           <div className="flex gap-1">
-            {(['progress', 'report', 'villages', 'bottlenecks', 'timeline', 'summary'] as const).map((t) => (
+            {(['progress', 'report', 'villages', 'people', 'bottlenecks', 'timeline', 'summary'] as const).map((t) => (
               <Button key={t} type="button" variant={tab === t ? 'secondary' : 'ghost'}
                 onClick={() => setTab(t)}>
                 {t === 'progress' ? 'Progress'
                   : t === 'report' ? 'Report'
                     : t === 'villages' ? 'Villages'
-                      : t === 'bottlenecks' ? 'Bottlenecks'
-                        : t === 'timeline' ? 'Over time' : 'Summary'}
+                      : t === 'people' ? 'Crew & rovers'
+                        : t === 'bottlenecks' ? 'Bottlenecks'
+                          : t === 'timeline' ? 'Over time' : 'Summary'}
               </Button>
             ))}
           </div>
@@ -192,6 +193,9 @@ export default function SurveyPage() {
         {projectId && tab === 'villages' ? (
           <Villages projectId={projectId} canManage={canManage} canEnter={canEnter}
             openVillage={openVillage} />
+        ) : null}
+        {projectId && tab === 'people' ? (
+          <CrewAndRovers projectId={projectId} range={range} />
         ) : null}
         {projectId && tab === 'bottlenecks' ? (
           <Bottlenecks projectId={projectId} canForecast={canForecast} />
@@ -621,6 +625,230 @@ function PeriodReport({
 function periodTotal(values: Record<string, number> | undefined): number {
   if (!values) return 0;
   return Object.values(values).reduce((t, v) => t + Number(v ?? 0), 0);
+}
+
+/* ------------------------------------------------------- crew and rovers */
+
+/**
+ * What each person and each instrument did (§38).
+ *
+ * Both endpoints have existed since the module was built and nothing showed
+ * them, so the answer to "which rovers are earning their keep" lived in the
+ * API and nowhere a supervisor could reach it.
+ *
+ * Two deliberate choices carried up from the API. A person's average is per
+ * day they were out, not per calendar day — the days they were not working
+ * are not theirs, and dividing by them ranks whoever was rostered most rather
+ * than whoever did most. And idle days are broken down by reason, because
+ * "three idle days" is a number while "three idle days, all rover fault" is a
+ * maintenance job.
+ */
+function CrewAndRovers({
+  projectId, range,
+}: { projectId: string; range: { from: string; to: string } }) {
+  const [view, setView] = React.useState<'people' | 'rovers'>('people');
+
+  const people = useQuery({
+    queryKey: ['survey-employee-productivity', projectId, range],
+    enabled: view === 'people',
+    queryFn: async () => {
+      const q = new URLSearchParams({ from: range.from, to: range.to });
+      return ((await apiRequestRaw(
+        `/api/v1/survey/projects/${projectId}/employee-productivity?${q}`))
+        .body as { data: Row }).data;
+    },
+  });
+
+  const rovers = useQuery({
+    queryKey: ['survey-rover-productivity', projectId, range],
+    enabled: view === 'rovers',
+    queryFn: async () => {
+      const q = new URLSearchParams({ from: range.from, to: range.to });
+      return ((await apiRequestRaw(
+        `/api/v1/survey/projects/${projectId}/rover-productivity?${q}`))
+        .body as { data: Row }).data;
+    },
+  });
+
+  const active = view === 'people' ? people : rovers;
+  const crew: Row[] = people.data?.employees ?? [];
+  const fleet: Row[] = rovers.data?.rovers ?? [];
+
+  return (
+    <div className="space-y-4">
+      <Toolbar>
+        <div className="flex gap-1">
+          <Button type="button" variant={view === 'people' ? 'secondary' : 'ghost'}
+            onClick={() => setView('people')}>People</Button>
+          <Button type="button" variant={view === 'rovers' ? 'secondary' : 'ghost'}
+            onClick={() => setView('rovers')}>Rovers</Button>
+        </div>
+        <span className="ml-auto text-2xs text-text-subtle">
+          {day(range.from)} to {day(range.to)}
+        </span>
+      </Toolbar>
+
+      {active.isLoading ? <Skeleton className="h-64" /> : null}
+      {active.isError ? (
+        <ErrorCard error={active.error} onRetry={() => active.refetch()} />
+      ) : null}
+
+      {view === 'people' && people.isSuccess ? (
+        crew.length === 0 ? (
+          <EmptyState title="Nobody has been recorded against a rover yet"
+            description="Per-person figures come from the rovers named on each day's return." />
+        ) : (
+          <>
+            <Card className="p-4">
+              <BarChart
+                title="Extent surveyed in this range, by person"
+                unit="Ac"
+                points={crew.filter((c) => Number(c.area_ac) > 0).slice(0, 12)
+                  .map((c) => ({
+                    label: String(c.employee_name), value: round1(Number(c.area_ac)),
+                  }))}
+              />
+            </Card>
+            <TableWrap>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Person</TH>
+                    <TH className="text-right">Days out</TH>
+                    <TH className="text-right">Villages</TH>
+                    <TH className="text-right">Surveyed</TH>
+                    <TH className="text-right">Per day out</TH>
+                    <TH className="text-right">Rover use</TH>
+                    <TH className="text-right">Thin days</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {crew.map((c) => (
+                    <TR key={String(c.employee_id)}>
+                      <TD>
+                        <div className="font-medium text-text">{String(c.employee_name)}</div>
+                        <div className="text-2xs text-text-subtle">{String(c.emp_no)}</div>
+                      </TD>
+                      <TD className="text-right tabular-nums">{count(c.days_worked)}</TD>
+                      <TD className="text-right tabular-nums">{count(c.villages_worked)}</TD>
+                      <TD className="text-right tabular-nums">{acres(c.area_ac)}</TD>
+                      {/* Per day they were out. The days they were not are
+                          not theirs, and dividing by them ranks whoever was
+                          rostered most rather than whoever did most. */}
+                      <TD className="text-right tabular-nums">
+                        {c.avg_daily_ac === null ? '—' : acres(c.avg_daily_ac)}
+                      </TD>
+                      <TD className="text-right">
+                        {c.rover_utilisation_pct === null ? '—' : (
+                          <Badge tone={pctTone(c.rover_utilisation_pct) === 'danger'
+                            ? 'danger' : 'neutral'}>
+                            {pct(c.rover_utilisation_pct)}
+                          </Badge>
+                        )}
+                      </TD>
+                      <TD className="text-right tabular-nums">
+                        {Number(c.low_progress_days) > 0 ? (
+                          <span className="text-warning">{count(c.low_progress_days)}</span>
+                        ) : '—'}
+                      </TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </TableWrap>
+            <p className="text-2xs text-text-subtle">
+              “Thin days” are days that fell below this programme’s threshold and carried a
+              reason. They are context, not a verdict — weather and access account for most.
+            </p>
+          </>
+        )
+      ) : null}
+
+      {view === 'rovers' && rovers.isSuccess ? (
+        fleet.length === 0 ? (
+          <EmptyState title="No rover has been recorded on a return yet"
+            description="Allocate rovers to a village and account for them on the day’s return." />
+        ) : (
+          <>
+            <Card className="p-4">
+              {/* Ordered by idle days by the API: the instruments costing
+                  money and doing nothing come first, which is the list
+                  somebody acts on. */}
+              <StackBar
+                title="Rover days across this range"
+                segments={[
+                  { key: 'used', label: 'Utilised',
+                    value: fleet.reduce((t, r) => t + Number(r.utilized_days ?? 0), 0) },
+                  { key: 'idle', label: 'Idle',
+                    value: fleet.reduce((t, r) => t + Number(r.idle_days ?? 0), 0) },
+                ]}
+              />
+            </Card>
+            <TableWrap>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Rover</TH>
+                    <TH className="text-right">Days assigned</TH>
+                    <TH className="text-right">Used</TH>
+                    <TH className="text-right">Idle</TH>
+                    <TH className="text-right">Utilisation</TH>
+                    <TH className="text-right">Surveyed</TH>
+                    <TH>Why it sat</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {fleet.map((r) => (
+                    <TR key={String(r.asset_id)}>
+                      <TD>
+                        <div className="font-medium text-text">{String(r.asset_code)}</div>
+                        <div className="text-2xs text-text-subtle">
+                          {String(r.asset_name)}
+                          {r.serial_number ? ` · ${String(r.serial_number)}` : ''}
+                        </div>
+                      </TD>
+                      <TD className="text-right tabular-nums">{count(r.assigned_days)}</TD>
+                      <TD className="text-right tabular-nums">{count(r.utilized_days)}</TD>
+                      <TD className="text-right tabular-nums">
+                        {Number(r.idle_days) > 0 ? (
+                          <span className="text-warning">{count(r.idle_days)}</span>
+                        ) : '—'}
+                      </TD>
+                      <TD className="text-right">
+                        {r.utilisation_pct === null ? '—' : (
+                          <Badge tone={pctTone(r.utilisation_pct) === 'danger'
+                            ? 'danger' : pctTone(r.utilisation_pct) === 'warning'
+                              ? 'warning' : 'success'}>
+                            {pct(r.utilisation_pct)}
+                          </Badge>
+                        )}
+                      </TD>
+                      <TD className="text-right tabular-nums">{acres(r.area_ac)}</TD>
+                      <TD>
+                        {/* "Three idle days" is a number; "three idle days,
+                            all rover fault" is a maintenance job. */}
+                        {(r.idle_reasons ?? []).length === 0 ? (
+                          <span className="text-2xs text-text-subtle">—</span>
+                        ) : (
+                          <div className="flex flex-wrap gap-1">
+                            {(r.idle_reasons as Row[]).map((ir) => (
+                              <Badge key={String(ir.reason)} tone="neutral">
+                                {String(ir.label)} × {ir.days}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </TableWrap>
+          </>
+        )
+      ) : null}
+    </div>
+  );
 }
 
 function Bottlenecks({ projectId, canForecast }: { projectId: string; canForecast: boolean }) {
