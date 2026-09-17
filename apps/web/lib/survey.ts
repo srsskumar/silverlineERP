@@ -310,8 +310,12 @@ export function paceNote(p: {
   if (!p || p.acresPerCalendarDay === null) {
     return 'Not enough recorded progress yet to measure a pace.';
   }
+  // "on the 1 days work was recorded" is what a template does to a sentence
+  // when the number can be one.
+  const days = p.activeDays === 1 ? 'the one day' : `the ${p.activeDays} days`;
   const parts = [
-    `${p.acresPerCalendarDay} acres a day overall, ${p.acresPerActiveDay ?? '—'} on the ${p.activeDays} days work was recorded.`,
+    `${p.acresPerCalendarDay} acres a day across the calendar, and `
+    + `${p.acresPerActiveDay ?? '—'} on ${days} work was actually recorded.`,
   ];
   if (p.projectedFinish) {
     parts.push(`At that rate the remaining extent runs out around ${p.projectedFinish}.`);

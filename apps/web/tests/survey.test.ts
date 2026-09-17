@@ -290,9 +290,20 @@ describe('paceNote', () => {
       activeDays: 10, acresPerActiveDay: 30, acresPerCalendarDay: 10,
       projectedFinish: '2026-11-25',
     });
-    expect(note).toContain('10 acres a day overall');
+    expect(note).toContain('10 acres a day across the calendar');
     expect(note).toContain('30 on the 10 days');
     expect(note).toContain('2026-11-25');
+  });
+
+  it('reads as English when only one day has been worked', () => {
+    // A template that writes "on the 1 days work was recorded" is a template
+    // nobody proofread against the number being one.
+    const note = paceNote({
+      activeDays: 1, acresPerActiveDay: 12, acresPerCalendarDay: 4,
+      projectedFinish: null,
+    });
+    expect(note).toContain('on the one day work was actually recorded');
+    expect(note).not.toContain('1 days');
   });
 
   it('says there is not enough to measure rather than showing zero', () => {

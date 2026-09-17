@@ -37,8 +37,11 @@ function nextStep(error: unknown): string | null {
     case 'FORBIDDEN':
       return null; // The message already names the permission and who grants it.
     case 'UNAUTHORIZED':
-      return 'Your session has expired. Sign in again — your work is not lost if you '
-        + 'sign in on another tab first.';
+      // Two different things arrive as 401: a bad password at the sign-in
+      // box, and a session that ran out mid-task. Only the second has
+      // anything worth saying — telling somebody mistyping their password
+      // that their session expired sends them looking for the wrong problem.
+      return null;
     case 'NOT_FOUND':
       return null; // Likewise: the message says where to go instead.
     case 'CONFLICT':
@@ -73,6 +76,14 @@ export function ErrorCard({
   const requestId = requestIdOf(error);
   const fields = error instanceof ApiClientError ? error.fieldErrors : [];
   const advice = nextStep(error);
+  /*
+   * The request id is for reporting a fault, not for reading.
+   *
+   * Printed under every wrong password and every missing field it turns a
+   * routine correction into something that looks like a system failure worth
+   * escalating. Kept for the failures somebody would actually report.
+   */
+  const worthReporting = !(error instanceof ApiClientError) || error.status >= 500;
   const retryable = !(error instanceof ApiClientError) || error.retryable
     || error.code === 'VALIDATION_ERROR';
 
@@ -105,7 +116,7 @@ export function ErrorCard({
 
         {advice && <p className="mt-1.5 text-xs text-text">{advice}</p>}
 
-        {requestId && (
+        {requestId && worthReporting && (
           <p className="mt-1 font-mono text-2xs text-text-subtle">Request ID: {requestId}</p>
         )}
         {onRetry && retryable && (

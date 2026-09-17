@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/Badge';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Notice, Section, Stat } from '@/components/finance/Primitives';
+import { GLOSSARY } from '@/components/ui/InfoHint';
 import { day, businessToday } from '@/lib/finance';
 import {
   GRAINS, LEVEL_LABELS, REPORT_LEVELS, STAGE_STATE_LABELS, TALLY_LABELS, TALLY_ORDER,
@@ -239,10 +240,12 @@ function Progress({
       <Card className="space-y-3 p-4">
         <p className="text-sm text-text">{progressHeadline(total)}</p>
         <div className="grid gap-2 sm:grid-cols-5">
-          <Stat label="Extent to survey" value={acres(total.extentAc)} hint={sqKm(total.extentSqKm)} />
+          <Stat label="Extent to survey" value={acres(total.extentAc)} hint={sqKm(total.extentSqKm)}
+            explain={GLOSSARY.extent} />
           <Stat label="Surveyed" value={acres(total.surveyedAc)}
             tone={hasPct(total.overallPct) && total.overallPct >= 100 ? 'success' : undefined} />
-          <Stat label="Completion" value={pct(total.overallPct)} tone={pctTone(total.overallPct)} />
+          <Stat label="Completion" value={pct(total.overallPct)} tone={pctTone(total.overallPct)}
+            explain={GLOSSARY.completion} />
           <Stat label="Villages finished" value={`${total.completed} of ${total.villages}`}
             tone={total.completed === total.villages && total.villages > 0 ? 'success' : undefined} />
           <Stat label="Not started" value={total.notStarted}
@@ -317,15 +320,18 @@ function Progress({
       <Card className="space-y-3 p-4">
         <h3 className="text-sm font-semibold text-text">Equipment and pace</h3>
         <div className="grid gap-2 sm:grid-cols-4">
-          <Stat label="Rovers allocated" value={data.rovers?.allocated ?? 0} />
+          <Stat label="Rovers allocated" value={data.rovers?.allocated ?? 0}
+            explain={GLOSSARY.dgps} />
           <Stat label="In use" value={data.rovers?.used ?? 0}
             tone={data.rovers?.overUsed ? 'danger' : undefined} />
           <Stat label="Idle" value={data.rovers?.idle ?? 0}
             tone={(data.rovers?.idle ?? 0) > 0 ? 'warning' : 'success'}
-            hint={pct(data.rovers?.utilisationPct)} />
+            hint={pct(data.rovers?.utilisationPct)}
+            explain={GLOSSARY.idleRovers} />
           <Stat label="Projected finish"
             value={data.pace?.projectedFinish ? day(data.pace.projectedFinish) : '—'}
-            hint={data.pace?.daysToFinish ? `${data.pace.daysToFinish} days at this rate` : undefined} />
+            hint={data.pace?.daysToFinish ? `${data.pace.daysToFinish} days at this rate` : undefined}
+            explain={GLOSSARY.projectedFinish} />
         </div>
         {data.rovers?.overUsed ? (
           <Notice tone="danger" title="More rovers reported in use than allocated">
@@ -526,20 +532,26 @@ function PeriodReport({
               : d?.area?.direction === 'UP' ? 'success' : undefined} />
           <Stat label="Days worked"
             value={`${d?.effort?.active_days ?? 0} of ${d?.effort?.calendar_days ?? 0}`}
-            hint="Calendar days that produced a return" />
+            hint="Calendar days that produced a return"
+            explain={GLOSSARY.daysWorked} />
           <Stat label="Per working day"
             value={d?.effort?.area_per_active_day === null
               ? '—' : `${acres(d?.effort?.area_per_active_day)}/day`}
-            hint="Divided by days worked, not days on the calendar" />
-          <Stat label="Villages worked" value={count(d?.effort?.villages_worked)} />
+            hint="Divided by days worked, not days on the calendar"
+            explain={GLOSSARY.pace} />
+          <Stat label="Villages worked" value={count(d?.effort?.villages_worked)}
+            explain={GLOSSARY.daysWorked} />
         </div>
         <div className="grid gap-2 sm:grid-cols-3">
-          <Stat label="Rovers used" value={count(d?.rovers?.utilised)} />
+          <Stat label="Rovers used" value={count(d?.rovers?.utilised)}
+            explain={GLOSSARY.utilisation} />
           <Stat label="Rover days idle" value={count(d?.rovers?.idle)}
+            explain={GLOSSARY.idleRovers}
             tone={(d?.rovers?.idle ?? 0) > 0 ? 'warning' : undefined}
             hint={(d?.rovers?.idle_reasons ?? []).map((r: string) => reasonLabel(r)).join(', ')
               || 'Nothing idle'} />
-          <Stat label="Team days" value={count(d?.effort?.team_days)} />
+          <Stat label="Team days" value={count(d?.effort?.team_days)}
+            explain={GLOSSARY.teamDays} />
         </div>
       </Card>
 
@@ -1164,10 +1176,12 @@ function Bottlenecks({ projectId, canForecast }: { projectId: string; canForecas
               tone={forecast.data.forecast?.state === 'BEHIND' ? 'danger'
                 : forecast.data.forecast?.state === 'AHEAD' ? 'success' : undefined}
               hint="What the pace implies" />
-            <Stat label="Village completion" value={pct(forecast.data.village_completion_pct)} />
+            <Stat label="Village completion" value={pct(forecast.data.village_completion_pct)}
+              explain={GLOSSARY.completion} />
             {/* Kept apart from village completion on purpose: the
                 specification is explicit they are not interchangeable. */}
-            <Stat label="Area completion" value={pct(forecast.data.area_completion_pct)} />
+            <Stat label="Area completion" value={pct(forecast.data.area_completion_pct)}
+              explain={GLOSSARY.completion} />
           </div>
           <div className="grid gap-2 sm:grid-cols-3">
             {[7, 14, 30].map((d) => (
