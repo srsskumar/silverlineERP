@@ -9,6 +9,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildWorld, idem, uniq, workDate, type CatalogueWorld, type Headers } from "./fixture.js";
+import { runSurveyAlerts } from "../../src/modules/jobs/surveyAlerts.js";
 
 let w: CatalogueWorld;
 let programmeId: string;
@@ -959,5 +960,164 @@ describe("the period report", () => {
       { code: uniq("SP"), name: "Not theirs" });
     const r = await get(w.directUser, `/api/v1/survey/projects/${other.data.id}/report`);
     expect(r.status).toBe(404);
+  });
+});
+
+/**
+ * Survey alerts (§27).
+ *
+ * The bottleneck report already says what is stuck — to whoever opens it,
+ * which is the problem: a village that has gone quiet is exactly the one
+ * nobody is looking at.
+ */
+describe("alerting on work that has stopped", () => {
+  async function alertsFor(villageId: string): Promise<Array<Record<string, any>>> {
+    return (await w.pool.query(
+      `SELECT DISTINCT title, body, event_key FROM notifications
+       WHERE type = 'SURVEY_ALERT' AND entity_id = $1 ORDER BY event_key`,
+      [villageId])).rows;
+  }
+
+  async function newVillage(name: string): Promise<string> {
+    const v = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_id: String((await w.pool.query(
+        `INSERT INTO org_units(org_id,type,code,name,parent_id)
+         SELECT $1,'village',$2,$3,id FROM org_units
+         WHERE org_id=$1 AND type='mandal' LIMIT 1 RETURNING id`,
+        [w.orgId, uniq("V"), name])).rows[0].id),
+      total_extent_ac: 40,
+    });
+    return String(v.data.id);
+  }
+
+  it("raises a village past the date somebody committed to", async () => {
+    const id = await newVillage("Overdue village");
+    await w.pool.query(
+      "UPDATE survey_villages SET expected_completion_on = CURRENT_DATE - 5 WHERE id = $1",
+      [id]);
+
+    await runSurveyAlerts(w.pool);
+    const rows = await alertsFor(id);
+    const overdue = rows.find(r => String(r.event_key).startsWith("survey.overdue:"));
+    expect(overdue, JSON.stringify(rows)).toBeTruthy();
+    expect(overdue!.title).toContain("past its completion date");
+    expect(overdue!.body).toContain("5 days ago");
+  });
+
+  it("does not say it twice, however often the worker runs", async () => {
+    // A job running every few minutes that alerts every few minutes gets
+    // muted, and then the feature is worse than not having it.
+    const id = await newVillage("Repeat village");
+    await w.pool.query(
+      "UPDATE survey_villages SET expected_completion_on = CURRENT_DATE - 2 WHERE id = $1",
+      [id]);
+
+    await runSurveyAlerts(w.pool);
+    const first = await w.pool.query(
+      "SELECT count(*)::int AS n FROM notifications WHERE entity_id = $1", [id]);
+    await runSurveyAlerts(w.pool);
+    await runSurveyAlerts(w.pool);
+    const after = await w.pool.query(
+      "SELECT count(*)::int AS n FROM notifications WHERE entity_id = $1", [id]);
+    expect(after.rows[0].n).toBe(first.rows[0].n);
+    expect(first.rows[0].n).toBeGreaterThan(0);
+  });
+
+  it("says it again when the date is moved and missed again", async () => {
+    // A fresh commitment missed is fresh news, and the key names the date
+    // rather than the village for exactly that reason.
+    const id = await newVillage("Moved village");
+    await w.pool.query(
+      "UPDATE survey_villages SET expected_completion_on = CURRENT_DATE - 9 WHERE id = $1",
+      [id]);
+    await runSurveyAlerts(w.pool);
+    const before = (await alertsFor(id)).length;
+
+    await w.pool.query(
+      "UPDATE survey_villages SET expected_completion_on = CURRENT_DATE - 1 WHERE id = $1",
+      [id]);
+    await runSurveyAlerts(w.pool);
+    expect((await alertsFor(id)).length).toBeGreaterThan(before);
+  });
+
+  it("leaves a village alone once somebody has put it on hold", async () => {
+    // Somebody has already decided about it. Telling them again is noise.
+    const id = await newVillage("Held village");
+    await w.pool.query(
+      `UPDATE survey_villages SET expected_completion_on = CURRENT_DATE - 5,
+         status_override = 'ON_HOLD' WHERE id = $1`, [id]);
+    await runSurveyAlerts(w.pool);
+    expect(await alertsFor(id)).toHaveLength(0);
+  });
+
+  it("raises a village with crew on it and nothing filed", async () => {
+    const id = await newVillage("Silent village");
+    await post(w.admin, `/api/v1/survey/villages/${id}/crew`, {
+      employee_id: w.directEmployee, stage_code: "GROUND_TRUTHING",
+    });
+
+    await runSurveyAlerts(w.pool);
+    const silent = (await alertsFor(id))
+      .find(r => String(r.event_key).startsWith("survey.silent:"));
+    expect(silent, "crew assigned, no return").toBeTruthy();
+    expect(silent!.body).toContain("no return has ever been filed");
+  });
+
+  it("does not call a village with nobody on it silent", async () => {
+    // A village nobody is working is not silent, it is simply not being
+    // worked — and saying otherwise buries the ones that matter.
+    const id = await newVillage("Unstaffed village");
+    await runSurveyAlerts(w.pool);
+    expect((await alertsFor(id))
+      .filter(r => String(r.event_key).startsWith("survey.silent:"))).toHaveLength(0);
+  });
+
+  it("raises a stage that has sat in progress longer than the programme allows", async () => {
+    const id = await newVillage("Stalled village");
+    await post(w.admin, `/api/v1/survey/villages/${id}/stage`, {
+      stage_code: "GROUND_TRUTHING", state: "IN_PROGRESS",
+    });
+    await w.pool.query(
+      `UPDATE survey_village_stages SET started_on = CURRENT_DATE - 60
+       WHERE survey_village_id = $1`, [id]);
+
+    await runSurveyAlerts(w.pool);
+    const stalled = (await alertsFor(id))
+      .find(r => String(r.event_key).startsWith("survey.stalled:"));
+    expect(stalled, "stage past its SLA").toBeTruthy();
+    expect(stalled!.title).toContain("stalled");
+  });
+
+  it("arrives in the inbox somebody actually opens", async () => {
+    // An alert written to a table nobody reads is not an alert. The inbox
+    // does not filter by type, so this is the whole journey.
+    const id = await newVillage("Inbox village");
+    await post(w.admin, `/api/v1/survey/villages/${id}/crew`, {
+      employee_id: w.directEmployee, stage_code: "GROUND_TRUTHING",
+    });
+    await runSurveyAlerts(w.pool);
+
+    const inbox = await get(w.directUser, "/api/v1/notifications?limit=100");
+    expect(inbox.status, JSON.stringify(inbox.body)).toBe(200);
+    const mine = (inbox.body.data as Array<Record<string, unknown>>)
+      .filter(n => n.type === "SURVEY_ALERT");
+    expect(mine.length, "survey alerts reach the inbox").toBeGreaterThan(0);
+    // And point at the village, so opening one goes somewhere useful.
+    expect(mine[0].entity_type).toBe("survey_village");
+  });
+
+  it("reaches the crew on the village, not everybody who can read the module", async () => {
+    // An alert that reaches people who cannot act on it is how alerts get
+    // muted.
+    const id = await newVillage("Crewed village");
+    await post(w.admin, `/api/v1/survey/villages/${id}/crew`, {
+      employee_id: w.directEmployee, stage_code: "GROUND_TRUTHING",
+    });
+    await runSurveyAlerts(w.pool);
+
+    const mine = await w.pool.query(
+      `SELECT 1 FROM notifications n JOIN users u ON u.id = n.recipient_id
+       WHERE n.entity_id = $1 AND u.employee_id = $2`, [id, w.directEmployee]);
+    expect(mine.rowCount, "the crew member hears about it").toBeGreaterThan(0);
   });
 });

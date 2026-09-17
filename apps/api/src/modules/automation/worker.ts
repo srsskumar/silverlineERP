@@ -2,6 +2,7 @@ import {runProviderJobs} from "../integrations/worker.js";
 import {runPushDelivery} from "../jobs/push.js";
 import {runReportJobs} from "../jobs/reports.js";
 import {runScheduledJobs} from "../jobs/scheduled.js";
+import {runSurveyAlerts} from "../jobs/surveyAlerts.js";
 import { createHmac } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { request } from 'node:https';
@@ -36,6 +37,9 @@ export async function runJobs(app:FastifyInstance,pool:Pool,jwtSecret:string):Pr
   await lock.query('BEGIN');
   const acquired=await lock.query('SELECT pg_try_advisory_xact_lock(7814239) AS ok');if(!acquired.rows[0].ok){await lock.query('COMMIT');return count;}
   await runScheduledJobs(app,pool,jwtSecret);
+  // Survey alerts (§27). Failing here must not stop the rest of the pass:
+  // the bottleneck report still shows everything these would have said.
+  try{await runSurveyAlerts(pool);}catch(e){console.error('Survey alerts failed',(e as Error).message);}
   await runReportJobs(app,pool,jwtSecret);
   const events=await pool.query('SELECT * FROM domain_events WHERE processed_at IS NULL AND attempts<8 AND next_attempt_at<=now() ORDER BY created_at LIMIT 25');
   for(const event of events.rows){
