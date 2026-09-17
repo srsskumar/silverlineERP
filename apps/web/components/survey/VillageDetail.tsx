@@ -54,6 +54,7 @@ export function VillageDetail({
       <div className="grid gap-4 lg:grid-cols-2">
         <Crew villageId={String(village.id)} pipeline={pipeline} canManage={canManage} />
         <Rovers villageId={String(village.id)} canManage={canManage} />
+        <CrewAssets villageId={String(village.id)} />
       </div>
     </div>
   );
@@ -390,6 +391,77 @@ function Crew({
           ))}
         </ul>
       ) : null}
+    </section>
+  );
+}
+
+/* -------------------------------------------------- equipment via the crew */
+
+/**
+ * Equipment that reached this village through the people working it.
+ *
+ * Two ways a thing can be here: allocated to the village — that is the rover
+ * list, and what the daily return accounts for — or issued to somebody who is
+ * on the crew, which is how a tripod, a radio and a battery usually travel:
+ * signed out to a surveyor, not to a place.
+ *
+ * Shown apart from the allocations rather than merged into them, because the
+ * distinction is real. Releasing the person from the village does not take
+ * the equipment off them, and a daily return that counted these would be
+ * counting instruments nobody allocated here.
+ */
+function CrewAssets({ villageId }: { villageId: string }) {
+  const held = useQuery({
+    queryKey: ['survey-crew-assets', villageId],
+    queryFn: async () =>
+      ((await apiRequestRaw(`/api/v1/survey/villages/${villageId}/crew-assets`))
+        .body as { data: Row[] }).data,
+  });
+
+  const rows: Row[] = held.data ?? [];
+  if (rows.length === 0) return null;
+
+  return (
+    <section className="rounded-lg border border-border bg-surface-sunken p-3">
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-text-subtle">
+        Carried by the crew
+      </h4>
+      <p className="mt-1 text-2xs text-text-subtle">
+        Issued to people working here, rather than allocated to the village. The daily return
+        does not account for these — allocate one to the village if it should.
+      </p>
+      <div className="mt-2 overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-left text-2xs text-text-subtle">
+              <th className="py-1 pr-3">Equipment</th>
+              <th className="py-1 pr-3">Assigned to</th>
+              <th className="py-1 pr-3">Phone</th>
+              <th className="py-1 pr-3">Assigned on</th>
+              <th className="py-1 pr-3">On stage</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={String(r.assignment_id)} className="border-t border-border">
+                <td className="py-1.5 pr-3 text-text">
+                  {String(r.asset_code)}
+                  <span className="ml-1 text-2xs text-text-subtle">
+                    {String(r.type_label ?? r.asset_name ?? '')}
+                  </span>
+                  {r.also_allocated ? (
+                    <span className="ml-1 text-2xs text-success">· also allocated here</span>
+                  ) : null}
+                </td>
+                <td className="py-1.5 pr-3 text-text-muted">{String(r.employee_name)}</td>
+                <td className="py-1.5 pr-3 text-text-muted">{String(r.phone ?? '—')}</td>
+                <td className="py-1.5 pr-3 text-text-muted">{String(r.issued_at ?? '—')}</td>
+                <td className="py-1.5 pr-3 text-text-muted">{String(r.stage_label ?? '—')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }

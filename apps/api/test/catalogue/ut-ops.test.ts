@@ -1045,14 +1045,15 @@ describe("importing assets", () => {
     expect(r.body.rejected).toBe(1);
   });
 
-  it("reports a vendor that matches nothing rather than dropping it", async () => {
-    // A silently missing vendor is a purchase trail that ends nowhere.
+  it("ignores a vendor column, which the register no longer carries", async () => {
+    // Vendor was added to the template and then asked to be taken out again.
+    // A sheet that still has the column is not wrong — it just has a column
+    // nothing reads, and rejecting the row over it would strand work.
     const r = await imp([{
       asset_code: `VN${uniq().toUpperCase().slice(-8)}`, name: "Bought somewhere",
       category: "ELECTRONIC", vendor: "No Such Supplier Ltd",
-    }]);
-    expect(r.body.rejected).toBe(1);
-    expect(r.body.results[0].message).toContain("No vendor named");
+    }], false);
+    expect(r.body.created, JSON.stringify(r.body)).toBe(1);
   });
 
   it("rejects a row naming a category nobody has, and keeps the rest", async () => {
@@ -1199,5 +1200,84 @@ describe("importing who holds what", () => {
       `SELECT 1 FROM asset_assignments a JOIN assets s ON s.id=a.asset_id
         WHERE s.asset_code=$1 AND a.returned_at IS NULL`, [code]);
     expect(open.rowCount, "nothing was written").toBe(0);
+  });
+});
+
+describe("issuing several assets to one person", () => {
+  const H = () => ({ ...w.role.INVENTORY_MANAGER, ...idem() });
+
+  async function freeAsset(name: string): Promise<string> {
+    return post(w.app, w.role.INVENTORY_MANAGER, "/api/v1/assets", {
+      asset_code: `BK${uniq().toUpperCase().slice(-8)}`,
+      name, category: "ELECTRONIC", condition: "GOOD",
+    });
+  }
+
+  it("issues a whole kit in one action", async () => {
+    // A surveyor carries a rover, a tripod, a radio and a battery. One form
+    // at a time is four chances to stop after three.
+    const kit = [await freeAsset("Rover"), await freeAsset("Tripod"), await freeAsset("Radio")];
+    const employeeId = await createActiveEmployee(w.app, w.admin, {
+      district_id: w.chainA.district,
+    });
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/assets/assign-bulk", headers: H(),
+      payload: { asset_ids: kit, employee_id: employeeId, reason: "Field kit" },
+    });
+    expect(r.statusCode, r.body).toBe(201);
+    expect(r.json().issued).toBe(3);
+  });
+
+  it("names the item already out with somebody and issues the rest", async () => {
+    const mine = await freeAsset("Wanted rover");
+    const spare = await freeAsset("Spare tripod");
+    const first = await createActiveEmployee(w.app, w.admin, { district_id: w.chainA.district });
+    const second = await createActiveEmployee(w.app, w.admin, { district_id: w.chainA.district });
+
+    await w.app.inject({
+      method: "POST", url: "/api/v1/assets/assign-bulk", headers: H(),
+      payload: { asset_ids: [mine], employee_id: first, reason: "First" },
+    });
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/assets/assign-bulk", headers: H(),
+      payload: { asset_ids: [mine, spare], employee_id: second, reason: "Second" },
+    });
+    expect(r.json().issued).toBe(1);
+    expect(r.json().busy).toHaveLength(1);
+    expect(r.json().busy[0].with_whom).toBeTruthy();
+  });
+
+  it("will not issue anything to somebody who has left", async () => {
+    const asset = await freeAsset("For a leaver");
+    const employeeId = await createActiveEmployee(w.app, w.admin, {
+      district_id: w.chainA.district,
+    });
+    await w.pool.query("UPDATE employees SET status='EXITED' WHERE id=$1", [employeeId]);
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/assets/assign-bulk", headers: H(),
+      payload: { asset_ids: [asset], employee_id: employeeId, reason: "x" },
+    });
+    expect(r.statusCode).toBe(422);
+  });
+
+  it("says who holds each asset, on what number, and since when", async () => {
+    // Chasing a missing instrument should not start with looking somebody up
+    // in the directory.
+    const asset = await freeAsset("Traceable");
+    const employeeId = await createActiveEmployee(w.app, w.admin, {
+      district_id: w.chainA.district,
+    });
+    await w.app.inject({
+      method: "POST", url: "/api/v1/assets/assign-bulk", headers: H(),
+      payload: { asset_ids: [asset], employee_id: employeeId, reason: "Survey" },
+    });
+    const list = await w.app.inject({
+      method: "GET", url: "/api/v1/assets?limit=100", headers: w.role.INVENTORY_MANAGER,
+    });
+    const row = (list.json().data as Array<Record<string, unknown>>)
+      .find((a) => a.id === asset);
+    expect(row!.held_by).toBeTruthy();
+    expect(row!.held_by_phone).toBeTruthy();
+    expect(row!.assigned_on).toBeTruthy();
   });
 });

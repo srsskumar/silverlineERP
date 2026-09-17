@@ -34,12 +34,27 @@ export const assetSchema = z.object({
   asset_type_id:uuid.nullable().optional(),
   make:z.string().trim().max(160).optional(),
   model:z.string().trim().max(160).optional(),
-  vendor_id:uuid.nullable().optional(),
   condition:text.default('GOOD'),
   /** Required when the condition is "other" -- the table enforces it too. */
   condition_note:z.string().trim().max(2000).optional(),
 }).refine(v=>v.condition!=='OTHER'||!!v.condition_note?.trim(),{
   message:'Say what condition it is in',path:['condition_note'],
+});
+
+/**
+ * Assigning several assets to one person at once.
+ *
+ * A surveyor going out carries a rover, a tripod, a radio and a battery.
+ * Issuing them one form at a time is four chances to stop after three, and
+ * the one that goes unrecorded is the one nobody can find later.
+ */
+export const assetBulkAssignSchema = z.object({
+  asset_ids:z.array(uuid).min(1).max(50),
+  employee_id:uuid,
+  project_id:uuid.nullable().optional(),
+  due_date:dateStringSchema.optional(),
+  condition:text.default('GOOD'),
+  reason:text,
 });
 
 /** Adding a type or a category: the "option to add more" the note asks for. */

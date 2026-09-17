@@ -45,7 +45,11 @@ export default function Page() {
             { key: 'asset_type_label', label: 'Type' },
             { key: 'category_label', label: 'Category' },
             { key: 'location', label: 'Where' },
-            { key: 'held_by', label: 'With' },
+            // Who has it, on what number, and since when — so chasing a
+            // missing instrument does not start with a directory lookup.
+            { key: 'held_by', label: 'Assigned to' },
+            { key: 'held_by_phone', label: 'Phone' },
+            { key: 'assigned_on', label: 'Assigned on' },
             { key: 'held_for_project', label: 'For' },
             { key: 'condition', label: 'Condition' },
           ]}
@@ -74,7 +78,6 @@ export default function Page() {
                 options: CONDITIONS, default: 'GOOD', required: true,
               },
               { key: 'condition_note', label: 'Condition note (required for “Other”)' },
-              { key: 'vendor_id', label: 'Vendor', source: 'vendors?limit=100' },
             ]}
           />
         </Panel>
@@ -166,6 +169,34 @@ export default function Page() {
             </Panel>
           </>
         ) : null}
+
+        <Panel title="Issue a kit to one person">
+          <p className="mb-4 text-sm text-text-muted">
+            {/* One form at a time is four chances to stop after three, and
+                the item that goes unrecorded is the one nobody can find. */}
+            A surveyor going out carries a rover, a tripod, a radio and a battery. Pick them
+            all, issue them once. Anything already out with somebody else is named and the
+            rest still go.
+          </p>
+          <MutationForm
+            path="assets/assign-bulk"
+            submit="Issue them"
+            fields={[
+              {
+                key: 'asset_ids', label: 'Equipment', type: 'multi_select',
+                source: 'assets?limit=100', required: true,
+              },
+              { key: 'employee_id', label: 'To employee', source: 'assets/eligible-employees', required: true },
+              { key: 'project_id', label: 'For project', source: 'inventory/eligible-projects' },
+              { key: 'due_date', label: 'Return due', type: 'date' },
+              {
+                key: 'condition', label: 'Condition going out', type: 'select',
+                options: CONDITIONS, default: 'GOOD', required: true,
+              },
+              { key: 'reason', label: 'What it is for', required: true },
+            ]}
+          />
+        </Panel>
 
         <Panel title="Types and categories">
           <p className="mb-4 text-sm text-text-muted">

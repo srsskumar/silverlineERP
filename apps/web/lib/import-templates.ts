@@ -158,7 +158,7 @@ export const IMPORT_TEMPLATES: ImportTemplate[] = [
      */
     headers: [
       'asset_code', 'name', 'category', 'asset_type', 'serial_number',
-      'make', 'model', 'condition', 'condition_note', 'vendor',
+      'make', 'model', 'condition', 'condition_note',
     ],
     required: ['asset_code', 'name', 'category'],
     options: {
@@ -172,7 +172,7 @@ export const IMPORT_TEMPLATES: ImportTemplate[] = [
     },
     example: [
       'AST-RV-014', 'Rover 14', 'ELECTRONIC', 'ROVER', 'TS2024X0914',
-      'Trimble', 'R12i', 'GOOD', '', 'Geosurvey Instruments Pvt Ltd',
+      'Trimble', 'R12i', 'GOOD', '',
     ],
     notes: [
       'asset_code is how the asset is referred to everywhere else, and must be unique. It is the same field the register form calls Asset code.',
@@ -180,7 +180,6 @@ export const IMPORT_TEMPLATES: ImportTemplate[] = [
       'serial_number identifies the physical unit: an upload matches on it, so a second row with the same serial updates that unit rather than creating another.',
       'Accessories are the exception — they match on code, because a box of screws has no serial worth trusting.',
       'condition_note is required when condition is OTHER.',
-      'vendor is matched by name against the vendor list. A name that matches nothing is reported on the row rather than silently dropped.',
     ],
   },
   {

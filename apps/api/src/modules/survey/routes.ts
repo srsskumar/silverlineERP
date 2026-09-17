@@ -1187,6 +1187,52 @@ export async function registerSurveyRoutes(
       };
     });
 
+  /**
+   * Equipment on this village through the people working it (§note 5).
+   *
+   * Two ways a thing can be at a village. It can be allocated to the village
+   * — that is the rover list, and it is what the daily return accounts for.
+   * Or it can be issued to a person who is on the village's crew, which is
+   * how a tripod, a radio and a battery usually travel: signed out to a
+   * surveyor, not to a place.
+   *
+   * The second kind was invisible here, so a village's equipment looked like
+   * whatever happened to be allocated formally and the rest was somewhere in
+   * the asset register under a name. Reported separately rather than merged
+   * into the rover list, because the distinction is real: releasing the
+   * person from the village does not take the equipment off them.
+   */
+  app.get('/api/v1/survey/villages/:id/crew-assets',
+    { preHandler: guard('survey.read') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      await inOrg(pool, 'survey_villages', id, u.orgId);
+      const rows = (await pool.query(
+        `SELECT DISTINCT ON (aa.asset_id)
+                aa.id AS assignment_id, aa.asset_id, aa.issued_at, aa.due_date,
+                a.asset_code, a.name AS asset_name, a.serial_number,
+                (SELECT t.label FROM asset_types t WHERE t.id = a.asset_type_id) AS type_label,
+                e.id AS employee_id, e.emp_no, e.phone,
+                COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), e.emp_no)
+                  AS employee_name,
+                s.label AS stage_label,
+                -- Already allocated to this village in its own right, so the
+                -- daily return accounts for it and it is not a second copy.
+                EXISTS (SELECT 1 FROM survey_rover_allocations r
+                        WHERE r.survey_village_id = $1 AND r.asset_id = aa.asset_id
+                          AND r.released_on IS NULL) AS also_allocated
+           FROM survey_crew c
+           JOIN employees e ON e.id = c.employee_id
+           JOIN asset_assignments aa ON aa.employee_id = e.id AND aa.returned_at IS NULL
+           JOIN assets a ON a.id = aa.asset_id
+           JOIN survey_stages s ON s.id = c.stage_id
+          WHERE c.survey_village_id = $1 AND c.org_id = $2 AND c.released_on IS NULL
+          ORDER BY aa.asset_id, aa.issued_at DESC`, [id, u.orgId])).rows;
+
+      return {
+        data: rows.map(r => ({ ...r, issued_at: iso(r.issued_at), due_date: iso(r.due_date) })),
+      };
+    });
+
   app.post('/api/v1/survey/villages/:id/rovers', { preHandler: guard('survey.manage') },
     async (req, reply) => {
       const u = actor(req), id = (req.params as { id: string }).id;

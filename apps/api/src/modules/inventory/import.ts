@@ -35,7 +35,6 @@ const assetRow = z.object({
   model: z.string().trim().max(160).optional().or(z.literal('')),
   condition: z.string().trim().max(24).optional().or(z.literal('')),
   condition_note: z.string().trim().max(2000).optional().or(z.literal('')),
-  vendor: z.string().trim().max(255).optional().or(z.literal('')),
 }).refine(v => v.asset_code || v.code, {
   message: 'asset_code is required', path: ['asset_code'],
 });
@@ -130,18 +129,6 @@ export async function registerInventoryImport(
 
           const assetCode = (v.asset_code || v.code) as string;
 
-          // Matched by name, and reported rather than dropped when it
-          // matches nothing: a silently missing vendor is a purchase trail
-          // that ends nowhere.
-          let vendorId: string | null = null;
-          if (v.vendor) {
-            const vendor = (await db.query(
-              'SELECT id FROM vendors WHERE org_id = $1 AND lower(name) = lower($2)',
-              [u.orgId, v.vendor])).rows[0];
-            if (!vendor) throw new RowError(`No vendor named "${v.vendor}"`);
-            vendorId = String(vendor.id);
-          }
-
           const serial = v.serial_number || null;
           const matchable = canMatchOnSerial(category, serial);
           const existing = (await db.query(
@@ -154,11 +141,10 @@ export async function registerInventoryImport(
             await db.query(
               `UPDATE assets SET name=$2, category=$3, asset_type_id=$4, make=$5, model=$6,
                  condition=$7, condition_note=$8, serial_number=COALESCE($9, serial_number),
-                 vendor_id=COALESCE($10, vendor_id),
                  version=version+1, updated_at=now()
                WHERE id=$1`,
               [existing.id, v.name, category, typeId, v.make || null, v.model || null,
-                condition, v.condition_note || null, serial, vendorId]);
+                condition, v.condition_note || null, serial]);
             updated += 1;
             results.push({
               row: rowNo, key: assetCode,
@@ -168,11 +154,10 @@ export async function registerInventoryImport(
           } else {
             await db.query(
               `INSERT INTO assets(org_id, asset_code, name, category, asset_type_id,
-                 serial_number, make, model, condition, condition_note, vendor_id, created_by)
-               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+                 serial_number, make, model, condition, condition_note, created_by)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
               [u.orgId, assetCode, v.name, category, typeId, serial,
-                v.make || null, v.model || null, condition, v.condition_note || null,
-                vendorId, u.id]);
+                v.make || null, v.model || null, condition, v.condition_note || null, u.id]);
             created += 1;
             results.push({
               row: rowNo, key: assetCode,

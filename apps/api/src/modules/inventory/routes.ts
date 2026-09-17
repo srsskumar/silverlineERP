@@ -2,7 +2,7 @@ import {resolveScopes,employeeScopeClause} from '../../common/scopes.js';
 import {scopedReads} from "../../common/scopedReads.js";
 import type { FastifyInstance,FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
-import { vendorSchema,itemSchema,stockSchema,invoiceSchema,assetSchema,assetLookupSchema,assetAssignSchema,assetTransitionSchema,assetAuditSchema,assetLocation } from '@silverline/shared';
+import { vendorSchema,itemSchema,stockSchema,invoiceSchema,assetSchema,assetLookupSchema,assetAssignSchema,assetBulkAssignSchema,assetTransitionSchema,assetAuditSchema,assetLocation } from '@silverline/shared';
 import { buildAuthenticate,requirePermission,scopesForPermission } from '../../common/auth.js';
 import { actor,parse,page,inOrg,mutate,version,fail,projectAccess,employeeAccess } from '../../common/domain.js';
 
@@ -78,6 +78,14 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
         (SELECT COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)),''),e.emp_no)
            FROM asset_assignments x JOIN employees e ON e.id=x.employee_id
           WHERE x.asset_id=a.id AND x.returned_at IS NULL LIMIT 1) AS held_by,
+        -- The holder's number and the date it went out, so chasing a missing
+        -- instrument does not start with looking somebody up in the directory.
+        (SELECT e.phone FROM asset_assignments x JOIN employees e ON e.id=x.employee_id
+          WHERE x.asset_id=a.id AND x.returned_at IS NULL LIMIT 1) AS held_by_phone,
+        (SELECT e.emp_no FROM asset_assignments x JOIN employees e ON e.id=x.employee_id
+          WHERE x.asset_id=a.id AND x.returned_at IS NULL LIMIT 1) AS held_by_emp_no,
+        (SELECT x.issued_at FROM asset_assignments x
+          WHERE x.asset_id=a.id AND x.returned_at IS NULL LIMIT 1) AS assigned_on,
         (SELECT p.name FROM asset_assignments x JOIN projects p ON p.id=x.project_id
           WHERE x.asset_id=a.id AND x.returned_at IS NULL LIMIT 1) AS held_for_project`
      :'';
@@ -245,6 +253,47 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    return (await db.query("UPDATE assets SET status='ASSIGNED',condition=$2,version=version+1,updated_at=now() WHERE id=$1 RETURNING *",[id,i.condition])).rows[0];
   });
  });
+ /**
+  * Issue several assets to one person at once (§note 5).
+  *
+  * A surveyor going out carries a rover, a tripod, a radio and a battery.
+  * Issuing them one form at a time is four chances to stop after three, and
+  * the one that goes unrecorded is the one nobody can find later.
+  *
+  * An asset already out with somebody else is named and the rest still go.
+  * Refusing the whole issue because one item is elsewhere means doing the
+  * other three again by hand, which is how people stop using the register.
+  */
+ app.post('/api/v1/assets/assign-bulk',{preHandler:guard('asset.manage')},async(req,reply)=>{
+  const u=actor(req),i=parse(assetBulkAssignSchema,req.body);
+  await employeeAccess(pool,req,i.employee_id);
+  if(i.project_id)await projectAccess(pool,req,i.project_id);
+  const out=await mutate(pool,req,'asset.assign.bulk','asset',async db=>{
+   const e=await inOrg(db,'employees',i.employee_id,u.orgId,true);
+   if(e.status!=='ACTIVE')fail('EMPLOYEE_INACTIVE','Only active employees may receive assets');
+   if(i.project_id){const p=await inOrg(db,'projects',i.project_id,u.orgId,true);if(p.status!=='ACTIVE')fail('PROJECT_INACTIVE','Project must be active');}
+
+   const issued:string[]=[];const busy:Array<{asset_code:string;with_whom:string}>=[];
+   for(const assetId of i.asset_ids){
+    const asset=await inOrg(db,'assets',assetId,u.orgId,true);
+    await assetAccess(req,assetId);
+    const open=(await db.query(
+     `SELECT COALESCE(NULLIF(trim(concat_ws(' ', emp.first_name, emp.last_name)),''),emp.emp_no) AS who
+        FROM asset_assignments a JOIN employees emp ON emp.id=a.employee_id
+       WHERE a.asset_id=$1 AND a.returned_at IS NULL`,[assetId])).rows[0];
+    if(open){busy.push({asset_code:String(asset.asset_code),with_whom:String(open.who)});continue;}
+    await db.query(
+     `INSERT INTO asset_assignments(org_id,asset_id,employee_id,project_id,due_date,condition,reason,created_by)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+     [u.orgId,assetId,i.employee_id,i.project_id??null,i.due_date??null,i.condition,i.reason,u.id]);
+    await db.query("UPDATE assets SET status='ASSIGNED',version=version+1,updated_at=now() WHERE id=$1",[assetId]);
+    issued.push(assetId);
+   }
+   return {issued:issued.length,busy};
+  });
+  return reply.code(201).send(out);
+ });
+
  app.post('/api/v1/assets/:id/transition',{preHandler:guard('asset.manage')},async req=>{
   const u=actor(req),id=(req.params as {id:string}).id,i=parse(assetTransitionSchema,req.body);
   return mutate(pool,req,'asset.transition','asset',async db=>{

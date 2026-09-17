@@ -80,7 +80,7 @@ describe('templates that must match the form beside them', () => {
   it('uses the register form\'s field names', () => {
     for (const field of [
       'asset_code', 'name', 'category', 'asset_type',
-      'serial_number', 'make', 'model', 'condition', 'condition_note', 'vendor',
+      'serial_number', 'make', 'model', 'condition', 'condition_note',
     ]) {
       expect(assets.headers, field).toContain(field);
     }
@@ -88,7 +88,12 @@ describe('templates that must match the form beside them', () => {
 
   it('does not offer a column the register has no field for', () => {
     // It used to offer purchase_cost and warranty_until, which exist nowhere.
-    for (const gone of ['purchase_cost', 'warranty_until', 'purchase_date', 'status', 'notes']) {
+    // vendor is on this list deliberately: it was asked for, then asked to
+    // be removed. The register form has no vendor field either, and the two
+    // are pinned together by this test.
+    for (const gone of [
+      'purchase_cost', 'warranty_until', 'purchase_date', 'status', 'notes', 'vendor',
+    ]) {
       expect(assets.headers, gone).not.toContain(gone);
     }
   });

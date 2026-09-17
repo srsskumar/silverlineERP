@@ -1538,3 +1538,57 @@ describe("a programme and its project, created together", () => {
     expect(r.status).toBe(409);
   });
 });
+
+describe("what a village's crew are carrying", () => {
+  it("shows equipment that reached the village through a person", async () => {
+    /*
+     * Two ways a thing can be at a village: allocated to the village, or
+     * issued to somebody who is on its crew. The second is how a tripod, a
+     * radio and a battery usually travel — signed out to a surveyor, not to
+     * a place — and it was invisible here, so a village's equipment looked
+     * like whatever happened to be allocated formally.
+     */
+    const asset = await makeRover(uniq("CA"));
+    await post(w.admin, "/api/v1/assets/assign-bulk", {
+      asset_ids: [asset], employee_id: w.directEmployee, reason: "Field kit",
+    });
+    await post(w.admin, `/api/v1/survey/villages/${villageA}/crew`, {
+      employee_id: w.directEmployee, stage_code: "RECORDS_PREPARATION",
+    });
+
+    const r = await get(w.admin, `/api/v1/survey/villages/${villageA}/crew-assets`);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const row = (r.body.data as Array<Record<string, unknown>>)
+      .find((x) => x.asset_id === asset);
+    expect(row, "the asset their crew member is carrying").toBeTruthy();
+    expect(row!.employee_name).toBeTruthy();
+    expect(row!.phone, "so it can be chased without a directory lookup").toBeTruthy();
+    expect(row!.issued_at).toBeTruthy();
+  });
+
+  it("marks the ones already allocated to the village in their own right", async () => {
+    // Otherwise the same instrument reads as two, and the daily return
+    // accounts for one of them.
+    const r = await get(w.admin, `/api/v1/survey/villages/${villageA}/crew-assets`);
+    for (const row of r.body.data as Array<Record<string, unknown>>) {
+      expect(row).toHaveProperty("also_allocated");
+    }
+  });
+
+  it("stops showing it once the person is off the crew", async () => {
+    // Releasing somebody from the village does not take the equipment off
+    // them — it stops being this village's business, which is the point of
+    // reporting it separately from the allocations.
+    const crew = await get(w.admin, `/api/v1/survey/villages/${villageA}/crew`);
+    const row = (crew.body.data as Array<Record<string, any>>)
+      .find((c) => c.employee_id === w.directEmployee && c.stage_code === "RECORDS_PREPARATION");
+    expect(row).toBeTruthy();
+    await post(w.admin, `/api/v1/survey/crew/${row!.id}/release`, {});
+
+    const after = await get(w.admin, `/api/v1/survey/villages/${villageA}/crew-assets`);
+    const stillThere = (after.body.data as Array<Record<string, unknown>>)
+      .filter((x) => x.employee_id === w.directEmployee
+        && x.stage_label === "Records preparation");
+    expect(stillThere).toHaveLength(0);
+  });
+});
