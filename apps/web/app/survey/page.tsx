@@ -25,8 +25,12 @@ import {
   reasonLabel, changeHint, periodNote,
 } from '@/lib/survey';
 import { VillageDetail } from '@/components/survey/VillageDetail';
+import { LineChart, BarChart, StackBar } from '@/components/survey/Charts';
 
 type Row = Record<string, any>;
+
+/** One decimal, which is as fine as an acre figure is ever read on a chart. */
+const round1 = (n: number) => Math.round(n * 10) / 10;
 type Tab = 'progress' | 'report' | 'villages' | 'bottlenecks' | 'timeline' | 'summary';
 
 /**
@@ -247,6 +251,20 @@ function Progress({
           <h3 className="text-sm font-semibold text-text">Villages at each stage</h3>
           <span className="text-2xs text-text-subtle">{roverNote(data.rovers)}</span>
         </div>
+        {/* Where the programme sits, before the grid of numbers behind it
+            (§39). "Most of it has not been started" is a sentence somebody
+            reads off this in a second and has to add up from the table. */}
+        <StackBar
+          title="Every village in the programme, by where it has reached"
+          segments={[
+            { key: 'notStarted', label: VILLAGE_STATE_LABELS.NOT_STARTED ?? 'Not started',
+              value: data.total?.notStarted ?? 0 },
+            { key: 'inProgress', label: VILLAGE_STATE_LABELS.IN_PROGRESS ?? 'In progress',
+              value: data.total?.inProgress ?? 0 },
+            { key: 'completed', label: VILLAGE_STATE_LABELS.COMPLETED ?? 'Completed',
+              value: data.total?.completed ?? 0 },
+          ]}
+        />
         <TableWrap>
           <Table>
             <THead>
@@ -533,6 +551,23 @@ function PeriodReport({
               </Badge>
             ))}
           </div>
+        </Card>
+      ) : null}
+
+      {units.length > 0 ? (
+        <Card className="p-4">
+          {/* Which units carried the period, ranked. The table below is
+              alphabetical because people look things up in it; this answers
+              "who did the work" without reading every row. */}
+          <BarChart
+            title={`Extent surveyed this period, by ${LEVEL_LABELS[level].toLowerCase()}`}
+            unit="Ac"
+            points={[...units]
+              .map((u) => ({ label: String(u.name), value: round1(periodTotal(u.period)) }))
+              .filter((u) => u.value > 0)
+              .sort((a, b) => b.value - a.value)
+              .slice(0, 12)}
+          />
         </Card>
       ) : null}
 
@@ -934,6 +969,10 @@ function Timeline({
   const active = Object.keys(periods[0]?.measures ?? {})
     .filter((code) => periods.some((p) => (p.measures[code] ?? 0) > 0));
   const peak = Math.max(1, ...periods.flatMap((p) => active.map((c) => p.measures[c] ?? 0)));
+  // Extent measures added together are what "surveyed" means on the chart;
+  // counting a village tally into the same line would be adding apples to
+  // acres.
+  const extentCodes = active.filter((c) => /_AC$|EXTENT/.test(c));
 
   return (
     <div className="space-y-4">
@@ -958,7 +997,25 @@ function Timeline({
           description="No daily progress falls between these dates."
         />
       ) : (
-        <TableWrap>
+        <>
+          {/* The shape of the work, before the numbers behind it (§39). A
+              table of forty rows hides a slowdown that a line shows in a
+              second; the table stays underneath for the exact figures. */}
+          <Card className="space-y-4 p-4">
+            <LineChart
+              title="Extent surveyed each period"
+              unit="Ac"
+              points={periods.map((p) => ({
+                label: p.label,
+                value: round1(extentCodes.reduce((t, c) => t + (p.measures[c] ?? 0), 0)),
+              }))}
+            />
+            <BarChart
+              title="Villages worked each period"
+              points={periods.map((p) => ({ label: p.label, value: p.villages ?? 0 }))}
+            />
+          </Card>
+          <TableWrap>
           <Table>
             <THead>
               <TR>
@@ -990,7 +1047,8 @@ function Timeline({
               ))}
             </TBody>
           </Table>
-        </TableWrap>
+          </TableWrap>
+        </>
       )}
     </div>
   );
