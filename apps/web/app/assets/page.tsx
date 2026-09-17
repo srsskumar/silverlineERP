@@ -1,12 +1,16 @@
 'use client';
 
+import * as React from 'react';
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AssetAudit, AuditResults } from '@/components/v2/AssetAudit';
 import {
   Workbench, Panel, Can, Collection, MutationForm, choices, type Row,
 } from '@/components/v2/Workbench';
-import { apiRequestRaw } from '@/lib/apiClient';
+import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
+import { Combobox } from '@/components/ui/Combobox';
+import { Button } from '@/components/ui/Button';
+import { ErrorCard } from '@/components/ui/ErrorCard';
 import { ASSET_CONDITIONS, ASSET_LOCATION_LABELS } from '@silverline/shared';
 
 /**
@@ -221,35 +225,7 @@ export default function Page() {
         ) : null}
 
         <Panel title="Issue a kit to one person">
-          <p className="mb-4 text-sm text-text-muted">
-            {/* One form at a time is four chances to stop after three, and
-                the item that goes unrecorded is the one nobody can find. */}
-            A surveyor going out carries a rover, a tripod, a radio and a battery. Pick them
-            all, issue them once. Anything already out with somebody else is named and the
-            rest still go.
-          </p>
-          <MutationForm
-            path="assets/assign-bulk"
-            submit="Issue them"
-            fields={[
-              {
-                // Type and serial, not a name: three rows reading "Rover"
-                // and no way to tell which is being signed out is how the
-                // wrong one goes into the van.
-                key: 'asset_ids', label: 'Equipment (type · serial · code)',
-                type: 'multi_select', source: 'assets?limit=100',
-                labelKey: 'picker_label', required: true,
-              },
-              { key: 'employee_id', label: 'To employee', source: 'assets/eligible-employees', required: true },
-              { key: 'project_id', label: 'For project', source: 'inventory/eligible-projects' },
-              { key: 'due_date', label: 'Return due', type: 'date' },
-              {
-                key: 'condition', label: 'Condition going out', type: 'select',
-                options: CONDITIONS, default: 'GOOD', required: true,
-              },
-              { key: 'reason', label: 'What it is for', required: true },
-            ]}
-          />
+          <IssueKit />
         </Panel>
 
         <Panel title="Types and categories">
@@ -376,6 +352,196 @@ function AssetHistory({ asset }: { asset: Row }) {
       )}
     </Panel>
   );
+}
+
+/**
+ * Issue several pieces of equipment to one person.
+ *
+ * Typed and picked, not scrolled. A register of a few hundred instruments in
+ * a multi-select list means hunting for "the rover with serial ...4471" by
+ * eye, and the one that gets picked is whichever looked close enough — which
+ * is how the wrong instrument ends up in somebody's van and the right one
+ * goes missing on paper.
+ *
+ * Each item is identified the way a storeman identifies it: what it is, its
+ * serial, its code. Three rows reading "Rover" tell nobody which is which.
+ */
+function IssueKit() {
+  const qc = useQueryClient();
+  const [basket, setBasket] = React.useState<Array<{ id: string; label: string }>>([]);
+  const [form, setForm] = React.useState({
+    employee_id: '', project_id: '', due_date: '', condition: 'GOOD', reason: '',
+  });
+  const [outcome, setOutcome] = React.useState<string | null>(null);
+
+  const assets = useQuery({
+    queryKey: ['assets', 'all'], queryFn: fetchAllAssets, staleTime: 300_000,
+  });
+  const people = useQuery({
+    queryKey: ['assets', 'eligible-employees'],
+    queryFn: async () =>
+      ((await apiRequestRaw('/api/v1/assets/eligible-employees')).body as { data: Row[] }).data,
+    staleTime: 300_000,
+  });
+  const projects = useQuery({
+    queryKey: ['inventory', 'eligible-projects'],
+    queryFn: async () =>
+      ((await apiRequestRaw('/api/v1/inventory/eligible-projects')).body as { data: Row[] }).data,
+    staleTime: 300_000,
+  });
+
+  const issue = useMutation({
+    mutationFn: async () =>
+      apiRequest('/api/v1/assets/assign-bulk', {
+        method: 'POST',
+        body: {
+          asset_ids: basket.map((b) => b.id),
+          employee_id: form.employee_id,
+          project_id: form.project_id || undefined,
+          due_date: form.due_date || undefined,
+          condition: form.condition,
+          reason: form.reason,
+        },
+      }),
+    onSuccess: (res: any) => {
+      const d = res?.data ?? res ?? {};
+      const busy = (d.busy ?? []) as Array<{ asset_code: string; with_whom: string }>;
+      setOutcome([
+        d.issued ? `${d.issued} issued` : '',
+        busy.length
+          ? busy.map((b) => `${b.asset_code} is already with ${b.with_whom}`).join('; ')
+          : '',
+      ].filter(Boolean).join('. '));
+      setBasket([]);
+      setForm({ ...form, reason: '' });
+      qc.invalidateQueries({ queryKey: ['assets'] });
+    },
+  });
+
+  const field = 'w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
+  const ready = basket.length > 0 && form.employee_id && form.reason.trim();
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-text-muted">
+        A surveyor going out carries a rover, a tripod, a radio and a battery. Search for each,
+        add them all, issue them once. Anything already out with somebody else is named and the
+        rest still go.
+      </p>
+
+      <div>
+        <label className="mb-1 block text-sm font-medium text-text-muted">Equipment</label>
+        <Combobox
+          value=""
+          onChange={(id) => {
+            const a = (assets.data ?? []).find((x) => String(x.id) === id);
+            if (!a || basket.some((b) => b.id === id)) return;
+            setBasket([...basket, { id, label: String(a.picker_label ?? a.asset_code) }]);
+            setOutcome(null);
+          }}
+          isLoading={assets.isLoading}
+          placeholder="Type a type, serial or code — add as many as you need…"
+          options={(assets.data ?? [])
+            .filter((a) => !basket.some((b) => b.id === String(a.id)))
+            .map((a) => ({
+              id: String(a.id),
+              label: String(a.picker_label ?? a.name ?? a.asset_code),
+              // Where it already is, so a clash is seen before it is picked
+              // rather than after the server refuses it.
+              hint: a.location === 'IN_FIELD' && a.held_by
+                ? `out with ${a.held_by}` : 'in office',
+            }))}
+          emptyHint="Search by what it is, its serial number or its code"
+        />
+        {basket.length > 0 ? (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {basket.map((b) => (
+              <button
+                key={b.id}
+                type="button"
+                onClick={() => setBasket(basket.filter((x) => x.id !== b.id))}
+                className="rounded-full border border-border bg-surface px-2 py-0.5 text-2xs
+                  text-text hover:border-danger hover:text-danger"
+                title="Remove"
+              >
+                {b.label} ×
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <label className="block text-sm font-medium text-text-muted">
+          <span className="mb-1 block">To employee *</span>
+          <Combobox
+            value={form.employee_id}
+            onChange={(id) => setForm({ ...form, employee_id: id })}
+            isLoading={people.isLoading}
+            placeholder="Search the directory…"
+            options={(people.data ?? []).map((e) => ({
+              id: String(e.id),
+              label: [e.first_name, e.last_name].filter(Boolean).join(' ') || String(e.emp_no),
+              hint: String(e.emp_no ?? ''),
+            }))}
+          />
+        </label>
+        <label className="block text-sm font-medium text-text-muted">
+          <span className="mb-1 block">For project</span>
+          <select className={field} value={form.project_id}
+            onChange={(e) => setForm({ ...form, project_id: e.target.value })}>
+            <option value="">None</option>
+            {(projects.data ?? []).map((p) => (
+              <option key={String(p.id)} value={String(p.id)}>
+                {String(p.code ?? '')} {String(p.name)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-sm font-medium text-text-muted">
+          <span className="mb-1 block">Return due</span>
+          <input type="date" className={field} value={form.due_date}
+            onChange={(e) => setForm({ ...form, due_date: e.target.value })} />
+        </label>
+        <label className="block text-sm font-medium text-text-muted">
+          <span className="mb-1 block">Condition going out *</span>
+          <select className={field} value={form.condition}
+            onChange={(e) => setForm({ ...form, condition: e.target.value })}>
+            {CONDITIONS.map((c) => (
+              <option key={c.value} value={c.value}>{c.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-sm font-medium text-text-muted sm:col-span-2">
+          <span className="mb-1 block">What it is for *</span>
+          <input className={field} value={form.reason}
+            placeholder="Ground truthing, Koyyuru mandal"
+            onChange={(e) => setForm({ ...form, reason: e.target.value })} />
+        </label>
+      </div>
+
+      {issue.isError ? <ErrorCard error={issue.error} /> : null}
+      {outcome ? <p className="text-sm text-text-muted">{outcome}</p> : null}
+
+      <Button type="button" variant="primary" loading={issue.isPending}
+        disabled={!ready} onClick={() => issue.mutate()}>
+        {basket.length > 1 ? `Issue ${basket.length} items` : 'Issue it'}
+      </Button>
+    </div>
+  );
+}
+
+/** The whole asset register, a page at a time: the server caps a page at 100. */
+async function fetchAllAssets(): Promise<Row[]> {
+  const out: Row[] = [];
+  for (let page = 0, offset = 0; page < 20; page += 1, offset += 100) {
+    const body = (await apiRequestRaw(`/api/v1/assets?limit=100&offset=${offset}`)).body as {
+      data?: Row[]; has_more?: boolean;
+    };
+    out.push(...(body?.data ?? []));
+    if (!body?.has_more) break;
+  }
+  return out;
 }
 
 function Fact({ label: name, value }: { label: string; value: string }) {
