@@ -1034,6 +1034,41 @@ export const crewAssignmentSchema = z.object({
   released_on: isoDate.nullable().optional(),
 });
 
+/**
+ * Allocating several rovers at once.
+ *
+ * A crew going out takes four instruments, not one, and opening the same
+ * form four times is how the fourth gets forgotten. The dates are shared
+ * because they always are — the kit goes out together.
+ */
+export const roverBulkAllocationSchema = z.object({
+  asset_ids: z.array(z.string().uuid()).min(1).max(50),
+  allocated_on: isoDate,
+  released_on: isoDate.nullable().optional(),
+}).refine(v => !v.released_on || v.released_on >= v.allocated_on, {
+  message: 'A rover cannot be released before it was allocated',
+  path: ['released_on'],
+});
+
+/** Putting several people on the same stage at once, for the same reason. */
+export const crewBulkAssignmentSchema = z.object({
+  employee_ids: z.array(z.string().uuid()).min(1).max(50),
+  stage_code: z.string().trim().min(1).max(64),
+  assigned_on: isoDate.optional(),
+});
+
+/** Correcting an allocation that was recorded with the wrong dates. */
+export const roverAllocationEditSchema = z.object({
+  allocated_on: isoDate.optional(),
+  released_on: isoDate.nullable().optional(),
+});
+
+/** Moving villages from one programme to another (enhancement note 4). */
+export const villageMoveSchema = z.object({
+  village_ids: z.array(z.string().uuid()).min(1).max(2000),
+  to_project_id: z.string().uuid(),
+});
+
 export const roverAllocationSchema = z.object({
   asset_id: z.string().uuid(),
   allocated_on: isoDate,

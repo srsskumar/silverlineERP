@@ -210,16 +210,55 @@ function NewProgramme({ onCreated }: { onCreated: (id: string) => void }) {
 function AddVillage({ projectId }: { projectId: string }) {
   const qc = useQueryClient();
   const [form, setForm] = React.useState({
-    village_name: '', village_code: '', mandal_id: '', total_extent_ac: '',
+    village_name: '', village_code: '', district_id: '', mandal_id: '',
+    new_mandal_name: '', new_mandal_code: '', total_extent_ac: '',
   });
 
   // The mandals already in the organisation, which is what a village hangs
   // off. A village with no mandal has nowhere to roll up to.
+  const districts = useQuery({
+    queryKey: ['org-units', 'district'],
+    queryFn: async () =>
+      ((await apiRequestRaw('/api/v1/org/units?type=district&limit=100')).body as { data: Row[] }).data,
+    staleTime: 300_000,
+  });
+
   const mandals = useQuery({
     queryKey: ['org-units', 'mandal'],
     queryFn: async () =>
       ((await apiRequestRaw('/api/v1/org/units?type=mandal&limit=100')).body as { data: Row[] }).data,
     staleTime: 300_000,
+  });
+
+  /*
+   * Mandals narrowed to the chosen district.
+   *
+   * A district holds a dozen mandals and the organisation holds hundreds.
+   * Offering all of them makes the right one hard to find and the wrong one
+   * easy to pick — and a village filed under the wrong mandal is wrong in
+   * every report it ever appears in.
+   */
+  const inDistrict = (mandals.data ?? []).filter(
+    (m) => !form.district_id || String(m.parent_id ?? '') === form.district_id);
+
+  // Creating the mandal first, when the village is in one that is not on the
+  // list yet — which is the usual reason somebody is adding a village by hand.
+  const addMandal = useMutation({
+    mutationFn: async () =>
+      apiRequest('/api/v1/org/units', {
+        method: 'POST',
+        body: {
+          type: 'mandal', name: form.new_mandal_name.trim(),
+          code: form.new_mandal_code.trim(), parent_id: form.district_id,
+        },
+      }),
+    onSuccess: (res: any) => {
+      setForm({
+        ...form, mandal_id: String(res?.data?.id ?? res?.id ?? ''),
+        new_mandal_name: '', new_mandal_code: '',
+      });
+      qc.invalidateQueries({ queryKey: ['org-units', 'mandal'] });
+    },
   });
 
   const add = useMutation({
@@ -236,7 +275,11 @@ function AddVillage({ projectId }: { projectId: string }) {
         },
       }),
     onSuccess: () => {
-      setForm({ village_name: '', village_code: '', mandal_id: '', total_extent_ac: '' });
+      // The district and mandal are kept: somebody adding one village by
+      // hand is usually adding three, all in the same mandal.
+      setForm((f) => ({
+        ...f, village_name: '', village_code: '', total_extent_ac: '',
+      }));
       qc.invalidateQueries({ queryKey: ['survey-villages'] });
       qc.invalidateQueries({ queryKey: ['survey-projects'] });
     },
@@ -255,6 +298,16 @@ function AddVillage({ projectId }: { projectId: string }) {
         </p>
         <div className="grid gap-3 sm:grid-cols-4">
           <label className="space-y-1">
+            <span className="text-2xs uppercase tracking-wide text-text-subtle">District</span>
+            <select className={field} value={form.district_id}
+              onChange={(e) => setForm({ ...form, district_id: e.target.value, mandal_id: '' })}>
+              <option value="">Choose…</option>
+              {(districts.data ?? []).map((d) => (
+                <option key={String(d.id)} value={String(d.id)}>{String(d.name)}</option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1">
             <span className="text-2xs uppercase tracking-wide text-text-subtle">Village name</span>
             <input className={field} value={form.village_name}
               onChange={(e) => setForm({ ...form, village_name: e.target.value })} />
@@ -269,8 +322,10 @@ function AddVillage({ projectId }: { projectId: string }) {
             <span className="text-2xs uppercase tracking-wide text-text-subtle">Mandal</span>
             <select className={field} value={form.mandal_id}
               onChange={(e) => setForm({ ...form, mandal_id: e.target.value })}>
-              <option value="">Choose…</option>
-              {(mandals.data ?? []).map((m) => (
+              <option value="">
+                {form.district_id ? 'Choose…' : 'Choose a district first'}
+              </option>
+              {inDistrict.map((m) => (
                 <option key={String(m.id)} value={String(m.id)}>{String(m.name)}</option>
               ))}
             </select>
@@ -284,6 +339,38 @@ function AddVillage({ projectId }: { projectId: string }) {
               onChange={(e) => setForm({ ...form, total_extent_ac: e.target.value })} />
           </label>
         </div>
+        {form.district_id ? (
+          <details className="text-xs">
+            <summary className="cursor-pointer text-text-muted hover:text-text">
+              The mandal is not on the list
+            </summary>
+            <div className="mt-2 grid gap-3 sm:grid-cols-3">
+              <label className="space-y-1">
+                <span className="text-2xs uppercase tracking-wide text-text-subtle">
+                  New mandal name
+                </span>
+                <input className={field} value={form.new_mandal_name}
+                  onChange={(e) => setForm({ ...form, new_mandal_name: e.target.value })} />
+              </label>
+              <label className="space-y-1">
+                <span className="text-2xs uppercase tracking-wide text-text-subtle">
+                  Mandal code
+                </span>
+                <input className={field} value={form.new_mandal_code}
+                  onChange={(e) => setForm({ ...form, new_mandal_code: e.target.value })} />
+              </label>
+              <div className="flex items-end">
+                <Button type="button" variant="secondary" loading={addMandal.isPending}
+                  disabled={!form.new_mandal_name.trim() || !form.new_mandal_code.trim()}
+                  onClick={() => addMandal.mutate()}>
+                  Add the mandal
+                </Button>
+              </div>
+            </div>
+            {addMandal.isError ? <ErrorCard error={addMandal.error} /> : null}
+          </details>
+        ) : null}
+
         {add.isError ? <ErrorCard error={add.error} /> : null}
         {add.isSuccess ? (
           <p className="text-xs text-success">Added to the programme.</p>

@@ -1,8 +1,8 @@
 'use client';
 
 import * as React from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { apiRequestRaw } from '@/lib/apiClient';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
 import { AppShell } from '@/components/AppShell';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -629,6 +629,83 @@ function PeriodReport({
 function periodTotal(values: Record<string, number> | undefined): number {
   if (!values) return 0;
   return Object.values(values).reduce((t, v) => t + Number(v ?? 0), 0);
+}
+
+/* ------------------------------------------------------------ moving villages */
+
+/**
+ * Move the villages the filter is showing into another programme.
+ *
+ * Deliberately tied to the filter rather than offering a thousand tick
+ * boxes: the reason to move villages is almost always "this district" or
+ * "this mandal", which is exactly what the filter above has already
+ * selected. It refuses to appear when nothing is filtered, because "move
+ * all 1,183" is not an action anybody should reach by accident.
+ */
+function MoveVillages({ projectId, villages }: { projectId: string; villages: Row[] }) {
+  const qc = useQueryClient();
+  const [open, setOpen] = React.useState(false);
+  const [target, setTarget] = React.useState('');
+  const [done, setDone] = React.useState<string | null>(null);
+
+  const programmes = useQuery({
+    queryKey: ['survey-projects'],
+    enabled: open,
+    queryFn: async () =>
+      ((await apiRequestRaw('/api/v1/survey/projects?limit=100')).body as { data: Row[] }).data,
+    staleTime: 300_000,
+  });
+
+  const move = useMutation({
+    mutationFn: async () =>
+      apiRequest(`/api/v1/survey/projects/${projectId}/villages/move`, {
+        method: 'POST',
+        body: { village_ids: villages.map((v) => String(v.id)), to_project_id: target },
+        // A district's worth of villages, each carrying its returns.
+        timeoutMs: 180_000,
+      }),
+    onSuccess: (res: any) => {
+      const d = res?.data ?? {};
+      setDone(`${d.moved} moved to ${d.to}`
+        + (d.already_there ? `; ${d.already_there} already listed there` : ''));
+      setTarget('');
+      qc.invalidateQueries({ queryKey: ['survey-villages'] });
+      qc.invalidateQueries({ queryKey: ['survey-projects'] });
+      qc.invalidateQueries({ queryKey: ['survey-progress'] });
+    },
+  });
+
+  if (!open) {
+    return (
+      <Button type="button" variant="ghost" onClick={() => setOpen(true)}>
+        Move these {villages.length} to another programme
+      </Button>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-xs text-text-muted">
+        Move {villages.length} village{villages.length === 1 ? '' : 's'} to
+      </span>
+      <select value={target} onChange={(e) => setTarget(e.target.value)}
+        className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+        <option value="">Choose a programme…</option>
+        {(programmes.data ?? [])
+          .filter((p) => String(p.id) !== projectId)
+          .map((p) => <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>)}
+      </select>
+      <Button type="button" variant="primary" loading={move.isPending}
+        disabled={!target} onClick={() => move.mutate()}>
+        Move
+      </Button>
+      <Button type="button" variant="ghost" onClick={() => { setOpen(false); setDone(null); }}>
+        Cancel
+      </Button>
+      {done ? <span className="text-2xs text-success">{done}</span> : null}
+      {move.isError ? <ErrorCard error={move.error} /> : null}
+    </div>
+  );
 }
 
 /* ---------------------------------------------------------- deployment */
@@ -1273,6 +1350,18 @@ function Villages({
             onChange={(e) => setUnstarted(e.target.checked)} />
           Not started
         </label>
+        {/*
+          * Moving what the filter is showing.
+          *
+          * Programmes get split and merged — a district carved into its own
+          * contract, two pilots folded together. Re-importing the list into
+          * the other programme would leave the progress behind, which is the
+          * whole record, so the villages move with everything recorded
+          * against them.
+          */}
+        {canManage && rows.length > 0 && rows.length < all.length ? (
+          <MoveVillages projectId={projectId} villages={rows} />
+        ) : null}
         {(district || mandal || stage || unstarted || filter) ? (
           <Button type="button" variant="ghost" onClick={() => {
             setDistrict(''); setMandal(''); setStage(''); setUnstarted(false); setFilter('');

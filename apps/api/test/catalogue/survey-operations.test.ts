@@ -1304,3 +1304,160 @@ describe("the district a village rolls up to", () => {
     expect(shallow, "a village whose mandal has no division").toBeTruthy();
   });
 });
+
+describe("assigning people and instruments in one go", () => {
+  it("puts a whole crew on a stage at once", async () => {
+    // Four or five people assigned one form at a time is how the fifth gets
+    // forgotten.
+    const ids = [] as string[];
+    for (let i = 0; i < 3; i += 1) {
+      ids.push(String((await w.pool.query(
+        `INSERT INTO employees(org_id,emp_no,first_name,phone,date_of_joining,status)
+         VALUES($1,$2,'Crew','+9191000${String(70000 + i).slice(-5)}','2026-01-01','ACTIVE')
+         RETURNING id`, [w.orgId, uniq("E")])).rows[0].id));
+    }
+    const r = await post(w.admin, `/api/v1/survey/villages/${villageA}/crew/bulk`, {
+      employee_ids: ids, stage_code: "GT_QC",
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.data.assigned).toBe(3);
+  });
+
+  it("reports somebody already on that stage instead of failing the rest", async () => {
+    const one = String((await w.pool.query(
+      `INSERT INTO employees(org_id,emp_no,first_name,phone,date_of_joining,status)
+       VALUES($1,$2,'Repeat','+919100070900','2026-01-01','ACTIVE') RETURNING id`,
+      [w.orgId, uniq("E")])).rows[0].id);
+    await post(w.admin, `/api/v1/survey/villages/${villageA}/crew/bulk`,
+      { employee_ids: [one], stage_code: "VECTORIZATION" });
+    const again = await post(w.admin, `/api/v1/survey/villages/${villageA}/crew/bulk`,
+      { employee_ids: [one], stage_code: "VECTORIZATION" });
+    expect(again.data.already_assigned).toBe(1);
+    expect(again.data.assigned).toBe(0);
+  });
+
+  it("will not put somebody who has left onto work", async () => {
+    const gone = String((await w.pool.query(
+      `INSERT INTO employees(org_id,emp_no,first_name,phone,date_of_joining,status)
+       VALUES($1,$2,'Departed','+919100070901','2026-01-01','EXITED') RETURNING id`,
+      [w.orgId, uniq("E")])).rows[0].id);
+    const r = await post(w.admin, `/api/v1/survey/villages/${villageA}/crew/bulk`,
+      { employee_ids: [gone], stage_code: "GT_QC" });
+    expect(r.data.refused).toBe(1);
+    expect(r.data.assigned).toBe(0);
+  });
+
+  it("allocates several rovers together and names the one that is busy", async () => {
+    /*
+     * Refusing the whole request because one instrument is out means doing
+     * the other four again by hand.
+     */
+    const free1 = await makeRover(uniq("RA"));
+    const free2 = await makeRover(uniq("RB"));
+    const busy = await makeRover(uniq("RC"));
+
+    const other = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Holds a rover", village_code: uniq("VH"),
+      mandal_id: String((await w.pool.query(
+        "SELECT id FROM org_units WHERE org_id=$1 AND type='mandal' LIMIT 1",
+        [w.orgId])).rows[0].id),
+    });
+    await post(w.admin, `/api/v1/survey/villages/${other.data.id}/rovers`,
+      { asset_id: busy, allocated_on: workDate() });
+
+    const r = await post(w.admin, `/api/v1/survey/villages/${villageA}/rovers/bulk`, {
+      asset_ids: [free1, free2, busy], allocated_on: workDate(),
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.data.allocated).toBe(2);
+    expect(r.data.clashes).toHaveLength(1);
+    expect(r.data.clashes[0].with_village).toBe("Holds a rover");
+  });
+
+  it("corrects an allocation's dates", async () => {
+    const asset = await makeRover(uniq("RD"));
+    const made = await post(w.admin, `/api/v1/survey/villages/${villageA}/rovers`,
+      { asset_id: asset, allocated_on: workDate() });
+    const r = await patch(w.admin, `/api/v1/survey/rovers/${made.data.id}`,
+      { released_on: workDate() });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.released_on).toBeTruthy();
+  });
+
+  it("refuses a correction that would release it before it went out", async () => {
+    const asset = await makeRover(uniq("RE"));
+    const made = await post(w.admin, `/api/v1/survey/villages/${villageA}/rovers`,
+      { asset_id: asset, allocated_on: workDate() });
+    const r = await patch(w.admin, `/api/v1/survey/rovers/${made.data.id}`,
+      { released_on: "2020-01-01" });
+    expect(r.status).toBe(422);
+  });
+});
+
+describe("moving villages between programmes", () => {
+  it("takes the progress with them", async () => {
+    /*
+     * Programmes get split and merged — a district carved into its own
+     * contract, two pilots folded together. Re-importing the list into the
+     * other programme would leave the progress behind, which is the whole
+     * record.
+     */
+    const target = await post(w.admin, "/api/v1/survey/projects",
+      { code: uniq("SP"), name: "Receiving programme" });
+    const mandal = String((await w.pool.query(
+      "SELECT id FROM org_units WHERE org_id=$1 AND type='mandal' LIMIT 1",
+      [w.orgId])).rows[0].id);
+    const village = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Travelling village", village_code: uniq("VT"),
+      mandal_id: mandal, total_extent_ac: 60,
+    });
+    await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: village.data.id, entry_date: day(0),
+      teams_deployed: 1, values: { GOVT_LAND_EXTENT_AC: 9 },
+    });
+
+    const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages/move`, {
+      village_ids: [village.data.id], to_project_id: target.data.id,
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.moved).toBe(1);
+
+    // The village and its return are both on the new programme.
+    const moved = await w.pool.query(
+      "SELECT survey_project_id FROM survey_villages WHERE id=$1", [village.data.id]);
+    expect(String(moved.rows[0].survey_project_id)).toBe(String(target.data.id));
+    const entry = await w.pool.query(
+      "SELECT survey_project_id FROM survey_entries WHERE survey_village_id=$1",
+      [village.data.id]);
+    expect(String(entry.rows[0].survey_project_id)).toBe(String(target.data.id));
+  });
+
+  it("refuses to move a village into the programme it is already in", async () => {
+    const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages/move`, {
+      village_ids: [villageA], to_project_id: programmeId,
+    });
+    expect(r.status).toBe(422);
+  });
+
+  it("reports a village the target already lists rather than duplicating it", async () => {
+    const target = await post(w.admin, "/api/v1/survey/projects",
+      { code: uniq("SP"), name: "Already has it" });
+    const mandal = String((await w.pool.query(
+      "SELECT id FROM org_units WHERE org_id=$1 AND type='mandal' LIMIT 1",
+      [w.orgId])).rows[0].id);
+    const unit = String((await w.pool.query(
+      `INSERT INTO org_units(org_id,type,code,name,parent_id)
+       VALUES($1,'village',$2,'Shared village',$3) RETURNING id`,
+      [w.orgId, uniq("VS"), mandal])).rows[0].id);
+    const here = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`,
+      { village_id: unit });
+    await post(w.admin, `/api/v1/survey/projects/${target.data.id}/villages`,
+      { village_id: unit });
+
+    const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages/move`, {
+      village_ids: [here.data.id], to_project_id: target.data.id,
+    });
+    expect(r.data.moved).toBe(0);
+    expect(r.data.already_there).toBe(1);
+  });
+});

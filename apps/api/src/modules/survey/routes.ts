@@ -10,6 +10,8 @@ import {
   tallyByStage, roverUtilisation, roverWindow, rankByWaste, pace, currentStage,
   outOfSequence, stageBlockedBy,
   crewAssignmentSchema, roverAllocationSchema, stageRemarkSchema, STAGE_PIPELINE,
+  crewBulkAssignmentSchema, roverBulkAllocationSchema, roverAllocationEditSchema,
+  villageMoveSchema,
   checkRoverDay, checkLowProgress, villageStatus, projectEmployeeSchema,
   forecast, findBottlenecks, delayReasonLabel as reasonLabel,
   villageStatusSchema, villagePlanSchema, delayReasonLabel, DELAY_REASONS,
@@ -846,6 +848,197 @@ export async function registerSurveyRoutes(
       });
       reply.code(201);
       return { data: row };
+    });
+
+  /**
+   * Put several people on a stage at once (§note 4).
+   *
+   * A crew is four or five people and assigning them one form at a time is
+   * how the fifth gets forgotten. Somebody already on that stage here is
+   * reported rather than failing the request: re-running the list after
+   * adding one person is the normal way this gets used.
+   */
+  app.post('/api/v1/survey/villages/:id/crew/bulk', { preHandler: guard('survey.manage') },
+    async (req, reply) => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(crewBulkAssignmentSchema, req.body);
+      const out = await mutate(pool, req, 'survey.crew.assign.bulk', 'survey_crew', async db => {
+        await inOrg(db, 'survey_villages', id, u.orgId);
+        const stage = (await db.query(
+          'SELECT id FROM survey_stages WHERE org_id = $1 AND code = $2 AND active',
+          [u.orgId, input.stage_code])).rows[0];
+        if (!stage) fail('UNKNOWN_STAGE', `There is no stage ${input.stage_code}`, 422);
+
+        const assigned: string[] = [], already: string[] = [], refused: string[] = [];
+        for (const employeeId of input.employee_ids) {
+          const e = (await db.query(
+            'SELECT id, status FROM employees WHERE id = $1 AND org_id = $2',
+            [employeeId, u.orgId])).rows[0];
+          // Somebody who has left cannot be put on work.
+          if (!e || e.status !== 'ACTIVE') { refused.push(employeeId); continue; }
+          const done = await db.query(
+            `INSERT INTO survey_crew(org_id, survey_village_id, stage_id, employee_id,
+               assigned_on, created_by)
+             SELECT $1,$2,$3,$4,COALESCE($5::date, CURRENT_DATE),$6
+             WHERE NOT EXISTS (
+               SELECT 1 FROM survey_crew
+               WHERE survey_village_id = $2 AND stage_id = $3 AND employee_id = $4
+                 AND released_on IS NULL)
+             RETURNING id`,
+            [u.orgId, id, stage.id, employeeId, input.assigned_on ?? null, u.id]);
+          if (done.rowCount) assigned.push(employeeId); else already.push(employeeId);
+        }
+        return { assigned: assigned.length, already_assigned: already.length,
+          refused: refused.length, refused_ids: refused };
+      });
+      reply.code(201);
+      return { data: out };
+    });
+
+  /**
+   * Allocate several rovers at once (§note 4).
+   *
+   * The kit goes out together, so the dates are shared. A rover already out
+   * on another village for an overlapping period is reported by name and
+   * the rest still go — refusing the whole request because one instrument is
+   * busy means doing the other four again by hand.
+   */
+  app.post('/api/v1/survey/villages/:id/rovers/bulk', { preHandler: guard('survey.manage') },
+    async (req, reply) => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(roverBulkAllocationSchema, req.body);
+      const out = await mutate(pool, req, 'survey.rover.allocate.bulk',
+        'survey_rover_allocation', async db => {
+          await inOrg(db, 'survey_villages', id, u.orgId);
+          const allocated: string[] = [];
+          const clashes: Array<{ asset_id: string; asset_code: string; with_village: string }> = [];
+
+          for (const assetId of input.asset_ids) {
+            await db.query('SAVEPOINT rover_row');
+            try {
+              await db.query(
+                `INSERT INTO survey_rover_allocations(org_id, survey_village_id, asset_id,
+                   allocated_on, released_on, created_by)
+                 VALUES($1,$2,$3,$4::date,$5::date,$6)`,
+                [u.orgId, id, assetId, input.allocated_on, input.released_on ?? null, u.id]);
+              allocated.push(assetId);
+              await db.query('RELEASE SAVEPOINT rover_row');
+            } catch (error) {
+              await db.query('ROLLBACK TO SAVEPOINT rover_row');
+              // 23P01 is the exclusion constraint: this rover is already out
+              // somewhere over these dates.
+              if ((error as { code?: string }).code !== '23P01') throw error;
+              const where = (await db.query(
+                `SELECT a.asset_code, ou.name AS village
+                   FROM survey_rover_allocations r
+                   JOIN assets a ON a.id = r.asset_id
+                   JOIN survey_villages sv ON sv.id = r.survey_village_id
+                   JOIN org_units ou ON ou.id = sv.village_id
+                  WHERE r.asset_id = $1 AND r.released_on IS NULL LIMIT 1`, [assetId])).rows[0];
+              clashes.push({
+                asset_id: assetId,
+                asset_code: where?.asset_code ?? 'unknown',
+                with_village: where?.village ?? 'another village',
+              });
+            }
+          }
+          return { allocated: allocated.length, clashes };
+        });
+      reply.code(201);
+      return { data: out };
+    });
+
+  /**
+   * Correct an allocation's dates (§note 4).
+   *
+   * Recorded with the wrong start, or a release that never happened. The
+   * exclusion constraint still applies, so a correction that would put one
+   * rover in two villages at once is refused rather than accepted quietly.
+   */
+  app.patch('/api/v1/survey/rovers/:id', { preHandler: guard('survey.manage') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(roverAllocationEditSchema, req.body);
+      return mutate(pool, req, 'survey.rover.update', 'survey_rover_allocation', async db => {
+        const row = await inOrg(db, 'survey_rover_allocations', id, u.orgId, true);
+        const allocatedOn = input.allocated_on ?? iso(row.allocated_on);
+        const releasedOn = input.released_on === undefined
+          ? iso(row.released_on) : input.released_on;
+        if (releasedOn && allocatedOn && releasedOn < allocatedOn) {
+          fail('VALIDATION_ERROR', 'A rover cannot be released before it was allocated', 422);
+        }
+        try {
+          return (await db.query(
+            `UPDATE survey_rover_allocations
+                SET allocated_on = $2::date, released_on = $3::date
+              WHERE id = $1 RETURNING *`, [id, allocatedOn, releasedOn])).rows[0];
+        } catch (error) {
+          if ((error as { code?: string }).code === '23P01') {
+            fail('ROVER_DOUBLE_ALLOCATED',
+              'Those dates would put this rover in two villages at once', 409);
+          }
+          throw error;
+        }
+      });
+    });
+
+  /**
+   * Move villages from one programme to another (§note 4).
+   *
+   * Programmes get split and merged — a district carved out into its own
+   * contract, two pilots folded into one. Re-importing the list into the
+   * other programme would leave the progress behind, which is the whole
+   * record.
+   *
+   * Everything recorded against a village travels with it, because it all
+   * hangs off the village row rather than the programme: the daily returns,
+   * the stage states, the crew, the rover allocations. Only the programme
+   * changes.
+   */
+  app.post('/api/v1/survey/projects/:id/villages/move',
+    { preHandler: guard('survey.manage') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(villageMoveSchema, req.body);
+      return mutate(pool, req, 'survey.villages.move', 'survey_project', async db => {
+        await projectOr404(db, u.orgId, id);
+        const target = await projectOr404(db, u.orgId, input.to_project_id);
+        if (input.to_project_id === id) {
+          fail('VALIDATION_ERROR', 'That is the programme they are already in', 422);
+        }
+
+        const moved: string[] = [], clashed: string[] = [];
+        for (const villageId of input.village_ids) {
+          const row = (await db.query(
+            `SELECT sv.id, sv.village_id, ou.name
+               FROM survey_villages sv JOIN org_units ou ON ou.id = sv.village_id
+              WHERE sv.id = $1 AND sv.survey_project_id = $2 AND sv.org_id = $3`,
+            [villageId, id, u.orgId])).rows[0];
+          if (!row) continue;
+
+          // The same village cannot be listed twice in one programme.
+          const already = await db.query(
+            'SELECT 1 FROM survey_villages WHERE survey_project_id = $1 AND village_id = $2',
+            [input.to_project_id, row.village_id]);
+          if (already.rowCount) { clashed.push(String(row.name)); continue; }
+
+          await db.query(
+            `UPDATE survey_villages
+                SET survey_project_id = $2, version = version + 1,
+                    updated_at = now(), updated_by = $3
+              WHERE id = $1`, [villageId, input.to_project_id, u.id]);
+          // The daily returns carry the programme too, so they move with it
+          // or every report on the new programme would be short.
+          await db.query(
+            'UPDATE survey_entries SET survey_project_id = $2 WHERE survey_village_id = $1',
+            [villageId, input.to_project_id]);
+          moved.push(String(row.name));
+        }
+
+        return {
+          moved: moved.length, to: target.name,
+          already_there: clashed.length, already_there_names: clashed.slice(0, 20),
+        };
+      });
     });
 
   app.post('/api/v1/survey/crew/:id/release', { preHandler: guard('survey.manage') },

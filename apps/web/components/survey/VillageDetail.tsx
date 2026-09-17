@@ -254,10 +254,31 @@ function Crew({
     staleTime: 300_000,
   });
 
+  /*
+   * Several people at once.
+   *
+   * A crew is four or five, and assigning them one form at a time is how the
+   * fifth gets forgotten. Names are gathered into a basket first so the whole
+   * crew goes on in one action, and somebody already on the stage is reported
+   * rather than failing the rest.
+   */
+  const [basket, setBasket] = React.useState<Array<{ id: string; label: string }>>([]);
+  const [outcome, setOutcome] = React.useState<string | null>(null);
+
   const assign = useMutation({
     mutationFn: async () =>
-      apiRequest(`/api/v1/survey/villages/${villageId}/crew`, { method: 'POST', body: form }),
-    onSuccess: () => {
+      apiRequest(`/api/v1/survey/villages/${villageId}/crew/bulk`, {
+        method: 'POST',
+        body: { employee_ids: basket.map((b) => b.id), stage_code: form.stage_code },
+      }),
+    onSuccess: (res: any) => {
+      const d = res?.data ?? {};
+      setOutcome([
+        d.assigned ? `${d.assigned} assigned` : '',
+        d.already_assigned ? `${d.already_assigned} already on this stage` : '',
+        d.refused ? `${d.refused} not active` : '',
+      ].filter(Boolean).join(', ') || 'Nothing to do');
+      setBasket([]);
       setForm({ employee_id: '', stage_code: form.stage_code });
       qc.invalidateQueries({ queryKey: ['survey-crew', villageId] });
     },
@@ -286,16 +307,46 @@ function Crew({
         <div className="mt-2 grid gap-2 sm:grid-cols-3">
           <div className="sm:col-span-2">
             <Combobox
-              value={form.employee_id}
-              onChange={(id) => setForm({ ...form, employee_id: id })}
+              value=""
+              onChange={(id) => {
+                const person = (people.data ?? []).find((e) => String(e.id) === id);
+                if (!person || basket.some((b) => b.id === id)) return;
+                setBasket([...basket, {
+                  id,
+                  label: [person.first_name, person.last_name].filter(Boolean).join(' ')
+                    || String(person.emp_no),
+                }]);
+                setOutcome(null);
+              }}
               isLoading={people.isLoading}
-              placeholder="Search the directory…"
-              options={(people.data ?? []).map((e) => ({
-                id: String(e.id),
-                label: [e.first_name, e.last_name].filter(Boolean).join(' ') || String(e.emp_no),
-                hint: String(e.emp_no ?? ''),
-              }))}
+              placeholder="Search the directory — add as many as you need…"
+              options={(people.data ?? [])
+                .filter((e) => !basket.some((b) => b.id === String(e.id)))
+                .map((e) => ({
+                  id: String(e.id),
+                  label: [e.first_name, e.last_name].filter(Boolean).join(' ') || String(e.emp_no),
+                  hint: String(e.emp_no ?? ''),
+                }))}
             />
+            {basket.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {basket.map((b) => (
+                  <button
+                    key={b.id}
+                    type="button"
+                    onClick={() => setBasket(basket.filter((x) => x.id !== b.id))}
+                    className="rounded-full border border-border bg-surface px-2 py-0.5
+                      text-2xs text-text hover:border-danger hover:text-danger"
+                    title="Remove"
+                  >
+                    {b.label} ×
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {outcome ? (
+              <p className="mt-2 text-2xs text-text-muted">{outcome}</p>
+            ) : null}
           </div>
           <select className={field} value={form.stage_code}
             onChange={(e) => setForm({ ...form, stage_code: e.target.value })}>
@@ -304,8 +355,11 @@ function Crew({
           </select>
           <div className="sm:col-span-3">
             <Button type="button" variant="primary" loading={assign.isPending}
-              disabled={!form.employee_id || !form.stage_code} onClick={() => assign.mutate()}>
-              Add to the crew
+              disabled={basket.length === 0 || !form.stage_code}
+              onClick={() => assign.mutate()}>
+              {basket.length > 1
+                ? `Add ${basket.length} to the crew`
+                : 'Add to the crew'}
             </Button>
           </div>
           {assign.isError ? <div className="sm:col-span-3"><ErrorCard error={assign.error} /></div> : null}
@@ -370,10 +424,26 @@ function Rovers({ villageId, canManage }: { villageId: string; canManage: boolea
     staleTime: 300_000,
   });
 
+  /*
+   * Several instruments at once.
+   *
+   * The kit goes out together — four rovers, a base, the radios — and doing
+   * that one form at a time is four chances to stop after three. One already
+   * out elsewhere is named and the rest still go: refusing the whole request
+   * because one instrument is busy means redoing the others by hand.
+   */
+  const [basket, setBasket] = React.useState<Array<{ id: string; label: string }>>([]);
+  const [clashes, setClashes] = React.useState<Array<Record<string, string>>>([]);
+
   const allocate = useMutation({
     mutationFn: async () =>
-      apiRequest(`/api/v1/survey/villages/${villageId}/rovers`, { method: 'POST', body: form }),
-    onSuccess: () => {
+      apiRequest(`/api/v1/survey/villages/${villageId}/rovers/bulk`, {
+        method: 'POST',
+        body: { asset_ids: basket.map((b) => b.id), allocated_on: form.allocated_on },
+      }),
+    onSuccess: (res: any) => {
+      setClashes(res?.data?.clashes ?? []);
+      setBasket([]);
       setForm({ asset_id: '', allocated_on: today });
       qc.invalidateQueries({ queryKey: ['survey-rovers', villageId] });
       qc.invalidateQueries({ queryKey: ['survey-progress'] });
@@ -406,7 +476,7 @@ function Rovers({ villageId, canManage }: { villageId: string; canManage: boolea
         </h4>
         {canManage ? (
           <Button type="button" variant="ghost" onClick={() => setAdding((a) => !a)}>
-            {adding ? 'Cancel' : 'Allocate one'}
+            {adding ? 'Cancel' : 'Allocate instruments'}
           </Button>
         ) : null}
       </div>
@@ -415,24 +485,59 @@ function Rovers({ villageId, canManage }: { villageId: string; canManage: boolea
         <div className="mt-2 grid gap-2 sm:grid-cols-3">
           <div className="sm:col-span-2">
             <Combobox
-              value={form.asset_id}
-              onChange={(id) => setForm({ ...form, asset_id: id })}
+              value=""
+              onChange={(id) => {
+                const a = (assets.data ?? []).find((x) => String(x.id) === id);
+                if (!a || basket.some((b) => b.id === id)) return;
+                setBasket([...basket, { id, label: String(a.name ?? a.asset_code) }]);
+                setClashes([]);
+              }}
               isLoading={assets.isLoading}
-              placeholder="Search survey equipment…"
-              options={(candidates.length ? candidates : assets.data ?? []).map((a) => ({
-                id: String(a.id),
-                label: String(a.name ?? a.asset_code),
-                hint: [a.asset_code, a.serial_number].filter(Boolean).join(' · '),
-              }))}
+              placeholder="Search survey equipment — add as many as you need…"
+              options={(candidates.length ? candidates : assets.data ?? [])
+                .filter((a) => !basket.some((b) => b.id === String(a.id)))
+                .map((a) => ({
+                  id: String(a.id),
+                  label: String(a.name ?? a.asset_code),
+                  /* Where it already is, on the option itself: an instrument
+                     that is out elsewhere can then be recognised before it is
+                     picked, rather than after the server refuses it. */
+                  hint: [
+                    a.asset_code,
+                    a.serial_number,
+                    a.location === 'IN_FIELD' && a.held_by
+                      ? `out with ${a.held_by}${a.held_for_project ? ` · ${a.held_for_project}` : ''}`
+                      : '',
+                  ].filter(Boolean).join(' · '),
+                }))}
               emptyHint="Instruments in the asset register, category SURVEY"
             />
+            {basket.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {basket.map((b) => (
+                  <button key={b.id} type="button"
+                    onClick={() => setBasket(basket.filter((x) => x.id !== b.id))}
+                    className="rounded-full border border-border bg-surface px-2 py-0.5
+                      text-2xs text-text hover:border-danger hover:text-danger"
+                    title="Remove">
+                    {b.label} ×
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {clashes.length > 0 ? (
+              <p className="mt-2 text-2xs text-warning">
+                {clashes.map((c) => `${c.asset_code} is already out on ${c.with_village}`)
+                  .join('; ')}. The rest were allocated.
+              </p>
+            ) : null}
           </div>
           <input type="date" className={field} value={form.allocated_on}
             onChange={(e) => setForm({ ...form, allocated_on: e.target.value })} />
           <div className="sm:col-span-3">
             <Button type="button" variant="primary" loading={allocate.isPending}
-              disabled={!form.asset_id} onClick={() => allocate.mutate()}>
-              Allocate
+              disabled={basket.length === 0} onClick={() => allocate.mutate()}>
+              {basket.length > 1 ? `Allocate ${basket.length}` : 'Allocate'}
             </Button>
           </div>
           {allocate.isError ? (
