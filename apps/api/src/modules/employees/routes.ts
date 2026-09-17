@@ -206,6 +206,36 @@ function duplicateFieldError(error: unknown): { field: string; message: string }
 }
 
 
+/**
+ * The next employee number for an organisation.
+ *
+ * Reads the highest number already issued and adds one, keeping whatever
+ * prefix the organisation already uses so a new number looks like the old
+ * ones. Taken under a lock on the organisation row, because two imports
+ * running at once would otherwise read the same maximum and allocate the
+ * same number — and the loser fails on a unique constraint halfway through
+ * a two hundred row file.
+ *
+ * Falls back to EMP0001 for an organisation with nobody in it yet.
+ */
+async function nextEmpNo(
+  db: import('pg').Pool | import('pg').PoolClient, orgId: string,
+): Promise<string> {
+  await db.query('SELECT id FROM organizations WHERE id = $1 FOR UPDATE', [orgId]);
+  const row = (await db.query(
+    `SELECT emp_no FROM employees
+      WHERE org_id = $1 AND emp_no ~ '^[A-Za-z]*[0-9]+$'
+      ORDER BY length(regexp_replace(emp_no, '^[A-Za-z]*', '')) DESC,
+               regexp_replace(emp_no, '^[A-Za-z]*', '') DESC
+      LIMIT 1`, [orgId])).rows[0] as { emp_no: string } | undefined;
+
+  if (!row) return 'EMP0001';
+  const prefix = /^[A-Za-z]*/.exec(row.emp_no)?.[0] ?? 'EMP';
+  const digits = row.emp_no.slice(prefix.length);
+  const next = String(Number(digits) + 1).padStart(digits.length, '0');
+  return `${prefix}${next}`;
+}
+
 const SELECT_COLS = `id, org_id, emp_no, first_name, last_name, father_name,
   date_of_birth, gender, phone, phone_secondary, email,
   aadhaar_encrypted, pan_encrypted, address,
@@ -515,6 +545,9 @@ export async function registerEmployeeRoutes(
         fieldErrors,
       });
     }
+    // Allocated when the caller leaves it out, so the form need not ask for
+    // a unique identifier the server can work out for itself.
+    const singleEmpNo = d.emp_no ?? await nextEmpNo(db, user.orgId);
     let row: EmployeeRow;
     try {
       const ins = await db.query(
@@ -532,7 +565,7 @@ export async function registerEmployeeRoutes(
          RETURNING ${SELECT_COLS}`,
         [
           user.orgId,
-          d.emp_no,
+          singleEmpNo,
           d.first_name,
           d.last_name ?? null,
           d.father_name ?? null,
@@ -681,7 +714,10 @@ export async function registerEmployeeRoutes(
           }
         } else {
           const v = parsedRow.data;
-          if (seenEmpNos.has(v.emp_no) || existingEmpNos.has(v.emp_no)) {
+          // Only a number somebody supplied can clash. A blank one is
+          // allocated by the server later, from a sequence nothing else
+          // is reading.
+          if (v.emp_no && (seenEmpNos.has(v.emp_no) || existingEmpNos.has(v.emp_no))) {
             rowErrors.push({ field: "emp_no", message: "emp_no already exists in this org" });
           }
           if (seenPhones.has(v.phone) || existingPhones.has(v.phone)) {
@@ -693,9 +729,9 @@ export async function registerEmployeeRoutes(
           );
           if (rowErrors.length === 0) {
             valid.push({ index, data: v });
-            seenEmpNos.add(v.emp_no);
+            if (v.emp_no) seenEmpNos.add(v.emp_no);
             seenPhones.add(v.phone);
-            existingEmpNos.add(v.emp_no);
+            if (v.emp_no) existingEmpNos.add(v.emp_no);
             existingPhones.add(v.phone);
           }
         }
@@ -723,6 +759,10 @@ export async function registerEmployeeRoutes(
           for (const { index, data: v } of valid) {
             try {
               await client.query('SAVEPOINT import_row');
+              // Allocated here rather than in the sheet: nobody filling in
+              // two hundred rows should be inventing unique identifiers, and
+              // the ones people invent collide.
+              const empNo = v.emp_no ?? await nextEmpNo(client, user.orgId);
               const ins = await client.query(
                 `INSERT INTO employees (
                    org_id, emp_no, first_name, last_name, father_name, date_of_birth, gender,
@@ -738,7 +778,7 @@ export async function registerEmployeeRoutes(
                  RETURNING id`,
                 [
                   user.orgId,
-                  v.emp_no,
+                  empNo,
                   v.first_name,
                   v.last_name ?? null,
                   v.father_name ?? null,
@@ -784,7 +824,7 @@ export async function registerEmployeeRoutes(
                 action: "employee.import",
                 entityType: "employee",
                 entityId: newId,
-                afterState: redactPiiForAudit({ emp_no: v.emp_no, index }),
+                afterState: redactPiiForAudit({ emp_no: empNo, index }),
                 reason: "bulk import",
                 requestId: req.requestId,
               });

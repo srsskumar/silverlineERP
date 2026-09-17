@@ -93,11 +93,14 @@ const UPLOAD_TARGETS: Record<string, UploadTarget | undefined> = {
   assets: { path: '/api/v1/assets/import', verb: 'Add to the register' },
   'asset-allocation': { path: '/api/v1/assets/allocations/import', verb: 'Record allocations' },
   inventory: { path: '/api/v1/inventory/items/import', verb: 'Add to stock' },
+  // Employees upload from here too. The dedicated importer under Employees
+  // is still there and says more about each row; this is for somebody who
+  // came looking for the format and has the filled-in file in hand.
+  employees: { path: '/api/v1/employees/bulk-import', verb: 'Add to the register' },
 };
 
 const ELSEWHERE: Record<string, string> = {
-  employees: 'Upload this under Employees \u2192 Import employees, which previews each row against the register first.',
-  'survey-villages': 'Upload this under Land survey \u2192 Setup, against the programme the villages belong to.',
+  'survey-villages': 'Villages upload under Land survey \u2192 Setup, where they are loaded against the programme they belong to \u2014 a village list means nothing without one.',
 };
 
 /** Every template in one place, for an admin or settings screen. */

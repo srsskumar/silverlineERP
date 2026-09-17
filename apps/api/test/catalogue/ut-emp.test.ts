@@ -606,3 +606,93 @@ describe("UT-EMP-08 assign site references from another organization or wrong un
     await activate(w.app, w.admin, id);
   });
 });
+
+/**
+ * The employee number the server allocates (enhancement note 3).
+ *
+ * Nobody filling in two hundred rows should be inventing unique identifiers,
+ * and the ones people invent collide.
+ */
+describe("allocating employee numbers", () => {
+  it("issues the next number when the caller leaves it out", async () => {
+    const before = await w.pool.query(
+      "SELECT count(*)::int AS n FROM employees WHERE org_id = $1", [w.orgId]);
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/employees",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        first_name: "Unnumbered", phone: uniquePhone(),
+        date_of_joining: "2026-01-01",
+      },
+    });
+    expect(r.statusCode, r.body).toBe(201);
+    expect(r.json().emp_no, "a number was allocated").toBeTruthy();
+    const after = await w.pool.query(
+      "SELECT count(*)::int AS n FROM employees WHERE org_id = $1", [w.orgId]);
+    expect(after.rows[0].n).toBe(before.rows[0].n + 1);
+  });
+
+  it("counts upward rather than reusing a number", async () => {
+    const make = async () => {
+      const r = await w.app.inject({
+        method: "POST", url: "/api/v1/employees",
+        headers: { ...w.admin, ...idem() },
+        payload: {
+          first_name: "Sequential", phone: uniquePhone(),
+          date_of_joining: "2026-01-01",
+        },
+      });
+      expect(r.statusCode, r.body).toBe(201);
+      return String(r.json().emp_no);
+    };
+    const first = await make();
+    const second = await make();
+    expect(second).not.toBe(first);
+    const digits = (s: string) => Number(s.replace(/^[A-Za-z]*/, ""));
+    expect(digits(second)).toBe(digits(first) + 1);
+    // And it keeps the shape the organisation already uses.
+    expect(second.replace(/[0-9]+$/, "")).toBe(first.replace(/[0-9]+$/, ""));
+  });
+
+  it("still accepts a number that is given", async () => {
+    // An organisation migrating from another system has numbers printed on
+    // ID cards, and renumbering everybody to suit us is not a migration
+    // anybody would agree to.
+    const mine = `MIG${Date.now().toString().slice(-7)}`;
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/employees",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        emp_no: mine, first_name: "Migrated", phone: uniquePhone(),
+        date_of_joining: "2026-01-01",
+      },
+    });
+    expect(r.statusCode, r.body).toBe(201);
+    expect(r.json().emp_no).toBe(mine);
+  });
+
+  it("allocates a number for every row of an import that omits one", async () => {
+    const rows = [1, 2, 3].map((n) => ({
+      first_name: `Bulk ${n}`, phone: uniquePhone(), date_of_joining: "2026-01-01",
+    }));
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/employees/bulk-import",
+      headers: { ...w.admin, ...idem() },
+      payload: { rows, dry_run: false },
+    });
+    expect(r.statusCode, r.body).toBe(200);
+    expect(r.json().imported, "all three rows written").toBe(3);
+
+    const numbers = await w.pool.query(
+      "SELECT emp_no FROM employees WHERE first_name LIKE 'Bulk %' AND org_id = $1", [w.orgId]);
+    expect(numbers.rowCount).toBe(3);
+    // Three rows, three distinct numbers — the collision this replaces.
+    expect(new Set(numbers.rows.map((x) => x.emp_no)).size).toBe(3);
+  });
+});
+
+/** A phone nobody else in the fixture is using. */
+function uniquePhone(): string {
+  const n = String(Math.floor(Math.random() * 1_000_000_000)).padStart(9, "0");
+  return `+919${n}`;
+}

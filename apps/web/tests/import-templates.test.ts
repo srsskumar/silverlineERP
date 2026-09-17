@@ -40,7 +40,10 @@ describe('import templates', () => {
     const parsed = parseEmployeeCsv(templateCsv(employees));
     expect(parsed.parseErrors).toHaveLength(0);
     expect(parsed.rows).toHaveLength(1);
-    expect(parsed.rows[0].emp_no).toBe('EMP001');
+    // No emp_no column: the server allocates the number, so the sheet does
+    // not ask anybody to invent a unique identifier two hundred times.
+    expect(parsed.rows[0].emp_no).toBeUndefined();
+    expect(employees.headers).not.toContain('emp_no');
     expect(parsed.rows[0].first_name).toBe('Anitha');
     // Dates land as written, in the form the server expects.
     expect(parsed.rows[0].date_of_birth).toBe('1990-07-24');

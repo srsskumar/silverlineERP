@@ -41,26 +41,37 @@ export const IMPORT_TEMPLATES: ImportTemplate[] = [
     label: 'Employees',
     fileName: 'silverline-employees-template.csv',
     description: 'Staff records, including bank and statutory identifiers.',
+    /*
+     * No emp_no column.
+     *
+     * The server allocates the next number. Nobody filling in two hundred
+     * rows should be inventing unique identifiers, and the ones people invent
+     * collide — two people typing "the next number" at the same time produce
+     * the same number, and one import fails on a constraint nobody expected.
+     * A number can still be sent by anyone migrating from a system where the
+     * numbers are already printed on ID cards; it is simply not asked for.
+     */
     headers: [
-      'emp_no', 'first_name', 'last_name', 'father_name', 'date_of_birth', 'gender',
+      'first_name', 'last_name', 'father_name', 'date_of_birth', 'gender',
       'phone', 'phone_secondary', 'email', 'address',
       'designation', 'department', 'date_of_joining', 'status',
       'salary_basic', 'education', 'experience_years', 'skills',
       'aadhaar', 'pan', 'bank_name', 'bank_account', 'bank_ifsc', 'phonepe_number',
     ],
-    required: ['emp_no', 'first_name', 'last_name', 'phone'],
+    required: ['first_name', 'last_name', 'phone'],
     options: {
       gender: ['MALE', 'FEMALE', 'OTHER'],
       status: ['ACTIVE', 'SUSPENDED', 'EXITED'],
     },
     example: [
-      'EMP001', 'Anitha', 'Devi', 'Ramesh Devi', '1990-07-24', 'FEMALE',
+      'Anitha', 'Devi', 'Ramesh Devi', '1990-07-24', 'FEMALE',
       '+919876543210', '', 'anitha.devi@example.com', '12 MG Road, Hyderabad',
       'Site Engineer', 'Projects', '2023-04-01', 'ACTIVE',
       '35000', 'B.E. Civil', '6', 'Survey;AutoCAD',
       '234567890123', 'ABCPD1234E', 'HDFC Bank', '50100123456789', 'HDFC0001234', '+919876543210',
     ],
     notes: [
+      'The employee number is allocated on upload, counting on from the highest already issued.',
       'Dates are YYYY-MM-DD. A date written 24/07/1990 is rejected.',
       'Phone numbers keep the country code, and must be unique within the organisation.',
       'Aadhaar, PAN and bank details are encrypted at rest and never appear in an export.',

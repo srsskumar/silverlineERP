@@ -137,7 +137,20 @@ export type OrgUnitPatchInput = z.infer<typeof orgUnitPatchSchema>;
 
 /** POST /api/v1/employees — also reused for each bulk-import row. */
 export const employeeCreateSchema = z.object({
-  emp_no: z.string().min(1, "emp_no is required").max(50),
+  /**
+   * The employee number.
+   *
+   * Optional: the server allocates the next one when it is left out, which
+   * is what a bulk upload wants. Nobody filling in two hundred rows should be
+   * inventing unique identifiers by hand, and the ones they invent collide —
+   * two people typing the next number at the same time produce the same
+   * number, and one of the two imports fails on a constraint nobody expected.
+   *
+   * Still accepted when given, because an organisation migrating from another
+   * system has numbers already printed on ID cards, and renumbering everybody
+   * to suit us is not a migration anybody would agree to.
+   */
+  emp_no: z.string().min(1).max(50).optional(),
   first_name: z.string().min(1, "first_name is required").max(100),
   last_name: z.string().max(100).optional(),
   father_name: z.string().max(200).optional(),

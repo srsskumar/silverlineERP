@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { apiRequestRaw } from '@/lib/apiClient';
 import { parseCsv } from '@/lib/csv';
+import { readXlsx } from '@/lib/xlsx-read';
 import { normaliseHeader } from '@/lib/survey-import';
 
 /**
@@ -53,8 +54,18 @@ export function ImportUpload({ target }: { target: UploadTarget }) {
     setError(undefined);
     setOutcome(null);
     try {
-      const text = await file.text();
-      const table = parseCsv(text).filter((r) => r.some((c) => c.trim() !== ''));
+      /*
+       * Excel or CSV.
+       *
+       * The templates are offered as Excel first, because its dropdowns stop
+       * the mis-typed enum behind most rejections — and the upload used to
+       * take only CSV, so everybody who took the recommended path had to
+       * convert the file back before they could submit it.
+       */
+      const table = (/\.xlsx?$/i.test(file.name)
+        ? await readXlsx(await file.arrayBuffer())
+        : parseCsv(await file.text())
+      ).filter((r) => r.some((c) => (c ?? '').trim() !== ''));
       if (table.length < 2) throw new Error('That file has a header row and nothing else.');
       // Headers are matched loosely, because a column somebody renamed from
       // "Serial Number" to "serial number" is the same column.
@@ -95,7 +106,7 @@ export function ImportUpload({ target }: { target: UploadTarget }) {
         <label className="cursor-pointer text-xs text-primary underline underline-offset-2">
           <input
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
@@ -103,7 +114,7 @@ export function ImportUpload({ target }: { target: UploadTarget }) {
               e.target.value = '';
             }}
           />
-          Choose a filled-in CSV…
+          Choose a filled-in Excel or CSV file…
         </label>
         {fileName ? (
           <span className="text-2xs text-text-subtle">
