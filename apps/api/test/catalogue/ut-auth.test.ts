@@ -8,6 +8,7 @@
 import { Writable } from "node:stream";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 import { authenticator } from "otplib";
 import { MFA_DEFAULT_REQUIRED_ROLES } from "@silverline/shared";
 import { ADMIN_PASSWORD, ADMIN_USERNAME } from "../../src/database/seed.js";
@@ -23,6 +24,7 @@ import {
   idem,
   ifMatch,
   loginAs,
+  PASSWORD,
   uniq,
   workDate,
   type CatalogueWorld,
@@ -1016,6 +1018,48 @@ describe("asking somebody to replace a password that was set for them", () => {
     expect(await read()).toBe(true);
     expect((await patch(false)).statusCode).toBe(200);
     expect(await read()).toBe(false);
+  });
+});
+
+describe("background work and a password somebody else chose", () => {
+  /*
+   * The gate routes a person to the change-password screen. A worker token
+   * has no screen: blocking it stops that account's scheduled reports and
+   * automation rules with an error nobody connects to a password policy.
+   */
+  it("does not stop a worker acting for an account that must change its password", async () => {
+    const id = await createUser(w.pool, w.orgId, {
+      username: uniq("worker"), roles: ["ADMIN"],
+    });
+    await w.pool.query(
+      "UPDATE users SET must_change_password = true WHERE id = $1", [id]);
+
+    // The shape the worker signs: short-lived, no session family.
+    const token = jwt.sign(
+      { sub: id, org_id: w.orgId, type: "access", worker: true },
+      JWT_SECRET, { expiresIn: 60 });
+
+    const r = await w.app.inject({
+      method: "GET", url: "/api/v1/employees",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(r.json().code).not.toBe("PASSWORD_CHANGE_REQUIRED");
+  });
+
+  it("still stops the person themselves", async () => {
+    // Their interactive access is the part that matters.
+    const username = uniq("person");
+    const id = await createUser(w.pool, w.orgId, { username, roles: ["ADMIN"] });
+    await w.pool.query(
+      "UPDATE users SET must_change_password = true WHERE id = $1", [id]);
+
+    const signIn = await login({ username, password: PASSWORD });
+    const r = await w.app.inject({
+      method: "GET", url: "/api/v1/employees",
+      headers: { authorization: `Bearer ${signIn.json().access_token}` },
+    });
+    expect(r.statusCode).toBe(403);
+    expect(r.json().code).toBe("PASSWORD_CHANGE_REQUIRED");
   });
 });
 

@@ -159,8 +159,23 @@ export function buildAuthenticate(ctx: AuthContext) {
      *
      * Same shape as the MFA gate above, and deliberately so: the auth routes
      * stay open because the change itself lives there.
+     *
+     * Background work is exempt. The gate exists to route a *person* to the
+     * change-password screen, and a worker token has no screen to be routed
+     * to: blocking it would stop that account's scheduled reports and
+     * automation rules with an error nobody would connect to a password
+     * policy. Their interactive access stays blocked, which is the part that
+     * matters -- the authority behind the automation was established when it
+     * was created, not at each run.
+     *
+     * The MFA gate above does block workers, and two report schedules on the
+     * production VM fail that way today. That is a pre-existing security
+     * decision rather than an oversight, so it is left alone; the fix there
+     * is for those two accounts to enrol.
      */
-    if (row.must_change_password && !req.url.startsWith("/api/v1/auth/")) {
+    if (row.must_change_password
+        && !req.authUser.worker
+        && !req.url.startsWith("/api/v1/auth/")) {
       throw new ApiError({
         status: 403,
         code: "PASSWORD_CHANGE_REQUIRED",
