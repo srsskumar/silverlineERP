@@ -1,0 +1,27 @@
+# What never goes to the VM.
+#
+# Kept as a file rather than a string of --exclude flags in a comment,
+# because the flags were retyped by hand on every deploy and one of them got
+# left off: local tooling state under .gstack rode along to the production
+# VM, including a browser audit log holding plaintext passwords, at 644.
+
+# Repository and build output — the VM builds its own from source.
+.git
+node_modules
+.next
+.next-verify
+dist
+
+# Credentials. They are placed on the VM once, by hand, at /etc/silverline.
+.env
+.env.*
+certs/*.key
+
+# Local tooling state. None of it is the application, and some of it holds
+# secrets that have no business leaving the workstation.
+.gstack
+.claude
+.DS_Store
+
+# Built by a separate toolchain that is not installed on the VM.
+apps/mobile/android

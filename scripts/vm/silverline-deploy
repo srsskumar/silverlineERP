@@ -2,11 +2,15 @@
 # Rebuild and restart Silverline from whatever source is in /opt/silverline.
 #
 # Push new source with rsync from a workstation, then run this:
-#   rsync -az --delete --exclude=.git --exclude=node_modules \
-#         --exclude=.next --exclude=.next-verify --exclude=dist \
-#         --exclude=apps/mobile/android --exclude=.env --exclude=".env.*" \
+#   rsync -az --delete --exclude-from=scripts/vm/rsync-exclude.txt \
 #         ./ dev-thor:/opt/silverline/
 #   ssh dev-thor sudo silverline-deploy
+#
+# The exclusions live in a file rather than in this comment because the list
+# was being retyped by hand each time, and one of them got left off: local
+# tooling state under .gstack rode along to the VM, including a browser
+# audit log with plaintext passwords in it, world-readable. A list nobody
+# retypes is a list nobody can leave a line out of.
 #
 # Runtime data lives in /var/lib/silverline, deliberately outside the tree
 # rsync --delete owns. Uploads used to sit under /opt/silverline and a deploy
