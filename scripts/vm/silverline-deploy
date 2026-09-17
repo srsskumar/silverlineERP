@@ -16,6 +16,23 @@
 set -euo pipefail
 cd /opt/silverline
 
+# Run the version that was just pushed, not the one installed last time.
+#
+# This script lives in the tree and is also installed on PATH, and the two
+# drifted: a change to the deploy steps was committed, pushed and rsynced, and
+# every deploy afterwards silently ran the old installed copy. Nothing said so
+# — the deploy succeeded, it just did not do the new thing.
+#
+# exec replaces the process before bash reads any further, so the running
+# script is never modified underneath itself. The guard stops it looping if
+# the two are somehow never equal.
+if [ "${SILVERLINE_DEPLOY_REEXEC:-}" != "1" ] \
+  && ! cmp -s "$0" /opt/silverline/scripts/vm/silverline-deploy; then
+  echo "==> deploy script changed; re-running the pushed version"
+  install -m 755 /opt/silverline/scripts/vm/silverline-deploy /usr/local/bin/silverline-deploy
+  SILVERLINE_DEPLOY_REEXEC=1 exec /usr/local/bin/silverline-deploy "$@"
+fi
+
 # NEXT_PUBLIC_API_URL is baked into the bundle at build time, so it has to be
 # the origin the browser will use. Change it here if a domain is put in front.
 API_ORIGIN="${API_ORIGIN:-http://34.131.134.217}"
