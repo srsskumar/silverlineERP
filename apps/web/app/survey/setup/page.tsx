@@ -15,7 +15,7 @@ import { Badge } from '@/components/ui/Badge';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Notice, Section, Stat } from '@/components/finance/Primitives';
-import { readVillageCsv, missingColumns } from '@/lib/survey-import';
+import { duplicateVillageCodes, readVillageCsv, missingColumns } from '@/lib/survey-import';
 import { acres, count } from '@/lib/survey';
 import { IMPORT_TEMPLATES, downloadTemplate, downloadTemplateWorkbook } from '@/lib/import-templates';
 
@@ -310,6 +310,10 @@ function VillageImport({ projectId }: { projectId: string }) {
 
   const [progress, setProgress] = React.useState<{ done: number; total: number } | null>(null);
 
+  // Repeated village codes, found before anything is sent.
+  const duplicates = React.useMemo(() => duplicateVillageCodes(rows), [rows]);
+  const duplicateRows = duplicates.reduce((t, d) => t + d.rows.length - 1, 0);
+
   const run = useMutation({
     /*
      * Sent in batches, not in one request.
@@ -404,6 +408,24 @@ function VillageImport({ projectId }: { projectId: string }) {
           placeholder="DistrictCode,District Name,DivisionCode,Division Name,MandalCode,Mandal Name,Village Code,Village Name,vill_code_old&#10;15,Alluri Sitharama Raju,1,Paderu,11,KOYYURU,1511077,ADAKULA,314077"
           className="w-full rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-2xs text-text"
         />
+
+        {duplicates.length > 0 ? (
+          <Notice tone="warning" title={`${duplicateRows} of these rows repeat a village already in the file`}>
+            {/* Said before the upload, not after: "already listed" in the
+                result reads as though the village was in the programme
+                beforehand, and it was not — the list itself repeats it. */}
+            <p className="mb-2">
+              The file has {count(rows.length)} rows but only{' '}
+              {count(rows.length - duplicateRows)} different villages. The repeated rows are
+              loaded once each; they are reported as already listed, which is why the two
+              numbers will not match.
+            </p>
+            <p className="text-2xs">
+              {duplicates.slice(0, 6).map((d) => `${d.code} (rows ${d.rows.join(', ')})`).join(' · ')}
+              {duplicates.length > 6 ? ` · and ${duplicates.length - 6} more` : ''}
+            </p>
+          </Notice>
+        ) : null}
 
         {rows.length > 0 ? (
           <p className="text-xs text-text-muted">
@@ -543,6 +565,14 @@ function BoardLink({ programme }: { programme: Row }) {
       apiRequest(`/api/v1/survey/projects/${programme.id}/generate-tasks`, {
         method: 'POST',
         body: { dry_run: dryRun, include_stages: true },
+        /*
+         * A task per village and a subtask per stage: on a programme of a
+         * thousand villages that is nine thousand rows in one request, and
+         * the default thirty seconds is for reading a screenful. The browser
+         * was abandoning it while the server carried on writing, which
+         * leaves somebody unable to tell whether the board was built.
+         */
+        timeoutMs: 600_000,
       }),
     onSuccess: (res: any) => {
       setPreview(res?.data ?? null);

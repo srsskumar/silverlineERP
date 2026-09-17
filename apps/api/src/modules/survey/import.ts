@@ -232,7 +232,11 @@ export async function registerSurveyImport(
               // the normal way this gets used.
               results.push({
                 row: rowNo, village_code: v.village_code, status: 'ALREADY_LISTED',
-                message: `${v.village_name} is already in this programme`,
+                // Deliberately not "already in this programme": the commonest
+                // cause is the same village appearing twice in the file being
+                // uploaded, and blaming the programme sends people looking in
+                // the wrong place for 200 villages that were never missing.
+                message: `${v.village_name} is already listed — either loaded earlier, or repeated in this file`,
               });
               await db.query('RELEASE SAVEPOINT import_row');
               continue;

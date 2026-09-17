@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { normaliseHeader, readVillageCsv, missingColumns, VILLAGE_COLUMN_ALIASES } from '../lib/survey-import';
+import {
+  normaliseHeader, readVillageCsv, missingColumns, VILLAGE_COLUMN_ALIASES,
+  duplicateVillageCodes,
+} from '../lib/survey-import';
 
 /** The header row of the source spreadsheet, verbatim. */
 const SOURCE_HEADER =
@@ -96,5 +99,51 @@ describe('the alias table', () => {
     for (const target of Object.values(VILLAGE_COLUMN_ALIASES)) {
       expect(accepted, target).toContain(target);
     }
+  });
+});
+
+describe('repeated rows in an uploaded village list', () => {
+  it('finds a code that appears more than once, and where', () => {
+    /*
+     * A 1,399-row file produced 1,183 villages and reported 216 "already
+     * listed", which read as though they were in the programme beforehand.
+     * They were not — the file repeated them. Saying so before the upload
+     * is the difference between a reconciled count and an afternoon spent
+     * looking for 216 villages that were never missing.
+     */
+    const rows = [
+      { village_code: '1511077', village_name: 'ADAKULA' },
+      { village_code: '1511078', village_name: 'BOMMIKA' },
+      { village_code: '1511077', village_name: 'ADAKULA' },
+      { village_code: '1511077', village_name: 'Adakula (dup)' },
+    ];
+    const dups = duplicateVillageCodes(rows);
+    expect(dups).toHaveLength(1);
+    expect(dups[0].code).toBe('1511077');
+    expect(dups[0].rows).toEqual([1, 3, 4]);
+  });
+
+  it('says nothing when every code is distinct', () => {
+    expect(duplicateVillageCodes([
+      { village_code: 'A', village_name: 'One' },
+      { village_code: 'B', village_name: 'Two' },
+    ])).toEqual([]);
+  });
+
+  it('ignores rows with no code rather than grouping them together', () => {
+    // Blank codes are a different fault, reported by the importer per row.
+    expect(duplicateVillageCodes([
+      { village_code: '', village_name: 'One' },
+      { village_code: '   ', village_name: 'Two' },
+    ])).toEqual([]);
+  });
+
+  it('puts the worst repeat first', () => {
+    const dups = duplicateVillageCodes([
+      { village_code: 'A', village_name: 'x' }, { village_code: 'A', village_name: 'x' },
+      { village_code: 'B', village_name: 'y' }, { village_code: 'B', village_name: 'y' },
+      { village_code: 'B', village_name: 'y' },
+    ]);
+    expect(dups[0].code).toBe('B');
   });
 });

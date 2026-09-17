@@ -1264,3 +1264,43 @@ describe("who and what is deployed on a programme", () => {
     expect(r.status).toBe(404);
   });
 });
+
+describe("the district a village rolls up to", () => {
+  it("finds it whether the mandal reports through a division or not", async () => {
+    /*
+     * A mandal reports either straight to a district or through a division,
+     * so the district is the parent in one shape and the grandparent in the
+     * other. Reading only one would file every village in a
+     * division-organised district as having no district — and the Villages
+     * filter would then offer a list that silently excluded them.
+     */
+    const district = String((await w.pool.query(
+      `INSERT INTO org_units(org_id,type,code,name) VALUES($1,'district',$2,'Deep district')
+       RETURNING id`, [w.orgId, uniq("D")])).rows[0].id);
+    const division = String((await w.pool.query(
+      `INSERT INTO org_units(org_id,type,code,name,parent_id) VALUES($1,'division',$2,'A division',$3)
+       RETURNING id`, [w.orgId, uniq("DV"), district])).rows[0].id);
+    const mandal = String((await w.pool.query(
+      `INSERT INTO org_units(org_id,type,code,name,parent_id) VALUES($1,'mandal',$2,'Deep mandal',$3)
+       RETURNING id`, [w.orgId, uniq("M"), division])).rows[0].id);
+
+    await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Deep village", village_code: uniq("DVL"),
+      mandal_id: mandal, total_extent_ac: 30,
+    });
+
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/villages`);
+    const deep = (r.body.data as Array<Record<string, unknown>>)
+      .find((v) => v.village_name === "Deep village");
+    expect(deep, "the village was listed").toBeTruthy();
+    expect(deep!.district_name, "found through the division").toBe("Deep district");
+    expect(deep!.division_name).toBe("A division");
+  });
+
+  it("finds it when the mandal reports straight to the district", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/villages`);
+    const shallow = (r.body.data as Array<Record<string, unknown>>)
+      .find((v) => v.district_name && !v.division_name);
+    expect(shallow, "a village whose mandal has no division").toBeTruthy();
+  });
+});

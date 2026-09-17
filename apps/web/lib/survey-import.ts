@@ -81,3 +81,34 @@ export function missingColumns(rows: Array<Record<string, string>>): string[] {
     'village_code', 'village_name'];
   return required.filter(c => !(c in rows[0]));
 }
+
+/**
+ * Village codes that appear more than once in an uploaded file.
+ *
+ * A work list of 1,399 rows produced 1,183 villages, and the importer
+ * reported the other 216 as "already listed" — which read as though they
+ * were in the programme beforehand. They were not: the file itself repeated
+ * them. The distinction matters, because one means you are re-running an
+ * import and the other means the list you were given has duplicate rows in
+ * it, which is worth knowing before anybody reconciles a count.
+ *
+ * Detected here rather than at the server because only the client sees the
+ * whole file: the upload is sent in batches, and a row repeated across two
+ * batches is invisible to either request on its own.
+ */
+export function duplicateVillageCodes(
+  rows: Array<Record<string, string>>,
+): Array<{ code: string; rows: number[] }> {
+  const seen = new Map<string, number[]>();
+  rows.forEach((row, index) => {
+    const code = (row.village_code ?? '').trim();
+    if (!code) return;
+    const at = seen.get(code);
+    if (at) at.push(index + 1);
+    else seen.set(code, [index + 1]);
+  });
+  return [...seen.entries()]
+    .filter(([, at]) => at.length > 1)
+    .map(([code, at]) => ({ code, rows: at }))
+    .sort((a, b) => b.rows.length - a.rows.length);
+}

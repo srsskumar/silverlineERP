@@ -734,6 +734,26 @@ function Deployment({
                 </tr>
               ))}
             </tbody>
+            {/* Totals count each person and each instrument once, however
+                many units they appear in — the same rover listed under two
+                mandals is one rover, and a column that adds the rows up
+                would say otherwise. */}
+            <tfoot>
+              <tr className="border-t-2 border-border font-medium">
+                <td className="px-4 py-2 text-text">Total</td>
+                <td className="px-4 py-2 text-right tabular-nums">{count(d?.totals?.villages)}</td>
+                <td className="px-4 py-2 text-right tabular-nums">{count(d?.totals?.crew)}</td>
+                <td className="px-4 py-2 text-right tabular-nums">{count(d?.totals?.assets)}</td>
+                <td className="px-4 py-2 text-2xs font-normal text-text-subtle" colSpan={2}>
+                  Each person and instrument counted once across {count(units.length)}{' '}
+                  {LEVEL_LABELS[level].toLowerCase()}
+                  {units.length === 1 ? '' : 's'}
+                  {(d?.totals?.programme_staff ?? 0) > 0
+                    ? `, plus ${count(d?.totals?.programme_staff)} on the programme itself`
+                    : ''}
+                </td>
+              </tr>
+            </tfoot>
           </table>
         </Card>
       )}
@@ -1156,6 +1176,10 @@ function Villages({
 }) {
   const [open, setOpen] = React.useState<string | null>(null);
   const [filter, setFilter] = React.useState('');
+  const [district, setDistrict] = React.useState('');
+  const [mandal, setMandal] = React.useState('');
+  const [stage, setStage] = React.useState('');
+  const [unstarted, setUnstarted] = React.useState(false);
 
   // Somebody arriving from the progress form to allocate the rovers it told
   // them were missing lands on that village, not on a list to search again.
@@ -1184,10 +1208,27 @@ function Villages({
   const pipeline: Row[] = progress.data?.pipeline ?? [];
   const all: Row[] = villages.data ?? [];
   const needle = filter.trim().toLowerCase();
-  const rows = needle
-    ? all.filter((v) => [v.village_name, v.mandal_name, v.village_code]
-      .some((f) => String(f ?? '').toLowerCase().includes(needle)))
-    : all;
+
+  /*
+   * The districts and mandals actually present, taken from the rows rather
+   * than from a master list: a programme covering three mandals should not
+   * offer a picker with two hundred, and one whose villages arrived without
+   * a district should still be filterable by the ones that did.
+   */
+  const districts = [...new Set(all.map((v) => String(v.district_name ?? '')).filter(Boolean))].sort();
+  const mandals = [...new Set(all
+    .filter((v) => !district || String(v.district_name ?? '') === district)
+    .map((v) => String(v.mandal_name ?? '')).filter(Boolean))].sort();
+
+  const rows = all.filter((v) => {
+    if (district && String(v.district_name ?? '') !== district) return false;
+    if (mandal && String(v.mandal_name ?? '') !== mandal) return false;
+    if (stage && String(v.stages?.[stage] ?? 'NOT_STARTED') === 'COMPLETED') return false;
+    if (unstarted && Object.values(v.stages ?? {}).some((x) => x !== 'NOT_STARTED')) return false;
+    if (!needle) return true;
+    return [v.village_name, v.mandal_name, v.district_name, v.village_code]
+      .some((f) => String(f ?? '').toLowerCase().includes(needle));
+  });
 
   if (all.length === 0) {
     return (
@@ -1204,10 +1245,40 @@ function Villages({
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Find a village or mandal…"
+          placeholder="Find a village, code, mandal or district…"
           className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
         />
-        <span className="text-2xs text-text-subtle">
+        <select value={district}
+          onChange={(e) => { setDistrict(e.target.value); setMandal(''); }}
+          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+          <option value="">All districts</option>
+          {districts.map((d) => <option key={d} value={d}>{d}</option>)}
+        </select>
+        <select value={mandal} onChange={(e) => setMandal(e.target.value)}
+          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+          <option value="">All mandals</option>
+          {mandals.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <select value={stage} onChange={(e) => setStage(e.target.value)}
+          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+          <option value="">Any stage</option>
+          {pipeline.map((p) => (
+            <option key={String(p.code)} value={String(p.code)}>
+              {String(p.label)} outstanding
+            </option>
+          ))}
+        </select>
+        <label className="flex items-center gap-1.5 text-xs text-text-muted">
+          <input type="checkbox" checked={unstarted}
+            onChange={(e) => setUnstarted(e.target.checked)} />
+          Not started
+        </label>
+        {(district || mandal || stage || unstarted || filter) ? (
+          <Button type="button" variant="ghost" onClick={() => {
+            setDistrict(''); setMandal(''); setStage(''); setUnstarted(false); setFilter('');
+          }}>Clear</Button>
+        ) : null}
+        <span className="ml-auto text-2xs text-text-subtle">
           {rows.length} of {all.length} villages
         </span>
       </Toolbar>
@@ -1216,7 +1287,13 @@ function Villages({
         <Table>
           <THead>
             <TR>
+              {/* A running number, so a row can be referred to out loud and
+                  found again in a list of a thousand. It follows the filter
+                  rather than the underlying record, which is what somebody
+                  reading the screen is counting. */}
+              <TH className="text-right">#</TH>
               <TH>Village</TH>
+              <TH>District</TH>
               <TH>Mandal</TH>
               <TH className="text-right">Extent</TH>
               <TH>Where it has got to</TH>
@@ -1225,7 +1302,7 @@ function Villages({
             </TR>
           </THead>
           <TBody>
-            {rows.map((v) => {
+            {rows.map((v, index) => {
               const isOpen = open === String(v.id);
               // The furthest stage not yet complete: the work waiting, which
               // is what somebody means by "where is this village".
@@ -1234,12 +1311,16 @@ function Villages({
               return (
                 <React.Fragment key={String(v.id)}>
                   <TR>
+                    <TD className="text-right tabular-nums text-2xs text-text-subtle">
+                      {index + 1}
+                    </TD>
                     <TD>
                       <span className="font-medium text-text">{v.village_name}</span>
                       {v.village_code ? (
                         <span className="ml-1 text-2xs text-text-subtle">{v.village_code}</span>
                       ) : null}
                     </TD>
+                    <TD className="text-xs text-text-muted">{v.district_name ?? '—'}</TD>
                     <TD className="text-xs text-text-muted">{v.mandal_name ?? '—'}</TD>
                     <TD className="text-right tabular-nums">{acres(v.total_extent_ac)}</TD>
                     <TD>
@@ -1262,7 +1343,7 @@ function Villages({
                   </TR>
                   {isOpen ? (
                     <TR>
-                      <TD colSpan={6} className="bg-surface-sunken p-0">
+                      <TD colSpan={8} className="bg-surface-sunken p-0">
                         <VillageDetail
                           village={v}
                           pipeline={pipeline}

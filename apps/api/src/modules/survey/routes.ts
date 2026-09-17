@@ -518,6 +518,19 @@ export async function registerSurveyRoutes(
         village_code: p.row.village_source_code ?? p.row.village_code,
         mandal_name: p.row.mandal_name,
         division_name: p.row.parent_type === 'division' ? p.row.parent_name : null,
+        /*
+         * The district, wherever it sits in the chain.
+         *
+         * A mandal reports either straight to a district or through a
+         * division, so the district is the parent in one shape and the
+         * grandparent in the other. Reading only one of the two would leave
+         * every village in a division-organised district filed as having no
+         * district at all — and the Villages filter would then offer a list
+         * that silently excluded them.
+         */
+        district_name: p.row.parent_type === 'district'
+          ? p.row.parent_name
+          : p.row.grandparent_type === 'district' ? p.row.grandparent_name : null,
         total_extent_ac: p.extentAc,
         // Derived rather than stored: two columns holding one quantity in
         // different units disagree the moment either is edited.
