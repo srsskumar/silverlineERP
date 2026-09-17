@@ -3,6 +3,8 @@ import type { Pool } from "pg";
 import {
   ApiError,
   changePasswordSchema,
+  mfaRequired,
+  type MfaPolicy,
   loginSchema,
   logoutSchema,
   mfaVerifySchema,
@@ -263,7 +265,33 @@ export async function registerAuthRoutes(
       }
       const parsed=mfaVerifySchema.safeParse(req.body);
       if(!parsed.success)throw new ApiError({status:422,code:'VALIDATION_ERROR',message:'The current authenticator code is required'});
-      if(app.appConfig.nodeEnv==='production'&&user.roles.some(r=>['SUPER_ADMIN','ADMIN','PROJECT_MANAGER','TEAM_LEAD','AUDITOR'].includes(r)))throw new ApiError({status:403,code:'MFA_REQUIRED',message:'Your role requires MFA. Ask an administrator for account recovery.'});
+      /*
+       * Turning it off has to answer the same question as being made to turn
+       * it on, or the gate is a revolving door: an account could enrol, be
+       * let through, and disable it again on the next request.
+       *
+       * Read from the database rather than the token, because a role's
+       * setting may have changed since this token was issued and the stricter
+       * of the two answers is the one to act on.
+       */
+      const policy = (await opts.pool.query(
+        `SELECT u.mfa_policy,
+                COALESCE(json_agg(json_build_object('code', r.code,
+                  'mfa_required', r.mfa_required)) FILTER (WHERE r.id IS NOT NULL),
+                  '[]') AS roles
+         FROM users u
+         LEFT JOIN user_roles ur ON ur.user_id = u.id
+         LEFT JOIN roles r ON r.id = ur.role_id
+         WHERE u.id = $1 GROUP BY u.mfa_policy`, [user.id])).rows[0] as
+          { mfa_policy: string; roles: Array<{ code: string; mfa_required: boolean }> }
+          | undefined;
+      if (app.appConfig.nodeEnv === 'production'
+          && mfaRequired(policy?.roles ?? [], (policy?.mfa_policy ?? 'INHERIT') as MfaPolicy)) {
+        throw new ApiError({
+          status: 403, code: 'MFA_REQUIRED',
+          message: 'Your role requires MFA. Ask an administrator for account recovery.',
+        });
+      }
       await disableMfa(ctx, user.id, parsed.data.code);
       await writeAudit(opts.pool, {
         orgId: user.orgId,

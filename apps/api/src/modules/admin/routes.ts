@@ -4,13 +4,13 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { buildAuthenticate,requirePermission } from '../../common/auth.js';
 import { actor,parse,page,mutate,inOrg,fail } from '../../common/domain.js';
-import { isIndianMobile,formatIndianMobile } from '@silverline/shared';
+import { isIndianMobile,formatIndianMobile,MFA_POLICIES,mfaFloorRole } from '@silverline/shared';
 
 export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jwtSecret:string}) {
  const {pool}=opts,auth=buildAuthenticate(opts),guard=(p:string)=>requirePermission(auth,p);
  async function keepAdministrator(db:import('pg').PoolClient,org:string){const admins=await db.query("SELECT u.id FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN role_permissions rp ON rp.role_id=ur.role_id WHERE u.org_id=$1 AND u.auth_status='ACTIVE' AND ur.scope_type IS NULL AND ur.scope_id IS NULL AND rp.permission_code IN('users.manage','admin.configure') GROUP BY u.id HAVING count(DISTINCT rp.permission_code)=2 LIMIT 1",[org]);if(!admins.rowCount)fail('LAST_ADMIN','Keep at least one active organization administrator',409);}
 
- app.get('/api/v1/admin/users',{preHandler:guard('users.read')},async req=>{const {limit,offset}=page(req),rows=(await pool.query("SELECT u.id,u.username,u.email,u.phone,u.auth_status,u.employee_id,u.mfa_enabled,u.must_change_password,u.password_set_at,u.last_login_at,COALESCE((SELECT json_agg(json_build_object('role_id',r.id,'code',r.code,'scope_type',ur.scope_type,'scope_id',ur.scope_id)) FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id),'[]') AS roles FROM users u WHERE org_id=$1 ORDER BY username LIMIT $2 OFFSET $3",[actor(req).orgId,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
+ app.get('/api/v1/admin/users',{preHandler:guard('users.read')},async req=>{const {limit,offset}=page(req),rows=(await pool.query("SELECT u.id,u.username,u.email,u.phone,u.auth_status,u.employee_id,u.mfa_enabled,u.mfa_policy,u.must_change_password,u.password_set_at,u.last_login_at,COALESCE((SELECT json_agg(json_build_object('role_id',r.id,'code',r.code,'scope_type',ur.scope_type,'scope_id',ur.scope_id)) FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id),'[]') AS roles FROM users u WHERE org_id=$1 ORDER BY username LIMIT $2 OFFSET $3",[actor(req).orgId,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
  app.post('/api/v1/admin/users',{preHandler:guard('users.manage')},async(req,reply)=>{
   const i=parse(z.object({username:z.string().trim().min(3).max(100),password:z.string().min(12).max(128),email:z.string().email().optional(),employee_id:z.string().uuid().optional(),
    // The number they sign in with (§34). Stored in one written form so it can
@@ -26,7 +26,11 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
  });
  app.patch('/api/v1/admin/users/:id',{preHandler:guard('users.manage')},async req=>{
   const id=(req.params as {id:string}).id,u=actor(req),i=parse(z.object({auth_status:z.enum(['ACTIVE','DISABLED']).optional(),password:z.string().min(12).max(128).optional(),
-   phone:z.string().trim().max(20).nullable().optional()}),req.body);
+   phone:z.string().trim().max(20).nullable().optional(),
+   // Whether this particular account needs an authenticator, regardless of
+   // what its roles say. "This person handles payroll" and "this phone cannot
+   // run an authenticator" are both real, and neither is a property of a role.
+   mfa_policy:z.enum(MFA_POLICIES).optional()}),req.body);
   if(id===u.id&&i.auth_status==='DISABLED')fail('SELF_DISABLE','You cannot disable your own account');
   if(i.phone&&!isIndianMobile(i.phone))fail('VALIDATION_ERROR','Enter a ten-digit Indian mobile number',422);
   const phone=i.phone===undefined?undefined:(i.phone===null?null:formatIndianMobile(i.phone));
@@ -36,9 +40,42 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
    // A password an administrator sets is a password the administrator knows.
    // The account can sign in -- it must, or the password could never be
    // changed -- and can do nothing else until the person sets their own.
-   await db.query('UPDATE users SET auth_status=COALESCE($2,auth_status),password_hash=COALESCE($3,password_hash),phone=CASE WHEN $5::boolean THEN $4 ELSE phone END,must_change_password=CASE WHEN $3::text IS NULL THEN must_change_password ELSE true END,password_set_at=CASE WHEN $3::text IS NULL THEN password_set_at ELSE now() END,updated_at=now() WHERE id=$1',[id,i.auth_status??null,hash,phone??null,phone!==undefined]);await keepAdministrator(db,u.orgId);await db.query('UPDATE sessions SET revoked=true,revoked_at=now() WHERE user_id=$1',[id]);return {id,updated:true};});
+   if(i.mfa_policy==='EXEMPT'){
+    // The floor, again: an account holding a floor role cannot be excused,
+    // however the request is phrased.
+    const held=(await db.query("SELECT r.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=$1",[id])).rows as Array<{code:string}>;
+    if(held.some(r=>mfaFloorRole(r.code)))fail('MFA_REQUIRED','A super administrator cannot be exempted from two-factor authentication',422);
+   }
+   await db.query('UPDATE users SET auth_status=COALESCE($2,auth_status),password_hash=COALESCE($3,password_hash),phone=CASE WHEN $5::boolean THEN $4 ELSE phone END,must_change_password=CASE WHEN $3::text IS NULL THEN must_change_password ELSE true END,password_set_at=CASE WHEN $3::text IS NULL THEN password_set_at ELSE now() END,mfa_policy=COALESCE($6,mfa_policy),updated_at=now() WHERE id=$1',[id,i.auth_status??null,hash,phone??null,phone!==undefined,i.mfa_policy??null]);await keepAdministrator(db,u.orgId);await db.query('UPDATE sessions SET revoked=true,revoked_at=now() WHERE user_id=$1',[id]);return {id,updated:true};});
  });
  app.get('/api/v1/admin/roles',{preHandler:guard('users.read')},async req=>({data:(await pool.query("SELECT r.*,COALESCE((SELECT json_agg(permission_code) FROM role_permissions WHERE role_id=r.id),'[]') AS permissions FROM roles r WHERE org_id IS NULL OR org_id=$1 ORDER BY name",[actor(req).orgId])).rows}));
+ /**
+  * Whether a role's holders must set up an authenticator (§34).
+  *
+  * The requirement used to be a list of role codes compiled into the API, so
+  * changing it meant a deploy. It was also wrong for the field: a rover
+  * operator reading a six-digit code off a second device before every shift
+  * pays that cost every morning, and whether it is worth paying is the
+  * organisation's call.
+  *
+  * Under admin.configure rather than users.manage, because this is the shape
+  * of the security policy rather than the administration of one account.
+  */
+ app.patch('/api/v1/admin/roles/:id/mfa',{preHandler:guard('admin.configure')},async req=>{
+  const id=(req.params as {id:string}).id,u=actor(req),i=parse(z.object({mfa_required:z.boolean()}),req.body);
+  return mutate(pool,req,'role.mfa_update','role',async db=>{
+   const role=(await db.query('SELECT id,code,org_id FROM roles WHERE id=$1 AND (org_id IS NULL OR org_id=$2)',[id,u.orgId])).rows[0] as {id:string;code:string}|undefined;
+   if(!role)fail('NOT_FOUND','No such role',404);
+   // A super administrator can grant itself the permission to change this
+   // setting, so letting it switch its own requirement off would make every
+   // control below it decorative. The table refuses this too.
+   if(!i.mfa_required&&mfaFloorRole(role!.code))fail('MFA_REQUIRED','A super administrator must keep two-factor authentication',422);
+   await db.query('UPDATE roles SET mfa_required=$2 WHERE id=$1',[id,i.mfa_required]);
+   // Nothing is revoked. Somebody who already enrolled keeps their
+   // authenticator -- the setting decides who must have one, not who may.
+   return {id,code:role!.code,mfa_required:i.mfa_required};
+  });
+ });
  app.get('/api/v1/admin/permissions',{preHandler:guard('admin.configure')},async()=>({data:(await pool.query('SELECT * FROM permissions ORDER BY code')).rows}));
  app.post('/api/v1/admin/roles',{preHandler:guard('admin.configure')},async(req,reply)=>{
   const i=parse(z.object({code:z.string().regex(/^[A-Z][A-Z0-9_]{2,39}$/),name:z.string().min(1).max(100),permissions:z.array(z.string()).max(200)}),req.body),u=actor(req);

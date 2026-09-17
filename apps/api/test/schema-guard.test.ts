@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { MFA_DEFAULT_REQUIRED_ROLES, MFA_FLOOR_ROLES } from "@silverline/shared";
 import { MIGRATION_VERSIONS } from "../src/database/migrate.js";
 import {
   describeSchemaDrift,
@@ -131,5 +133,40 @@ describe("MIGRATION_VERSIONS", () => {
   it("is unique and matches the on-disk file order", () => {
     expect(new Set(MIGRATION_VERSIONS).size).toBe(MIGRATION_VERSIONS.length);
     expect([...MIGRATION_VERSIONS].sort()).toEqual([...MIGRATION_VERSIONS]);
+  });
+});
+
+describe("the MFA role defaults, in two places that must agree", () => {
+  /*
+   * Migration 055 seeds mfa_required from a list written in SQL; the seed
+   * writes the same list from TypeScript. They cannot import from each other,
+   * so the only thing keeping them together is this test — and this codebase
+   * has already shipped a seed that overwrote a migration's role data more
+   * than once.
+   */
+  const sql = readFileSync(
+    new URL("../src/database/migrations/055_mfa_policy.sql", import.meta.url),
+    "utf8",
+  );
+
+  it("seeds exactly the roles the shared list names", () => {
+    const line = sql.match(/UPDATE roles SET mfa_required = true\s+WHERE code IN \(([^)]+)\)/);
+    expect(line, "the migration's seeding statement").toBeTruthy();
+    const inSql = [...line![1].matchAll(/'([A-Z_]+)'/g)].map(m => m[1]).sort();
+    expect(inSql).toEqual([...MFA_DEFAULT_REQUIRED_ROLES].sort());
+  });
+
+  it("keeps the floor role in the defaults", () => {
+    // A role the database refuses to set false must be seeded true, or a
+    // fresh install cannot write the row at all.
+    for (const code of MFA_FLOOR_ROLES) {
+      expect(MFA_DEFAULT_REQUIRED_ROLES as readonly string[]).toContain(code);
+    }
+  });
+
+  it("writes the floor into the table, not only into the API", () => {
+    // A policy that holds only while the application is the only writer is
+    // not a policy.
+    expect(sql).toMatch(/CHECK \(code <> 'SUPER_ADMIN' OR mfa_required\)/);
   });
 });

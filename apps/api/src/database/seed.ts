@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { Pool } from "pg";
 import {
   ALL_PERMISSIONS,
+  MFA_DEFAULT_REQUIRED_ROLES,
   V2_PERMISSIONS, V2_ROLE_GRANTS,
   CRM_PERMISSIONS,
   CRM_ROLE_GRANTS,
@@ -153,10 +154,16 @@ export async function seedDatabase(
 
   for (const code of ROLE_CODES) {
     await pool.query(
-      `INSERT INTO roles (org_id, code, name, is_system_role, description)
-       VALUES (NULL, $1, $1, true, $2)
+      // mfa_required comes from the one list rather than the column default,
+      // which is false. A SUPER_ADMIN row inserted with the default would be
+      // refused outright by the floor constraint (migration 055), and seed
+      // and migration drifting apart on a role list is a mistake this
+      // codebase has already made more than once.
+      `INSERT INTO roles (org_id, code, name, is_system_role, description, mfa_required)
+       VALUES (NULL, $1, $1, true, $2, $3)
        ON CONFLICT (code) DO NOTHING`,
-      [code, `System role ${code}`],
+      [code, `System role ${code}`,
+        (MFA_DEFAULT_REQUIRED_ROLES as readonly string[]).includes(code)],
     );
   }
 

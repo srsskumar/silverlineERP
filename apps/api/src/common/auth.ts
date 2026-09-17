@@ -2,7 +2,7 @@ import {enforceRecordScope} from "./recordScope.js";
 import type { FastifyRequest } from "fastify";
 import jwt from "jsonwebtoken";
 import type { Pool } from "pg";
-import { ApiError } from "@silverline/shared";
+import { ApiError, mfaRequired, type MfaPolicy } from "@silverline/shared";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -64,13 +64,14 @@ export function buildAuthenticate(ctx: AuthContext) {
       });
     }
     const userRes = await ctx.pool.query(
-      `SELECT id, org_id, username, auth_status, mfa_enabled, must_change_password
+      `SELECT id, org_id, username, auth_status, mfa_enabled, must_change_password,
+              mfa_policy
        FROM users WHERE id = $1`,
       [claims.sub],
     );
     const row = userRes.rows[0] as
       | { id: string; org_id: string; username: string; auth_status: string;
-          mfa_enabled: boolean; must_change_password: boolean }
+          mfa_enabled: boolean; must_change_password: boolean; mfa_policy: string }
       | undefined;
     if (!row || row.auth_status !== "ACTIVE") {
       // Generic message: never leak whether the account exists / is disabled.
@@ -89,12 +90,15 @@ export function buildAuthenticate(ctx: AuthContext) {
       if (!active.rowCount) throw new ApiError({ status: 401, code: 'INVALID_TOKEN', message: 'Session revoked or expired' });
     }
     const rolesRes = await ctx.pool.query(
-      `SELECT r.code FROM roles r
+      // mfa_required rides along on a query that already runs, so making the
+      // requirement configurable costs nothing per request.
+      `SELECT r.code, r.mfa_required FROM roles r
        JOIN user_roles ur ON ur.role_id = r.id
        WHERE ur.user_id = $1`,
       [row.id],
     );
-    const roles = rolesRes.rows.map((r) => (r as { code: string }).code);
+    const roleFlags = rolesRes.rows as Array<{ code: string; mfa_required: boolean }>;
+    const roles = roleFlags.map((r) => r.code);
     const permsRes = await ctx.pool.query(
       `SELECT DISTINCT rp.permission_code FROM role_permissions rp
        JOIN user_roles ur ON ur.role_id = rp.role_id
@@ -117,7 +121,23 @@ export function buildAuthenticate(ctx: AuthContext) {
     if(clientOnly)scopes=scopes.filter(s=>s.scope_type==='project'&&s.scope_id);
     if(clientOnly&&!scopes.length)scopes=[{scope_type:'restricted',scope_id:row.id}];
     if(clientOnly&&(req.url.startsWith('/api/v1/custom-fields')||/\/projects\/[^/]+\/(people|dependencies)/.test(req.url)||/\/tasks\/[^/]+\/(comments|evidence|activity|planning)/.test(req.url)))throw new ApiError({status:403,code:'FORBIDDEN',message:'Client access is limited to project progress'});
-    const mfaEnrollmentRequired=req.server.appConfig.nodeEnv==='production'&&!row.mfa_enabled&&roles.some(r=>['SUPER_ADMIN','ADMIN','PROJECT_MANAGER','TEAM_LEAD','AUDITOR'].includes(r));
+    /*
+     * Who needs an authenticator is now the organisation's decision (§34).
+     *
+     * It used to be a list of role codes compiled in here, which put a policy
+     * question somewhere only a deploy could answer -- and it was wrong for
+     * the field, where a rover operator reading a six-digit code off a second
+     * device before every shift pays that cost every morning.
+     *
+     * The floor still holds: a super administrator is never exempt, whatever
+     * the role flag or the account's own policy says. That account can grant
+     * itself the permission to change this setting, so opting out of it would
+     * itself be the attack.
+     */
+    const mfaEnrollmentRequired =
+      req.server.appConfig.nodeEnv === 'production'
+      && !row.mfa_enabled
+      && mfaRequired(roleFlags, row.mfa_policy as MfaPolicy);
     req.authUser = {
       id: row.id,
       orgId: row.org_id,

@@ -9,6 +9,7 @@ import { Writable } from "node:stream";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import bcrypt from "bcryptjs";
 import { authenticator } from "otplib";
+import { MFA_DEFAULT_REQUIRED_ROLES } from "@silverline/shared";
 import { ADMIN_PASSWORD, ADMIN_USERNAME } from "../../src/database/seed.js";
 import { JWT_SECRET } from "./fixture.js";
 import { encryptPii } from "../../src/common/crypto.js";
@@ -945,5 +946,136 @@ describe("setting your own password", () => {
     // This account holds no roles, so a plain permission denial is the
     // correct answer. What must be gone is the password block.
     expect(ok.json().code).not.toBe("PASSWORD_CHANGE_REQUIRED");
+  });
+});
+
+/**
+ * Deciding who needs two-factor authentication (§34).
+ *
+ * It used to be a list of role codes compiled into the API, which put a
+ * policy question somewhere only a deploy could answer — and it was wrong for
+ * the field, where a rover operator reading a six-digit code off a second
+ * device before every shift pays that cost every morning.
+ */
+describe("choosing which roles need an authenticator", () => {
+  async function roleId(code: string): Promise<string> {
+    return String((await w.pool.query(
+      "SELECT id FROM roles WHERE code = $1", [code])).rows[0].id);
+  }
+
+  async function setRoleMfa(code: string, required: boolean) {
+    return w.app.inject({
+      method: "PATCH", url: `/api/v1/admin/roles/${await roleId(code)}/mfa`,
+      headers: { ...w.admin, ...idem() }, payload: { mfa_required: required },
+    });
+  }
+
+  it("starts where the hardcoded list left off, so nothing changes on the day", async () => {
+    const rows = await w.pool.query(
+      "SELECT code, mfa_required FROM roles WHERE mfa_required ORDER BY code");
+    expect(rows.rows.map(r => r.code)).toEqual(
+      [...MFA_DEFAULT_REQUIRED_ROLES].sort());
+  });
+
+  it("lets an organisation excuse a field role", async () => {
+    // The whole point of the setting.
+    const r = await setRoleMfa("TEAM_LEAD", false);
+    expect(r.statusCode, r.body).toBe(200);
+    expect((await w.pool.query(
+      "SELECT mfa_required FROM roles WHERE code = 'TEAM_LEAD'")).rows[0].mfa_required)
+      .toBe(false);
+
+    // And put it back.
+    expect((await setRoleMfa("TEAM_LEAD", true)).statusCode).toBe(200);
+  });
+
+  it("will not let a super administrator be excused", async () => {
+    // That role can grant itself the permission to change this setting, so
+    // the opting out would itself be the attack.
+    const r = await setRoleMfa("SUPER_ADMIN", false);
+    expect(r.statusCode).toBe(422);
+    expect(r.json().code).toBe("MFA_REQUIRED");
+    expect((await w.pool.query(
+      "SELECT mfa_required FROM roles WHERE code = 'SUPER_ADMIN'")).rows[0].mfa_required)
+      .toBe(true);
+  });
+
+  it("refuses it at the table too, not only at the API", async () => {
+    // A policy that holds only while the application is the only writer is
+    // not a policy.
+    await expect(w.pool.query(
+      "UPDATE roles SET mfa_required = false WHERE code = 'SUPER_ADMIN'"))
+      .rejects.toThrow();
+  });
+
+  it("does not take somebody's authenticator away when the role stops requiring it", async () => {
+    // The setting decides who must have one, not who may.
+    const before = await w.pool.query(
+      "SELECT count(*)::int AS n FROM users WHERE mfa_enabled");
+    await setRoleMfa("AUDITOR", false);
+    const after = await w.pool.query(
+      "SELECT count(*)::int AS n FROM users WHERE mfa_enabled");
+    expect(after.rows[0].n).toBe(before.rows[0].n);
+    await setRoleMfa("AUDITOR", true);
+  });
+
+  it("is not something an ordinary account can change", async () => {
+    const r = await w.app.inject({
+      method: "PATCH", url: `/api/v1/admin/roles/${await roleId("TEAM_LEAD")}/mfa`,
+      headers: { ...w.directUser, ...idem() }, payload: { mfa_required: false },
+    });
+    expect([401, 403]).toContain(r.statusCode);
+  });
+});
+
+describe("excusing or requiring one account", () => {
+  let userId: string;
+
+  beforeAll(async () => {
+    userId = await createUser(w.pool, w.orgId, { username: uniq("policy") });
+  });
+
+  async function setPolicy(id: string, mfa_policy: string) {
+    return w.app.inject({
+      method: "PATCH", url: `/api/v1/admin/users/${id}`,
+      headers: { ...w.admin, ...idem() }, payload: { mfa_policy },
+    });
+  }
+
+  it("records an exemption for one person without changing their role", async () => {
+    const r = await setPolicy(userId, "EXEMPT");
+    expect(r.statusCode, r.body).toBe(200);
+    expect((await w.pool.query(
+      "SELECT mfa_policy FROM users WHERE id = $1", [userId])).rows[0].mfa_policy)
+      .toBe("EXEMPT");
+  });
+
+  it("holds one person to it without holding their role to it", async () => {
+    expect((await setPolicy(userId, "REQUIRED")).statusCode).toBe(200);
+    expect((await w.pool.query(
+      "SELECT mfa_policy FROM users WHERE id = $1", [userId])).rows[0].mfa_policy)
+      .toBe("REQUIRED");
+  });
+
+  it("keeps \"no override\" apart from \"deliberately exempt\"", async () => {
+    // Collapsing them into a boolean would silently re-require somebody the
+    // moment their role's default changed.
+    expect((await setPolicy(userId, "INHERIT")).statusCode).toBe(200);
+    expect((await w.pool.query(
+      "SELECT mfa_policy FROM users WHERE id = $1", [userId])).rows[0].mfa_policy)
+      .toBe("INHERIT");
+  });
+
+  it("will not exempt an account that holds a super administrator role", async () => {
+    const root = await createUser(w.pool, w.orgId, {
+      username: uniq("root"), roles: ["SUPER_ADMIN"],
+    });
+    const r = await setPolicy(root, "EXEMPT");
+    expect(r.statusCode).toBe(422);
+    expect(r.json().code).toBe("MFA_REQUIRED");
+  });
+
+  it("refuses a policy that is not one of the three", async () => {
+    expect((await setPolicy(userId, "SOMETIMES")).statusCode).toBe(422);
   });
 });

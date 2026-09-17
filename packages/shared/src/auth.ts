@@ -114,3 +114,73 @@ export interface MeResponse {
   roles: string[];
   permissions: string[];
 }
+
+/* ------------------------------------------------------- who needs MFA */
+
+/**
+ * The roles that must keep two-factor authentication whatever anybody decides.
+ *
+ * Exactly one. A super administrator can grant itself any permission in the
+ * system, including the permission to change this setting -- so if that
+ * account can be reduced to a password, every other control below it is
+ * decorative. It is not a policy anybody can opt out of, because the opting
+ * out would itself be the attack.
+ *
+ * Every other role, field roles included, is a decision for the organisation.
+ * Requiring a rover operator to read a six-digit code off a second device
+ * before every shift is a real cost paid every morning, and whether it is
+ * worth paying is not something this code should decide for them.
+ */
+export const MFA_FLOOR_ROLES = ['SUPER_ADMIN'] as const;
+
+/**
+ * The roles that require MFA on a database nobody has configured yet.
+ *
+ * Exactly the list the API used to have compiled in, so an organisation that
+ * never touches the setting sees no change. It is a starting position, not a
+ * rule -- everything outside MFA_FLOOR_ROLES can be switched off.
+ *
+ * Migration 055 and the seed both have to agree with this. They have drifted
+ * apart before, so a test asserts the migration's own list matches.
+ */
+export const MFA_DEFAULT_REQUIRED_ROLES = [
+  'SUPER_ADMIN', 'ADMIN', 'PROJECT_MANAGER', 'TEAM_LEAD', 'AUDITOR',
+] as const;
+
+/** What an individual account overrides its roles with. */
+export const MFA_POLICIES = ['INHERIT', 'REQUIRED', 'EXEMPT'] as const;
+export type MfaPolicy = (typeof MFA_POLICIES)[number];
+
+export interface MfaRoleFlag {
+  code: string;
+  mfa_required: boolean;
+}
+
+/**
+ * Whether this account must have an authenticator set up.
+ *
+ * Resolved from three things, in order of authority:
+ *
+ *   1. The floor. A super administrator is never exempt.
+ *   2. The account's own policy, where one has been set. "This particular
+ *      person handles payroll" and "this particular phone cannot run an
+ *      authenticator" are both real, and neither is a property of a role.
+ *   3. Otherwise, the roles: required if any of them requires it. A person
+ *      who is both a team lead and a field surveyor is a team lead, and the
+ *      stricter of their roles is the one that counts.
+ */
+export function mfaRequired(
+  roles: MfaRoleFlag[], policy: MfaPolicy = 'INHERIT',
+): boolean {
+  if (roles.some(r => (MFA_FLOOR_ROLES as readonly string[]).includes(r.code))) {
+    return true;
+  }
+  if (policy === 'REQUIRED') return true;
+  if (policy === 'EXEMPT') return false;
+  return roles.some(r => r.mfa_required);
+}
+
+/** Whether this role's requirement can be switched off at all. */
+export function mfaFloorRole(code: string): boolean {
+  return (MFA_FLOOR_ROLES as readonly string[]).includes(code);
+}
