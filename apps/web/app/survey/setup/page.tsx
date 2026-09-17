@@ -67,6 +67,12 @@ export default function SurveySetupPage() {
     );
   }
 
+  // The programme the picker is pointing at, if the list has caught up with
+  // the picker. Undefined for the one render after a programme is created.
+  const selectedProgramme = (projects.data ?? []).find(
+    (p) => String(p.id) === projectId,
+  );
+
   return (
     <AppShell>
       <PageHeader
@@ -75,9 +81,12 @@ export default function SurveySetupPage() {
       />
       <PageBody>
         <div className="space-y-4">
-          <NewProgramme onCreated={(id) => {
+          {/* Refresh the list before selecting, not after: selecting an id
+              the list has not caught up with is what left the panels below
+              with nothing to render. */}
+          <NewProgramme onCreated={async (id) => {
+            await qc.invalidateQueries({ queryKey: ['survey-projects'] });
             setProjectId(id);
-            qc.invalidateQueries({ queryKey: ['survey-projects'] });
           }} />
 
           {projects.data?.length ? (
@@ -103,11 +112,17 @@ export default function SurveySetupPage() {
               </Toolbar>
 
               {projectId ? <VillageImport projectId={projectId} /> : null}
-              {projectId ? (
-                <BoardLink
-                  programme={projects.data.find((p) => String(p.id) === projectId)!}
-                />
-              ) : null}
+              {/*
+                * Only once the programme is actually in the list.
+                *
+                * Creating one selects it immediately and refetches the list
+                * afterwards, so for one render the selected id is not in the
+                * data yet. The `!` that used to be here asserted otherwise
+                * and the panel crashed reading project_id off undefined —
+                * which is what anybody saw the moment they created their
+                * first programme.
+                */}
+              {selectedProgramme ? <BoardLink programme={selectedProgramme} /> : null}
             </>
           ) : (
             <EmptyState

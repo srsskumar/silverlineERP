@@ -7,7 +7,7 @@ import { AppShell } from '@/components/AppShell';
 import { RequirePermission } from '@/components/RequirePermission';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission, PERMISSIONS } from '@/lib/permissions';
-import { getProject, patchProject } from '@/lib/projects';
+import { getProject, patchProject, listWorkspaces, listProjectTypes } from '@/lib/projects';
 import { listTasksPage, type Task } from '@/lib/tasks';
 import { queryKeys } from '@/lib/query-keys';
 import { PROJECT_STATUS_TRANSITIONS } from '@silverline/shared';
@@ -63,6 +63,27 @@ export function ProjectDetailView({ id }: { id: string }) {
   // Names, not identifiers: nobody refers to a colleague by UUID.
   const peopleQuery = useQuery({ queryKey: ['people'], queryFn: listPeople, staleTime: 300_000 });
   const peopleIdx = React.useMemo(() => peopleIndex(peopleQuery.data ?? []), [peopleQuery.data]);
+
+  /*
+   * The same courtesy for the workspace and the project type.
+   *
+   * These read out as raw UUIDs, which tell nobody anything: a person
+   * checking they are looking at the right project cannot confirm it from
+   * "73fda4fb-ca39-4cc9-b241-e9e2a1db8ef3". The identifier is still there
+   * for anybody who needs it — it moves to the tooltip, where a support
+   * conversation can still reach it.
+   */
+  const workspacesQuery = useQuery({
+    queryKey: ['workspaces'], queryFn: listWorkspaces, staleTime: 300_000,
+  });
+  const typesQuery = useQuery({
+    queryKey: ['project-types'], queryFn: listProjectTypes, staleTime: 300_000,
+  });
+  const loaded = detailQuery.data?.project;
+  const workspaceName = (workspacesQuery.data ?? [])
+    .find((x) => String(x.id) === String(loaded?.workspace_id))?.name;
+  const typeRow = (typesQuery.data ?? [])
+    .find((x) => String(x.id) === String(loaded?.project_type_id));
 
   const refetchAll = React.useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: queryKeys.projects.detail(id) });
@@ -138,10 +159,32 @@ export function ProjectDetailView({ id }: { id: string }) {
               <ProjectTabs projectId={project.id} active="overview" />
             </div>
             <dl className="mt-4 divide-y divide-border">
-              <DetailRow label="Project ID" value={<span className="font-mono text-xs">{project.id}</span>} />
-              <DetailRow label="Workspace" value={<span className="font-mono text-xs">{String(project.workspace_id)}</span>} />
+              {/* The project's own code is what people quote to each other;
+                  the UUID stays available on hover for support. */}
+              <DetailRow label="Project ID" value={
+                <span className="font-mono text-xs" title={String(project.id)}>
+                  {project.code ? String(project.code) : String(project.id)}
+                </span>
+              } />
+              <DetailRow label="Workspace" value={
+                <span title={String(project.workspace_id)}>
+                  {workspaceName ?? (
+                    workspacesQuery.isLoading
+                      ? <span className="text-text-subtle">Loading…</span>
+                      : <span className="font-mono text-xs">{String(project.workspace_id)}</span>
+                  )}
+                </span>
+              } />
               {project.project_type_id ? (
-                <DetailRow label="Type" value={<span className="font-mono text-xs">{String(project.project_type_id)}</span>} />
+                <DetailRow label="Type" value={
+                  <span title={String(project.project_type_id)}>
+                    {typeRow?.name ?? (
+                      typesQuery.isLoading
+                        ? <span className="text-text-subtle">Loading…</span>
+                        : <span className="font-mono text-xs">{String(project.project_type_id)}</span>
+                    )}
+                  </span>
+                } />
               ) : null}
               <DetailRow
                 label="Manager"
