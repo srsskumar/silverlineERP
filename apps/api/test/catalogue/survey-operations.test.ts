@@ -1592,3 +1592,110 @@ describe("what a village's crew are carrying", () => {
     expect(stillThere).toHaveLength(0);
   });
 });
+
+describe("bulk operations pushed at deliberately", () => {
+  let village = "";
+  let person = "";
+
+  beforeAll(async () => {
+    const mandal = String((await w.pool.query(
+      "SELECT id FROM org_units WHERE org_id=$1 AND type='mandal' LIMIT 1",
+      [w.orgId])).rows[0].id);
+    const v = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Bulk edge village", village_code: uniq("BE"),
+      mandal_id: mandal, total_extent_ac: 75,
+    });
+    village = String(v.data.id);
+    person = String((await w.pool.query(
+      `INSERT INTO employees(org_id,emp_no,first_name,phone,date_of_joining,status)
+       VALUES($1,$2,'Edge','+919100071500','2026-01-01','ACTIVE') RETURNING id`,
+      [w.orgId, uniq("E")])).rows[0].id);
+  });
+
+  it("refuses a crew assignment with nobody in it", async () => {
+    // An empty list is a form submitted by accident, not an instruction.
+    const r = await post(w.admin, `/api/v1/survey/villages/${village}/crew/bulk`,
+      { employee_ids: [], stage_code: "GROUND_TRUTHING" });
+    expect(r.status).toBe(422);
+  });
+
+  it("counts somebody named twice in one payload only once", async () => {
+    // Paste a column out of a spreadsheet and duplicates are the norm.
+    const r = await post(w.admin, `/api/v1/survey/villages/${village}/crew/bulk`,
+      { employee_ids: [person, person, person], stage_code: "GROUND_TRUTHING" });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    const rows = await w.pool.query(
+      `SELECT count(*)::int AS n FROM survey_crew
+        WHERE survey_village_id = $1 AND employee_id = $2 AND released_on IS NULL`,
+      [village, person]);
+    expect(rows.rows[0].n).toBe(1);
+  });
+
+  it("refuses a crew list longer than a village could hold", async () => {
+    const many = Array.from({ length: 2000 },
+      () => "00000000-0000-4000-8000-000000000000");
+    const r = await post(w.admin, `/api/v1/survey/villages/${village}/crew/bulk`,
+      { employee_ids: many, stage_code: "GROUND_TRUTHING" });
+    expect([404, 422]).toContain(r.status);
+  });
+
+  it("refuses an equipment allocation with no equipment in it", async () => {
+    const r = await post(w.admin, `/api/v1/survey/villages/${village}/rovers/bulk`,
+      { asset_ids: [], allocated_on: day(0) });
+    expect(r.status).toBe(422);
+  });
+
+  it("does not allocate the same instrument to the village twice", async () => {
+    // One rover in two places is a rover nobody can find.
+    const r = await post(w.admin, `/api/v1/survey/villages/${village}/rovers/bulk`,
+      { asset_ids: [w.assetId, w.assetId], allocated_on: day(0) });
+    expect([200, 201], JSON.stringify(r.body)).toContain(r.status);
+    const out = await w.pool.query(
+      `SELECT count(*)::int AS n FROM survey_rover_allocations
+        WHERE survey_village_id = $1 AND asset_id = $2 AND released_on IS NULL`,
+      [village, w.assetId]);
+    expect(out.rows[0].n).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("moving villages, asked for impossible things", () => {
+  it("refuses a move to a programme that does not exist", async () => {
+    const mandal = String((await w.pool.query(
+      "SELECT id FROM org_units WHERE org_id=$1 AND type='mandal' LIMIT 1",
+      [w.orgId])).rows[0].id);
+    const v = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Nowhere bound", village_code: uniq("NB"),
+      mandal_id: mandal, total_extent_ac: 20,
+    });
+    const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages/move`, {
+      village_ids: [v.data.id], to_project_id: "00000000-0000-4000-8000-000000000000",
+    });
+    expect([404, 422]).toContain(r.status);
+  });
+
+  it("refuses a move with no villages named", async () => {
+    const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages/move`, {
+      village_ids: [], to_project_id: programmeId,
+    });
+    expect(r.status).toBe(422);
+  });
+
+  it("refuses a move into the programme they are already in", async () => {
+    // A no-op should be said plainly rather than written as a move nobody
+    // made and nobody can see afterwards.
+    const mandal = String((await w.pool.query(
+      "SELECT id FROM org_units WHERE org_id=$1 AND type='mandal' LIMIT 1",
+      [w.orgId])).rows[0].id);
+    const v = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Staying put", village_code: uniq("SP"),
+      mandal_id: mandal, total_extent_ac: 20,
+    });
+    const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages/move`, {
+      village_ids: [v.data.id], to_project_id: programmeId,
+    });
+    expect(r.status).toBe(422);
+    const still = await w.pool.query(
+      "SELECT survey_project_id FROM survey_villages WHERE id = $1", [v.data.id]);
+    expect(String(still.rows[0].survey_project_id)).toBe(programmeId);
+  });
+});
