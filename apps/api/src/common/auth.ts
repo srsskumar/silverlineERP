@@ -148,7 +148,22 @@ export function buildAuthenticate(ctx: AuthContext) {
       mfaEnrollmentRequired,
       worker:claims.worker===true&&!claims.family,
     };
-    if(mfaEnrollmentRequired&&!req.url.startsWith("/api/v1/auth/")&&!req.url.startsWith("/api/v1/devices/register"))throw new ApiError({status:403,code:"MFA_ENROLLMENT_REQUIRED",message:"Set up an authenticator in Account security before continuing"});
+    /*
+     * Background work is exempt, as it is from the password gate below.
+     *
+     * Both gates exist to put a *person* in front of a screen -- an
+     * enrolment screen here, a change-password screen there -- and a worker
+     * token has no screen to be put in front of. Blocking it stopped two
+     * report schedules on the production VM, and the error they failed with
+     * named MFA, which is not something anybody would connect to a report
+     * that had simply stopped arriving.
+     *
+     * The account's own interactive access stays blocked, which is what the
+     * requirement is for: the authority behind a schedule or an automation
+     * rule was established when it was created, and re-checking the author's
+     * enrolment at each run only breaks the work, it does not enrol anybody.
+     */
+    if(mfaEnrollmentRequired&&!req.authUser.worker&&!req.url.startsWith("/api/v1/auth/")&&!req.url.startsWith("/api/v1/devices/register"))throw new ApiError({status:403,code:"MFA_ENROLLMENT_REQUIRED",message:"Set up an authenticator in Account security before continuing"});
     /*
      * A password somebody else chose is a password somebody else knows (§34).
      *
@@ -168,10 +183,7 @@ export function buildAuthenticate(ctx: AuthContext) {
      * matters -- the authority behind the automation was established when it
      * was created, not at each run.
      *
-     * The MFA gate above does block workers, and two report schedules on the
-     * production VM fail that way today. That is a pre-existing security
-     * decision rather than an oversight, so it is left alone; the fix there
-     * is for those two accounts to enrol.
+     * The MFA gate above is exempt for the same reason and in the same way.
      */
     if (row.must_change_password
         && !req.authUser.worker

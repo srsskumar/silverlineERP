@@ -141,6 +141,36 @@ describe('v2 delivery and authorization regression',()=>{
   await runJobs(app,pool,'v2-test-secret');await runJobs(app,pool,'v2-test-secret');
   expect((await pool.query('SELECT count(*) FROM report_registry')).rows[0].count).toBe('3');expect((await pool.query('SELECT last_run_at FROM report_schedules')).rows[0].last_run_at).toBeTruthy();
  });
+ it('stops a schedule whose owner can no longer run its report, rather than retrying it',async()=>{
+  /*
+   * A schedule whose owner has lost the right to the report is not failing
+   * temporarily. Retrying it every fifteen minutes until a counter reaches
+   * seven is two hours of work that cannot succeed, ending in a schedule
+   * that switches itself off with 'FORBIDDEN' in a column nobody reads.
+   */
+  const schedule=await call('POST','report-schedules',{name:'Loses access',type:'tasks',format:'csv',frequency:'DAILY'});
+  expect(schedule.statusCode).toBe(201);
+  // The authority goes away after the schedule was made, which is exactly
+  // how this happens in practice: somebody changes roles.
+  await pool.query("DELETE FROM role_permissions WHERE role_id IN (SELECT role_id FROM user_roles WHERE user_id=$1) AND permission_code LIKE 'report%'",[adminId]);
+  await pool.query("UPDATE report_schedules SET next_run_at=now()-interval '1 minute' WHERE id=$1",[schedule.json().id]);
+
+  await runJobs(app,pool,'v2-test-secret');
+  const row=(await pool.query('SELECT active,failures,error FROM report_schedules WHERE id=$1',[schedule.json().id])).rows[0];
+  // Off at the first attempt, not the eighth.
+  expect(row.active).toBe(false);
+  expect(Number(row.failures)).toBe(1);
+  // And the error says what the decision is, rather than naming a status.
+  expect(String(row.error)).toContain('cannot run a tasks report');
+
+  // The owner is told, so it is not a report that quietly stops arriving.
+  expect((await pool.query("SELECT count(*) FROM notifications WHERE type='REPORT_PAUSED' AND recipient_id=$1",[adminId])).rows[0].count).toBe('1');
+
+  // And a second pass does not pick it up again.
+  await runJobs(app,pool,'v2-test-secret');
+  expect(Number((await pool.query('SELECT failures FROM report_schedules WHERE id=$1',[schedule.json().id])).rows[0].failures)).toBe(1);
+ });
+
  it('completes a queued large report once and notifies its requester',async()=>{
   const p=await project();await pool.query("INSERT INTO tasks(org_id,project_id,title) SELECT $1,$2,'Export task '||n FROM generate_series(1,5001) n",[orgId,p.id]);
   const response=await call('POST','reports',{type:'tasks',format:'csv'});expect(response.statusCode).toBe(202);const report=response.json();

@@ -1046,6 +1046,27 @@ describe("background work and a password somebody else chose", () => {
     expect(r.json().code).not.toBe("PASSWORD_CHANGE_REQUIRED");
   });
 
+  it("does not stop a worker acting for an account that has not enrolled MFA", async () => {
+    // Same reasoning as the password gate: the requirement exists to put a
+    // person in front of an enrolment screen, and a worker has no screen.
+    // Two report schedules on the production VM failed this way, with an
+    // error naming MFA that nobody would connect to a report that had
+    // simply stopped arriving.
+    const id = await createUser(w.pool, w.orgId, {
+      username: uniq("mfaworker"), roles: ["ADMIN"],
+    });
+    await w.pool.query("UPDATE users SET mfa_enabled = false WHERE id = $1", [id]);
+
+    const token = jwt.sign(
+      { sub: id, org_id: w.orgId, type: "access", worker: true },
+      JWT_SECRET, { expiresIn: 60 });
+    const r = await w.app.inject({
+      method: "GET", url: "/api/v1/employees",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(r.json().code).not.toBe("MFA_ENROLLMENT_REQUIRED");
+  });
+
   it("still stops the person themselves", async () => {
     // Their interactive access is the part that matters.
     const username = uniq("person");

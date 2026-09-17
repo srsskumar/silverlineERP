@@ -26,6 +26,29 @@ export async function runScheduledJobs(app:FastifyInstance,pool:Pool,secret:stri
   const token=jwt.sign({sub:s.created_by,org_id:s.org_id,type:'access',worker:true},secret,{expiresIn:60});
   const response=await app.inject({method:'POST',url:'/api/v1/reports',headers:{authorization:`Bearer ${token}`,'x-request-id':`schedule:${s.id}`,'idempotency-key':`schedule:${s.id}:${new Date(s.next_run_at).toISOString()}`},payload:{type:s.report_type,format:s.format,filters:s.filters}});
   if(response.statusCode<300){const report=response.json();if(report.status==='READY')await pool.query("INSERT INTO notifications(org_id,recipient_id,type,title,body,entity_type,entity_id,event_key) VALUES($1,$2,'REPORT_READY','Scheduled report ready','Open Reports to download your report','report',$3,$4) ON CONFLICT DO NOTHING",[s.org_id,s.created_by,report.id,`report:${report.id}`]);await pool.query("UPDATE report_schedules SET last_run_at=now(),next_run_at=now()+CASE frequency WHEN 'DAILY' THEN interval '1 day' WHEN 'WEEKLY' THEN interval '7 days' ELSE interval '1 month' END,error=NULL,failures=0 WHERE id=$1",[s.id]);}
-  else await pool.query("UPDATE report_schedules SET failures=failures+1,active=failures<7,error=$2,next_run_at=now()+interval '15 minutes' WHERE id=$1",[s.id,response.json().code??'GENERATION_FAILED']);
+  else {
+   /*
+    * A schedule whose owner has lost the right to the report is not failing
+    * temporarily -- it is failing permanently, and retrying it every fifteen
+    * minutes until a counter reaches seven is two hours of work that cannot
+    * succeed, ending in a schedule that switches itself off with 'FORBIDDEN'
+    * in a column nobody reads.
+    *
+    * Authority failures stop at the first attempt and say whose access is
+    * missing, so the person who has to decide -- grant the permission, hand
+    * the schedule to somebody who holds it, or delete it -- can see what the
+    * decision is. Everything else keeps the bounded retry it had, because a
+    * generation that failed on a bad afternoon usually works on a good one.
+    */
+   const code=response.json().code??'GENERATION_FAILED';
+   const permanent=[401,403,404].includes(response.statusCode);
+   await pool.query(
+    // active stays `failures<7` for a retryable failure -- the same bounded
+    // give-up this always had, expressed in SQL so the pre-increment value
+    // is the one compared, exactly as before.
+    "UPDATE report_schedules SET failures=failures+1,active=CASE WHEN $3::boolean THEN false ELSE failures<7 END,error=$2,next_run_at=now()+interval '15 minutes' WHERE id=$1",
+    [s.id,permanent?`Paused: ${code} — the account that created this schedule cannot run a ${s.report_type} report`:code,permanent]);
+   if(permanent)await pool.query("INSERT INTO notifications(org_id,recipient_id,type,title,body,entity_type,entity_id,event_key) VALUES($1,$2,'REPORT_PAUSED',$3,$4,'report_schedule',$1,$5) ON CONFLICT DO NOTHING",[s.org_id,s.created_by,'A scheduled report has been paused',`Your ${s.frequency.toLowerCase()} ${s.report_type} report was stopped because your account can no longer run it. Ask an administrator for access, or hand the schedule to somebody who has it.`,`report_paused:${s.id}`]);
+  }
  }
 }
