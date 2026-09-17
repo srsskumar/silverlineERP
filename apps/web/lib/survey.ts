@@ -318,3 +318,62 @@ export function paceNote(p: {
   }
   return parts.join(' ');
 }
+
+/* ----------------------------------------------------------- period report */
+
+export interface PeriodComparison {
+  current: number;
+  previous: number;
+  change: number;
+  changePct: number | null;
+  direction: 'UP' | 'DOWN' | 'FLAT';
+}
+
+/**
+ * The change, said in words next to the figure.
+ *
+ * A percentage is only offered when there was something to compare against.
+ * The first week of a programme has not improved by any percentage, and
+ * "+100%" against a start from nothing is the kind of number that ends up in
+ * a review slide meaning nothing.
+ */
+export function changeHint(c: PeriodComparison | undefined): string {
+  if (!c) return '';
+  if (c.direction === 'FLAT') return 'Unchanged from the previous period';
+  const word = c.direction === 'UP' ? 'up' : 'down';
+  const size = Math.abs(c.change).toFixed(2).replace(/\.00$/, '');
+  return c.changePct === null
+    ? `${size} Ac ${word}; nothing recorded in the previous period`
+    : `${size} Ac ${word} (${Math.abs(c.changePct)}%) on the previous period`;
+}
+
+/**
+ * The sentence at the top of the report.
+ *
+ * Says what happened and whether it is better or worse than last time, in the
+ * order somebody reads it. A report that opens with a table makes everybody
+ * do this arithmetic in their head, and they do it differently.
+ */
+export function periodNote(d: {
+  period?: { label?: string };
+  area?: PeriodComparison;
+  effort?: { active_days?: number; calendar_days?: number; villages_worked?: number };
+} | undefined): string {
+  if (!d?.area) return 'Nothing has been recorded for this period.';
+  const { area, effort } = d;
+  if (area.current === 0) {
+    return effort?.active_days
+      ? 'Returns were filed in this period but no extent was recorded against them.'
+      : 'No day’s return falls inside this period.';
+  }
+  const worked = effort?.active_days ?? 0;
+  const villages = effort?.villages_worked ?? 0;
+  const head = `${acres(area.current)} surveyed over ${worked} working `
+    + `${worked === 1 ? 'day' : 'days'} across ${villages} `
+    + `${villages === 1 ? 'village' : 'villages'}.`;
+  if (area.direction === 'FLAT') return `${head} The same as the previous period.`;
+  const word = area.direction === 'UP' ? 'more' : 'less';
+  return area.changePct === null
+    ? `${head} Nothing was recorded in the previous period to compare against.`
+    : `${head} That is ${Math.abs(area.changePct)}% ${word} than the previous period.`;
+}

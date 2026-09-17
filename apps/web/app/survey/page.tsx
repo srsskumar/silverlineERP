@@ -22,12 +22,12 @@ import {
   hasPct, paceNote, pct, pctTone, progressHeadline, roverNote, sqKm, stageLabel,
   stateTone, tallyTone, type ReportLevel,
   BOTTLENECK_LABELS, VILLAGE_STATUS_LABELS, forecastNote, villageStatusTone,
-  reasonLabel,
+  reasonLabel, changeHint, periodNote,
 } from '@/lib/survey';
 import { VillageDetail } from '@/components/survey/VillageDetail';
 
 type Row = Record<string, any>;
-type Tab = 'progress' | 'villages' | 'bottlenecks' | 'timeline' | 'summary';
+type Tab = 'progress' | 'report' | 'villages' | 'bottlenecks' | 'timeline' | 'summary';
 
 /**
  * Land survey progress (§59).
@@ -62,7 +62,7 @@ export default function SurveyPage() {
   React.useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const wanted = q.get('tab');
-    if (wanted && (['progress', 'villages', 'bottlenecks', 'timeline', 'summary'] as string[])
+    if (wanted && (['progress', 'report', 'villages', 'bottlenecks', 'timeline', 'summary'] as string[])
       .includes(wanted)) setTab(wanted as Tab);
     const village = q.get('village');
     if (village) { setTab('villages'); setOpenVillage(village); }
@@ -128,13 +128,14 @@ export default function SurveyPage() {
           </select>
 
           <div className="flex gap-1">
-            {(['progress', 'villages', 'bottlenecks', 'timeline', 'summary'] as const).map((t) => (
+            {(['progress', 'report', 'villages', 'bottlenecks', 'timeline', 'summary'] as const).map((t) => (
               <Button key={t} type="button" variant={tab === t ? 'secondary' : 'ghost'}
                 onClick={() => setTab(t)}>
                 {t === 'progress' ? 'Progress'
-                  : t === 'villages' ? 'Villages'
-                    : t === 'bottlenecks' ? 'Bottlenecks'
-                      : t === 'timeline' ? 'Over time' : 'Summary'}
+                  : t === 'report' ? 'Report'
+                    : t === 'villages' ? 'Villages'
+                      : t === 'bottlenecks' ? 'Bottlenecks'
+                        : t === 'timeline' ? 'Over time' : 'Summary'}
               </Button>
             ))}
           </div>
@@ -180,6 +181,9 @@ export default function SurveyPage() {
 
         {projectId && tab === 'progress' ? (
           <Progress query={progress} level={level} setLevel={setLevel} range={range} />
+        ) : null}
+        {projectId && tab === 'report' ? (
+          <PeriodReport projectId={projectId} level={level} setLevel={setLevel} />
         ) : null}
         {projectId && tab === 'villages' ? (
           <Villages projectId={projectId} canManage={canManage} canEnter={canEnter}
@@ -424,6 +428,166 @@ function Progress({
  * fortnight late is a number, and the list of villages causing it is what
  * somebody does about it.
  */
+/* ----------------------------------------------------------- period report */
+
+/**
+ * The daily, weekly and monthly report (§23).
+ *
+ * A figure on its own is not a report. "Four hundred acres this week" means
+ * nothing until it sits beside last week's, and the comparison is the part
+ * anybody acts on — so every number here carries its predecessor.
+ */
+function PeriodReport({
+  projectId, level, setLevel,
+}: {
+  projectId: string; level: ReportLevel; setLevel: (l: ReportLevel) => void;
+}) {
+  const [grain, setGrain] = React.useState<'DAY' | 'WEEK' | 'MONTH'>('WEEK');
+  const [asOf, setAsOf] = React.useState(() => businessToday());
+
+  const report = useQuery({
+    queryKey: ['survey-report', projectId, grain, level, asOf],
+    queryFn: async () => {
+      const q = new URLSearchParams({ grain, level, as_of: asOf });
+      return ((await apiRequestRaw(
+        `/api/v1/survey/projects/${projectId}/report?${q}`)).body as { data: Row }).data;
+    },
+  });
+
+  if (report.isLoading) return <Skeleton className="h-64" />;
+  if (report.isError) {
+    return <ErrorCard error={report.error} onRetry={() => report.refetch()} />;
+  }
+  const d = report.data as Row;
+  const units: Row[] = d?.units ?? [];
+
+  return (
+    <div className="space-y-4">
+      <Toolbar>
+        <div className="flex gap-1">
+          {([['DAY', 'Daily'], ['WEEK', 'Weekly'], ['MONTH', 'Monthly']] as const).map(
+            ([g, label]) => (
+              <Button key={g} type="button" variant={grain === g ? 'secondary' : 'ghost'}
+                onClick={() => setGrain(g)}>{label}</Button>
+            ))}
+        </div>
+        <label className="flex items-center gap-1.5 text-xs text-text-muted">
+          Covering
+          <input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)}
+            className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text" />
+        </label>
+        <select value={level} onChange={(e) => setLevel(e.target.value as ReportLevel)}
+          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+          {REPORT_LEVELS.map((l) => (
+            <option key={l} value={l}>{LEVEL_LABELS[l]}</option>
+          ))}
+        </select>
+      </Toolbar>
+
+      <Card className="space-y-3 p-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h3 className="text-sm font-semibold text-text">{d?.period?.label}</h3>
+          <span className="text-xs text-text-muted">
+            {day(d?.period?.from)} to {day(d?.period?.to)}, against {d?.previous_period?.label}
+          </span>
+        </div>
+        <p className="text-sm text-text">{periodNote(d)}</p>
+        <div className="grid gap-2 sm:grid-cols-4">
+          <Stat label="Surveyed this period" value={`${acres(d?.area?.current)}`}
+            hint={changeHint(d?.area)}
+            tone={d?.area?.direction === 'DOWN' ? 'warning'
+              : d?.area?.direction === 'UP' ? 'success' : undefined} />
+          <Stat label="Days worked"
+            value={`${d?.effort?.active_days ?? 0} of ${d?.effort?.calendar_days ?? 0}`}
+            hint="Calendar days that produced a return" />
+          <Stat label="Per working day"
+            value={d?.effort?.area_per_active_day === null
+              ? '—' : `${acres(d?.effort?.area_per_active_day)}/day`}
+            hint="Divided by days worked, not days on the calendar" />
+          <Stat label="Villages worked" value={count(d?.effort?.villages_worked)} />
+        </div>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <Stat label="Rovers used" value={count(d?.rovers?.utilised)} />
+          <Stat label="Rover days idle" value={count(d?.rovers?.idle)}
+            tone={(d?.rovers?.idle ?? 0) > 0 ? 'warning' : undefined}
+            hint={(d?.rovers?.idle_reasons ?? []).map((r: string) => reasonLabel(r)).join(', ')
+              || 'Nothing idle'} />
+          <Stat label="Team days" value={count(d?.effort?.team_days)} />
+        </div>
+      </Card>
+
+      {(d?.stage_movements ?? []).length > 0 ? (
+        <Card className="space-y-2 p-4">
+          <h3 className="text-sm font-semibold text-text">Stages that moved</h3>
+          <p className="text-xs text-text-muted">
+            No measure total shows that four villages finished ground truthing, and it is
+            usually the first thing anybody asks.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {(d.stage_movements as Row[]).map((mv, i) => (
+              <Badge key={`${mv.stage_code}:${mv.to_state}:${i}`}
+                tone={mv.to_state === 'COMPLETED' ? 'success'
+                  : mv.to_state === 'IN_PROGRESS' ? 'warning' : 'neutral'}>
+                {mv.villages} × {mv.stage_label} → {STAGE_STATE_LABELS[String(mv.to_state)]
+                  ?? String(mv.to_state)}
+              </Badge>
+            ))}
+          </div>
+        </Card>
+      ) : null}
+
+      {units.length === 0 ? (
+        <EmptyState title="Nothing recorded in this period"
+          description="No day's return falls inside these dates." />
+      ) : (
+        <Card className="overflow-x-auto p-0">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-xs text-text-muted">
+                <th className="px-4 py-2">{LEVEL_LABELS[level]}</th>
+                <th className="px-4 py-2 text-right">Villages</th>
+                <th className="px-4 py-2 text-right">This period</th>
+                <th className="px-4 py-2 text-right">Previous</th>
+                <th className="px-4 py-2 text-right">Cumulative</th>
+                <th className="px-4 py-2 text-right">Complete</th>
+              </tr>
+            </thead>
+            <tbody>
+              {units.map((u) => {
+                const here = periodTotal(u.period);
+                const before = periodTotal(u.previous);
+                return (
+                  <tr key={String(u.id ?? u.name)} className="border-b border-border last:border-0">
+                    <td className="px-4 py-2 text-text">{String(u.name)}</td>
+                    <td className="px-4 py-2 text-right text-text-muted">{count(u.villages)}</td>
+                    <td className="px-4 py-2 text-right text-text">{acres(here)}</td>
+                    <td className="px-4 py-2 text-right text-text-muted">{acres(before)}</td>
+                    <td className="px-4 py-2 text-right text-text-muted">
+                      {acres(u.cumulative?.doneAc)}
+                    </td>
+                    <td className="px-4 py-2 text-right">
+                      <span className={pctTone(u.cumulative?.pct) === 'danger'
+                        ? 'text-danger' : 'text-text'}>
+                        {pct(u.cumulative?.pct)}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/** Extent measures added up, which is what "surveyed" means on this table. */
+function periodTotal(values: Record<string, number> | undefined): number {
+  if (!values) return 0;
+  return Object.values(values).reduce((t, v) => t + Number(v ?? 0), 0);
+}
+
 function Bottlenecks({ projectId, canForecast }: { projectId: string; canForecast: boolean }) {
   const stuck = useQuery({
     queryKey: ['survey-bottlenecks', projectId],

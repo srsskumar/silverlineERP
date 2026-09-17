@@ -5,6 +5,7 @@ import {
   pctTone, progressHeadline, sqKm, stateTone,
   TALLY_ORDER, TALLY_LABELS, tallyTone, stageLabel, roverNote, paceNote,
   DELAY_REASON_OPTIONS, reasonLabel, villageStatusTone, BOTTLENECK_LABELS, forecastNote,
+  changeHint, periodNote,
 } from '../lib/survey';
 import { businessToday } from '../lib/finance';
 import { NAV_GROUPS } from '../lib/nav';
@@ -403,5 +404,65 @@ describe('naming a reason on the chase list', () => {
   it('shows a dash where no reason was given at all', () => {
     // The case worth chasing first, and the one a stray "Other" would hide.
     expect(reasonLabel(null)).toBe('—');
+  });
+});
+
+describe('saying what a period did', () => {
+  const up = {
+    current: 400, previous: 320, change: 80, changePct: 25, direction: 'UP' as const,
+  };
+
+  it('puts the size and the direction next to the figure', () => {
+    expect(changeHint(up)).toContain('up');
+    expect(changeHint(up)).toContain('25%');
+  });
+
+  it('offers no percentage when there was nothing to compare against', () => {
+    // "+100%" against a start from nothing is a number that means nothing.
+    const first = { ...up, previous: 0, change: 400, changePct: null };
+    expect(changeHint(first)).toContain('nothing recorded');
+    expect(changeHint(first)).not.toContain('%');
+  });
+
+  it('calls no change unchanged rather than up nothing', () => {
+    expect(changeHint({ ...up, previous: 400, change: 0, changePct: 0, direction: 'FLAT' }))
+      .toContain('Unchanged');
+  });
+
+  it('opens the report with what happened, then the comparison', () => {
+    const note = periodNote({
+      period: { label: 'Week of 2026-09-14' }, area: up,
+      effort: { active_days: 4, calendar_days: 7, villages_worked: 3 },
+    });
+    expect(note).toContain('4 working days');
+    expect(note).toContain('3 villages');
+    expect(note).toContain('25% more');
+  });
+
+  it('distinguishes a period nobody worked from one that recorded no extent', () => {
+    // A crew that filed returns with nothing against them is a different
+    // problem from a crew that filed nothing, and the two want different
+    // conversations.
+    const noReturns = periodNote({
+      area: { current: 0, previous: 0, change: 0, changePct: null, direction: 'FLAT' },
+      effort: { active_days: 0, calendar_days: 7, villages_worked: 0 },
+    });
+    expect(noReturns).toContain('No day’s return');
+
+    const noExtent = periodNote({
+      area: { current: 0, previous: 0, change: 0, changePct: null, direction: 'FLAT' },
+      effort: { active_days: 3, calendar_days: 7, villages_worked: 2 },
+    });
+    expect(noExtent).toContain('no extent was recorded');
+  });
+
+  it('says days and villages in the singular when there is one', () => {
+    const note = periodNote({
+      area: { ...up, changePct: null, previous: 0 },
+      effort: { active_days: 1, calendar_days: 1, villages_worked: 1 },
+    });
+    expect(note).toContain('1 working day across 1 village.');
+    expect(note).not.toContain('working days');
+    expect(note).not.toContain('1 villages');
   });
 });

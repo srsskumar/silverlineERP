@@ -359,6 +359,75 @@ export function periodBuckets(from: string, to: string, grain: PeriodGrain): Per
 }
 
 /**
+ * The whole period of this grain that a date falls inside.
+ *
+ * Distinct from periodBuckets, which clips to the range asked for. A report
+ * for "this week" means the whole week, Monday to Sunday, even when it is run
+ * on Wednesday -- clipping it would silently answer a different question and
+ * make every week-on-week comparison meaningless.
+ */
+export function periodContaining(on: string, grain: PeriodGrain): Period {
+  const d = utc(on);
+  const y = d.getUTCFullYear(), m = d.getUTCMonth(), day = d.getUTCDate();
+
+  if (grain === 'DAY') return { from: on, to: on, label: on };
+  if (grain === 'WEEK') {
+    // Monday start, as in the field and in every Indian progress review.
+    const dow = d.getUTCDay();
+    const back = dow === 0 ? 6 : dow - 1;
+    const start = new Date(Date.UTC(y, m, day - back));
+    const end = new Date(Date.UTC(y, m, day - back + 6));
+    return { from: iso(start), to: iso(end), label: `Week of ${iso(start)}` };
+  }
+  if (grain === 'MONTH') {
+    return {
+      from: iso(new Date(Date.UTC(y, m, 1))),
+      to: iso(new Date(Date.UTC(y, m + 1, 0))),
+      label: `${MONTHS[m]} ${y}`,
+    };
+  }
+  return {
+    from: iso(new Date(Date.UTC(y, 0, 1))),
+    to: iso(new Date(Date.UTC(y, 11, 31))),
+    label: String(y),
+  };
+}
+
+/**
+ * The period before this one.
+ *
+ * A figure on its own is not a report. "Four hundred acres this week" means
+ * nothing until it sits beside last week's, and the comparison is the only
+ * part anybody acts on.
+ */
+export function previousPeriod(period: Period, grain: PeriodGrain): Period {
+  const dayBefore = iso(new Date(utc(period.from).getTime() - 86_400_000));
+  return periodContaining(dayBefore, grain);
+}
+
+/**
+ * How one period compares with the one before it.
+ *
+ * `changePct` is null rather than zero or infinite when the previous period
+ * produced nothing: the first week of a programme has not improved by any
+ * percentage, and printing "+100%" against a start from nothing is the kind
+ * of number that ends up in a review slide meaning nothing.
+ */
+export function comparePeriods(current: number, previous: number): {
+  current: number; previous: number; change: number; changePct: number | null;
+  direction: 'UP' | 'DOWN' | 'FLAT';
+} {
+  const change = current - previous;
+  return {
+    current, previous, change,
+    changePct: previous > 0
+      ? Math.round((change / previous) * 1000) / 10
+      : null,
+    direction: change > 0 ? 'UP' : change < 0 ? 'DOWN' : 'FLAT',
+  };
+}
+
+/**
  * The Indian financial year containing a date, as a range.
  *
  * Government survey programmes are budgeted and reviewed on the financial

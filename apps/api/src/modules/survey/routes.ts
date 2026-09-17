@@ -4,6 +4,7 @@ import {
   surveyProjectSchema, surveyVillageSchema, surveyEntrySchema, surveyEntryPatchSchema,
   measureSchema, targetSchema, stageUpdateSchema,
   rollUp, villageState, completion, acresToSqKm, periodBuckets, financialYearRange,
+  PERIOD_GRAINS, periodContaining, previousPeriod, comparePeriods,
   STAGE_CODES, REPORT_LEVELS, resolveStage, isOutOfScope, plannedTasksFor,
   tallyByStage, roverUtilisation, roverWindow, rankByWaste, pace, currentStage,
   outOfSequence, stageBlockedBy,
@@ -1876,6 +1877,176 @@ export async function registerSurveyRoutes(
    * done in it; the percentage complete is as at the end of the period,
    * because it describes the programme rather than the week.
    */
+  /**
+   * The daily, weekly and monthly report (§23).
+   *
+   * One endpoint rather than three, because "what happened in this period"
+   * is one question asked at three sizes, and three endpoints would be three
+   * places for the same arithmetic to drift apart.
+   *
+   * What makes it a report rather than a series is the comparison. Four
+   * hundred acres this week means nothing on its own; beside last week's
+   * three hundred and twenty it means something somebody acts on. The
+   * timeline endpoint next door answers a different question -- it draws a
+   * line through many periods -- and neither replaces the other.
+   *
+   * The period is always whole. A weekly report run on Wednesday covers
+   * Monday to Sunday, not Monday to Wednesday: clipping it to today would
+   * make every week-on-week comparison compare three days against seven.
+   */
+  app.get('/api/v1/survey/projects/:id/report', { preHandler: guard('survey.read') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const { q } = page(req);
+      const programme = await projectOr404(pool, u.orgId, id, u);
+
+      const grain = (PERIOD_GRAINS as readonly string[]).includes(String(q.grain))
+        ? String(q.grain) as PeriodGrain : 'DAY';
+      const asOf = String(q.as_of ?? today());
+      const period = periodContaining(asOf, grain);
+      const prior = previousPeriod(period, grain);
+      const level = (REPORT_LEVELS as readonly string[]).includes(String(q.level))
+        ? String(q.level) as ReportLevel : 'mandal';
+
+      const m = await measures(pool, u.orgId);
+      const pipeline = await stagePipeline(pool, u.orgId);
+
+      /** What was recorded in one window, by measure and by village. */
+      async function totals(from: string, to: string) {
+        return (await pool.query(
+          `SELECT e.survey_village_id, mm.code AS measure_code,
+                  sum(ev.quantity) AS total
+           FROM survey_entries e
+           JOIN survey_entry_values ev ON ev.entry_id = e.id
+           JOIN survey_measures mm ON mm.id = ev.measure_id
+           WHERE e.org_id = $1 AND e.survey_project_id = $2
+             AND e.entry_date >= $3::date AND e.entry_date <= $4::date
+           GROUP BY 1, 2`, [u.orgId, id, from, to])).rows;
+      }
+
+      const [now, before, days, rovers, moved] = await Promise.all([
+        totals(period.from, period.to),
+        totals(prior.from, prior.to),
+        // Days actually worked, which is what a pace figure must divide by.
+        // Dividing by calendar days reports a crew that worked four days as
+        // though it had worked seven and understates them by nearly half.
+        pool.query(
+          `SELECT count(DISTINCT e.entry_date)::int AS active_days,
+                  count(DISTINCT e.survey_village_id)::int AS villages,
+                  COALESCE(sum(e.teams_deployed), 0)::int AS team_days
+           FROM survey_entries e
+           WHERE e.org_id = $1 AND e.survey_project_id = $2
+             AND e.entry_date >= $3::date AND e.entry_date <= $4::date`,
+          [u.orgId, id, period.from, period.to]),
+        pool.query(
+          `SELECT count(*) FILTER (WHERE r.status = 'UTILIZED')::int AS used,
+                  count(*) FILTER (WHERE r.status = 'IDLE')::int AS idle,
+                  COALESCE(json_agg(DISTINCT r.idle_reason)
+                    FILTER (WHERE r.idle_reason IS NOT NULL), '[]') AS idle_reasons
+           FROM survey_entry_rovers r
+           JOIN survey_entries e ON e.id = r.entry_id
+           WHERE e.org_id = $1 AND e.survey_project_id = $2
+             AND e.entry_date >= $3::date AND e.entry_date <= $4::date`,
+          [u.orgId, id, period.from, period.to]),
+        // Stages that moved in the period. A report of quantities alone
+        // cannot show that four villages finished ground truthing, which is
+        // usually the first thing anybody asks.
+        pool.query(
+          `SELECT s.code AS stage_code, s.label AS stage_label, h.to_state,
+                  count(DISTINCT h.survey_village_id)::int AS villages
+           FROM survey_stage_history h
+           JOIN survey_stages s ON s.id = h.stage_id
+           JOIN survey_villages sv ON sv.id = h.survey_village_id
+           WHERE h.org_id = $1 AND sv.survey_project_id = $2
+             AND (h.changed_at AT TIME ZONE 'Asia/Kolkata')::date
+                 BETWEEN $3::date AND $4::date
+           GROUP BY 1, 2, 3, s.display_order
+           ORDER BY s.display_order`,
+          [u.orgId, id, period.from, period.to]),
+      ]);
+
+      const sumBy = (rows: Array<Record<string, any>>, code: string) =>
+        rows.filter(r => r.measure_code === code)
+          .reduce((t, r) => t + Number(r.total ?? 0), 0);
+
+      // Positions as at the end of the period, so the cumulative column is
+      // the programme as it stood then rather than as it stands now. A report
+      // for last month that moves every time it is re-run is not a report.
+      const pos = await positions(pool, u.orgId, id, { asOf: period.to });
+      const overall = rollUp(pos, m.codes, pipeline.map(p => p.code), m.basis);
+
+      const byVillage = new Map(pos.map(p => [p.villageId, p]));
+      const groups = new Map<string, { name: string; villages: string[] }>();
+      for (const p of pos) {
+        const unit = level === 'village' ? { id: p.villageId, name: p.row.village_name }
+          : level === 'mandal' ? { id: p.row.mandal_id, name: p.row.mandal_name }
+            : level === 'division' ? { id: p.row.division_id, name: p.row.division_name }
+              : { id: p.row.district_id, name: p.row.district_name };
+        const key = unit?.id ?? '__unattributed__';
+        if (!groups.has(key)) {
+          groups.set(key, { name: unit?.name ?? 'Not attributed', villages: [] });
+        }
+        groups.get(key)!.villages.push(p.villageId);
+      }
+
+      const units = [...groups.entries()].map(([key, g]) => {
+        const mine = new Set(g.villages);
+        const inPeriod = now.filter(r => mine.has(String(r.survey_village_id)));
+        const inPrior = before.filter(r => mine.has(String(r.survey_village_id)));
+        return {
+          id: key === '__unattributed__' ? null : key,
+          name: g.name,
+          villages: g.villages.length,
+          period: Object.fromEntries(m.codes.map(c => [c, sumBy(inPeriod, c)])),
+          previous: Object.fromEntries(m.codes.map(c => [c, sumBy(inPrior, c)])),
+          // Where the programme stands at the end of the period, so the
+          // report carries both the movement and the position.
+          cumulative: rollUp(
+            g.villages.map(v => byVillage.get(v)!).filter(Boolean),
+            m.codes, pipeline.map(p => p.code), m.basis),
+        };
+      }).sort((a, b) => a.name.localeCompare(b.name));
+
+      const extentCodes = m.codes.filter(c => m.basis[c] === 'EXTENT');
+      const areaNow = extentCodes.reduce((t, c) => t + sumBy(now, c), 0);
+      const areaBefore = extentCodes.reduce((t, c) => t + sumBy(before, c), 0);
+      const activeDays = Number(days.rows[0]?.active_days ?? 0);
+
+      return {
+        data: {
+          grain, level, as_of: asOf,
+          period, previous_period: prior,
+          programme: { id, name: programme.name, code: programme.code },
+          // The headline, and the only line most people read.
+          area: {
+            ...comparePeriods(round2(areaNow), round2(areaBefore)),
+            unit: 'Ac',
+          },
+          measures: Object.fromEntries(m.codes.map(c => [
+            c, comparePeriods(round2(sumBy(now, c)), round2(sumBy(before, c))),
+          ])),
+          effort: {
+            active_days: activeDays,
+            calendar_days: Math.round(
+              (Date.parse(`${period.to}T00:00:00Z`) - Date.parse(`${period.from}T00:00:00Z`))
+              / 86_400_000) + 1,
+            villages_worked: Number(days.rows[0]?.villages ?? 0),
+            team_days: Number(days.rows[0]?.team_days ?? 0),
+            // Per day actually worked, not per day on the calendar.
+            area_per_active_day: activeDays ? round2(areaNow / activeDays) : null,
+          },
+          rovers: {
+            utilised: Number(rovers.rows[0]?.used ?? 0),
+            idle: Number(rovers.rows[0]?.idle ?? 0),
+            idle_reasons: rovers.rows[0]?.idle_reasons ?? [],
+          },
+          stage_movements: moved.rows,
+          units,
+          overall,
+        },
+      };
+    });
+
   app.get('/api/v1/survey/projects/:id/timeline', { preHandler: guard('survey.read') },
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;

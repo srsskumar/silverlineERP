@@ -852,3 +852,112 @@ describe("punching in and out against a village", () => {
     if (r.status === 422) expect(r.body.code).not.toBe("DAILY_PROGRESS_REQUIRED");
   });
 });
+
+/**
+ * The daily, weekly and monthly report (§23).
+ *
+ * One endpoint at three sizes, because "what happened in this period" is one
+ * question and three endpoints would be three places for the same arithmetic
+ * to drift apart.
+ */
+describe("the period report", () => {
+  const report = (q: string) =>
+    get(w.admin, `/api/v1/survey/projects/${programmeId}/report?${q}`);
+
+  it("covers the whole week even when it is run mid-week", async () => {
+    // A weekly report run on Wednesday that stops on Wednesday compares three
+    // days against last week's seven, and every comparison it prints is wrong.
+    const r = await report("grain=WEEK");
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const p = r.body.data.period as { from: string; to: string };
+    const days = (Date.parse(`${p.to}T00:00:00Z`) - Date.parse(`${p.from}T00:00:00Z`))
+      / 86_400_000 + 1;
+    expect(days).toBe(7);
+    expect(new Date(`${p.from}T00:00:00Z`).getUTCDay(), "weeks start on Monday").toBe(1);
+  });
+
+  it("sets the period against the one before it", async () => {
+    const r = await report("grain=WEEK");
+    const prior = r.body.data.previous_period as { from: string; to: string };
+    const period = r.body.data.period as { from: string };
+    // The previous period ends the day before this one starts, with no gap
+    // and no overlap.
+    expect(new Date(`${prior.to}T00:00:00Z`).getTime() + 86_400_000)
+      .toBe(new Date(`${period.from}T00:00:00Z`).getTime());
+    expect(r.body.data.area).toHaveProperty("direction");
+  });
+
+  it("says nothing about a percentage when the previous period had nothing", async () => {
+    // "+100%" against a start from nothing is a number that means nothing.
+    const r = await report("grain=YEAR&as_of=2019-06-01");
+    expect(r.body.data.area.changePct).toBeNull();
+  });
+
+  it("divides by the days actually worked, not the days on the calendar", async () => {
+    // A crew that worked four days of seven is not going at four-sevenths of
+    // its own pace, and reporting it that way understates them by nearly half.
+    const r = await report("grain=WEEK");
+    const e = r.body.data.effort;
+    expect(e.calendar_days).toBe(7);
+    expect(e.active_days).toBeLessThanOrEqual(e.calendar_days);
+    if (e.active_days > 0) {
+      expect(e.area_per_active_day).toBeGreaterThan(0);
+    } else {
+      // Nothing worked is not a pace of zero; it is no pace at all.
+      expect(e.area_per_active_day).toBeNull();
+    }
+  });
+
+  it("reports the position as it stood at the end of the period", async () => {
+    // A report for a past period that changes every time it is re-run is not
+    // a report.
+    const first = await report("grain=MONTH&as_of=2026-01-15");
+    const again = await report("grain=MONTH&as_of=2026-01-15");
+    expect(first.body.data.overall).toEqual(again.body.data.overall);
+    expect(first.body.data.period.to).toBe("2026-01-31");
+  });
+
+  it("breaks the period down by mandal, and by district when asked", async () => {
+    const byMandal = await report("grain=MONTH&level=mandal");
+    expect(byMandal.body.data.level).toBe("mandal");
+    expect(Array.isArray(byMandal.body.data.units)).toBe(true);
+    const byDistrict = await report("grain=MONTH&level=district");
+    expect(byDistrict.body.data.level).toBe("district");
+    // A district holds at least as many villages as one of its mandals.
+    const d = (byDistrict.body.data.units as Array<{ villages: number }>)
+      .reduce((t, x) => t + x.villages, 0);
+    const mm = (byMandal.body.data.units as Array<{ villages: number }>)
+      .reduce((t, x) => t + x.villages, 0);
+    expect(d).toBe(mm);
+  });
+
+  it("carries both the movement and the position for each unit", async () => {
+    const r = await report("grain=MONTH&level=mandal");
+    const unit = (r.body.data.units as Array<Record<string, unknown>>)[0];
+    expect(unit, "at least one unit").toBeTruthy();
+    expect(unit).toHaveProperty("period");
+    expect(unit).toHaveProperty("previous");
+    expect(unit).toHaveProperty("cumulative");
+  });
+
+  it("names the stages that moved, which quantities alone cannot show", async () => {
+    // "Four villages finished ground truthing" is usually the first thing
+    // anybody asks, and no measure total answers it.
+    const r = await report("grain=YEAR");
+    expect(Array.isArray(r.body.data.stage_movements)).toBe(true);
+  });
+
+  it("defaults to the day, and refuses nothing for an unknown grain", async () => {
+    expect((await report("")).body.data.grain).toBe("DAY");
+    // An unrecognised grain falls back rather than failing: a report that
+    // refuses to run is worse than one that runs at the wrong size.
+    expect((await report("grain=FORTNIGHT")).body.data.grain).toBe("DAY");
+  });
+
+  it("is refused to somebody who may not read the programme", async () => {
+    const other = await post(w.admin, "/api/v1/survey/projects",
+      { code: uniq("SP"), name: "Not theirs" });
+    const r = await get(w.directUser, `/api/v1/survey/projects/${other.data.id}/report`);
+    expect(r.status).toBe(404);
+  });
+});

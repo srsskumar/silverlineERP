@@ -11,6 +11,7 @@ import {
   villageStatus, programmeVisible, SURVEY_PROJECT_STATUSES, SURVEY_PROJECT_STATUS_LABELS,
   forecast, findBottlenecks, BOTTLENECK_KINDS, BOTTLENECK_LABELS, type BottleneckInput,
   type MeasureBasis, type VillageProgress,
+  periodContaining, previousPeriod, comparePeriods,
 } from './survey.js';
 
 const BASIS: Record<string, MeasureBasis> = Object.fromEntries(
@@ -1135,5 +1136,70 @@ describe('findBottlenecks', () => {
 
   it('labels every kind it can report', () => {
     for (const k of BOTTLENECK_KINDS) expect(BOTTLENECK_LABELS[k], k).toBeTruthy();
+  });
+});
+
+describe('the period a report covers', () => {
+  it('gives the whole week a Wednesday falls in, not the week so far', () => {
+    // A report for "this week" run on Wednesday means Monday to Sunday.
+    // Clipping it would answer a different question and make every
+    // week-on-week comparison meaningless.
+    expect(periodContaining('2026-09-16', 'WEEK'))
+      .toMatchObject({ from: '2026-09-14', to: '2026-09-20' });
+  });
+
+  it('starts weeks on Monday, including for a Sunday', () => {
+    // Sunday ends the week it belongs to; it does not start the next one.
+    expect(periodContaining('2026-09-20', 'WEEK'))
+      .toMatchObject({ from: '2026-09-14', to: '2026-09-20' });
+    expect(periodContaining('2026-09-14', 'WEEK').from).toBe('2026-09-14');
+  });
+
+  it('gives the whole month, and the whole year', () => {
+    expect(periodContaining('2026-09-16', 'MONTH'))
+      .toMatchObject({ from: '2026-09-01', to: '2026-09-30' });
+    expect(periodContaining('2026-02-10', 'MONTH').to).toBe('2026-02-28');
+    expect(periodContaining('2026-09-16', 'YEAR'))
+      .toMatchObject({ from: '2026-01-01', to: '2026-12-31' });
+  });
+
+  it('gives a single day for the daily report', () => {
+    expect(periodContaining('2026-09-16', 'DAY'))
+      .toMatchObject({ from: '2026-09-16', to: '2026-09-16' });
+  });
+
+  it('steps back a whole period, across a month and a year boundary', () => {
+    expect(previousPeriod(periodContaining('2026-09-16', 'WEEK'), 'WEEK').from)
+      .toBe('2026-09-07');
+    expect(previousPeriod(periodContaining('2026-09-16', 'MONTH'), 'MONTH'))
+      .toMatchObject({ from: '2026-08-01', to: '2026-08-31' });
+    expect(previousPeriod(periodContaining('2026-01-10', 'MONTH'), 'MONTH'))
+      .toMatchObject({ from: '2025-12-01', to: '2025-12-31' });
+    expect(previousPeriod(periodContaining('2026-03-02', 'DAY'), 'DAY').from)
+      .toBe('2026-03-01');
+  });
+});
+
+describe('comparing a period with the one before it', () => {
+  it('reports the direction and the size of the change', () => {
+    expect(comparePeriods(400, 320)).toMatchObject({
+      change: 80, changePct: 25, direction: 'UP',
+    });
+    expect(comparePeriods(240, 320)).toMatchObject({
+      change: -80, changePct: -25, direction: 'DOWN',
+    });
+  });
+
+  it('says nothing about the percentage when there was nothing before', () => {
+    // The first week of a programme has not improved by any percentage, and
+    // "+100%" against a start from nothing is a number that means nothing.
+    expect(comparePeriods(400, 0).changePct).toBeNull();
+    expect(comparePeriods(400, 0).direction).toBe('UP');
+  });
+
+  it('calls no change flat rather than up or down', () => {
+    expect(comparePeriods(320, 320)).toMatchObject({
+      change: 0, changePct: 0, direction: 'FLAT',
+    });
   });
 });
