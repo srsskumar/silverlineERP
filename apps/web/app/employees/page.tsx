@@ -129,6 +129,10 @@ function EmployeesTable() {
                   <th className="px-3 py-2 text-left font-medium text-text-muted">Phone</th>
                   <th className="px-3 py-2 text-left font-medium text-text-muted">Aadhaar (masked)</th>
                   <th className="px-3 py-2 text-left font-medium text-text-muted">Designation</th>
+                  {/* The reporting line at a glance. It was on the record and
+                      on the form, and nowhere you could see it without
+                      opening two people to compare them. */}
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Reports to</th>
                   <th className="px-3 py-2 text-left font-medium text-text-muted">Status</th>
                   <th className="px-3 py-2 text-left font-medium text-text-muted">Action</th>
                 </tr>
@@ -145,6 +149,18 @@ function EmployeesTable() {
                       {displayMasked(e.aadhaar ?? null, (e.aadhaar_last4 as string | null) ?? null)}
                     </td>
                     <td className="px-3 py-2 text-text-muted">{(e.designation as string) ?? '—'}</td>
+                    <td className="px-3 py-2 text-text-muted">
+                      {e.reports_to_name ? (
+                        <>
+                          {String(e.reports_to_name)}
+                          {e.reports_to_emp_no ? (
+                            <span className="ml-1 text-2xs text-text-subtle">
+                              {String(e.reports_to_emp_no)}
+                            </span>
+                          ) : null}
+                        </>
+                      ) : '—'}
+                    </td>
                     <td className="px-3 py-2">
                       <Badge tone={statusTone(e.status)}>{e.status}</Badge>
                     </td>

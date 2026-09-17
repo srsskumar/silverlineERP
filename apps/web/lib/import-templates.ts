@@ -54,7 +54,7 @@ export const IMPORT_TEMPLATES: ImportTemplate[] = [
     headers: [
       'first_name', 'last_name', 'father_name', 'date_of_birth', 'gender',
       'phone', 'phone_secondary', 'email', 'address',
-      'designation', 'department', 'date_of_joining', 'status',
+      'designation', 'department', 'reports_to', 'date_of_joining', 'status',
       'salary_basic', 'education', 'experience_years', 'skills',
       'aadhaar', 'pan', 'bank_name', 'bank_account', 'bank_ifsc', 'phonepe_number',
     ],
@@ -66,12 +66,14 @@ export const IMPORT_TEMPLATES: ImportTemplate[] = [
     example: [
       'Anitha', 'Devi', 'Ramesh Devi', '1990-07-24', 'FEMALE',
       '+919876543210', '', 'anitha.devi@example.com', '12 MG Road, Hyderabad',
-      'Site Engineer', 'Projects', '2023-04-01', 'ACTIVE',
+      'Site Engineer', 'Projects', 'EMPSLV001001', '2023-04-01', 'ACTIVE',
       '35000', 'B.E. Civil', '6', 'Survey;AutoCAD',
       '234567890123', 'ABCPD1234E', 'HDFC Bank', '50100123456789', 'HDFC0001234', '+919876543210',
     ],
     notes: [
       'The employee number is allocated on upload, counting on from the highest already issued.',
+      'reports_to is the manager\u2019s employee number, not their name \u2014 two people share a first name often enough that a name cannot identify one. A number matching nobody is reported on the row.',
+      'A manager must already exist when the row is uploaded. To load a whole team at once, upload the managers first, or leave the column blank and set it afterwards.',
       'Dates are YYYY-MM-DD. A date written 24/07/1990 is rejected.',
       'Phone numbers keep the country code, and must be unique within the organisation.',
       'Aadhaar, PAN and bank details are encrypted at rest and never appear in an export.',

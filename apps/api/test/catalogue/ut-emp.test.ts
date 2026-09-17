@@ -760,3 +760,87 @@ describe("uploading employees from a real spreadsheet", () => {
     expect(r.body.failed).toBe(1);
   });
 });
+
+describe("the reporting line", () => {
+  it("names the manager rather than returning an identifier", async () => {
+    // An identifier in a directory column answers nobody's question — the
+    // point of the field is to read the reporting line at a glance.
+    // A manager has to be ACTIVE, which a freshly created employee is not.
+    const managerId = await createActiveEmployee(w.app, w.admin, {});
+    await w.pool.query(
+      "UPDATE employees SET first_name='Manager', last_name='One' WHERE id=$1", [managerId]);
+    const reportee = await w.app.inject({
+      method: "POST", url: "/api/v1/employees", headers: { ...w.admin, ...idem() },
+      payload: {
+        first_name: "Reports", last_name: "ToOne",
+        phone: "+919100091002", date_of_joining: "2026-01-01",
+        reports_to: managerId,
+      },
+    });
+    expect(reportee.statusCode, reportee.body).toBe(201);
+
+    const read = await w.app.inject({
+      method: "GET", url: `/api/v1/employees/${reportee.json().id}`, headers: w.admin,
+    });
+    expect(read.json().reports_to_name).toBe("Manager One");
+    expect(read.json().reports_to_emp_no).toBeTruthy();
+  });
+
+  it("takes the manager's employee number in an upload", async () => {
+    // Nobody types a UUID into a spreadsheet.
+    const bossId = await createActiveEmployee(w.app, w.admin, {});
+    const bossNo = String((await w.pool.query(
+      "SELECT emp_no FROM employees WHERE id=$1", [bossId])).rows[0].emp_no);
+
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/employees/bulk-import",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        rows: [{
+          first_name: "Uploaded", phone: "+919100091004",
+          date_of_joining: "2026-01-01", reports_to: bossNo,
+        }],
+        dry_run: false,
+      },
+    });
+    expect(r.statusCode, r.body).toBe(200);
+    expect(r.json().imported, JSON.stringify(r.json().errors)).toBe(1);
+
+    const row = await w.pool.query(
+      "SELECT reports_to FROM employees WHERE first_name = 'Uploaded'");
+    expect(String(row.rows[0].reports_to)).toBe(bossId);
+  });
+
+  it("reports a manager number that matches nobody, on the row", async () => {
+    // A silently missing reporting line looks exactly like one that was
+    // never given.
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/employees/bulk-import",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        rows: [{
+          first_name: "Orphan", phone: "+919100091005",
+          date_of_joining: "2026-01-01", reports_to: "NOBODY-123",
+        }],
+        dry_run: true,
+      },
+    });
+    expect(r.json().failed).toBe(1);
+    expect(JSON.stringify(r.json().errors)).toContain("NOBODY-123");
+  });
+
+  it("is happy with the column left blank", async () => {
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/employees/bulk-import",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        rows: [{
+          first_name: "NoManager", phone: "+919100091006",
+          date_of_joining: "2026-01-01", reports_to: "",
+        }],
+        dry_run: false,
+      },
+    });
+    expect(r.json().imported, JSON.stringify(r.json().errors)).toBe(1);
+  });
+});

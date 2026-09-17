@@ -85,6 +85,8 @@ interface EmployeeRow {
   date_of_exit: Date | string | null;
   exit_reason: string | null;
   reports_to: string | null;
+  reports_to_name?: string | null;
+  reports_to_emp_no?: string | null;
   salary_basic: string | number | null;
   bank_name: string | null;
   bank_account_encrypted: string | null;
@@ -147,6 +149,10 @@ function toShape(row: EmployeeRow, canSeePii: boolean) {
     date_of_exit: dateOnly(row.date_of_exit),
     exit_reason: row.exit_reason,
     reports_to: row.reports_to,
+    // The manager by name, so a directory column reads as a person rather
+    // than an identifier nobody can resolve by eye.
+    reports_to_name: row.reports_to_name ?? null,
+    reports_to_emp_no: row.reports_to_emp_no ?? null,
     salary_basic:
       row.salary_basic === null || row.salary_basic === undefined
         ? null
@@ -243,7 +249,17 @@ const SELECT_COLS = `id, org_id, emp_no, first_name, last_name, father_name,
   district_id, mandal_id, village_id, site_id, designation, department,
   date_of_joining, date_of_exit, exit_reason, reports_to, salary_basic,
   bank_name, bank_account_encrypted, bank_ifsc, phonepe_number,
-  education, skills, experience_years, status, version, created_at, updated_at`;
+  education, skills, experience_years, status, version, created_at, updated_at,
+  /*
+   * Who they report to, by name.
+   *
+   * reports_to is an identifier, and an identifier in a directory column
+   * answers nobody's question — the whole point of the field is to see the
+   * reporting line at a glance rather than open two records to compare them.
+   */
+  (SELECT COALESCE(NULLIF(trim(concat_ws(' ', m.first_name, m.last_name)), ''), m.emp_no)
+     FROM employees m WHERE m.id = employees.reports_to) AS reports_to_name,
+  (SELECT m.emp_no FROM employees m WHERE m.id = employees.reports_to) AS reports_to_emp_no`;
 
 /** Validates unit refs (existence + org + expected type per field). */
 async function validateUnitRefs(
@@ -712,12 +728,38 @@ export async function registerEmployeeRoutes(
         // blank cells dropped, numbers read out of text, a skills cell split,
         // and Excel's date serials converted. None of those is the person's
         // mistake, so none of them should be their problem.
-        const parsedRow = employeeCreateSchema.safeParse(employeeImportRow(raw));
-        if (!parsedRow.success) {
+        /*
+         * reports_to, as a spreadsheet can express it.
+         *
+         * The field is an identifier, and nobody types a UUID into a
+         * spreadsheet — so the column takes the manager's employee number
+         * and it is resolved here. A number that matches nobody is reported
+         * on the row rather than dropped, because a silently missing
+         * reporting line looks exactly like one that was never given.
+         */
+        const prepared = employeeImportRow(raw) as Record<string, unknown>;
+        const managerRef = prepared.reports_to;
+        if (typeof managerRef === 'string'
+            && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(managerRef)) {
+          const manager = (await opts.pool.query(
+            "SELECT id FROM employees WHERE org_id = $1 AND emp_no = $2",
+            [user.orgId, managerRef])).rows[0];
+          // Reported through the same accumulator as every other row fault,
+          // so it appears in the results beside them rather than as a
+          // separate kind of failure.
+          if (manager) prepared.reports_to = String(manager.id);
+          else rowErrors.push({
+            field: 'reports_to', message: `No employee has the number ${managerRef}`,
+          });
+        }
+        const parsedRow = rowErrors.length > 0
+          ? null
+          : employeeCreateSchema.safeParse(prepared);
+        if (parsedRow && !parsedRow.success) {
           for (const fe of toFieldErrors(parsedRow.error)) {
             rowErrors.push({ field: fe.field, message: fe.message });
           }
-        } else {
+        } else if (parsedRow) {
           const v = parsedRow.data;
           // Only a number somebody supplied can clash. A blank one is
           // allocated by the server later, from a sequence nothing else
