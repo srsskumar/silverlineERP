@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import * as React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiRequest } from '@/lib/apiClient';
@@ -57,7 +58,7 @@ export default function ExpenseReportsPage() {
       <PageHeader
         title="Expense reports"
         description={current.blurb}
-        breadcrumb={<a href="/expenses" className="hover:underline">Expenses</a>}
+        breadcrumb={<Link href="/expenses" className="hover:underline">Expenses</Link>}
       />
 
       <PageBody>

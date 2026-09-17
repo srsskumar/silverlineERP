@@ -205,11 +205,17 @@ export function requirePermission(
   return async function guard(req: FastifyRequest): Promise<void> {
     await authenticate(req);
     if (!req.authUser?.permissions.includes(permission)) {
-      // Generic 403: never reveal whether the target resource exists.
+      /*
+       * Still generic about the resource — naming it would reveal whether it
+       * exists — but specific about the permission, which is the one thing
+       * the person can actually act on. "Insufficient permissions" left them
+       * with nothing to ask for and nobody to ask.
+       */
       throw new ApiError({
         status: 403,
         code: "FORBIDDEN",
-        message: "Insufficient permissions",
+        message: `This needs the "${permission}" permission, which your roles do not include. `
+          + "An administrator can add it to your role under Administration \u2192 Roles.",
       });
     }
     req.authUser!.scopes=await scopesForPermission(req,permission);

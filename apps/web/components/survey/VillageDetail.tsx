@@ -3,6 +3,8 @@
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
+import { useToast } from '@/components/ui/Toast';
+import { messageOf } from '@/lib/form-errors';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
@@ -79,10 +81,16 @@ function StagePipeline({
   const stages: Record<string, string> = village.stages ?? {};
   const dates: Record<string, Row> = village.stage_dates ?? {};
 
+  const toast = useToast();
   const move = useMutation({
     mutationFn: async (v: Row) =>
       apiRequest(`/api/v1/survey/villages/${village.id}/stage`, { method: 'POST', body: v }),
-    onSuccess: () => {
+    onError: (e) => toast.error('The stage was not changed', messageOf(e)),
+    onSuccess: (_res, v: Row) => {
+      toast.success(
+        `${village.village_name ?? 'The village'} moved to ${String(v.stage_code ?? '').replace(/_/g, ' ').toLowerCase()}`,
+        'The board and every roll-up above it now show the new stage.',
+      );
       setEditing(null);
       qc.invalidateQueries({ queryKey: ['survey-villages'] });
       qc.invalidateQueries({ queryKey: ['survey-progress'] });
@@ -266,6 +274,7 @@ function Crew({
   const [basket, setBasket] = React.useState<Array<{ id: string; label: string }>>([]);
   const [outcome, setOutcome] = React.useState<string | null>(null);
 
+  const toast = useToast();
   const assign = useMutation({
     mutationFn: async () =>
       apiRequest(`/api/v1/survey/villages/${villageId}/crew/bulk`, {
@@ -288,7 +297,12 @@ function Crew({
   const release = useMutation({
     mutationFn: async (id: string) =>
       apiRequest(`/api/v1/survey/crew/${id}/release`, { method: 'POST', body: {} }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['survey-crew', villageId] }),
+    onError: (e) => toast.error('They were not taken off the crew', messageOf(e)),
+    onSuccess: () => {
+      toast.success('Taken off this village',
+        'Their earlier work on it stays on the record.');
+      qc.invalidateQueries({ queryKey: ['survey-crew', villageId] });
+    },
   });
 
   const rows: Row[] = crew.data ?? [];
@@ -507,6 +521,7 @@ function Rovers({ villageId, canManage }: { villageId: string; canManage: boolea
   const [basket, setBasket] = React.useState<Array<{ id: string; label: string }>>([]);
   const [clashes, setClashes] = React.useState<Array<Record<string, string>>>([]);
 
+  const toast = useToast();
   const allocate = useMutation({
     mutationFn: async () =>
       apiRequest(`/api/v1/survey/villages/${villageId}/rovers/bulk`, {
@@ -529,7 +544,10 @@ function Rovers({ villageId, canManage }: { villageId: string; canManage: boolea
       apiRequest(`/api/v1/survey/rovers/${row.id}/release`, {
         method: 'POST', body: { released_on: today },
       }),
+    onError: (e) => toast.error('The equipment was not released', messageOf(e)),
     onSuccess: () => {
+      toast.success('Released back to the store',
+        'It is free to allocate to another village from today.');
       qc.invalidateQueries({ queryKey: ['survey-rovers', villageId] });
       qc.invalidateQueries({ queryKey: ['survey-progress'] });
     },

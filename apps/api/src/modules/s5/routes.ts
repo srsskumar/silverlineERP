@@ -272,7 +272,8 @@ export async function registerS5Routes(
       throw new ApiError({
         status: 403,
         code: "FORBIDDEN",
-        message: "Insufficient permissions",
+        message:
+          `Saved views need the "filter.read" permission. An administrator can add it to your role under Administration \u2192 Roles.`,
       });
     }
   }

@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
@@ -78,9 +79,9 @@ export default function LeadsPage() {
             Leads from first contact through to a tender or proposal.
           </p>
         </div>
-        <a href="/leads/new" className="rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-fg hover:bg-primary-hover">
+        <Link href="/leads/new" className="rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-fg hover:bg-primary-hover">
           + New lead
-        </a>
+        </Link>
       </div>
 
       {leads.error ? <div className="mt-3"><ErrorCard error={leads.error} onRetry={() => void leads.refetch()} /></div> : null}

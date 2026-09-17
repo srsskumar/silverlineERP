@@ -29,3 +29,16 @@ export function isConflictError(error: unknown): boolean {
 export function requestIdOf(error: unknown): string | undefined {
   return error instanceof ApiClientError ? error.requestId : undefined;
 }
+
+/**
+ * An error as one sentence, for a toast.
+ *
+ * A toast has room for the headline and not the field list, so this is the
+ * server's message and nothing else. Anything the reader has to act on
+ * field by field belongs on the form next to the field, not here.
+ */
+export function messageOf(error: unknown): string {
+  if (error instanceof ApiClientError) return error.message;
+  if (error instanceof Error) return error.message;
+  return 'The server could not be reached. Nothing has been saved.';
+}

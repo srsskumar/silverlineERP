@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
@@ -164,14 +165,14 @@ export default function SurveyPage() {
 
           <div className="ml-auto flex gap-2">
             {canManage ? (
-              <a href="/survey/setup">
+              <Link href="/survey/setup">
                 <Button type="button" variant="secondary">Setup</Button>
-              </a>
+              </Link>
             ) : null}
             {canEnter ? (
-              <a href="/survey/entry">
+              <Link href="/survey/entry">
                 <Button type="button" variant="primary">Record today’s progress</Button>
-              </a>
+              </Link>
             ) : null}
           </div>
         </Toolbar>

@@ -1857,7 +1857,8 @@ export async function registerWorkRoutes(
       return sendError(reply, req.requestId, {
         status: 403,
         code: "FORBIDDEN",
-        message: "Insufficient permissions",
+        message:
+          `That task is assigned to somebody else. You can update tasks assigned to you; changing anybody else's needs the "task.assign" permission.`,
       });
     }
     if (cur.version !== expectedVersion) {
@@ -2047,7 +2048,8 @@ export async function registerWorkRoutes(
             return sendError(reply, req.requestId, {
               status: 403,
               code: "FORBIDDEN",
-              message: "Insufficient permissions",
+              message:
+                `Changing a project needs the "project.update" permission. An administrator can add it to your role under Administration \u2192 Roles.`,
             });
           }
           if (!reason) {

@@ -404,7 +404,8 @@ export async function registerLeaveRoutes(
           return sendError(reply, req.requestId, {
             status: 403,
             code: "FORBIDDEN",
-            message: "Insufficient permissions",
+            message:
+              `That is somebody else's leave. You can see your own; anybody else's needs the "leave.read" permission.`,
           });
         }
         targetEmployee = parsed.data.employee_id;
@@ -556,7 +557,8 @@ export async function registerLeaveRoutes(
         return sendError(reply, req.requestId, {
           status: 403,
           code: "FORBIDDEN",
-          message: "Insufficient permissions",
+          message:
+            `Adjusting leave balances needs the "leave.admin" permission, which is held by HR. Ask them to make the adjustment.`,
         });
       }
       const other = await db.query(
@@ -805,7 +807,8 @@ export async function registerLeaveRoutes(
       return sendError(reply, req.requestId, {
         status: 403,
         code: "FORBIDDEN",
-        message: "Insufficient permissions",
+        message:
+          `Filtering by another employee needs the "leave.read" permission. Leave the employee filter empty to see your own leave.`,
       });
     }
     const own = await linkedEmployeeId(user.id);
@@ -923,7 +926,8 @@ export async function registerLeaveRoutes(
         return sendError(reply, req.requestId, {
           status: 403,
           code: "FORBIDDEN",
-          message: "Insufficient permissions",
+          message:
+            "That leave request is not yours and you are not its approver, so you cannot see it.",
         });
       }
       if(row.employee_id!==own){user.scopes=await scopesForPermission(req,user.permissions.includes(LEAVE_READ)?LEAVE_READ:LEAVE_DECIDE);await employeeAccess(opts.pool,req,row.employee_id);}
@@ -1185,7 +1189,8 @@ export async function registerLeaveRoutes(
         return sendError(reply, req.requestId, {
           status: 403,
           code: "FORBIDDEN",
-          message: "Insufficient permissions",
+          message:
+            `That leave request belongs to somebody else. Cancelling it needs the "leave.admin" permission, which is held by HR.`,
         });
       }
       if (cur.status !== "PENDING") {

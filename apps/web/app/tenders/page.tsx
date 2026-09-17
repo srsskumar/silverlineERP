@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
@@ -59,9 +60,9 @@ export default function TendersPage() {
             {['DRAFT','PUBLISHED','IN_PROGRESS','SUBMITTED','UNDER_EVALUATION','CLARIFICATION_REQUIRED','SELECTED','REJECTED','AWARDED','CANCELLED']
               .map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
           </select>
-          <a href="/tenders/new" className="rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-fg hover:bg-primary-hover">
+          <Link href="/tenders/new" className="rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-fg hover:bg-primary-hover">
             + New tender
-          </a>
+          </Link>
         </div>
       </div>
 

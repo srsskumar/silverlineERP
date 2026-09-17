@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import * as React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AppShell } from '@/components/AppShell';
@@ -87,7 +88,7 @@ export default function AuditPage() {
       <PageHeader
         title="Audit trail"
         description="Every recorded change, in the order it happened, with who made it."
-        breadcrumb={<a href="/admin" className="hover:underline">Administration</a>}
+        breadcrumb={<Link href="/admin" className="hover:underline">Administration</Link>}
       />
       <PageBody>
         <div className="space-y-4">
@@ -110,9 +111,9 @@ export default function AuditPage() {
                 Clear
               </Button>
             ) : null}
-            <a href="/reports" className="ml-auto">
+            <Link href="/reports" className="ml-auto">
               <Button type="button" variant="secondary">Export the trail</Button>
-            </a>
+            </Link>
           </Toolbar>
 
           <p className="text-xs text-text-muted">

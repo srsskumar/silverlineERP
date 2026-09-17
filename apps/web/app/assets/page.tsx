@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import * as React from 'react';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -45,9 +46,9 @@ export default function Page() {
               to tell which is lying. */}
           Location is worked out from the allocations: an asset is in the field exactly when
           somebody holds it. Select one to allocate it, record its return, or read its history.{' '}
-          <a href="/assets/movements" className="text-primary underline underline-offset-2">
+          <Link href="/assets/movements" className="text-primary underline underline-offset-2">
             Every movement, across the whole register
-          </a>.
+          </Link>.
         </p>
         <Collection
           path="assets"

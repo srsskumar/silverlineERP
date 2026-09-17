@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
@@ -91,7 +92,7 @@ export default function DelegationsPage() {
       <PageHeader
         title="Delegations"
         description="Authority handed to somebody else for a fixed window."
-        breadcrumb={<a href="/approvals" className="hover:underline">Approvals</a>}
+        breadcrumb={<Link href="/approvals" className="hover:underline">Approvals</Link>}
       />
 
       <PageBody>

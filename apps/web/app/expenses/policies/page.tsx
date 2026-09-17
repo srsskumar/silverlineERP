@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest } from '@/lib/apiClient';
@@ -82,7 +83,7 @@ export default function ExpensePoliciesPage() {
       <PageHeader
         title="Expense policy"
         description="Limits as they stood on the date of the expense, not as they stand today."
-        breadcrumb={<a href="/expenses" className="hover:underline">Expenses</a>}
+        breadcrumb={<Link href="/expenses" className="hover:underline">Expenses</Link>}
       />
 
       <PageBody>

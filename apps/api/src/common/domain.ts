@@ -3,7 +3,7 @@ import {inTransaction} from './transactionContext.js';
 import {parseIfMatch} from './ifMatch.js';
 import type { FastifyRequest } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
-import { ApiError, toFieldErrors } from '@silverline/shared';
+import { ApiError, toFieldErrors, validationSummary, fieldLabel } from '@silverline/shared';
 import type { z } from 'zod';
 import { resolveScopes, taskScopeClause, employeeScopeClause } from './scopes.js';
 
@@ -42,9 +42,15 @@ function nulByteIn(value:unknown,path:string[]=[],depth=0):string|null {
 export function parse<T>(schema:z.ZodType<T, z.ZodTypeDef, unknown>,body:unknown):T {
  const nul=nulByteIn(body);
  if(nul) throw new ApiError({status:422,code:'VALIDATION_ERROR',message:'Validation failed',
-  fieldErrors:[{field:nul,message:'Remove the null character from this value',code:'invalid_string'}]});
+  fieldErrors:[{field:nul,message:`${fieldLabel(nul)} contains a character that cannot be stored. It usually comes from a corrupt export — retype the value or re-export the file.`,code:'invalid_string'}]});
  const result=schema.safeParse(body);
- if(!result.success) throw new ApiError({status:422,code:'VALIDATION_ERROR',message:'Validation failed',fieldErrors:toFieldErrors(result.error)});
+ if(!result.success) {
+  // The headline says the problem rather than the category. "Validation
+  // failed" is what the server calls it, and tells whoever is looking at the
+  // form nothing they can act on.
+  const fieldErrors=toFieldErrors(result.error);
+  throw new ApiError({status:422,code:'VALIDATION_ERROR',message:validationSummary(fieldErrors),fieldErrors});
+ }
  return result.data;
 }
 export function fail(code:string,message:string,status=422):never {throw new ApiError({status,code,message});}
@@ -101,7 +107,8 @@ export async function inOrg(db:Pool|PoolClient,table:string,id:string,orgId:stri
  // has cost several debugging sessions.
  if(!allowed.includes(table)) throw new Error(`inOrg: '${table}' is not in the allowed table list in common/domain.ts`);
  const r=await db.query(`SELECT * FROM ${table} WHERE id=$1 AND org_id=$2${lock?' FOR UPDATE':''}`,[id,orgId]);
- if(!r.rowCount) fail('NOT_FOUND','Record not found',404);
+ if(!r.rowCount) fail('NOT_FOUND',
+  'That record no longer exists, or it belongs to something you do not have access to. Go back to the list and open it from there.',404);
  return r.rows[0];
 }
 export async function projectAccess(pool:Pool,req:FastifyRequest,id:string) {

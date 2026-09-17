@@ -645,7 +645,8 @@ export async function registerAttendanceRoutes(
       return sendError(reply, req.requestId, {
         status: 403,
         code: "FORBIDDEN",
-        message: "Insufficient permissions",
+        message:
+          `You can only punch for yourself. Recording somebody else's attendance needs the "attendance.decide" permission \u2014 ask your supervisor to record it, or to grant you that permission.`,
       });
     }
 
@@ -1358,7 +1359,8 @@ export async function registerAttendanceRoutes(
       return sendError(reply, req.requestId, {
         status: 403,
         code: "FORBIDDEN",
-        message: "Insufficient permissions",
+        message:
+          `That attendance record belongs to somebody else. You can raise an exception on your own attendance; anybody else's needs the "attendance.decide" permission.`,
       });
     }
     const ins = await db.query(
@@ -1591,7 +1593,8 @@ export async function registerAttendanceRoutes(
       return sendError(reply, req.requestId, {
         status: 403,
         code: "FORBIDDEN",
-        message: "Insufficient permissions",
+        message:
+          `That attendance record belongs to somebody else. You can raise an exception on your own attendance; anybody else's needs the "attendance.decide" permission.`,
       });
     }
     // BR-05: the same lock applies to a regularization, which is a request to

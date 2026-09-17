@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import * as React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AppShell } from '@/components/AppShell';
@@ -88,7 +89,7 @@ export default function MovementsPage() {
       <PageHeader
         title="Asset movements"
         description="Every time a piece of equipment changed hands, and the state it was in."
-        breadcrumb={<a href="/assets" className="hover:underline">Assets</a>}
+        breadcrumb={<Link href="/assets" className="hover:underline">Assets</Link>}
       />
       <PageBody>
         <div className="space-y-4">

@@ -150,5 +150,11 @@ export const QUICK_CREATE: NavItem[] = [
   { href: '/leave/new', label: 'New leave request', permission: PERMISSIONS.LEAVE_REQUEST, icon: PlaneTakeoff },
   { href: '/payroll/new', label: 'New payroll run', permission: PERMISSIONS.PAYROLL_GENERATE, icon: Wallet },
   { href: '/employees/import', label: 'Import employees', permission: PERMISSIONS.EMPLOYEE_IMPORT, icon: Users },
+  /*
+   * The one thing a field crew does every single day, and it was two clicks
+   * down inside the programme page. Everything else in this list is occasional
+   * by comparison.
+   */
+  { href: '/survey/entry', label: "Record today's survey progress", permission: 'survey.enter', icon: Compass },
 ];
 

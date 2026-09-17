@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { AppShell } from '@/components/AppShell';
 import { PageHeader, PageBody } from '@/components/ui/Page';
 import { AllImportTemplates } from '@/components/ImportTemplateCard';
@@ -24,7 +25,7 @@ export default function ImportTemplatesPage() {
       <PageHeader
         title="Upload and download"
         description="Fill in a template to load data, or export what is already there."
-        breadcrumb={<a href="/admin" className="hover:underline">Administration</a>}
+        breadcrumb={<Link href="/admin" className="hover:underline">Administration</Link>}
       />
       <PageBody>
         <ExportPanel />

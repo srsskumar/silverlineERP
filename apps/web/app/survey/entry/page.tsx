@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
@@ -220,9 +221,9 @@ export default function SurveyEntryPage() {
               Recording a past day. Every total above it corrects itself.
             </span>
           ) : null}
-          <a href="/survey" className="ml-auto">
+          <Link href="/survey" className="ml-auto">
             <Button type="button" variant="ghost">Back to progress</Button>
-          </a>
+          </Link>
         </Toolbar>
 
         {saved ? (

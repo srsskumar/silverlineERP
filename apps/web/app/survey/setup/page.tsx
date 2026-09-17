@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { businessToday } from '@/lib/finance';
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -106,9 +107,9 @@ export default function SurveySetupPage() {
                     ))}
                   </select>
                 </label>
-                <a href="/survey" className="ml-auto">
+                <Link href="/survey" className="ml-auto">
                   <Button type="button" variant="ghost">Back to progress</Button>
-                </a>
+                </Link>
               </Toolbar>
 
               {projectId ? <VillageImport projectId={projectId} /> : null}

@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ToastProvider } from './ui/Toast';
 import {
   ApiClientError,
   fetchMe,
@@ -179,7 +180,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [client] = React.useState(makeQueryClient);
   return (
     <QueryClientProvider client={client}>
-      <AuthInner>{children}</AuthInner>
+      {/* Inside the query provider so a mutation's onSuccess can reach it. */}
+      <ToastProvider>
+        <AuthInner>{children}</AuthInner>
+      </ToastProvider>
     </QueryClientProvider>
   );
 }

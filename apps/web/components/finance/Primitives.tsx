@@ -4,6 +4,7 @@ import * as React from 'react';
 import { Badge } from '@/components/ui/Badge';
 import { Sheet, SheetContent, SheetHeader, SheetBody, SheetTitle } from '@/components/ui/Sheet';
 import { cn } from '@/lib/cn';
+import { InfoHint } from '@/components/ui/InfoHint';
 import { statusLabel } from '@/lib/board-visuals';
 import { financialTone } from '@/lib/finance';
 
@@ -103,16 +104,26 @@ export function RecordSheet({
  * is usually the more flattering half of the story.
  */
 export function Stat({
-  label, value, hint, tone,
+  label, value, hint, tone, explain,
 }: {
   label: string;
   value: React.ReactNode;
   hint?: React.ReactNode;
   tone?: 'default' | 'danger' | 'success' | 'warning';
+  /**
+   * What the figure means, for a reader who did not define it.
+   *
+   * Most of these labels are terms of art, and a number under a term of art
+   * is a number two people will read two different ways.
+   */
+  explain?: React.ReactNode;
 }) {
   return (
     <div className="rounded-lg border border-border bg-surface px-3 py-2.5">
-      <p className="text-2xs uppercase tracking-wide text-text-subtle">{label}</p>
+      <p className="flex items-center gap-1 text-2xs uppercase tracking-wide text-text-subtle">
+        {label}
+        {explain ? <InfoHint label={`What ${label.toLowerCase()} means`}>{explain}</InfoHint> : null}
+      </p>
       <p
         className={cn(
           'mt-1 text-lg font-semibold tabular-nums',

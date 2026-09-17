@@ -751,7 +751,8 @@ export async function registerS6Routes(
       return sendError(reply, req.requestId, {
         status: 403,
         code: "FORBIDDEN",
-        message: "Insufficient permissions",
+        message:
+          `Running this report needs both the "report.generate" permission and permission to read the data it covers. An administrator can add the missing one under Administration \u2192 Roles.`,
       });
     }
     user.scopes=await scopesForPermission(req,domainRead);
@@ -874,7 +875,8 @@ export async function registerS6Routes(
         return sendError(reply, req.requestId, {
           status: 403,
           code: "FORBIDDEN",
-          message: "Insufficient permissions",
+          message:
+            `Running this report needs both the "report.generate" permission and permission to read the data it covers. An administrator can add the missing one under Administration \u2192 Roles.`,
         });
       }
       if(entry.status!=='READY')return sendError(reply,req.requestId,{status:409,code:'REPORT_NOT_READY',message:entry.status==='FAILED'?'Report generation failed. Generate a fresh report.':'Report is queued. Your inbox will notify you when it is ready.'});
