@@ -125,6 +125,28 @@ describe("a rover's day", () => {
     expect(e.rows[0].dgps_rovers).toBe(1);
   });
 
+  it("ignores a rover count the payload disagrees with", async () => {
+    // The screen shows the rovers assigned to the village and does not let
+    // anybody type over it, but the API is the boundary that has to hold: a
+    // count that disagrees with the instruments named beside it makes the
+    // utilisation figures answer a question nobody asked.
+    const r = await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: villageA, entry_date: day(-2), teams_deployed: 1,
+      dgps_rovers: 99,
+      values: { GOVT_LAND_EXTENT_AC: 8 },
+      rovers: [
+        { asset_id: roverA, status: "UTILIZED", area_ac: 8 },
+        { asset_id: roverB, status: "IDLE", idle_reason: "WEATHER" },
+      ],
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+
+    const e = await w.pool.query(
+      "SELECT dgps_rovers FROM survey_entries WHERE id = $1", [r.data.id]);
+    // One of the two named rovers was in use. Not ninety-nine.
+    expect(e.rows[0].dgps_rovers).toBe(1);
+  });
+
   it("refuses an idle rover with no reason", async () => {
     // An idle count with no reasons behind it is not a finding anybody can use.
     const r = await post(w.admin, "/api/v1/survey/entries", {

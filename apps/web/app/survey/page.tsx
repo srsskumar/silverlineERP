@@ -51,6 +51,24 @@ export default function SurveyPage() {
 
   const [tab, setTab] = React.useState<Tab>('progress');
   const [projectId, setProjectId] = React.useState('');
+  /**
+   * A village another screen sent us to, opened on arrival.
+   *
+   * Read on mount rather than in the initial state, because this page is
+   * prerendered: deriving state from the URL during the first render makes
+   * the server and client disagree about what to draw.
+   */
+  const [openVillage, setOpenVillage] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const wanted = q.get('tab');
+    if (wanted && (['progress', 'villages', 'bottlenecks', 'timeline', 'summary'] as string[])
+      .includes(wanted)) setTab(wanted as Tab);
+    const village = q.get('village');
+    if (village) { setTab('villages'); setOpenVillage(village); }
+    const project = q.get('project');
+    if (project) setProjectId(project);
+  }, []);
   const [level, setLevel] = React.useState<ReportLevel>('mandal');
   const [range, setRange] = React.useState(fy);
   const [grain, setGrain] = React.useState<'DAY' | 'WEEK' | 'MONTH' | 'YEAR'>('MONTH');
@@ -164,7 +182,8 @@ export default function SurveyPage() {
           <Progress query={progress} level={level} setLevel={setLevel} range={range} />
         ) : null}
         {projectId && tab === 'villages' ? (
-          <Villages projectId={projectId} canManage={canManage} canEnter={canEnter} />
+          <Villages projectId={projectId} canManage={canManage} canEnter={canEnter}
+            openVillage={openVillage} />
         ) : null}
         {projectId && tab === 'bottlenecks' ? (
           <Bottlenecks projectId={projectId} canForecast={canForecast} />
@@ -588,12 +607,20 @@ function Bottlenecks({ projectId, canForecast }: { projectId: string; canForecas
  * the stage remarks.
  */
 function Villages({
-  projectId, canManage, canEnter,
+  projectId, canManage, canEnter, openVillage,
 }: {
   projectId: string; canManage: boolean; canEnter: boolean;
+  /** A village another screen linked to, opened on arrival. */
+  openVillage?: string | null;
 }) {
   const [open, setOpen] = React.useState<string | null>(null);
   const [filter, setFilter] = React.useState('');
+
+  // Somebody arriving from the progress form to allocate the rovers it told
+  // them were missing lands on that village, not on a list to search again.
+  React.useEffect(() => {
+    if (openVillage) setOpen(openVillage);
+  }, [openVillage]);
 
   const villages = useQuery({
     queryKey: ['survey-villages', projectId],

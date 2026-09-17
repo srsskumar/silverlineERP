@@ -957,6 +957,68 @@ describe("setting your own password", () => {
  * the field, where a rover operator reading a six-digit code off a second
  * device before every shift pays that cost every morning.
  */
+describe("asking somebody to replace a password that was set for them", () => {
+  /*
+   * Offered, not imposed. A password an administrator sets is one the
+   * administrator knows, so asking the person to replace it is worth having —
+   * but a crew member handed a phone at the start of a shift should not be
+   * stopped at a password screen by a policy nobody chose.
+   */
+  it("does not ask by default when an account is created", async () => {
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/admin/users",
+      headers: { ...w.admin, ...idem() },
+      payload: { username: uniq("opt"), password: "Initial@2026xyz" },
+    });
+    expect(r.statusCode, r.body).toBe(201);
+    expect(r.json().must_change_password).toBe(false);
+  });
+
+  it("asks when it is asked for", async () => {
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/admin/users",
+      headers: { ...w.admin, ...idem() },
+      payload: {
+        username: uniq("opt"), password: "Initial@2026xyz",
+        must_change_password: true,
+      },
+    });
+    expect(r.statusCode, r.body).toBe(201);
+    expect(r.json().must_change_password).toBe(true);
+  });
+
+  it("does not impose it when an administrator resets a password", async () => {
+    // Resetting a password just resets it.
+    const id = await createUser(w.pool, w.orgId, { username: uniq("reset") });
+    const r = await w.app.inject({
+      method: "PATCH", url: `/api/v1/admin/users/${id}`,
+      headers: { ...w.admin, ...idem() },
+      payload: { password: "Replaced@2026abc" },
+    });
+    expect(r.statusCode, r.body).toBe(200);
+    expect((await w.pool.query(
+      "SELECT must_change_password FROM users WHERE id = $1", [id]))
+      .rows[0].must_change_password).toBe(false);
+  });
+
+  it("can be turned on for an account, and off again", async () => {
+    const id = await createUser(w.pool, w.orgId, { username: uniq("toggle") });
+    const patch = (v: boolean) => w.app.inject({
+      method: "PATCH", url: `/api/v1/admin/users/${id}`,
+      headers: { ...w.admin, ...idem() },
+      payload: { must_change_password: v },
+    });
+    const read = async () => (await w.pool.query(
+      "SELECT must_change_password FROM users WHERE id = $1", [id]))
+      .rows[0].must_change_password;
+
+    expect((await patch(true)).statusCode).toBe(200);
+    expect(await read()).toBe(true);
+    expect((await patch(false)).statusCode).toBe(200);
+    expect(await read()).toBe(false);
+  });
+});
+
 describe("choosing which roles need an authenticator", () => {
   async function roleId(code: string): Promise<string> {
     return String((await w.pool.query(

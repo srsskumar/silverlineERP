@@ -115,13 +115,29 @@ export default function SurveyEntryPage() {
   // numbers most days, and retyping them is how they end up wrong.
   React.useEffect(() => {
     if (village) {
-      setDeployed({
+      // Rovers are not prefilled from the work list: they are counted from
+      // the allocations below. Setting them here as well would clobber that
+      // count whenever the village record happened to arrive second.
+      setDeployed((d) => ({
+        ...d,
         teams: Number(village.teams ?? 0),
         base: Number(village.dgps_base ?? 0),
-        rovers: Number(village.dgps_rovers ?? 0),
-      });
+      }));
     }
   }, [villageId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /*
+   * The rover count is the rovers assigned to this village.
+   *
+   * The village record carries a planned figure from the work list, and the
+   * allocations carry what is actually out there. Where they disagree the
+   * allocations are right — they are the instruments this return is about to
+   * account for, one by one, below. Reporting a different number alongside
+   * them makes the utilisation figures answer a question nobody asked.
+   */
+  React.useEffect(() => {
+    setDeployed((d) => (d.rovers === outToday.length ? d : { ...d, rovers: outToday.length }));
+  }, [villageId, rovers.data, outToday.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = useMutation({
     mutationFn: async () => {
@@ -260,10 +276,28 @@ export default function SurveyEntryPage() {
                   <input type="number" min={0} className={field} value={deployed.base}
                     onChange={(e) => setDeployed({ ...deployed, base: Number(e.target.value) })} />
                 </label>
+                {/*
+                  * Rovers on the day's return are the rovers allocated to this
+                  * village, not a number somebody types.
+                  *
+                  * It used to be typed, and a typed count drifts from the
+                  * allocation the moment either changes — which makes the
+                  * utilisation figures answer a question nobody asked. The
+                  * instruments are named one by one below; this is how many
+                  * of them there are.
+                  */}
                 <label className="space-y-1">
-                  <span className="text-2xs uppercase tracking-wide text-text-subtle">Moving rovers</span>
-                  <input type="number" min={0} className={field} value={deployed.rovers}
-                    onChange={(e) => setDeployed({ ...deployed, rovers: Number(e.target.value) })} />
+                  <span className="flex items-baseline justify-between gap-2">
+                    <span className="text-2xs uppercase tracking-wide text-text-subtle">
+                      Rovers assigned
+                    </span>
+                    <span className="text-2xs text-text-subtle"
+                      title="Counted from the rovers allocated to this village">
+                      allocated
+                    </span>
+                  </span>
+                  <input type="number" className={field} value={deployed.rovers} readOnly
+                    aria-readonly="true" />
                 </label>
               </div>
 
@@ -342,7 +376,15 @@ export default function SurveyEntryPage() {
               ) : (
                 <p className="text-2xs text-text-subtle">
                   No rovers are allocated to this village, so there is nothing to account for.
-                  Allocate them from the village screen.
+                  Allocate them from the{' '}
+                  {/* Straight to this village, not to a list they would have
+                      to search again — they are here because of this one. */}
+                  <a
+                    className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                    href={`/survey?tab=villages&project=${projectId}&village=${villageId}`}
+                  >
+                    village screen
+                  </a>.
                 </p>
               )}
 

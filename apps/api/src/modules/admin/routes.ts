@@ -15,14 +15,19 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
   const i=parse(z.object({username:z.string().trim().min(3).max(100),password:z.string().min(12).max(128),email:z.string().email().optional(),employee_id:z.string().uuid().optional(),
    // The number they sign in with (§34). Stored in one written form so it can
    // be dialled from a contact card and matched without normalising on read.
-   phone:z.string().trim().max(20).optional()}),req.body),u=actor(req),hash=await bcrypt.hash(i.password,12);
+   phone:z.string().trim().max(20).optional(),
+   // Ask the person to replace the password set here. Optional, and off
+   // unless it is asked for: it is a choice about this account, not a rule.
+   must_change_password:z.boolean().optional()}),req.body),u=actor(req),hash=await bcrypt.hash(i.password,12);
   if(i.phone&&!isIndianMobile(i.phone))fail('VALIDATION_ERROR','Enter a ten-digit Indian mobile number',422);
   const phone=i.phone?formatIndianMobile(i.phone):null;
   const row=await mutate(pool,req,'user.create','user',async db=>{if(i.employee_id)await inOrg(db,'employees',i.employee_id,u.orgId);
    if(phone&&(await db.query('SELECT 1 FROM users WHERE org_id=$1 AND mobile_digits=$2',[u.orgId,phone.slice(3)])).rowCount)fail('MOBILE_IN_USE','Another account already signs in with that mobile number',409);
-   // The password was chosen by whoever is creating the account, so they know
-   // it. The person has to set their own before they can do anything.
-   return (await db.query('INSERT INTO users(org_id,username,password_hash,email,employee_id,phone,must_change_password,password_set_at) VALUES($1,$2,$3,$4,$5,$6,true,now()) RETURNING id,username,email,phone,auth_status,employee_id,must_change_password',[u.orgId,i.username,hash,i.email??null,i.employee_id??null,phone])).rows[0];});return reply.code(201).send(row);
+   // Whoever creates the account knows the password they set, so asking the
+   // person to replace it is worth offering -- but it is an offer, not a
+   // rule. A crew member handed a phone at the start of a shift should not
+   // be stopped at a password screen by a policy nobody chose.
+   return (await db.query('INSERT INTO users(org_id,username,password_hash,email,employee_id,phone,must_change_password,password_set_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()) RETURNING id,username,email,phone,auth_status,employee_id,must_change_password',[u.orgId,i.username,hash,i.email??null,i.employee_id??null,phone,i.must_change_password??false])).rows[0];});return reply.code(201).send(row);
  });
  app.patch('/api/v1/admin/users/:id',{preHandler:guard('users.manage')},async req=>{
   const id=(req.params as {id:string}).id,u=actor(req),i=parse(z.object({auth_status:z.enum(['ACTIVE','DISABLED']).optional(),password:z.string().min(12).max(128).optional(),
@@ -30,23 +35,26 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
    // Whether this particular account needs an authenticator, regardless of
    // what its roles say. "This person handles payroll" and "this phone cannot
    // run an authenticator" are both real, and neither is a property of a role.
-   mfa_policy:z.enum(MFA_POLICIES).optional()}),req.body);
+   mfa_policy:z.enum(MFA_POLICIES).optional(),
+   // Ask the person to set their own password. Optional in both directions:
+   // it can be turned on for an account and turned off again.
+   must_change_password:z.boolean().optional()}),req.body);
   if(id===u.id&&i.auth_status==='DISABLED')fail('SELF_DISABLE','You cannot disable your own account');
   if(i.phone&&!isIndianMobile(i.phone))fail('VALIDATION_ERROR','Enter a ten-digit Indian mobile number',422);
   const phone=i.phone===undefined?undefined:(i.phone===null?null:formatIndianMobile(i.phone));
   const hash=i.password?await bcrypt.hash(i.password,12):null;
   return mutate(pool,req,'user.security_update','user',async db=>{await db.query('SELECT id FROM organizations WHERE id=$1 FOR UPDATE',[u.orgId]);await inOrg(db,'users',id,u.orgId,true);
    if(phone&&(await db.query('SELECT 1 FROM users WHERE org_id=$1 AND mobile_digits=$2 AND id<>$3',[u.orgId,phone.slice(3),id])).rowCount)fail('MOBILE_IN_USE','Another account already signs in with that mobile number',409);
-   // A password an administrator sets is a password the administrator knows.
-   // The account can sign in -- it must, or the password could never be
-   // changed -- and can do nothing else until the person sets their own.
+   // A password set here is one the administrator knows, so asking the person
+   // to replace it is worth offering -- but only when it is asked for. Left
+   // alone, resetting a password just resets it.
    if(i.mfa_policy==='EXEMPT'){
     // The floor, again: an account holding a floor role cannot be excused,
     // however the request is phrased.
     const held=(await db.query("SELECT r.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=$1",[id])).rows as Array<{code:string}>;
     if(held.some(r=>mfaFloorRole(r.code)))fail('MFA_REQUIRED','A super administrator cannot be exempted from two-factor authentication',422);
    }
-   await db.query('UPDATE users SET auth_status=COALESCE($2,auth_status),password_hash=COALESCE($3,password_hash),phone=CASE WHEN $5::boolean THEN $4 ELSE phone END,must_change_password=CASE WHEN $3::text IS NULL THEN must_change_password ELSE true END,password_set_at=CASE WHEN $3::text IS NULL THEN password_set_at ELSE now() END,mfa_policy=COALESCE($6,mfa_policy),updated_at=now() WHERE id=$1',[id,i.auth_status??null,hash,phone??null,phone!==undefined,i.mfa_policy??null]);await keepAdministrator(db,u.orgId);await db.query('UPDATE sessions SET revoked=true,revoked_at=now() WHERE user_id=$1',[id]);return {id,updated:true};});
+   await db.query('UPDATE users SET auth_status=COALESCE($2,auth_status),password_hash=COALESCE($3,password_hash),phone=CASE WHEN $5::boolean THEN $4 ELSE phone END,must_change_password=COALESCE($7,must_change_password),password_set_at=CASE WHEN $3::text IS NULL THEN password_set_at ELSE now() END,mfa_policy=COALESCE($6,mfa_policy),updated_at=now() WHERE id=$1',[id,i.auth_status??null,hash,phone??null,phone!==undefined,i.mfa_policy??null,i.must_change_password??null]);await keepAdministrator(db,u.orgId);await db.query('UPDATE sessions SET revoked=true,revoked_at=now() WHERE user_id=$1',[id]);return {id,updated:true};});
  });
  app.get('/api/v1/admin/roles',{preHandler:guard('users.read')},async req=>({data:(await pool.query("SELECT r.*,COALESCE((SELECT json_agg(permission_code) FROM role_permissions WHERE role_id=r.id),'[]') AS permissions FROM roles r WHERE org_id IS NULL OR org_id=$1 ORDER BY name",[actor(req).orgId])).rows}));
  /**
