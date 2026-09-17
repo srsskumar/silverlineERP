@@ -1,0 +1,19 @@
+# Every five minutes.
+#
+# The work is mostly alerting, and an alert that arrives five minutes late is
+# the same alert. More frequent would add load for nothing; much less frequent
+# and a same-day escalation stops being same-day.
+[Unit]
+Description=Run the Silverline background worker every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+# Survives a reboot that spans a scheduled run rather than silently skipping it.
+Persistent=true
+# The worker takes an advisory lock, so a stagger is not needed for safety --
+# it is here so a fleet of these would not arrive together.
+RandomizedDelaySec=30
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,24 @@
+# One pass of the background worker.
+#
+# The API exposes /api/v1/jobs/run for a scheduler to call; on Vercel that was
+# a cron entry in vercel.json. Nothing replaced it when the system moved to
+# this VM, so since the migration the worker has not run at all: SLA alerts,
+# survey alerts (§27) and scheduled reports were all inert.
+#
+# Oneshot rather than a long-lived service. The endpoint takes its own
+# advisory lock, so overlapping runs are already safe; a unit that exits is
+# easier to reason about and leaves its outcome in the journal.
+[Unit]
+Description=Silverline background worker (one pass)
+After=network-online.target silverline-api.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/silverline/api.env
+# --fail so a non-2xx becomes a failed unit and shows up in systemctl rather
+# than scrolling past as a 200-shaped error page.
+ExecStart=/usr/bin/curl --fail --silent --show-error --max-time 300 \
+  -H "Authorization: Bearer ${CRON_SECRET}" \
+  http://127.0.0.1/api/v1/jobs/run
+User=dev-thor

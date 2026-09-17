@@ -30,6 +30,16 @@ sudo -u dev-thor npm run build --workspace=api
 echo "==> building web (API origin: $API_ORIGIN)"
 sudo -u dev-thor env NEXT_VERIFY_BUILD=1 NEXT_PUBLIC_API_URL="$API_ORIGIN" npm run build --workspace=web
 
+# The worker units are shipped but deliberately not enabled here: switching
+# the scheduler on for the first time fires every overdue report schedule at
+# once and delivers a backlog of alerts, which is an operator's decision
+# rather than a deploy's. Install with:
+#   sudo systemctl enable --now silverline-worker.timer
+echo "==> installing worker units (not enabled)"
+install -m 644 /opt/silverline/scripts/vm/silverline-worker.service /etc/systemd/system/
+install -m 644 /opt/silverline/scripts/vm/silverline-worker.timer /etc/systemd/system/
+systemctl daemon-reload
+
 echo "==> restarting"
 systemctl restart silverline-api
 systemctl reload nginx
