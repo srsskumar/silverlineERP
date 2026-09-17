@@ -57,6 +57,81 @@ install -m 644 /opt/silverline/scripts/vm/silverline-worker.service /etc/systemd
 install -m 644 /opt/silverline/scripts/vm/silverline-worker.timer /etc/systemd/system/
 systemctl daemon-reload
 
+# Stop before the restart, not after it.
+#
+# The API refuses to start against a schema older than the code, which is
+# right — serving routes whose columns do not exist yet turns every request
+# into an opaque 500. But nothing here applied migrations, so a deploy
+# carrying one took the API down and left it down until somebody read the
+# journal and ran the migration by hand.
+#
+# Migrations stay a deliberate step rather than something a deploy does on its
+# own: applying schema changes to production is a decision with a rollback
+# plan attached, not a side effect of pushing code. So this only checks, and
+# refuses to restart into an outage it can see coming. The old build keeps
+# serving in the meantime.
+echo "==> checking the schema is current"
+# Skippable, because a check that breaks must not become a new way to block
+# every deploy: SKIP_SCHEMA_CHECK=1 silverline-deploy
+if [ "${SKIP_SCHEMA_CHECK:-}" = "1" ]; then
+  echo "   skipped (SKIP_SCHEMA_CHECK=1)"
+else
+  # The same environment file the service reads, so this asks the same
+  # database. Passed through `env` rather than `sudo -E`, which this box
+  # refuses with "preserving the entire environment is not supported" — and
+  # refuses on stderr, so the variable simply arrived empty.
+  set +e
+  PENDING=$(
+    set -a; . /etc/silverline/api.env; set +a
+    cd /opt/silverline/apps/api && sudo -u dev-thor \
+      env DATABASE_URL="$DATABASE_URL" npx tsx -e '
+// Wrapped, because `tsx -e` compiles to CJS and CJS has no top-level await.
+const { readdirSync } = require("node:fs");
+const pg = require("pg");
+(async () => {
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error("DATABASE_URL is not set in /etc/silverline/api.env");
+  const dir = "/opt/silverline/apps/api/src/database/migrations";
+  const onDisk = readdirSync(dir)
+    .filter(f => f.endsWith(".sql"))
+    .map(f => f.replace(/\.sql$/, ""))
+    .sort();
+  const c = new pg.Client({ connectionString: url });
+  await c.connect();
+  const applied = new Set(
+    (await c.query("SELECT version FROM schema_migrations")).rows.map(r => r.version));
+  await c.end();
+  console.log("PENDING:" + onDisk.filter(v => !applied.has(v)).join(","));
+})();
+' 2>&1
+  )
+  CHECK_STATUS=$?
+  set -e
+
+  if [ "$CHECK_STATUS" -ne 0 ] || ! printf '%s' "$PENDING" | grep -q "PENDING:"; then
+    # Loud, never silent. An earlier version hid this behind 2>/dev/null and
+    # set -e killed the deploy with no message at all.
+    echo "!! Could not check the schema. The API refuses to start against a schema"
+    echo "   older than the code, so restarting now risks taking it down."
+    echo "   What the check said:"
+    printf '%s\n' "$PENDING" | sed 's/^/     /'
+    echo "   Verify by hand, or re-run with SKIP_SCHEMA_CHECK=1 to go ahead anyway."
+    exit 1
+  fi
+
+  PENDING=$(printf '%s' "$PENDING" | grep -o 'PENDING:.*' | cut -d: -f2-)
+  if [ -n "$PENDING" ]; then
+    echo "!! Not restarting: these migrations have not been applied yet:"
+    echo "     $PENDING"
+    echo "   The running API is still serving the previous build, so nothing is down."
+    echo "   Apply them, then run this again:"
+    echo "     cd /opt/silverline/apps/api \\"
+    echo "       && sudo -u dev-thor env DATABASE_URL=\"\$DATABASE_URL\" npx tsx src/database/migrate.ts"
+    exit 1
+  fi
+  echo "   up to date"
+fi
+
 echo "==> restarting"
 systemctl restart silverline-api
 systemctl reload nginx

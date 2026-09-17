@@ -491,6 +491,34 @@ describe("what the proposal must never do", () => {
     expect(r.data.lines[0].cumulativeQuantity).toBe(40);
   });
 
+  it("covers every programme running against the one project", async () => {
+    /*
+     * Two programmes sharing a project is a real configuration — production
+     * has one today — and it is usually somebody picking an existing project
+     * when creating the second programme rather than a deliberate choice.
+     *
+     * Summing both is still the right answer: the BOQ belongs to the
+     * contract, and everything delivered against that contract is billable
+     * under it. Surprising enough to be worth writing down, because the
+     * alternative reading silently drops one programme's work.
+     */
+    const first = await programme();
+    const second = await post(w.admin, "/api/v1/survey/projects", {
+      code: uniq("SHARE"), name: "Second programme, same contract",
+      project_id: first.projectId, create_project: false,
+    });
+    expect(second.status, JSON.stringify(second.body)).toBe(201);
+
+    await record(await village(first.programmeId), day(3), 70);
+    await record(await village(String(second.data.id)), day(3), 30);
+    await link(first.projectId, {
+      boq_item_id: first.boqItemId, measure_id: await measureId(),
+    });
+
+    const r = await proposal(first.projectId);
+    expect(r.data.lines[0].cumulativeQuantity).toBe(100);
+  });
+
   it("raises no bill by itself", async () => {
     // A measurement book is certified by an engineer who walks the ground.
     // Software billing automatically from its own records would assert
