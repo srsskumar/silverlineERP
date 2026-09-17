@@ -477,3 +477,16 @@ describe('saying what a period did', () => {
     expect(note).not.toContain('1 villages');
   });
 });
+
+describe('pace before anybody has worked', () => {
+  it('says there is nothing to measure rather than describing zero days', () => {
+    // A programme with no returns comes back with a rate of zero rather than
+    // null, and the old guard only caught null — so an untouched programme
+    // described a measurement nobody had taken.
+    const note = paceNote({
+      activeDays: 0, acresPerActiveDay: null, acresPerCalendarDay: 0, projectedFinish: null,
+    });
+    expect(note).toBe('Not enough recorded progress yet to measure a pace.');
+    expect(note).not.toContain('0 days');
+  });
+});

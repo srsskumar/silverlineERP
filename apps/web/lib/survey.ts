@@ -307,7 +307,16 @@ export function paceNote(p: {
   activeDays: number; acresPerActiveDay: number | null;
   acresPerCalendarDay: number | null; projectedFinish: string | null;
 } | undefined): string {
-  if (!p || p.acresPerCalendarDay === null) {
+  /*
+   * Nothing recorded means nothing to measure.
+   *
+   * A null rate was the only case this caught, and a programme with no
+   * returns at all comes back with a rate of zero rather than null — which
+   * produced "— acres a day on the 0 days work was actually recorded", a
+   * sentence about a measurement nobody has taken. Zero worked days is the
+   * honest test.
+   */
+  if (!p || p.acresPerCalendarDay === null || p.activeDays === 0) {
     return 'Not enough recorded progress yet to measure a pace.';
   }
   // "on the 1 days work was recorded" is what a template does to a sentence
