@@ -42,7 +42,7 @@ export const VOLATILE_TABLES = `
   custom_field_definitions, domain_events, automation_rules, automation_executions,
   webhook_subscriptions, webhook_deliveries, insight_feedback, v2_operations,
   geo_fence_employee_assignments, device_registrations, audit_events, sessions, user_roles,
-  idempotency_keys, users, employee_documents, employees, org_units, holidays,
+  idempotency_keys, users, employee_documents, employees, designations, org_units, holidays,
   attendance_exceptions, attendance_records, attendance_events, geo_fences, leave_requests,
   leave_balances, leave_types, mentions, comments, task_evidence, task_dependencies, tasks,
   projects, project_workflows, project_types, workspaces, notifications, task_labels,

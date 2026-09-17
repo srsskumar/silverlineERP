@@ -510,48 +510,116 @@ export async function registerSurveyRoutes(
            LEFT JOIN org_units m ON m.id = v.parent_id
            WHERE ${where} ORDER BY m.name, v.name`, values)).rows;
 
-        let villageTasks = 0, stageTasks = 0, skipped = 0;
+        const pending = villages.filter(v => !v.task_id);
+        const skipped = villages.length - pending.length;
 
-        for (const village of villages) {
-          if (village.task_id) { skipped += 1; continue; }
-          const plan = plannedTasksFor(
-            { name: String(village.village_name), mandalName: village.mandal_name },
-            stages.map(st => ({ code: String(st.code), label: String(st.label) })));
+        /*
+         * Counted, not written, when it is a preview.
+         *
+         * The preview used to do the entire job and roll it back, so asking
+         * "what would this create" cost exactly as much as creating it —
+         * which on this programme was over five minutes and a gateway
+         * timeout. A count is arithmetic.
+         */
+        if (input.dry_run) {
+          await db.query('ROLLBACK TO SAVEPOINT preview');
+          return {
+            dry_run: true,
+            villages_considered: villages.length,
+            village_tasks: pending.length,
+            stage_tasks: input.include_stages ? pending.length * stages.length : 0,
+            already_linked: skipped,
+            project_id: programme.project_id,
+          };
+        }
 
-          const parent = (await db.query(
-            `INSERT INTO tasks(org_id, project_id, title, status, village_id,
-               created_by, updated_by)
-             VALUES($1,$2,$3,'TO_DO',$4,$5,$5) RETURNING id`,
-            [u.orgId, programme.project_id, plan.parent, village.village_id, u.id])).rows[0];
-          villageTasks += 1;
-          await db.query('UPDATE survey_villages SET task_id = $2 WHERE id = $1',
-            [village.id, parent.id]);
+        /*
+         * Written in a handful of statements rather than eighteen per
+         * village.
+         *
+         * A task, an update, then a subtask and a stage link for each of
+         * eight stages: on 1,182 villages that was 21,276 round trips to a
+         * database in another data centre, and the request died long before
+         * it finished. The same work is four statements — the titles are
+         * worked out here, where they always were, and handed over as arrays.
+         */
+        let villageTasks = 0, stageTasks = 0;
 
-          if (!input.include_stages) continue;
-          for (const child of plan.children) {
-            const stage = stages.find(st => String(st.code) === child.stageCode)!;
-            const sub = (await db.query(
-              `INSERT INTO tasks(org_id, project_id, title, status, parent_task_id,
-                 village_id, created_by, updated_by)
-               VALUES($1,$2,$3,'TO_DO',$4,$5,$6,$6) RETURNING id`,
-              [u.orgId, programme.project_id, child.title, parent.id,
-                village.village_id, u.id])).rows[0];
-            stageTasks += 1;
-            // The stage row now exists only to carry the link; its state is
-            // the task's from here on.
-            await db.query(
-              `INSERT INTO survey_village_stages(org_id, survey_village_id, stage_id, task_id, updated_by)
-               VALUES($1,$2,$3,$4,$5)
-               ON CONFLICT (survey_village_id, stage_id)
-               DO UPDATE SET task_id = EXCLUDED.task_id, updated_at = now()`,
-              [u.orgId, village.id, stage.id, sub.id, u.id]);
+        if (pending.length > 0) {
+          const plans = pending.map(v => ({
+            surveyVillageId: String(v.id),
+            villageId: String(v.village_id),
+            plan: plannedTasksFor(
+              { name: String(v.village_name), mandalName: v.mandal_name },
+              stages.map(st => ({ code: String(st.code), label: String(st.label) })),
+            ),
+          }));
+
+          const parents = (await db.query(
+            `INSERT INTO tasks(org_id, project_id, title, status, village_id, created_by, updated_by)
+             SELECT $1, $2, t.title, 'TO_DO', t.village_id::uuid, $5, $5
+               FROM unnest($3::text[], $4::text[]) AS t(title, village_id)
+             RETURNING id, village_id`,
+            [u.orgId, programme.project_id,
+              plans.map(p => p.plan.parent), plans.map(p => p.villageId), u.id])).rows;
+          villageTasks = parents.length;
+
+          // village_id is unique within one programme, so it identifies the
+          // row the task belongs to without a second lookup.
+          const taskByVillage = new Map(parents.map(r => [String(r.village_id), String(r.id)]));
+
+          await db.query(
+            `UPDATE survey_villages sv SET task_id = m.task_id::uuid, updated_at = now()
+               FROM unnest($1::text[], $2::text[]) AS m(id, task_id)
+              WHERE sv.id = m.id::uuid`,
+            [plans.map(p => p.surveyVillageId),
+              plans.map(p => taskByVillage.get(p.villageId) ?? null)]);
+
+          if (input.include_stages) {
+            const titles: string[] = [], parentIds: string[] = [],
+              villageIds: string[] = [], surveyVillageIds: string[] = [], stageIds: string[] = [];
+            for (const p of plans) {
+              const parentId = taskByVillage.get(p.villageId);
+              if (!parentId) continue;
+              for (const child of p.plan.children) {
+                const stage = stages.find(st => String(st.code) === child.stageCode);
+                if (!stage) continue;
+                titles.push(child.title);
+                parentIds.push(parentId);
+                villageIds.push(p.villageId);
+                surveyVillageIds.push(p.surveyVillageId);
+                stageIds.push(String(stage.id));
+              }
+            }
+
+            if (titles.length > 0) {
+              const subs = (await db.query(
+                `INSERT INTO tasks(org_id, project_id, title, status, parent_task_id,
+                   village_id, created_by, updated_by)
+                 SELECT $1, $2, t.title, 'TO_DO', t.parent_id::uuid, t.village_id::uuid, $6, $6
+                   FROM unnest($3::text[], $4::text[], $5::text[])
+                        WITH ORDINALITY AS t(title, parent_id, village_id, ord)
+                  ORDER BY t.ord
+                 RETURNING id`,
+                [u.orgId, programme.project_id, titles, parentIds, villageIds, u.id])).rows;
+              stageTasks = subs.length;
+
+              // RETURNING follows the insert order, which ORDER BY ord fixes,
+              // so the nth task belongs to the nth stage link.
+              await db.query(
+                `INSERT INTO survey_village_stages(org_id, survey_village_id, stage_id, task_id, updated_by)
+                 SELECT $1, t.sv::uuid, t.stage::uuid, t.task::uuid, $5
+                   FROM unnest($2::text[], $3::text[], $4::text[]) AS t(sv, stage, task)
+                 ON CONFLICT (survey_village_id, stage_id)
+                 DO UPDATE SET task_id = EXCLUDED.task_id, updated_at = now()`,
+                [u.orgId, surveyVillageIds, stageIds,
+                  subs.map(r => String(r.id)), u.id]);
+            }
           }
         }
 
-        if (input.dry_run) await db.query('ROLLBACK TO SAVEPOINT preview');
-
         return {
-          dry_run: input.dry_run,
+          dry_run: false,
           villages_considered: villages.length,
           village_tasks: villageTasks,
           stage_tasks: stageTasks,

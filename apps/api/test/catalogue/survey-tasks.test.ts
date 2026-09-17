@@ -301,3 +301,60 @@ describe("controls", () => {
     expect(r.status).toBe(403);
   });
 });
+
+describe("generating a board for a real programme", () => {
+  /*
+   * A task, an update, then a subtask and a stage link for each of eight
+   * stages came to eighteen round trips per village. On 1,182 villages that
+   * is 21,276 trips to a database in another data centre, and the request
+   * died on a gateway timeout at five minutes — after doing all the work.
+   *
+   * These pin the two things that fixed it: a preview that counts instead of
+   * writing, and a write that is a handful of statements rather than a loop.
+   */
+  it("previews without writing anything at all", async () => {
+    const before = await w.pool.query("SELECT count(*)::int AS n FROM tasks");
+    const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/generate-tasks`,
+      { dry_run: true, include_stages: true });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.village_tasks).toBeGreaterThan(0);
+    expect(r.data.stage_tasks).toBe(r.data.village_tasks * 8);
+
+    const after = await w.pool.query("SELECT count(*)::int AS n FROM tasks");
+    expect(after.rows[0].n, "a preview writes nothing").toBe(before.rows[0].n);
+  });
+
+  it("writes every village and every stage, correctly parented", async () => {
+    const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/generate-tasks`,
+      { dry_run: false, include_stages: true });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.stage_tasks).toBe(r.data.village_tasks * 8);
+
+    // Every village carries its task, and every subtask hangs off the right
+    // parent — the set-based insert relies on ordering, so this is the
+    // property most worth pinning.
+    const villages = await w.pool.query(
+      `SELECT sv.id, sv.task_id FROM survey_villages sv WHERE sv.survey_project_id = $1`,
+      [programmeId]);
+    for (const v of villages.rows) expect(v.task_id, "village has a task").toBeTruthy();
+
+    const mismatched = await w.pool.query(
+      `SELECT count(*)::int AS n
+         FROM survey_village_stages vs
+         JOIN tasks sub ON sub.id = vs.task_id
+         JOIN survey_villages sv ON sv.id = vs.survey_village_id
+        WHERE sv.survey_project_id = $1
+          AND (sub.parent_task_id IS DISTINCT FROM sv.task_id
+               OR sub.village_id IS DISTINCT FROM sv.village_id)`,
+      [programmeId]);
+    expect(mismatched.rows[0].n, "every subtask under its own village").toBe(0);
+  });
+
+  it("leaves villages already on the board alone", async () => {
+    // Generating twice should not make a second card for the same village.
+    const again = await post(w.admin, `/api/v1/survey/projects/${programmeId}/generate-tasks`,
+      { dry_run: false, include_stages: true });
+    expect(again.data.village_tasks).toBe(0);
+    expect(again.data.already_linked).toBeGreaterThan(0);
+  });
+});

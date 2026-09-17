@@ -595,19 +595,33 @@ export async function grantLeaveBalance(
   leaveTypeId: string,
   openingBalance = 12,
 ): Promise<void> {
-  const res = await app.inject({
-    method: "POST",
-    url: "/api/v1/leave/balances",
-    headers: { ...headers, ...idem() },
-    payload: {
-      employee_id: employeeId,
-      leave_type_id: leaveTypeId,
-      period_year: Number(workDate().slice(0, 4)),
-      opening_balance: openingBalance,
-    },
-  });
-  if (res.statusCode >= 400) {
-    throw new Error(`grantLeaveBalance failed: ${res.statusCode} ${res.body}`);
+  /*
+   * This year and the next.
+   *
+   * A leave balance belongs to the calendar year of the leave's start date,
+   * and these suites ask for leave a hundred-odd days out. Granting only the
+   * current year meant that from late September onwards the far-dated tests
+   * asked for leave in a year with no balance and failed with
+   * INSUFFICIENT_BALANCE — a suite that passes in June and fails in October,
+   * which looks exactly like a regression in whatever was being worked on
+   * at the time.
+   */
+  const thisYear = Number(workDate().slice(0, 4));
+  for (const periodYear of [thisYear, thisYear + 1]) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/leave/balances",
+      headers: { ...headers, ...idem() },
+      payload: {
+        employee_id: employeeId,
+        leave_type_id: leaveTypeId,
+        period_year: periodYear,
+        opening_balance: openingBalance,
+      },
+    });
+    if (res.statusCode >= 400) {
+      throw new Error(`grantLeaveBalance failed: ${res.statusCode} ${res.body}`);
+    }
   }
 }
 
