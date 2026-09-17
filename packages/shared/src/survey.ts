@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { RoleCode } from './rbac.js';
 import type { TaskStatus } from './s4.js';
+import { businessDay } from './india.js';
 
 /**
  * Land survey progress (§59).
@@ -528,7 +529,32 @@ export function checkRoverDay(rows: RoverDayEntry[]): string[] {
 
 /* --------------------------------------------------------------- schemas */
 
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
+const isoDate = z.string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
+  // The shape is not the same thing as a date: 2026-13-01 and 2026-02-30 both
+  // match the pattern, and reach Postgres as something it refuses with a 500
+  // rather than a message anybody can act on. Round-tripping through Date is
+  // what separates a real calendar date from a well-formed string.
+  .refine(s => {
+    const d = new Date(`${s}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+  }, 'That is not a real date');
+
+/**
+ * A date that has already happened, in Indian time.
+ *
+ * A day's return is a measurement, and work that has not been done yet cannot
+ * be measured. Left open, tomorrow's figure lands in the cumulative and every
+ * pace and forecast downstream quietly becomes a prediction wearing the
+ * clothes of a record.
+ *
+ * Compared against the Indian business day rather than UTC: a crew filing at
+ * half past midnight in Vijayawada is filing on today's date, and UTC still
+ * thinks it is yesterday evening.
+ */
+const pastDate = isoDate.refine(
+  s => s <= businessDay(), 'That date has not happened yet',
+);
 const quantity = z.number().finite().min(0, 'A quantity cannot be negative');
 
 export const surveyProjectSchema = z.object({
@@ -618,7 +644,7 @@ export const roverDaySchema = z.object({
 
 export const surveyEntrySchema = z.object({
   survey_village_id: z.string().uuid(),
-  entry_date: isoDate,
+  entry_date: pastDate,
   teams_deployed: z.number().int().min(0).optional(),
   dgps_base: z.number().int().min(0).optional(),
   dgps_rovers: z.number().int().min(0).optional(),

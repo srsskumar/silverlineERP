@@ -7,7 +7,42 @@ import { ApiError, toFieldErrors } from '@silverline/shared';
 import type { z } from 'zod';
 import { resolveScopes, taskScopeClause, employeeScopeClause } from './scopes.js';
 
+/**
+ * Where a NUL byte is hiding in the body, if one is.
+ *
+ * Postgres will not store one in a text column: it comes back from the driver
+ * as an error nobody asked for, which the handler turns into a 500 and a
+ * stack trace in the log. What the caller needs instead is a sentence naming
+ * the field. Nothing a person types produces a NUL — it arrives from a
+ * corrupt export or from somebody trying it on — so refusing it and saying
+ * which value it was in is the whole of the right behaviour.
+ *
+ * Every module validates through parse(), so this is the one place it needs
+ * to be said.
+ */
+function nulByteIn(value:unknown,path:string[]=[],depth=0):string|null {
+ if(depth>24) return null;
+ if(typeof value==='string') return value.includes('\u0000')?(path.join('.')||'body'):null;
+ if(Array.isArray(value)) {
+  for(let i=0;i<value.length;i++) {
+   const hit=nulByteIn(value[i],[...path,String(i)],depth+1);
+   if(hit) return hit;
+  }
+  return null;
+ }
+ if(value&&typeof value==='object') {
+  for(const [k,v] of Object.entries(value as Record<string,unknown>)) {
+   const hit=nulByteIn(v,[...path,k],depth+1);
+   if(hit) return hit;
+  }
+ }
+ return null;
+}
+
 export function parse<T>(schema:z.ZodType<T, z.ZodTypeDef, unknown>,body:unknown):T {
+ const nul=nulByteIn(body);
+ if(nul) throw new ApiError({status:422,code:'VALIDATION_ERROR',message:'Validation failed',
+  fieldErrors:[{field:nul,message:'Remove the null character from this value',code:'invalid_string'}]});
  const result=schema.safeParse(body);
  if(!result.success) throw new ApiError({status:422,code:'VALIDATION_ERROR',message:'Validation failed',fieldErrors:toFieldErrors(result.error)});
  return result.data;

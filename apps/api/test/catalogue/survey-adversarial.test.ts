@@ -1,0 +1,290 @@
+/**
+ * The land survey module, pushed at deliberately.
+ *
+ * Every screen here takes numbers from a field crew on a phone and text from
+ * a spreadsheet nobody wrote carefully. These are the inputs that arrive in
+ * practice — a negative acreage, a date in the next century, a name with a
+ * quote in it, somebody else's village id — and each one is either handled
+ * or is a defect worth knowing about before a crew finds it.
+ */
+
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { buildWorld, idem, uniq, workDate, type CatalogueWorld, type Headers } from "./fixture.js";
+
+let w: CatalogueWorld;
+let programmeId: string;
+let villageId: string;
+let mandalId: string;
+
+async function send(
+  method: "POST" | "GET" | "PATCH", headers: Headers, url: string, payload?: unknown,
+) {
+  const res = await w.app.inject({
+    method, url,
+    headers: { ...headers, ...(method === "GET" ? {} : idem()) },
+    ...(payload === undefined ? {} : { payload }),
+  });
+  let body: any = null;
+  try { body = res.json(); } catch { body = null; }
+  return { status: res.statusCode, body, data: body?.data ?? body };
+}
+const post = (h: Headers, u: string, p?: unknown) => send("POST", h, u, p);
+const get = (h: Headers, u: string) => send("GET", h, u);
+
+beforeAll(async () => {
+  w = await buildWorld();
+  const district = String((await w.pool.query(
+    `INSERT INTO org_units(org_id,type,code,name) VALUES($1,'district',$2,'Adv district') RETURNING id`,
+    [w.orgId, uniq("D")])).rows[0].id);
+  mandalId = String((await w.pool.query(
+    `INSERT INTO org_units(org_id,type,code,name,parent_id) VALUES($1,'mandal',$2,'Adv mandal',$3) RETURNING id`,
+    [w.orgId, uniq("M"), district])).rows[0].id);
+
+  const p = await post(w.admin, "/api/v1/survey/projects",
+    { code: uniq("ADV"), name: "Adversarial programme", create_project: false });
+  programmeId = String(p.data.id);
+
+  const v = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+    village_name: "Adversarial village", village_code: uniq("AV"),
+    mandal_id: mandalId, total_extent_ac: 100,
+  });
+  villageId = String(v.data.id);
+}, 180_000);
+
+afterAll(async () => { await w?.app.close(); await w?.pool.end(); });
+
+describe("numbers a crew can actually type", () => {
+  const entry = (values: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+    post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: villageId, entry_date: workDate(),
+      teams_deployed: 1, values, ...extra,
+    });
+
+  it("refuses a negative quantity", async () => {
+    // Negative progress is not progress, and a cumulative that can go
+    // backwards is a cumulative nobody can reconcile.
+    const r = await entry({ GOVT_LAND_EXTENT_AC: -50 });
+    expect(r.status, JSON.stringify(r.body)).toBe(422);
+  });
+
+  it("refuses a quantity that is not a number at all", async () => {
+    const r = await entry({ GOVT_LAND_EXTENT_AC: "not a number" });
+    expect(r.status).toBe(422);
+  });
+
+  it("refuses infinity and NaN, which JSON can smuggle in as strings", async () => {
+    for (const bad of ["Infinity", "-Infinity", "NaN", "1e999"]) {
+      const r = await entry({ GOVT_LAND_EXTENT_AC: bad });
+      expect([422, 400], `value ${bad}`).toContain(r.status);
+    }
+  });
+
+  it("refuses a negative team count", async () => {
+    const r = await entry({ GOVT_LAND_EXTENT_AC: 1 }, { teams_deployed: -3 });
+    expect(r.status).toBe(422);
+  });
+
+  it("refuses a village extent of zero or below", async () => {
+    // Zero extent makes every percentage a division by nothing.
+    for (const bad of [0, -1]) {
+      const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+        village_name: "Bad extent", village_code: uniq("BE"),
+        mandal_id: mandalId, total_extent_ac: bad,
+      });
+      expect(r.status, `extent ${bad}`).toBe(422);
+    }
+  });
+});
+
+describe("dates a crew can actually type", () => {
+  it("refuses a return dated in the future", async () => {
+    // Recording work that has not happened yet makes the pace figure a
+    // forecast pretending to be a measurement.
+    const future = new Date();
+    future.setDate(future.getDate() + 3);
+    const r = await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: villageId, entry_date: future.toISOString().slice(0, 10),
+      teams_deployed: 1, values: { GOVT_LAND_EXTENT_AC: 5 },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(422);
+  });
+
+  it("refuses a malformed date rather than guessing at it", async () => {
+    for (const bad of ["31/12/2026", "2026-13-01", "2026-02-30", "yesterday", ""]) {
+      const r = await post(w.admin, "/api/v1/survey/entries", {
+        survey_village_id: villageId, entry_date: bad,
+        teams_deployed: 1, values: { GOVT_LAND_EXTENT_AC: 5 },
+      });
+      expect(r.status, `date ${bad}`).toBe(422);
+    }
+  });
+});
+
+describe("text from a spreadsheet nobody wrote carefully", () => {
+  it("keeps a quote in a village name without breaking anything", async () => {
+    const name = `O'Brien's "Village" -- DROP`;
+    const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: name, village_code: uniq("QT"), mandal_id: mandalId,
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    const unit = await w.pool.query(
+      "SELECT name FROM org_units WHERE id = (SELECT village_id FROM survey_villages WHERE id=$1)",
+      [r.data.id]);
+    // Stored exactly as given: escaping is the driver's job, not the name's.
+    expect(unit.rows[0].name).toBe(name);
+  });
+
+  it("refuses a name longer than the column can hold", async () => {
+    // Silently truncating somebody's data is worse than refusing it.
+    const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "x".repeat(5000), village_code: uniq("LN"), mandal_id: mandalId,
+    });
+    expect(r.status).toBe(422);
+  });
+
+  it("refuses an empty or whitespace-only name", async () => {
+    for (const bad of ["", "   ", "\t"]) {
+      const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+        village_name: bad, village_code: uniq("EM"), mandal_id: mandalId,
+      });
+      expect(r.status, JSON.stringify(bad)).toBe(422);
+    }
+  });
+
+  it("keeps Telugu script intact", async () => {
+    // The villages are in Andhra Pradesh; a register that mangles the local
+    // script is a register nobody trusts.
+    const name = "అడకుల గ్రామం";
+    const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: name, village_code: uniq("TE"), mandal_id: mandalId,
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    const unit = await w.pool.query(
+      "SELECT name FROM org_units WHERE id = (SELECT village_id FROM survey_villages WHERE id=$1)",
+      [r.data.id]);
+    expect(unit.rows[0].name).toBe(name);
+  });
+});
+
+describe("identifiers somebody else owns, or made up", () => {
+  it("refuses a village id that is not a uuid", async () => {
+    const r = await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: "'; DROP TABLE survey_villages; --",
+      entry_date: workDate(), teams_deployed: 1, values: {},
+    });
+    expect(r.status).toBe(422);
+    // And the table is still there.
+    const alive = await w.pool.query("SELECT count(*)::int AS n FROM survey_villages");
+    expect(alive.rows[0].n).toBeGreaterThan(0);
+  });
+
+  it("refuses a well-formed uuid that belongs to nothing", async () => {
+    const r = await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: "00000000-0000-4000-8000-000000000000",
+      entry_date: workDate(), teams_deployed: 1, values: { GOVT_LAND_EXTENT_AC: 1 },
+    });
+    expect([404, 422]).toContain(r.status);
+  });
+
+  it("refuses a measure code nobody defined", async () => {
+    const r = await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: villageId, entry_date: workDate(),
+      teams_deployed: 1, values: { NOT_A_MEASURE: 5 },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(422);
+  });
+
+  it("refuses a stage code nobody defined", async () => {
+    const r = await post(w.admin, `/api/v1/survey/villages/${villageId}/stage`, {
+      stage_code: "MADE_UP_STAGE", state: "IN_PROGRESS",
+    });
+    expect(r.status).toBe(422);
+  });
+
+  it("refuses a stage state that is not one of the three", async () => {
+    const r = await post(w.admin, `/api/v1/survey/villages/${villageId}/stage`, {
+      stage_code: "GROUND_TRUTHING", state: "NEARLY_DONE",
+    });
+    expect(r.status).toBe(422);
+  });
+});
+
+describe("the same thing submitted twice", () => {
+  it("refuses a second return for the same village on the same day", async () => {
+    // Two returns for one day would double that day's work in every total.
+    const day = workDate();
+    const first = await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: villageId, entry_date: day,
+      teams_deployed: 1, values: { GOVT_LAND_EXTENT_AC: 7 },
+    });
+    expect([201, 409]).toContain(first.status);
+    const second = await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: villageId, entry_date: day,
+      teams_deployed: 1, values: { GOVT_LAND_EXTENT_AC: 9 },
+    });
+    expect(second.status, JSON.stringify(second.body)).toBe(409);
+  });
+
+  it("refuses a programme code that is already in use", async () => {
+    const code = uniq("DUP");
+    await post(w.admin, "/api/v1/survey/projects", { code, name: "First", create_project: false });
+    const again = await post(w.admin, "/api/v1/survey/projects",
+      { code, name: "Second", create_project: false });
+    expect(again.status).toBe(409);
+  });
+});
+
+describe("reports asked for impossible things", () => {
+  it("refuses a range that ends before it starts", async () => {
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/progress?from=2026-12-31&to=2026-01-01`);
+    // Either refused, or answered with nothing — never with somebody else's
+    // numbers.
+    expect([200, 422]).toContain(r.status);
+    if (r.status === 200) expect(r.data.total.doneAc ?? 0).toBe(0);
+  });
+
+  it("refuses a page size beyond the server maximum", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/villages?limit=100000`);
+    // Clamped rather than obeyed: an unbounded page is a denial of service
+    // anybody can trigger from the address bar.
+    expect(r.status).toBe(200);
+    expect((r.data as unknown[]).length).toBeLessThanOrEqual(100);
+  });
+
+  it("does not fall over on a grain it has never heard of", async () => {
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/timeline?grain=FORTNIGHT`);
+    expect(r.status).toBe(200);
+  });
+
+  it("refuses a range so wide it would answer with thousands of periods", async () => {
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/timeline?grain=DAY&from=1900-01-01&to=2099-12-31`);
+    expect(r.status, JSON.stringify(r.body)).toBe(422);
+  });
+});
+
+describe("a crew member reaching past their own programme", () => {
+  it("cannot record progress against a village they are not on", async () => {
+    const other = await post(w.admin, "/api/v1/survey/projects",
+      { code: uniq("OTH"), name: "Somebody else's", create_project: false });
+    const theirVillage = await post(w.admin,
+      `/api/v1/survey/projects/${other.data.id}/villages`,
+      { village_name: "Theirs", village_code: uniq("TH"), mandal_id: mandalId });
+
+    const r = await post(w.directUser, "/api/v1/survey/entries", {
+      survey_village_id: theirVillage.data.id, entry_date: workDate(),
+      teams_deployed: 1, values: { GOVT_LAND_EXTENT_AC: 5 },
+    });
+    expect([403, 404]).toContain(r.status);
+  });
+
+  it("cannot change the village list", async () => {
+    // The list is what their own progress is measured against.
+    const r = await post(w.directUser, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Not theirs to add", village_code: uniq("NT"), mandal_id: mandalId,
+    });
+    expect([401, 403, 404]).toContain(r.status);
+  });
+});

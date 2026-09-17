@@ -151,7 +151,7 @@ describe("a rover's day", () => {
   it("refuses an idle rover with no reason", async () => {
     // An idle count with no reasons behind it is not a finding anybody can use.
     const r = await post(w.admin, "/api/v1/survey/entries", {
-      survey_village_id: villageA, entry_date: day(1), values: {},
+      survey_village_id: villageA, entry_date: day(-1), values: {},
       rovers: [{ asset_id: roverA, status: "IDLE" }],
     });
     expect(r.status).toBe(422);
@@ -161,7 +161,7 @@ describe("a rover's day", () => {
 
   it("refuses \"other\" with nothing written", async () => {
     const r = await post(w.admin, "/api/v1/survey/entries", {
-      survey_village_id: villageA, entry_date: day(1), values: {},
+      survey_village_id: villageA, entry_date: day(-1), values: {},
       rovers: [{ asset_id: roverA, status: "IDLE", idle_reason: "OTHER" }],
     });
     expect(r.status).toBe(422);
@@ -170,7 +170,7 @@ describe("a rover's day", () => {
 
   it("names every problem at once rather than one per attempt", async () => {
     const r = await post(w.admin, "/api/v1/survey/entries", {
-      survey_village_id: villageA, entry_date: day(1), values: {},
+      survey_village_id: villageA, entry_date: day(-1), values: {},
       rovers: [
         { asset_id: roverA, status: "IDLE" },
         { asset_id: roverB, status: "UTILIZED", idle_reason: "WEATHER" },
@@ -182,7 +182,7 @@ describe("a rover's day", () => {
 
   it("refuses a reason it does not know", async () => {
     const r = await post(w.admin, "/api/v1/survey/entries", {
-      survey_village_id: villageA, entry_date: day(1), values: {},
+      survey_village_id: villageA, entry_date: day(-1), values: {},
       rovers: [{ asset_id: roverA, status: "IDLE", idle_reason: "HUNGOVER" }],
     });
     expect(r.status).toBe(422);
@@ -193,7 +193,7 @@ describe("a thin day", () => {
   it("demands a reason when the day is below the programme threshold", async () => {
     // Five acres is the threshold on this programme; two is below it.
     const r = await post(w.admin, "/api/v1/survey/entries", {
-      survey_village_id: villageA, entry_date: day(2),
+      survey_village_id: villageA, entry_date: day(-3),
       values: { GOVT_LAND_EXTENT_AC: 2 },
       rovers: [{ asset_id: roverA, status: "UTILIZED", area_ac: 2 }],
     });
@@ -205,7 +205,7 @@ describe("a thin day", () => {
 
   it("accepts the day once a reason is given", async () => {
     const r = await post(w.admin, "/api/v1/survey/entries", {
-      survey_village_id: villageA, entry_date: day(2),
+      survey_village_id: villageA, entry_date: day(-3),
       values: { GOVT_LAND_EXTENT_AC: 2 },
       rovers: [{ asset_id: roverA, status: "UTILIZED", area_ac: 2 }],
       low_progress_reason: "ACCESS",
@@ -215,7 +215,7 @@ describe("a thin day", () => {
 
   it("demands nothing of a day that meets the threshold", async () => {
     const r = await post(w.admin, "/api/v1/survey/entries", {
-      survey_village_id: villageA, entry_date: day(3),
+      survey_village_id: villageA, entry_date: day(-6),
       values: { GOVT_LAND_EXTENT_AC: 9 },
       rovers: [{ asset_id: roverA, status: "UTILIZED", area_ac: 9 }],
     });

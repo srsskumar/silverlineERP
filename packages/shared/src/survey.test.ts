@@ -1203,3 +1203,53 @@ describe('comparing a period with the one before it', () => {
     });
   });
 });
+
+describe("the date on a day's return", () => {
+  const entry = (entry_date: string) => surveyEntrySchema.safeParse({
+    survey_village_id: '11111111-1111-4111-8111-111111111111',
+    entry_date, teams_deployed: 1, values: { GOVT_LAND_EXTENT_AC: 5 },
+  });
+
+  const today = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date());
+
+  it('takes today, in Indian time', () => {
+    // A crew filing at half past midnight in Vijayawada is filing on today's
+    // date; UTC still thinks it is yesterday evening.
+    expect(entry(today).success).toBe(true);
+  });
+
+  it('takes a day that has already happened', () => {
+    expect(entry('2026-01-15').success).toBe(true);
+  });
+
+  it('refuses tomorrow', () => {
+    const t = new Date(`${today}T00:00:00Z`);
+    t.setUTCDate(t.getUTCDate() + 1);
+    const r = entry(t.toISOString().slice(0, 10));
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues[0].message).toContain('has not happened yet');
+    }
+  });
+
+  it('refuses a month and a day the calendar does not have', () => {
+    // Both match YYYY-MM-DD. Postgres refuses them too, but as a driver error
+    // that surfaces as a 500 rather than as a sentence about the field.
+    for (const bad of ['2026-13-01', '2026-02-30', '2026-00-10', '2026-04-31']) {
+      expect(entry(bad).success, bad).toBe(false);
+    }
+  });
+
+  it('refuses a shape that is not a date at all', () => {
+    for (const bad of ['31/12/2026', 'yesterday', '', '2026-1-5', '20260105']) {
+      expect(entry(bad).success, bad).toBe(false);
+    }
+  });
+
+  it('accepts a leap day in a leap year and refuses it otherwise', () => {
+    expect(entry('2024-02-29').success).toBe(true);
+    expect(entry('2026-02-29').success).toBe(false);
+  });
+});

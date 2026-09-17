@@ -8,7 +8,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { STAGE_PIPELINE } from "@silverline/shared";
-import { buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
+import { buildWorld, idem, uniq, type CatalogueWorld, type Headers , joinProgramme } from "./fixture.js";
 
 let w: CatalogueWorld;
 let projectId: string;
@@ -468,6 +468,10 @@ describe("§59.4.3 measures added on the fly", () => {
 describe("§59.7 controls", () => {
   it("lets a crew record progress", async () => {
     const sv = await listed("Crew village", 40);
+    // A crew member is somebody on the programme. Without this the account
+    // holds survey.enter and stands on nothing, which the module now reads
+    // as "no programme of yours" rather than "every programme".
+    await joinProgramme(w.pool, w.orgId, w.roleUserId.TEAM_LEAD, projectId);
     const r = await post(w.role.TEAM_LEAD, "/api/v1/survey/entries", {
       survey_village_id: sv, entry_date: "2026-09-14", values: { GOVT_LAND_POINTS: 30 },
     });

@@ -7,7 +7,23 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
+import { buildWorld, idem, uniq, workDate, type CatalogueWorld, type Headers , joinProgramme } from "./fixture.js";
+
+/**
+ * The day the crew is working, and the day before it.
+ *
+ * These were fixed calendar dates until a day's return stopped being allowed
+ * in the future — which is correct, and which quietly made the whole file
+ * depend on the wall clock still being in October 2026. Dates in a test that
+ * records "today's work" have to move with today.
+ */
+const TODAY = workDate();
+const YESTERDAY = new Date(`${TODAY}T00:00:00Z`);
+YESTERDAY.setUTCDate(YESTERDAY.getUTCDate() - 1);
+const PRIOR = YESTERDAY.toISOString().slice(0, 10);
+const LATER = new Date(`${TODAY}T00:00:00Z`);
+LATER.setUTCDate(LATER.getUTCDate() + 4);
+const AHEAD = LATER.toISOString().slice(0, 10);
 
 let w: CatalogueWorld;
 let programmeId: string;
@@ -213,24 +229,24 @@ describe("rovers", () => {
 
   it("lets it move once it is back", async () => {
     await w.pool.query(
-      "UPDATE survey_rover_allocations SET released_on = '2026-09-30' WHERE asset_id = $1",
-      [rover1]);
+      "UPDATE survey_rover_allocations SET released_on = $2 WHERE asset_id = $1",
+      [rover1, PRIOR]);
     const r = await post(w.admin, `/api/v1/survey/villages/${villageB}/rovers`,
-      { asset_id: rover1, allocated_on: "2026-10-01" });
+      { asset_id: rover1, allocated_on: TODAY });
     expect(r.status).toBe(201);
   });
 
   it("reports what was used against what was out, and what sat idle", async () => {
     // Two rovers out on the day, one reported in use.
     await post(w.admin, `/api/v1/survey/villages/${villageA}/rovers`,
-      { asset_id: rover2, allocated_on: "2026-10-01" });
+      { asset_id: rover2, allocated_on: TODAY });
     await post(w.admin, "/api/v1/survey/entries", {
-      survey_village_id: villageA, entry_date: "2026-10-01",
+      survey_village_id: villageA, entry_date: TODAY,
       teams_deployed: 1, dgps_rovers: 1, values: { GOVT_LAND_EXTENT_AC: 5 },
     });
 
     const r = await get(w.admin,
-      `/api/v1/survey/projects/${programmeId}/progress?to=2026-10-01`);
+      `/api/v1/survey/projects/${programmeId}/progress?to=${TODAY}`);
     expect(r.data.rovers.allocated).toBe(2);
     expect(r.data.rovers.used).toBe(1);
     expect(r.data.rovers.idle).toBe(1);
@@ -248,7 +264,7 @@ describe("rovers", () => {
 describe("pace", () => {
   it("reports how fast the work is going and when it would finish", async () => {
     const r = await get(w.admin,
-      `/api/v1/survey/projects/${programmeId}/progress?to=2026-10-01`);
+      `/api/v1/survey/projects/${programmeId}/progress?to=${TODAY}`);
     expect(r.data.pace).toBeTruthy();
     expect(r.data.pace.activeDays).toBeGreaterThan(0);
     // Two rates: how fast a crew works, and how fast the work actually goes.
@@ -258,7 +274,7 @@ describe("pace", () => {
 
   it("projects a finish date from the calendar rate", async () => {
     const r = await get(w.admin,
-      `/api/v1/survey/projects/${programmeId}/progress?to=2026-10-01`);
+      `/api/v1/survey/projects/${programmeId}/progress?to=${TODAY}`);
     // 5 acres done of 200; there is a rate, so there is a projection.
     expect(r.data.pace.projectedFinish).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(r.data.pace.daysToFinish).toBeGreaterThan(0);
@@ -266,6 +282,12 @@ describe("pace", () => {
 });
 
 describe("controls", () => {
+  beforeAll(async () => {
+    // Same reason as the entry tests: the subject has to be on the programme
+    // to be a crew member on it.
+    await joinProgramme(w.pool, w.orgId, w.roleUserId.TEAM_LEAD, programmeId);
+  });
+
   it("lets a crew record progress but not assign the crew", async () => {
     const r = await post(w.role.TEAM_LEAD, `/api/v1/survey/villages/${villageB}/crew`,
       { employee_id: w.siteEmployee, stage_code: "VECTORIZATION" });
@@ -280,7 +302,7 @@ describe("controls", () => {
 
   it("does not let a crew allocate equipment", async () => {
     const r = await post(w.role.TEAM_LEAD, `/api/v1/survey/villages/${villageB}/rovers`,
-      { asset_id: w.assetId, allocated_on: "2026-10-05" });
+      { asset_id: w.assetId, allocated_on: AHEAD });
     expect(r.status).toBe(403);
   });
 });
@@ -329,7 +351,7 @@ describe("returning a rover", () => {
 describe("rover utilisation per village", () => {
   it("reports instrument-days per village over a window", async () => {
     const r = await get(w.admin,
-      `/api/v1/survey/projects/${programmeId}/rover-utilisation?from=2026-10-01&to=2026-10-01`);
+      `/api/v1/survey/projects/${programmeId}/rover-utilisation?from=${TODAY}&to=${TODAY}`);
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect(r.data.villages.length).toBeGreaterThan(0);
     const row = r.data.villages.find((v: any) => v.village === "ADAKULA");
@@ -342,7 +364,7 @@ describe("rover utilisation per village", () => {
     // A missing return is a reporting failure; a zero is somebody saying the
     // kit sat there. They need different conversations.
     const r = await get(w.admin,
-      `/api/v1/survey/projects/${programmeId}/rover-utilisation?from=2026-10-01&to=2026-10-05`);
+      `/api/v1/survey/projects/${programmeId}/rover-utilisation?from=${TODAY}&to=${AHEAD}`);
     const row = r.data.villages.find((v: any) => v.village === "ADAKULA");
     expect(row).toHaveProperty("daysNotReported");
     expect(row).toHaveProperty("unreportedRoverDays");
@@ -351,7 +373,7 @@ describe("rover utilisation per village", () => {
 
   it("ranks the worst offender first", async () => {
     const r = await get(w.admin,
-      `/api/v1/survey/projects/${programmeId}/rover-utilisation?from=2026-10-01&to=2026-10-05`);
+      `/api/v1/survey/projects/${programmeId}/rover-utilisation?from=${TODAY}&to=${AHEAD}`);
     const idle = r.data.villages.map((v: any) => v.idleRoverDays);
     expect([...idle].sort((a: number, b: number) => b - a)).toEqual(idle);
   });
@@ -365,7 +387,7 @@ describe("rover utilisation per village", () => {
 
   it("refuses a window that starts after it ends", async () => {
     const r = await get(w.admin,
-      `/api/v1/survey/projects/${programmeId}/rover-utilisation?from=2026-10-05&to=2026-10-01`);
+      `/api/v1/survey/projects/${programmeId}/rover-utilisation?from=${AHEAD}&to=${TODAY}`);
     expect(r.status).toBe(422);
   });
 });

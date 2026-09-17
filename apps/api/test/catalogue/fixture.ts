@@ -893,3 +893,40 @@ export function punch(over: Record<string, unknown> = {}): Record<string, unknow
 export function metresNorth(metres: number): number {
   return metres / M_PER_DEG_LAT;
 }
+
+/**
+ * Put a signed-in user on a survey programme, the way a real crew member is.
+ *
+ * Survey access is scoped to the programmes somebody is actually assigned to,
+ * on both sides now — a user holding survey.enter but standing on no
+ * programme is not a crew member, and the module is right to show them
+ * nothing. Tests that mean "a crew member does this" have to make the subject
+ * a crew member rather than lean on the scope being absent.
+ *
+ * The user gets an employee record of its own if it has none. Lending it a
+ * shared one would widen whatever else that employee is attached to, which is
+ * exactly the kind of quiet visibility change the scope exists to prevent.
+ */
+export async function joinProgramme(
+  pool: Pool, orgId: string, userId: string, programmeId: string,
+  projectRole = "TEAM_LEAD",
+): Promise<string> {
+  const held = (await pool.query("SELECT employee_id FROM users WHERE id = $1", [userId]))
+    .rows[0]?.employee_id as string | null;
+  let employeeId = held;
+  if (!employeeId) {
+    employeeId = (await pool.query(
+      `INSERT INTO employees (org_id, emp_no, first_name, last_name, phone, date_of_joining)
+       VALUES ($1, $2, 'Crew', 'Member', $3, CURRENT_DATE) RETURNING id`,
+      [orgId, uniq("CREW"), `9${Math.floor(100000000 + Math.random() * 899999999)}`],
+    )).rows[0].id as string;
+    await pool.query("UPDATE users SET employee_id = $1 WHERE id = $2", [employeeId, userId]);
+  }
+  await pool.query(
+    `INSERT INTO survey_project_employees (org_id, survey_project_id, employee_id, project_role)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (survey_project_id, employee_id) DO UPDATE SET released_on = NULL`,
+    [orgId, programmeId, employeeId, projectRole],
+  );
+  return employeeId;
+}

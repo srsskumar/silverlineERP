@@ -263,7 +263,18 @@ export async function registerSurveyRoutes(
       `SELECT pe.survey_project_id AS id
        FROM survey_project_employees pe
        JOIN users usr ON usr.employee_id = pe.employee_id
-       WHERE usr.id = $1 AND pe.org_id = $2 AND pe.released_on IS NULL`,
+       WHERE usr.id = $1 AND pe.org_id = $2 AND pe.released_on IS NULL
+       UNION
+       -- Being put on a village's crew is being on the programme, whatever
+       -- the enrolment table says. Crews are assigned village by village from
+       -- the village screen, which writes survey_crew and nothing else; read
+       -- only the enrolment table and the people actually doing the work see
+       -- an empty programme list and cannot file the day they just worked.
+       SELECT sv.survey_project_id AS id
+       FROM survey_crew sc
+       JOIN survey_villages sv ON sv.id = sc.survey_village_id
+       JOIN users usr ON usr.employee_id = sc.employee_id
+       WHERE usr.id = $1 AND sc.org_id = $2 AND sc.released_on IS NULL`,
       [u.id, u.orgId])).rows;
     return rows.map(r => String(r.id));
   }
@@ -280,6 +291,29 @@ export async function registerSurveyRoutes(
         // may not see is itself a disclosure.
         fail('NOT_FOUND', 'Not found', 404);
       }
+    }
+    return row;
+  }
+
+  /**
+   * A village, and only if the caller may see the programme it belongs to.
+   *
+   * inOrg() answers "is this row in your organisation", which is a different
+   * and weaker question. Every programme-addressed route already asks the
+   * stronger one through projectOr404; the village-addressed routes were
+   * asking only the weaker one, so a crew member on one programme could read
+   * and write villages on every other programme in the organisation by
+   * quoting the id. The scope belongs on the village too.
+   */
+  async function villageOr404(
+    db: Pool | PoolClient, orgId: string, id: string,
+    u: { orgId: string; id: string; permissions: string[] },
+    lock = false,
+  ) {
+    const row = await inOrg(db, 'survey_villages', id, orgId, lock);
+    const allowed = await visibleProgrammes(db, u);
+    if (allowed !== null && !allowed.includes(String(row.survey_project_id))) {
+      fail('NOT_FOUND', 'Not found', 404);
     }
     return row;
   }
@@ -808,7 +842,7 @@ export async function registerSurveyRoutes(
       const input = parse(targetSchema, req.body);
       return {
         data: await mutate(pool, req, 'survey.target.set', 'survey_target', async db => {
-          await inOrg(db, 'survey_villages', id, u.orgId);
+          await villageOr404(db, u.orgId, id, u);
           const m = (await measures(db, u.orgId)).byCode.get(input.measure_code);
           if (!m) fail('UNKNOWN_MEASURE', `There is no measure ${input.measure_code}`, 422);
           if (m.basis === 'EXTENT') {
@@ -844,7 +878,7 @@ export async function registerSurveyRoutes(
     const input = parse(stageRemarkSchema, req.body);
     return {
       data: await mutate(pool, req, 'survey.stage.set', 'survey_village_stage', async db => {
-        await inOrg(db, 'survey_villages', id, u.orgId);
+        await villageOr404(db, u.orgId, id, u);
         const stage = (await db.query(
           'SELECT * FROM survey_stages WHERE org_id = $1 AND code = $2 AND active',
           [u.orgId, input.stage_code])).rows[0];
@@ -920,7 +954,7 @@ export async function registerSurveyRoutes(
    */
   app.get('/api/v1/survey/villages/:id/crew', { preHandler: guard('survey.read') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    await inOrg(pool, 'survey_villages', id, u.orgId);
+    await villageOr404(pool, u.orgId, id, u);
     const rows = (await pool.query(
       `SELECT c.*, s.code AS stage_code, s.label AS stage_label,
               e.emp_no,
@@ -994,7 +1028,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(crewAssignmentSchema, req.body);
       const row = await mutate(pool, req, 'survey.crew.assign', 'survey_crew', async db => {
-        await inOrg(db, 'survey_villages', id, u.orgId);
+        await villageOr404(db, u.orgId, id, u);
         await inOrg(db, 'employees', input.employee_id, u.orgId);
         const stage = (await db.query(
           'SELECT id FROM survey_stages WHERE org_id = $1 AND code = $2 AND active',
@@ -1032,7 +1066,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(crewBulkAssignmentSchema, req.body);
       const out = await mutate(pool, req, 'survey.crew.assign.bulk', 'survey_crew', async db => {
-        await inOrg(db, 'survey_villages', id, u.orgId);
+        await villageOr404(db, u.orgId, id, u);
         const stage = (await db.query(
           'SELECT id FROM survey_stages WHERE org_id = $1 AND code = $2 AND active',
           [u.orgId, input.stage_code])).rows[0];
@@ -1078,7 +1112,7 @@ export async function registerSurveyRoutes(
       const input = parse(roverBulkAllocationSchema, req.body);
       const out = await mutate(pool, req, 'survey.rover.allocate.bulk',
         'survey_rover_allocation', async db => {
-          await inOrg(db, 'survey_villages', id, u.orgId);
+          await villageOr404(db, u.orgId, id, u);
           const allocated: string[] = [];
           const clashes: Array<{ asset_id: string; asset_code: string; with_village: string }> = [];
 
@@ -1240,7 +1274,7 @@ export async function registerSurveyRoutes(
   app.get('/api/v1/survey/villages/:id/rovers', { preHandler: guard('survey.read') },
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
-      await inOrg(pool, 'survey_villages', id, u.orgId);
+      await villageOr404(pool, u.orgId, id, u);
       const rows = (await pool.query(
         `SELECT r.*, a.asset_code, a.name AS asset_name, a.serial_number, a.condition
          FROM survey_rover_allocations r
@@ -1273,7 +1307,7 @@ export async function registerSurveyRoutes(
   app.get('/api/v1/survey/villages/:id/crew-assets',
     { preHandler: guard('survey.read') }, async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
-      await inOrg(pool, 'survey_villages', id, u.orgId);
+      await villageOr404(pool, u.orgId, id, u);
       const rows = (await pool.query(
         `SELECT DISTINCT ON (aa.asset_id)
                 aa.id AS assignment_id, aa.asset_id, aa.issued_at, aa.due_date,
@@ -1307,7 +1341,7 @@ export async function registerSurveyRoutes(
       const input = parse(roverAllocationSchema, req.body);
       const row = await mutate(pool, req, 'survey.rover.allocate', 'survey_rover_allocation',
         async db => {
-          await inOrg(db, 'survey_villages', id, u.orgId);
+          await villageOr404(db, u.orgId, id, u);
           await inOrg(db, 'assets', input.asset_id, u.orgId);
           try {
             return (await db.query(
@@ -1372,7 +1406,7 @@ export async function registerSurveyRoutes(
   app.post('/api/v1/survey/entries', { preHandler: guard('survey.enter') }, async (req, reply) => {
     const u = actor(req), input = parse(surveyEntrySchema, req.body);
     const row = await mutate(pool, req, 'survey.entry.create', 'survey_entry', async db => {
-      const village = await inOrg(db, 'survey_villages', input.survey_village_id, u.orgId);
+      const village = await villageOr404(db, u.orgId, input.survey_village_id, u);
       const m = await measures(db, u.orgId);
 
       for (const code of Object.keys(input.values)) {
@@ -1688,7 +1722,7 @@ export async function registerSurveyRoutes(
   app.get('/api/v1/survey/villages/:id/history', { preHandler: guard('survey.read') },
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
-      await inOrg(pool, 'survey_villages', id, u.orgId);
+      await villageOr404(pool, u.orgId, id, u);
       const rows = (await pool.query(
         `SELECT h.*, s.code AS stage_code, s.label AS stage_label, s.display_order,
                 COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), us.username)
@@ -1739,7 +1773,7 @@ export async function registerSurveyRoutes(
       const input = parse(villageStatusSchema, req.body);
       return {
         data: await mutate(pool, req, 'survey.village.status', 'survey_village', async db => {
-          const row = await inOrg(db, 'survey_villages', id, u.orgId, true);
+          const row = await villageOr404(db, u.orgId, id, u, true);
           version(req, row as { version: number });
           await db.query(
             `INSERT INTO survey_stage_history(org_id, survey_village_id, stage_id,
@@ -1781,7 +1815,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(surveyVillageEditSchema, req.body);
       return mutate(pool, req, 'survey.village.update', 'survey_village', async db => {
-        const row = await inOrg(db, 'survey_villages', id, u.orgId, true);
+        const row = await villageOr404(db, u.orgId, id, u, true);
         version(req, row as { version: number });
         if (input.village_name) {
           await db.query('UPDATE org_units SET name = $2, updated_at = now() WHERE id = $1',
@@ -1809,7 +1843,7 @@ export async function registerSurveyRoutes(
       const input = parse(villagePlanSchema, req.body);
       return {
         data: await mutate(pool, req, 'survey.village.plan', 'survey_village', async db => {
-          const row = await inOrg(db, 'survey_villages', id, u.orgId, true);
+          const row = await villageOr404(db, u.orgId, id, u, true);
           version(req, row as { version: number });
           const sets: string[] = [], values: unknown[] = [id];
           for (const key of ['total_extent_ac', 'expected_completion_on', 'planned_start_on'] as const) {
