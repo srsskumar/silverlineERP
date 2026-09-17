@@ -133,7 +133,13 @@ export default function SurveyPage() {
             ))}
           </select>
 
-          <div className="flex gap-1">
+          {/*
+            * Eight tabs do not fit across a phone, and a row that does not fit
+            * drags the whole page sideways with it — every screen below scrolls
+            * horizontally because of a strip at the top. Scrolls within itself
+            * instead.
+            */}
+          <div className="-mx-1 flex max-w-full gap-1 overflow-x-auto px-1 pb-1">
             {(['progress', 'report', 'villages', 'people', 'deployment', 'bottlenecks', 'timeline', 'summary'] as const).map((t) => (
               <Button key={t} type="button" variant={tab === t ? 'secondary' : 'ghost'}
                 onClick={() => setTab(t)}>
