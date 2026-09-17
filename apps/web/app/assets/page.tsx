@@ -39,7 +39,10 @@ export default function Page() {
               thing — a stored column would let the two disagree with no way
               to tell which is lying. */}
           Location is worked out from the allocations: an asset is in the field exactly when
-          somebody holds it. Select one to allocate it, record its return, or read its history.
+          somebody holds it. Select one to allocate it, record its return, or read its history.{' '}
+          <a href="/assets/movements" className="text-primary underline underline-offset-2">
+            Every movement, across the whole register
+          </a>.
         </p>
         <Collection
           path="assets"

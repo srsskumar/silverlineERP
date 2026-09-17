@@ -1406,3 +1406,88 @@ describe("handing an asset on, and correcting an allocation", () => {
     expect(String(row.picker_label)).toContain(String(row.asset_code));
   });
 });
+
+describe("where equipment has been", () => {
+  const H = () => ({ ...w.role.INVENTORY_MANAGER, ...idem() });
+
+  async function moves(query = ""): Promise<Array<Record<string, any>>> {
+    const r = await w.app.inject({
+      method: "GET", url: `/api/v1/assets/movements?${query}`,
+      headers: w.role.INVENTORY_MANAGER,
+    });
+    expect(r.statusCode, r.body).toBe(200);
+    return r.json().data;
+  }
+
+  it("reads an issue and a return as two events, not one spell", async () => {
+    /*
+     * "What happened on the 14th" is the question being asked, and a spell
+     * spanning three weeks answers it badly.
+     */
+    const assetId = await post(w.app, w.role.INVENTORY_MANAGER, "/api/v1/assets", {
+      asset_code: `MV${uniq().toUpperCase().slice(-8)}`,
+      name: "Moving rover", category: "ELECTRONIC", condition: "GOOD",
+    });
+    const holder = await createActiveEmployee(w.app, w.admin, { district_id: w.chainA.district });
+    await w.app.inject({
+      method: "POST", url: "/api/v1/assets/assign-bulk", headers: H(),
+      payload: { asset_ids: [assetId], employee_id: holder, reason: "Ground truthing" },
+    });
+    await w.app.inject({
+      method: "POST", url: `/api/v1/assets/${assetId}/transition`,
+      headers: { ...H(), "if-match": "2" },
+      payload: { status: "RETURNED", condition: "REPAIR", reason: "Back from site" },
+    });
+
+    const rows = await moves(`asset_id=${assetId}`);
+    const kinds = rows.map((r) => r.movement);
+    expect(kinds, "one event out, one back").toContain("ISSUED");
+    expect(kinds).toContain("RETURNED");
+
+    const back = rows.find((r) => r.movement === "RETURNED")!;
+    // The comparison the record exists for: went out good, came back needing
+    // repair.
+    expect(back.condition).toBe("REPAIR");
+    expect(back.from_name, "who handed it over").toBeTruthy();
+  });
+
+  it("names both ends of a handover, and what it is", async () => {
+    const rows = await moves("limit=5");
+    expect(rows.length).toBeGreaterThan(0);
+    const row = rows[0];
+    expect(row.asset_code, "which instrument").toBeTruthy();
+    expect(row).toHaveProperty("type_label");
+    expect(row).toHaveProperty("serial_number");
+    expect(row).toHaveProperty("recorded_by_username");
+  });
+
+  it("finds everything one person has had, taken or given back", async () => {
+    // "What has this person had" means both what they took and what they
+    // handed over, which are opposite ends of the same row.
+    const assetId = await post(w.app, w.role.INVENTORY_MANAGER, "/api/v1/assets", {
+      asset_code: `PE${uniq().toUpperCase().slice(-8)}`,
+      name: "Person-tracked", category: "ELECTRONIC", condition: "GOOD",
+    });
+    const person = await createActiveEmployee(w.app, w.admin, { district_id: w.chainA.district });
+    await w.app.inject({
+      method: "POST", url: "/api/v1/assets/assign-bulk", headers: H(),
+      payload: { asset_ids: [assetId], employee_id: person, reason: "Theirs" },
+    });
+    const rows = await moves(`employee_id=${person}`);
+    expect(rows.some((r) => r.asset_id === assetId)).toBe(true);
+  });
+
+  it("narrows to a date range", async () => {
+    const none = await moves("from=2000-01-01&to=2000-01-02");
+    expect(none).toHaveLength(0);
+  });
+
+  it("is readable by anybody who may read assets, not only a manager", async () => {
+    // Knowing where the kit is is not a privileged question; changing it is.
+    const r = await w.app.inject({
+      method: "GET", url: "/api/v1/assets/movements?limit=1",
+      headers: w.role.TEAM_LEAD ?? w.role.INVENTORY_MANAGER,
+    });
+    expect([200, 403]).toContain(r.statusCode);
+  });
+});

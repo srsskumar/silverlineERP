@@ -338,6 +338,90 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
   });
  });
 
+ /**
+  * Where equipment has been (§note 7).
+  *
+  * The general audit trail answers "which row changed", with an action name
+  * and a JSON diff. That is the right answer to a different question. Nobody
+  * chasing a rover wants asset.transfer and two identifiers; they want to
+  * read down a page and see the thing leave one pair of hands and arrive in
+  * another, with the state it was in each time.
+  *
+  * A movement is an event, and an allocation row holds two of them: the day
+  * it went out and the day it came back. They are split here rather than
+  * listed as spells, because "what happened on the 14th" is the question
+  * being asked and a spell spanning three weeks answers it badly.
+  *
+  * Reads asset_assignments, which is the record itself — not a log written
+  * alongside it. A log can disagree with the thing it describes; this
+  * cannot.
+  */
+ app.get('/api/v1/assets/movements',{preHandler:guard('asset.read')},async req=>{
+  const u=actor(req),{limit,offset,q}=page(req);
+  const values:unknown[]=[u.orgId];
+  const filters:string[]=['a.org_id=$1'];
+  if(q.asset_id){values.push(q.asset_id);filters.push(`a.asset_id=$${values.length}::uuid`);}
+  if(q.employee_id){
+   values.push(q.employee_id);
+   // Either end of a handover: the question "what has this person had" means
+   // both what they took and what they gave back.
+   filters.push(`(a.employee_id=$${values.length}::uuid OR a.returned_to_employee_id=$${values.length}::uuid)`);
+  }
+  if(q.project_id){values.push(q.project_id);filters.push(`a.project_id=$${values.length}::uuid`);}
+  const where=filters.join(' AND ');
+
+  const from=q.from?String(q.from):null, to=q.to?String(q.to):null;
+  values.push(from,to,limit+1,offset);
+  const iFrom=values.length-3,iTo=values.length-2,iLimit=values.length-1,iOffset=values.length;
+
+  const rows=(await pool.query(
+   `WITH moves AS (
+      SELECT a.id AS allocation_id, a.asset_id, 'ISSUED' AS movement,
+             a.issued_at AS at, a.employee_id AS to_employee_id,
+             NULL::uuid AS from_employee_id, a.condition AS condition,
+             a.condition AS condition_note_src, a.project_id, a.due_date,
+             a.reason, a.created_by AS recorded_by
+        FROM asset_assignments a WHERE ${where}
+      UNION ALL
+      SELECT a.id, a.asset_id, 'RETURNED',
+             a.returned_at, a.returned_to_employee_id,
+             a.employee_id, a.return_condition,
+             a.return_condition_note, a.project_id, a.due_date,
+             a.reason, a.received_by
+        FROM asset_assignments a WHERE ${where} AND a.returned_at IS NOT NULL
+    )
+    SELECT m.*,
+           s.asset_code, s.name AS asset_name, s.serial_number,
+           (SELECT t.label FROM asset_types t WHERE t.id=s.asset_type_id) AS type_label,
+           COALESCE(NULLIF(trim(concat_ws(' ', te.first_name, te.last_name)),''),te.emp_no) AS to_name,
+           te.emp_no AS to_emp_no, te.phone AS to_phone,
+           COALESCE(NULLIF(trim(concat_ws(' ', fe.first_name, fe.last_name)),''),fe.emp_no) AS from_name,
+           fe.emp_no AS from_emp_no,
+           p.name AS project_name, p.code AS project_code,
+           ru.username AS recorded_by_username
+      FROM moves m
+      JOIN assets s ON s.id=m.asset_id
+      LEFT JOIN employees te ON te.id=m.to_employee_id
+      LEFT JOIN employees fe ON fe.id=m.from_employee_id
+      LEFT JOIN projects p ON p.id=m.project_id
+      LEFT JOIN users ru ON ru.id=m.recorded_by
+     WHERE m.at IS NOT NULL
+       AND ($${iFrom}::date IS NULL OR m.at >= $${iFrom}::date)
+       AND ($${iTo}::date IS NULL OR m.at < ($${iTo}::date + 1))
+     ORDER BY m.at DESC, m.allocation_id DESC
+     LIMIT $${iLimit} OFFSET $${iOffset}`,values)).rows;
+
+  return {
+   data:rows.slice(0,limit).map(r=>({
+    ...r,
+    at:r.at instanceof Date?r.at.toISOString():r.at,
+    due_date:r.due_date instanceof Date?r.due_date.toISOString().slice(0,10):r.due_date,
+   })),
+   has_more:rows.length>limit,
+   next_offset:rows.length>limit?offset+limit:null,
+  };
+ });
+
  app.post('/api/v1/assets/assign-bulk',{preHandler:guard('asset.manage')},async(req,reply)=>{
   const u=actor(req),i=parse(assetBulkAssignSchema,req.body);
   await employeeAccess(pool,req,i.employee_id);

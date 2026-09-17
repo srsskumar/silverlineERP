@@ -15,7 +15,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   FileCheck,
-  Compass, ScrollText } from 'lucide-react';
+  Compass, ScrollText, ArrowLeftRight } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { PERMISSIONS } from './permissions';
 
@@ -117,6 +117,10 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/survey', label: 'Land survey', permission: 'survey.read', icon: Compass },
       { href: '/inventory', label: 'Inventory', permission: 'inventory.read', icon: Package },
       { href: '/assets', label: 'Assets', permission: 'asset.read', icon: Boxes },
+      // Kept apart from the audit trail on purpose: that answers "which row
+      // changed", this answers "where has the equipment been", and they are
+      // different questions asked by different people.
+      { href: '/assets/movements', label: 'Asset movements', permission: 'asset.read', icon: ArrowLeftRight },
       { href: '/geo-fences', label: 'Geo-fences', permission: PERMISSIONS.GEO_READ, icon: MapPin },
       { href: '/analytics', label: 'Analytics', permission: 'analytics.read', icon: BarChart3 },
       { href: '/automation', label: 'Automation', permission: 'automation.read', icon: Workflow },
