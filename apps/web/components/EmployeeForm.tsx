@@ -19,6 +19,7 @@ import { ErrorCard } from './ui/ErrorCard';
 import { FormField } from './ui/FormField';
 import { Input } from './ui/Input';
 import { CascadingLocationSelect } from './CascadingLocationSelect';
+import { DesignationSelect } from './DesignationSelect';
 import { ConflictDialog } from './ConflictDialog';
 
 export type EmployeeFormValues = EmployeeCreateInput;
@@ -74,6 +75,10 @@ export function EmployeeForm({
   const mandalId = watch('mandal_id' as keyof EmployeeFormValues) as unknown as string | undefined;
   const villageId = watch('village_id' as keyof EmployeeFormValues) as unknown as string | undefined;
   const siteId = watch('site_id' as keyof EmployeeFormValues) as unknown as string | undefined;
+  const designationId =
+    watch('designation_id' as keyof EmployeeFormValues) as unknown as string | undefined;
+  const designationLabel =
+    watch('designation' as keyof EmployeeFormValues) as unknown as string | undefined;
 
   const debouncedQ = React.useMemo(() => reportsQuery.trim(), [reportsQuery]);
   const reportsSearch = useQuery({
@@ -175,8 +180,18 @@ export function EmployeeForm({
         <FormField label="Email" htmlFor="email" error={err('email')}>
           <Input id="email" type="email" {...register('email')} />
         </FormField>
-        <FormField label="Designation" htmlFor="designation" error={err('designation')}>
-          <Input id="designation" {...register('designation')} />
+        <FormField label="Designation" htmlFor="designation" error={err('designation') ?? err('designation_id')}>
+          <DesignationSelect
+            id="designation"
+            value={designationId}
+            label={designationLabel}
+            onChange={(picked) => {
+              setValue('designation_id' as keyof EmployeeFormValues,
+                (picked?.id ?? null) as never, { shouldDirty: true });
+              setValue('designation' as keyof EmployeeFormValues,
+                (picked?.label ?? '') as never, { shouldDirty: true });
+            }}
+          />
         </FormField>
         <FormField label="Department" htmlFor="department" error={err('department')}>
           <Input id="department" {...register('department')} />

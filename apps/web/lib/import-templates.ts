@@ -72,6 +72,7 @@ export const IMPORT_TEMPLATES: ImportTemplate[] = [
     ],
     notes: [
       'The employee number is allocated on upload, counting on from the highest already issued.',
+      'Designation is matched against the list the organisation keeps, whatever the capitalisation \u2014 the Excel template carries that list as a dropdown. A title that is not on it is still accepted and stored as written.',
       'reports_to is the manager\u2019s employee number, not their name \u2014 two people share a first name often enough that a name cannot identify one. A number matching nobody is reported on the row.',
       'A manager must already exist when the row is uploaded. To load a whole team at once, upload the managers first, or leave the column blank and set it afterwards.',
       'Dates are YYYY-MM-DD. A date written 24/07/1990 is rejected.',
@@ -217,12 +218,32 @@ export const IMPORT_TEMPLATES: ImportTemplate[] = [
  * drift apart in their columns, which is exactly the bug a reader would be
  * least able to diagnose.
  */
-export function templateSheet(template: ImportTemplate): SheetSpec {
+/**
+ * Choices that are only known at the moment of download.
+ *
+ * Most dropdown columns are fixed sets written in this file. A few are lists
+ * the organisation maintains — designations, mandals — and those cannot be
+ * hardcoded without going stale the first time somebody adds one. The caller
+ * fetches them and passes them in, keyed by header.
+ */
+export type LiveOptions = Record<string, string[]>;
+
+function optionsFor(
+  template: ImportTemplate, header: string, live?: LiveOptions,
+): string[] | undefined {
+  const fromServer = live?.[header];
+  // A live list that came back empty is not a dropdown of nothing: fall back
+  // to whatever the template documents rather than locking the column down.
+  if (fromServer && fromServer.length > 0) return fromServer;
+  return template.options?.[header];
+}
+
+export function templateSheet(template: ImportTemplate, live?: LiveOptions): SheetSpec {
   return {
     name: template.label,
     columns: template.headers.map((header) => ({
       header,
-      options: template.options?.[header],
+      options: optionsFor(template, header, live),
       width: header.length > 14 ? 24 : 16,
     })),
     rows: [template.example],
@@ -246,8 +267,8 @@ export function templateCsv(template: ImportTemplate): string {
 }
 
 /** The same template as an Excel workbook, with the fixed columns as dropdowns. */
-export function downloadTemplateWorkbook(template: ImportTemplate): void {
-  downloadWorkbook([templateSheet(template)], template.fileName.replace(/\.csv$/, '.xlsx'));
+export function downloadTemplateWorkbook(template: ImportTemplate, live?: LiveOptions): void {
+  downloadWorkbook([templateSheet(template, live)], template.fileName.replace(/\.csv$/, '.xlsx'));
 }
 
 /** Trigger a download of the template in the browser. */

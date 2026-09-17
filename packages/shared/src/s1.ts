@@ -165,6 +165,14 @@ export const employeeCreateSchema = z.object({
   village_id: z.string().uuid().optional(),
   site_id: z.string().uuid().optional(),
   designation: z.string().max(100).optional(),
+  /**
+   * The designation chosen from the list, when it came from the list.
+   *
+   * The label stays alongside it: every report, payslip and export already
+   * reads the text, and a record whose title can only be resolved by a join
+   * is a record that prints blank wherever the join was forgotten.
+   */
+  designation_id: z.string().uuid().nullable().optional(),
   department: z.string().max(100).optional(),
   date_of_joining: dateStringSchema,
   reports_to: z.string().uuid().optional(),
@@ -483,4 +491,41 @@ export function spreadsheetDate(value: unknown): string | undefined {
   if (/^\d{4,6}$/.test(text)) return spreadsheetDate(Number(text));
 
   return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Designations
+// ---------------------------------------------------------------------------
+
+/**
+ * A job title, chosen from a list rather than typed.
+ *
+ * Designation was free text, which meant "Site Engineer", "site engineer" and
+ * "Sr. Engineer" were three designations as far as any report was concerned,
+ * and nobody could answer how many engineers there were. A list fixes that at
+ * the point of entry, which is the only point where it can be fixed.
+ *
+ * Each one can carry a role, because what somebody is called and what they
+ * are allowed to do are answered together at the moment they are hired. The
+ * role is created empty: an administrator grants it permissions afterwards,
+ * deliberately, rather than a job title quietly conferring access.
+ */
+export const designationCreateSchema = z.object({
+  label: z.string().trim().min(1, "Give the designation a name").max(160),
+  /**
+   * Derived from the label when not given, so nobody has to invent a code.
+   */
+  code: z.string().trim().min(1).max(64).regex(/^[A-Z0-9_]+$/,
+    "A code is capitals, digits and underscores").optional(),
+  display_order: z.number().int().min(0).max(9999).optional(),
+  /** Create an RBAC role of the same name alongside it, with no permissions. */
+  create_role: z.boolean().default(false),
+});
+
+export type DesignationCreate = z.infer<typeof designationCreateSchema>;
+
+/** The code a label implies: capitals, with runs of anything else as one `_`. */
+export function designationCode(label: string): string {
+  return label.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "").slice(0, 64);
 }

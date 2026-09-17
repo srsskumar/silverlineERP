@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { IMPORT_TEMPLATES, templateCsv } from '../lib/import-templates';
+import { IMPORT_TEMPLATES, templateCsv, templateSheet } from '../lib/import-templates';
 import { parseEmployeeCsv } from '../lib/csv';
 
 /**
@@ -115,5 +115,37 @@ describe('templates that must match the form beside them', () => {
     for (const t of IMPORT_TEMPLATES) {
       for (const r of t.required) expect(t.headers, `${t.key}/${r}`).toContain(r);
     }
+  });
+});
+
+describe('a dropdown for a list the organisation keeps', () => {
+  const employees = IMPORT_TEMPLATES.find((t) => t.key === 'employees')!;
+  const columnFor = (sheet: ReturnType<typeof templateSheet>, header: string) =>
+    sheet.columns.find((c) => c.header === header);
+
+  it('offers the designations it was given', () => {
+    // Hardcoding job titles in the template would make it wrong the first
+    // time somebody added one.
+    const sheet = templateSheet(employees, { designation: ['Site Engineer', 'Surveyor'] });
+    expect(columnFor(sheet, 'designation')?.options).toEqual(['Site Engineer', 'Surveyor']);
+  });
+
+  it('leaves the column open when the list came back empty', () => {
+    // An empty live list means the fetch found nothing, not that the column
+    // accepts nothing — locking it to a dropdown of no options would make the
+    // template unusable.
+    const sheet = templateSheet(employees, { designation: [] });
+    expect(columnFor(sheet, 'designation')?.options).toBeUndefined();
+  });
+
+  it('leaves the fixed columns exactly as the template writes them', () => {
+    const sheet = templateSheet(employees, { designation: ['Surveyor'] });
+    expect(columnFor(sheet, 'gender')?.options).toEqual(['MALE', 'FEMALE', 'OTHER']);
+  });
+
+  it('is the same sheet as before when nothing live was passed', () => {
+    const sheet = templateSheet(employees);
+    expect(columnFor(sheet, 'designation')?.options).toBeUndefined();
+    expect(columnFor(sheet, 'status')?.options).toEqual(['ACTIVE', 'SUSPENDED', 'EXITED']);
   });
 });

@@ -4,7 +4,7 @@ import {mutationRoute} from "../../common/mutationRoute.js";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { z } from "zod";
 import {
   ALLOWED_DOCUMENT_EXTENSIONS,
@@ -21,6 +21,8 @@ import {
   employeePatchSchema,
   employeeReactivateSchema,
   employeeSuspendSchema,
+  designationCreateSchema,
+  designationCode,
   encodeCursor,
   toFieldErrors,
 } from "@silverline/shared";
@@ -80,6 +82,7 @@ interface EmployeeRow {
   village_id: string | null;
   site_id: string | null;
   designation: string | null;
+  designation_id?: string | null;
   department: string | null;
   date_of_joining: Date | string;
   date_of_exit: Date | string | null;
@@ -144,6 +147,7 @@ function toShape(row: EmployeeRow, canSeePii: boolean) {
     village_id: row.village_id,
     site_id: row.site_id,
     designation: row.designation,
+    designation_id: row.designation_id ?? null,
     department: row.department,
     date_of_joining: dateOnly(row.date_of_joining),
     date_of_exit: dateOnly(row.date_of_exit),
@@ -246,7 +250,7 @@ async function nextEmpNo(
 const SELECT_COLS = `id, org_id, emp_no, first_name, last_name, father_name,
   date_of_birth, gender, phone, phone_secondary, email,
   aadhaar_encrypted, pan_encrypted, address,
-  district_id, mandal_id, village_id, site_id, designation, department,
+  district_id, mandal_id, village_id, site_id, designation, designation_id, department,
   date_of_joining, date_of_exit, exit_reason, reports_to, salary_basic,
   bank_name, bank_account_encrypted, bank_ifsc, phonepe_number,
   education, skills, experience_years, status, version, created_at, updated_at,
@@ -260,6 +264,45 @@ const SELECT_COLS = `id, org_id, emp_no, first_name, last_name, father_name,
   (SELECT COALESCE(NULLIF(trim(concat_ws(' ', m.first_name, m.last_name)), ''), m.emp_no)
      FROM employees m WHERE m.id = employees.reports_to) AS reports_to_name,
   (SELECT m.emp_no FROM employees m WHERE m.id = employees.reports_to) AS reports_to_emp_no`;
+
+/**
+ * The designation a write means, as both an id and a label.
+ *
+ * Three things can arrive: an id from the dropdown, a label from a
+ * spreadsheet, or neither. An id wins and supplies the label; a label is
+ * matched against the list so an import lands on the same designation the
+ * form would have chosen; anything unmatched is kept as the text it is,
+ * because refusing an import over a job title nobody has added yet helps
+ * nobody.
+ */
+async function resolveDesignation(
+  db: Pool | PoolClient, orgId: string,
+  input: { designation?: string | null; designation_id?: string | null },
+): Promise<{ id: string | null; label: string | null }> {
+  if (input.designation_id) {
+    const row = (await db.query(
+      "SELECT id, label FROM designations WHERE id = $1 AND org_id = $2",
+      [input.designation_id, orgId])).rows[0];
+    if (!row) {
+      throw new ApiError({
+        status: 422, code: "VALIDATION_ERROR", message: "Validation failed",
+        fieldErrors: [{ field: "designation_id",
+          message: "That designation is not on the list", code: "not_found" }],
+      });
+    }
+    return { id: String(row.id), label: String(row.label) };
+  }
+  const text = input.designation?.trim();
+  if (!text) return { id: null, label: null };
+  const match = (await db.query(
+    `SELECT id, label FROM designations
+      WHERE org_id = $1 AND active AND (lower(label) = lower($2) OR code = $3)
+      LIMIT 1`,
+    [orgId, text, designationCode(text)])).rows[0];
+  return match
+    ? { id: String(match.id), label: String(match.label) }
+    : { id: null, label: text };
+}
 
 /** Validates unit refs (existence + org + expected type per field). */
 async function validateUnitRefs(
@@ -565,19 +608,21 @@ export async function registerEmployeeRoutes(
     // Allocated when the caller leaves it out, so the form need not ask for
     // a unique identifier the server can work out for itself.
     const singleEmpNo = d.emp_no ?? await nextEmpNo(db, user.orgId);
+    const designation = await resolveDesignation(db, user.orgId, d);
     let row: EmployeeRow;
     try {
       const ins = await db.query(
         `INSERT INTO employees (
            org_id, emp_no, first_name, last_name, father_name, date_of_birth, gender,
            phone, phone_secondary, email, aadhaar_encrypted, pan_encrypted, address,
-           district_id, mandal_id, village_id, site_id, designation, department,
+           district_id, mandal_id, village_id, site_id, designation, designation_id,
+           department,
            date_of_joining, reports_to, salary_basic, bank_name,
            bank_account_encrypted, bank_ifsc, phonepe_number,
            education, skills, experience_years, status, created_by, updated_by,
            aadhaar_hash, pan_hash, bank_account_hash)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
-                 $14::uuid,$15::uuid,$16::uuid,$17::uuid,$18,$19,$20,$21::uuid,$22,$23,
+                 $14::uuid,$15::uuid,$16::uuid,$17::uuid,$18,$34::uuid,$19,$20,$21::uuid,$22,$23,
                  $24,$25,$26,$27,$28,$29,'DRAFT',$30::uuid,$30::uuid,$31,$32,$33)
          RETURNING ${SELECT_COLS}`,
         [
@@ -598,7 +643,7 @@ export async function registerEmployeeRoutes(
           d.mandal_id ?? null,
           d.village_id ?? null,
           d.site_id ?? null,
-          d.designation ?? null,
+          designation.label,
           d.department ?? null,
           d.date_of_joining,
           d.reports_to ?? null,
@@ -614,6 +659,7 @@ export async function registerEmployeeRoutes(
           piiIndex(d.aadhaar),
           piiIndex(d.pan),
           piiIndex(d.bank_account),
+          designation.id,
         ],
       );
       row = ins.rows[0] as EmployeeRow;
@@ -810,17 +856,21 @@ export async function registerEmployeeRoutes(
               // two hundred rows should be inventing unique identifiers, and
               // the ones people invent collide.
               const empNo = v.emp_no ?? await nextEmpNo(client, user.orgId);
+              // A sheet carries the title as text; the list is what turns it
+              // into the same designation the form would have picked.
+              const rowDesignation = await resolveDesignation(client, user.orgId, v);
               const ins = await client.query(
                 `INSERT INTO employees (
                    org_id, emp_no, first_name, last_name, father_name, date_of_birth, gender,
                    phone, phone_secondary, email, aadhaar_encrypted, pan_encrypted, address,
-                   district_id, mandal_id, village_id, site_id, designation, department,
+                   district_id, mandal_id, village_id, site_id, designation, designation_id,
+                   department,
                    date_of_joining, reports_to, salary_basic, bank_name,
                    bank_account_encrypted, bank_ifsc, phonepe_number,
                    education, skills, experience_years, status, created_by, updated_by,
                    aadhaar_hash, pan_hash, bank_account_hash)
                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
-                         $14::uuid,$15::uuid,$16::uuid,$17::uuid,$18,$19,$20,$21::uuid,$22,$23,
+                         $14::uuid,$15::uuid,$16::uuid,$17::uuid,$18,$34::uuid,$19,$20,$21::uuid,$22,$23,
                          $24,$25,$26,$27,$28,$29,'DRAFT',$30::uuid,$30::uuid,$31,$32,$33)
                  RETURNING id`,
                 [
@@ -841,7 +891,7 @@ export async function registerEmployeeRoutes(
                   v.mandal_id ?? null,
                   v.village_id ?? null,
                   v.site_id ?? null,
-                  v.designation ?? null,
+                  rowDesignation.label,
                   v.department ?? null,
                   v.date_of_joining,
                   v.reports_to ?? null,
@@ -857,6 +907,7 @@ export async function registerEmployeeRoutes(
                   piiIndex(v.aadhaar),
                   piiIndex(v.pan),
                   piiIndex(v.bank_account),
+                  rowDesignation.id,
                 ],
               );
               const newId = (ins.rows[0] as { id: string }).id;
@@ -1081,6 +1132,9 @@ export async function registerEmployeeRoutes(
         fieldErrors,
       });
     }
+    // COALESCE leaves it alone when nothing was sent, so an edit that does
+    // not mention the designation does not clear it.
+    const patchDesignation = await resolveDesignation(db, user.orgId, d);
     const upd = await db.query(
       `UPDATE employees SET
          emp_no = COALESCE($3, emp_no),
@@ -1100,6 +1154,7 @@ export async function registerEmployeeRoutes(
          village_id = COALESCE($17::uuid, village_id),
          site_id = COALESCE($18::uuid, site_id),
          designation = COALESCE($19, designation),
+         designation_id = COALESCE($36::uuid, designation_id),
          department = COALESCE($20, department),
          date_of_joining = COALESCE($21, date_of_joining),
          reports_to = COALESCE($22::uuid, reports_to),
@@ -1153,6 +1208,7 @@ export async function registerEmployeeRoutes(
         d.aadhaar !== undefined ? piiIndex(d.aadhaar) : null,
         d.pan !== undefined ? piiIndex(d.pan) : null,
         d.bank_account !== undefined ? piiIndex(d.bank_account) : null,
+        patchDesignation.id,
       ],
     );
     const row = upd.rows[0] as EmployeeRow | undefined;
@@ -1746,4 +1802,113 @@ export async function registerEmployeeRoutes(
     
 });},
   );
+
+  /* ------------------------------------------------------- designations */
+
+  /**
+   * The list of job titles, for the dropdown that replaced the free-text box.
+   *
+   * Open to anybody who can read the directory: choosing a designation is
+   * part of reading an employee record, and a dropdown whose options need a
+   * separate permission is a dropdown that renders empty for half the people
+   * who have to use it.
+   */
+  app.get("/api/v1/designations", { preHandler: canRead }, async (req, reply) => {
+    const user = req.authUser;
+    if (!user) {
+      return sendError(reply, req.requestId, {
+        status: 401, code: "UNAUTHENTICATED", message: "Sign in first",
+      });
+    }
+    const rows = (await opts.pool.query(
+      `SELECT d.id, d.code, d.label, d.display_order, d.active, d.role_id,
+              r.name AS role_name,
+              (SELECT count(*)::int FROM employees e
+                WHERE e.designation_id = d.id AND e.status <> 'EXITED') AS employee_count
+         FROM designations d
+         LEFT JOIN roles r ON r.id = d.role_id
+        WHERE d.org_id = $1 AND d.active
+        ORDER BY d.display_order, d.label`,
+      [user.orgId],
+    )).rows;
+    return reply.send({ data: rows });
+  });
+
+  /**
+   * A new job title, and optionally the role that goes with it.
+   *
+   * The role is created with no permissions at all. A job title that granted
+   * access by existing would make hiring an access-control decision taken by
+   * whoever fills in the form, which is exactly backwards — an administrator
+   * grants the role its permissions afterwards, on purpose.
+   */
+  app.post("/api/v1/designations", { preHandler: canCreate }, async (req, reply) => {
+    const user = req.authUser;
+    if (!user) {
+      return sendError(reply, req.requestId, {
+        status: 401, code: "UNAUTHENTICATED", message: "Sign in first",
+      });
+    }
+    const parsed = designationCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendError(reply, req.requestId, {
+        status: 422, code: "VALIDATION_ERROR", message: "Validation failed",
+        fieldErrors: toFieldErrors(parsed.error),
+      });
+    }
+    const input = parsed.data;
+    const code = input.code ?? designationCode(input.label);
+    if (!code) {
+      return sendError(reply, req.requestId, {
+        status: 422, code: "VALIDATION_ERROR", message: "Validation failed",
+        fieldErrors: [{ field: "label", message: "Use at least one letter or digit", code: "invalid" }],
+      });
+    }
+
+    const client = await opts.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const existing = (await client.query(
+        "SELECT * FROM designations WHERE org_id = $1 AND code = $2", [user.orgId, code],
+      )).rows[0];
+      if (existing) {
+        await client.query("ROLLBACK");
+        // Somebody adding a designation that is already there means the same
+        // thing as picking it: return it rather than making them go and look.
+        return reply.status(200).send({ data: existing });
+      }
+
+      let roleId: string | null = null;
+      if (input.create_role) {
+        const roleCode = `${user.orgId.slice(0, 8)}_${code}`;
+        const found = (await client.query(
+          "SELECT id FROM roles WHERE code = $1", [roleCode])).rows[0];
+        roleId = found
+          ? String(found.id)
+          : String((await client.query(
+              `INSERT INTO roles(org_id, code, name, is_system_role, description)
+               VALUES($1, $2, $3, false, $4) RETURNING id`,
+              [user.orgId, roleCode, input.label,
+               `Created alongside the ${input.label} designation. Grant it permissions before assigning it.`],
+            )).rows[0].id);
+      }
+
+      const row = (await client.query(
+        `INSERT INTO designations(org_id, code, label, role_id, display_order, created_by)
+         VALUES($1, $2, $3, $4, COALESCE($5, 100), $6) RETURNING *`,
+        [user.orgId, code, input.label, roleId, input.display_order ?? null, user.id],
+      )).rows[0];
+      await client.query("COMMIT");
+      await writeAudit(opts.pool, {
+        orgId: user.orgId, actorId: user.id, action: "designation.create",
+        entityType: "designation", entityId: String(row.id), afterState: row,
+      });
+      return reply.status(201).send({ data: row });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  });
 }

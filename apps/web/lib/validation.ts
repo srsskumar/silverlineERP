@@ -114,6 +114,14 @@ const employeeBaseFields = {
   village_id: optionalText(100),
   site_id: optionalText(100),
   designation: optionalText(100),
+  /**
+   * The list entry behind the title, when it came from the list.
+   *
+   * Sent alongside the text rather than instead of it: every payslip and
+   * export already reads the text, and a record whose title only resolves
+   * through a join prints blank wherever the join was forgotten.
+   */
+  designation_id: z.string().uuid().nullable().optional(),
   department: optionalText(100),
   date_of_joining: dateString('Date of joining must be YYYY-MM-DD'),
   reports_to: optionalText(100),

@@ -9,6 +9,8 @@ import {
   type ImportTemplate,
 } from '@/lib/import-templates';
 import { optionsNote } from '@/lib/xlsx';
+import { useQuery } from '@tanstack/react-query';
+import { apiRequestRaw } from '@/lib/apiClient';
 
 /**
  * The download-the-format panel.
@@ -24,6 +26,25 @@ export function ImportTemplateCard({ templateKey }: { templateKey: string }) {
 }
 
 export function TemplatePanel({ template }: { template: ImportTemplate }) {
+  /*
+   * Designations are a list the organisation keeps, not a fixed set this file
+   * can hold. Fetched at the moment of download so the dropdown in the
+   * workbook is the list as it stands, rather than the list as it stood when
+   * this template was written.
+   */
+  const wantsDesignations = template.headers.includes('designation');
+  const designations = useQuery({
+    queryKey: ['designations'],
+    enabled: wantsDesignations,
+    staleTime: 300_000,
+    queryFn: async () =>
+      ((await apiRequestRaw('/api/v1/designations')).body as { data: Array<{ label: string }> })
+        .data.map((d) => d.label),
+  });
+  const live = wantsDesignations && designations.data?.length
+    ? { designation: designations.data }
+    : undefined;
+
   return (
     <section className="rounded-lg border border-border bg-surface-sunken p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -34,7 +55,7 @@ export function TemplatePanel({ template }: { template: ImportTemplate }) {
         <div className="flex shrink-0 gap-2">
           {/* Excel first: its dropdowns stop the mis-typed enum that causes
               most of the rejections on a bulk upload. */}
-          <Button type="button" variant="secondary" onClick={() => downloadTemplateWorkbook(template)}>
+          <Button type="button" variant="secondary" onClick={() => downloadTemplateWorkbook(template, live)}>
             <Download className="size-4" />
             Excel
           </Button>
@@ -63,7 +84,7 @@ export function TemplatePanel({ template }: { template: ImportTemplate }) {
           </p>
         </details>
         <ul className="ml-4 list-disc space-y-0.5 text-text-subtle">
-          {optionsNote(templateSheet(template)).map((n) => <li key={n}>{n}</li>)}
+          {optionsNote(templateSheet(template, live)).map((n) => <li key={n}>{n}</li>)}
           {template.notes.map((n) => <li key={n}>{n}</li>)}
         </ul>
       </div>
