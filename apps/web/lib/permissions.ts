@@ -18,7 +18,20 @@ export const PERMISSIONS = {
   ORG_UNITS_MANAGE: 'org.units.manage',
   EMPLOYEE_READ: 'employee.read',
   EMPLOYEE_CREATE: 'employee.create',
-  EMPLOYEE_UPDATE: 'employee.update',
+  /**
+   * Editing an employee.
+   *
+   * Deliberately the same code the API enforces on PATCH /employees/:id,
+   * which is employee.create. There is no separate employee.update
+   * permission — the constant used to name one, no role could ever hold it,
+   * and the Edit button was invisible to every account in the system
+   * including SUPER_ADMIN. The feature was built and unreachable.
+   *
+   * Whoever may bring somebody onto the register may correct what it says
+   * about them; the destructive step is exiting them, which has its own
+   * permission.
+   */
+  EMPLOYEE_UPDATE: 'employee.create',
   EMPLOYEE_EXIT: 'employee.exit',
   EMPLOYEE_REACTIVATE: 'employee.reactivate',
   EMPLOYEE_IMPORT: 'employee.import',

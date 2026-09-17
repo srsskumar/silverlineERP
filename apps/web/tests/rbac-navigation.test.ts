@@ -165,3 +165,30 @@ describe('what each role can see', () => {
     }
   });
 });
+
+describe('permission codes the API actually enforces', () => {
+  /*
+   * A constant naming a permission nobody can hold hides the feature it
+   * gates, and hides it silently: the button simply is not there, and no
+   * error says why. EMPLOYEE_UPDATE named 'employee.update', which does not
+   * exist — so Edit on an employee was invisible to every account in the
+   * system, SUPER_ADMIN included, while the form behind it worked.
+   */
+  it('gates editing an employee on the code the API checks', () => {
+    expect(PERMISSIONS.EMPLOYEE_UPDATE).toBe('employee.create');
+  });
+
+  it('uses no permission code that no role could hold', () => {
+    // Every code the web gates on must be one the server grants. Anything
+    // else is a feature that exists and cannot be reached.
+    const known = new Set([
+      'employee.create', 'employee.exit', 'employee.import', 'employee.read',
+      'employee.pii.read', 'employee.reactivate', 'employees.manage',
+      'employees.read',
+    ]);
+    for (const [name, code] of Object.entries(PERMISSIONS)) {
+      if (!String(code).startsWith('employee')) continue;
+      expect(known.has(String(code)), `${name} = ${code}`).toBe(true);
+    }
+  });
+});
