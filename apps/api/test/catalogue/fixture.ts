@@ -483,7 +483,7 @@ export async function buildWorld(): Promise<CatalogueWorld> {
   world.assetId = await post(app, world.role.INVENTORY_MANAGER, "/api/v1/assets", {
     asset_code: `AS${uniq().toUpperCase().slice(-6)}`,
     name: "Catalogue laptop",
-    category: "IT",
+    category: "ELECTRONIC",
     condition: "GOOD",
   });
   world.itemId = await post(app, world.role.INVENTORY_MANAGER, "/api/v1/inventory/items", {

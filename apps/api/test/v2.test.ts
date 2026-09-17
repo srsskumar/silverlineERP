@@ -49,13 +49,13 @@ describe('inventory integrity',()=>{
 describe('assets',()=>{
  it('rejects exited employee assignments and enforces lifecycle versions',async()=>{
   const e=(await pool.query("INSERT INTO employees(org_id,emp_no,first_name,phone,date_of_joining,status) VALUES($1,'E1','Person','9876543210','2026-01-01','EXITED') RETURNING id",[orgId])).rows[0];
-  const asset=(await call('POST','assets',{asset_code:'A1',name:'Scanner',category:'Equipment'})).json();
+  const asset=(await call('POST','assets',{asset_code:'A1',name:'Scanner',category:'ELECTRONIC'})).json();
   expect((await call('POST',`assets/${asset.id}/assign`,{employee_id:e.id,reason:'Field use'},{'if-match':'1'})).json().code).toBe('EMPLOYEE_INACTIVE');
   const changed=await call('POST',`assets/${asset.id}/transition`,{status:'DAMAGED',condition:'Broken',reason:'Inspection'},{'if-match':'1'});expect(changed.statusCode).toBe(200);
   expect((await call('POST',`assets/${asset.id}/transition`,{status:'WRITTEN_OFF',condition:'Broken',reason:'Approved'},{'if-match':'1'})).statusCode).toBe(409);
  });
  it('reconciles found, missing, unexpected and changed conditions',async()=>{
-  const ids=[];for(let i=0;i<4;i++)ids.push((await call('POST','assets',{asset_code:`A${i}`,name:'Equipment',category:'Equipment'})).json().id);
+  const ids=[];for(let i=0;i<4;i++)ids.push((await call('POST','assets',{asset_code:`A${i}`,name:'Equipment',category:'ELECTRONIC'})).json().id);
   const r=await call('POST','asset-audits',{name:'Audit',expected_ids:ids.slice(0,3),scans:[{asset_id:ids[0],condition:'GOOD'},{asset_id:ids[2],condition:'WORN'},{asset_id:ids[3],condition:'GOOD'}]});expect(r.statusCode).toBe(201);expect(r.json().results.map((x:{result:string})=>x.result).sort()).toEqual(['CONDITION_CHANGED','FOUND','MISSING','UNEXPECTED']);
  });
 });

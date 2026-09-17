@@ -200,7 +200,7 @@ describe("UT-OPS-02 assign unavailable asset or assign to exited employee", () =
     return post(w.app, w.role.INVENTORY_MANAGER, "/api/v1/assets", {
       asset_code: `AS${uniq().toUpperCase().slice(-8)}`,
       name: "Probe asset",
-      category: "IT",
+      category: "ELECTRONIC",
       condition: "GOOD",
     });
   }
@@ -307,7 +307,7 @@ describe("UT-OPS-03 return damaged or lost asset", () => {
     const assetId = await post(w.app, w.role.INVENTORY_MANAGER, "/api/v1/assets", {
       asset_code: `AS${uniq().toUpperCase().slice(-8)}`,
       name: "Returnable asset",
-      category: "TOOLS",
+      category: "ELECTRONIC",
       condition: "GOOD",
     });
     const employeeId = await createActiveEmployee(w.app, w.admin, {
@@ -452,7 +452,7 @@ describe("UT-OPS-04 reconcile physical audit", () => {
     return post(w.app, w.role.INVENTORY_MANAGER, "/api/v1/assets", {
       asset_code: `AU${uniq().toUpperCase().slice(-8)}`,
       name: "Audited asset",
-      category: "TOOLS",
+      category: "ELECTRONIC",
       condition,
     });
   }
@@ -755,5 +755,195 @@ describe("UT-OPS-06 request AI result with insufficient history", () => {
       headers: w.directUser,
     });
     expect(res.statusCode).toBe(403);
+  });
+});
+
+/**
+ * The asset register a survey firm needs (enhancement note 3).
+ *
+ * What the thing is, what condition it is in, where it is right now, and who
+ * had it before.
+ */
+describe("the asset register", () => {
+  const H = () => ({ ...w.role.INVENTORY_MANAGER, ...idem() });
+
+  /** An asset currently out with somebody, for the location tests. */
+  async function outWithSomebody(): Promise<{ assetId: string; employeeId: string }> {
+    const assetId = await post(w.app, w.role.INVENTORY_MANAGER, "/api/v1/assets", {
+      asset_code: `AS${uniq().toUpperCase().slice(-8)}`,
+      name: "Field rover", category: "ELECTRONIC", condition: "GOOD",
+    });
+    const employeeId = await createActiveEmployee(w.app, w.admin, {
+      district_id: w.chainA.district,
+    });
+    const res = await w.app.inject({
+      method: "POST", url: `/api/v1/assets/${assetId}/assign`,
+      headers: { ...H(), "if-match": "1" },
+      payload: { employee_id: employeeId, condition: "GOOD", reason: "Survey work" },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    return { assetId, employeeId };
+  }
+
+  async function types(): Promise<Array<Record<string, any>>> {
+    const r = await w.app.inject({
+      method: "GET", url: "/api/v1/asset-types", headers: w.role.INVENTORY_MANAGER,
+    });
+    expect(r.statusCode, r.body).toBe(200);
+    return r.json().data;
+  }
+
+  it("offers every instrument the note names, ready to pick from", async () => {
+    const codes = (await types()).map((t) => t.code);
+    for (const wanted of ["ROVER", "DRONE", "TRIPOD", "BIPOD", "LAPTOP", "CPU", "MONITOR"]) {
+      expect(codes, wanted).toContain(wanted);
+    }
+  });
+
+  it("lets an organisation add a type the list never anticipated", async () => {
+    // Nobody can enumerate in advance every instrument a survey firm buys,
+    // and a register that refuses the thing you just bought gets kept in a
+    // spreadsheet instead.
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/asset-types", headers: H(),
+      payload: { code: "TOTAL_STATION", label: "Total station" },
+    });
+    expect(r.statusCode, r.body).toBe(201);
+    expect((await types()).map((t) => t.code)).toContain("TOTAL_STATION");
+  });
+
+  it("reinstates a retired entry rather than refusing the same code", async () => {
+    // "It already exists, but inactive" is not something anybody can act on
+    // from a form with one text box.
+    await w.pool.query(
+      "UPDATE asset_types SET active = false WHERE code = 'TOTAL_STATION'");
+    const again = await w.app.inject({
+      method: "POST", url: "/api/v1/asset-types", headers: H(),
+      payload: { code: "TOTAL_STATION", label: "Total station (survey)" },
+    });
+    expect(again.statusCode, again.body).toBe(201);
+    expect(again.json().active).toBe(true);
+    expect(again.json().label).toBe("Total station (survey)");
+  });
+
+  it("refuses a duplicate code that is still in use", async () => {
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/asset-types", headers: H(),
+      payload: { code: "TOTAL_STATION", label: "Another one" },
+    });
+    expect(r.statusCode).toBe(409);
+  });
+
+  it("will not let an ordinary reader extend the vocabulary", async () => {
+    // A list anybody can add to stops being a vocabulary.
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/asset-types", headers: { ...w.role.EMPLOYEE, ...idem() },
+      payload: { code: "SOMETHING", label: "Something" },
+    });
+    expect([401, 403]).toContain(r.statusCode);
+  });
+
+  it("registers an asset with its type, make and model", async () => {
+    const rover = (await types()).find((t) => t.code === "ROVER")!;
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/assets", headers: H(),
+      payload: {
+        asset_code: `AS${uniq().toUpperCase().slice(-8)}`,
+        name: "Rover 12", category: "ELECTRONIC", asset_type_id: rover.id,
+        make: "Trimble", model: "R12i", condition: "BRAND_NEW",
+      },
+    });
+    expect(r.statusCode, r.body).toBe(201);
+    expect(r.json().make).toBe("Trimble");
+    expect(r.json().model).toBe("R12i");
+  });
+
+  it("refuses a category this organisation does not have", async () => {
+    // Otherwise the asset is filed under something that exists nowhere and
+    // vanishes from every view that joins on the lookup — present in the
+    // register and absent from every sight of it.
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/assets", headers: H(),
+      payload: {
+        asset_code: `AS${uniq().toUpperCase().slice(-8)}`,
+        name: "Mystery", category: "NOT_A_CATEGORY", condition: "GOOD",
+      },
+    });
+    expect(r.statusCode, r.body).toBe(422);
+    expect(r.json().code).toBe("UNKNOWN_CATEGORY");
+  });
+
+  it("still accepts a category the register used before this list existed", async () => {
+    /*
+     * Migration 057 folded the categories already in use into the lookup, so
+     * rows written years ago still resolve to a name. Refusing them would
+     * mean an asset present in the register and absent from every view of
+     * it — worse than never having been accepted.
+     */
+    await w.pool.query(
+      `INSERT INTO asset_categories (org_id, code, label, display_order)
+       VALUES ($1, 'LEGACY_TOOLS', 'Tools', 500) ON CONFLICT DO NOTHING`, [w.orgId]);
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/assets", headers: H(),
+      payload: {
+        asset_code: `AS${uniq().toUpperCase().slice(-8)}`,
+        name: "Old theodolite", category: "LEGACY_TOOLS", condition: "GOOD",
+      },
+    });
+    expect(r.statusCode, r.body).toBe(201);
+  });
+
+  it("insists on a note when the condition is 'other'", async () => {
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/assets", headers: H(),
+      payload: {
+        asset_code: `AS${uniq().toUpperCase().slice(-8)}`,
+        name: "Odd one", category: "ELECTRONIC", condition: "OTHER",
+      },
+    });
+    expect(r.statusCode).toBe(422);
+  });
+
+  it("says where an asset is, and who has it, without being asked twice", async () => {
+    const { assetId, employeeId } = await outWithSomebody();
+    const r = await w.app.inject({
+      method: "GET", url: `/api/v1/assets/${assetId}`, headers: w.role.INVENTORY_MANAGER,
+    });
+    expect(r.statusCode).toBe(200);
+    const a = r.json();
+    expect(a.location).toBe("IN_FIELD");
+    expect(a.currently_with?.employee_id).toBe(employeeId);
+    expect(a.currently_with?.employee_name).toBeTruthy();
+  });
+
+  it("puts it back in the office when it comes back", async () => {
+    const { assetId } = await outWithSomebody();
+    const back = await w.app.inject({
+      method: "POST", url: `/api/v1/assets/${assetId}/transition`,
+      headers: { ...H(), "if-match": "1" },
+      payload: { status: "RETURNED", condition: "GOOD", reason: "End of survey" },
+    });
+    expect([200, 409]).toContain(back.statusCode);
+    if (back.statusCode !== 200) return;
+
+    const r = await w.app.inject({
+      method: "GET", url: `/api/v1/assets/${assetId}`, headers: w.role.INVENTORY_MANAGER,
+    });
+    expect(r.json().location).toBe("IN_OFFICE");
+    expect(r.json().currently_with).toBeNull();
+  });
+
+  it("keeps a readable history of who held it", async () => {
+    // "Who had it when it broke" should not be a second query somebody has
+    // to know to run.
+    const { assetId } = await outWithSomebody();
+    const r = await w.app.inject({
+      method: "GET", url: `/api/v1/assets/${assetId}`, headers: w.role.INVENTORY_MANAGER,
+    });
+    const history = r.json().assignments as Array<Record<string, unknown>>;
+    expect(history.length).toBeGreaterThan(0);
+    expect(history[0].employee_name, "a name, not an id").toBeTruthy();
+    expect(history[0]).toHaveProperty("return_condition");
+    expect(history[0]).toHaveProperty("returned_to_name");
   });
 });

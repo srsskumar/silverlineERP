@@ -18,7 +18,37 @@ export const vendorSchema = z.object({code:text,name:text,contact:z.string().max
 export const itemSchema = z.object({code:text,name:text,unit:text.default('unit'),low_stock_threshold:decimalSchema.default('0'),unit_cost:decimalSchema.default('0'),vendor_id:uuid.nullable().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE')});
 export const stockSchema = z.object({item_id:uuid,direction:z.enum(['IN','OUT']),quantity:decimalSchema.refine(v=>Number(v)>0,'Quantity must be greater than zero'),reference:text,project_id:uuid.nullable().optional(),reason:z.string().max(2000).optional(),invoice_id:uuid.nullable().optional()});
 export const invoiceSchema = z.object({serial_number:text,vendor_id:uuid,hsn:z.string().max(50),gst_enabled:z.boolean(),gst_rate:decimalSchema.default('0'),subtotal:decimalSchema,payment_mode:z.enum(['CASH','BANK','UPI','CREDIT']),reference:text});
-export const assetSchema = z.object({asset_code:text,serial_number:text.optional(),name:text,category:text,vendor_id:uuid.nullable().optional(),condition:text.default('GOOD')});
+/**
+ * Registering an asset (enhancement note 3).
+ *
+ * `category` stays free text on the wire rather than an enum: categories are
+ * rows now and an organisation may add its own, so pinning the wire format to
+ * today's list would make tomorrow's addition unusable. The API checks the
+ * value against that organisation's own categories instead.
+ */
+export const assetSchema = z.object({
+  asset_code:text,
+  serial_number:text.optional(),
+  name:text,
+  category:text,
+  asset_type_id:uuid.nullable().optional(),
+  make:z.string().trim().max(160).optional(),
+  model:z.string().trim().max(160).optional(),
+  vendor_id:uuid.nullable().optional(),
+  condition:text.default('GOOD'),
+  /** Required when the condition is "other" -- the table enforces it too. */
+  condition_note:z.string().trim().max(2000).optional(),
+}).refine(v=>v.condition!=='OTHER'||!!v.condition_note?.trim(),{
+  message:'Say what condition it is in',path:['condition_note'],
+});
+
+/** Adding a type or a category: the "option to add more" the note asks for. */
+export const assetLookupSchema = z.object({
+  code:z.string().trim().regex(/^[A-Z][A-Z0-9_]{1,63}$/,
+    'Use capitals, digits and underscores, starting with a letter'),
+  label:z.string().trim().min(1).max(160),
+  display_order:z.coerce.number().int().min(0).max(9999).optional(),
+});
 export const assetAssignSchema = z.object({employee_id:uuid,project_id:uuid.nullable().optional(),due_date:dateStringSchema.optional(),condition:text.default('GOOD'),reason:text});
 /**
  * Moving an asset, and handing it back (enhancement note 3).

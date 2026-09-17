@@ -1044,7 +1044,7 @@ describe("E2E-14 admin exits employee, then employee attempts punch/task/asset w
     const assetId = await post(w.app, w.role.INVENTORY_MANAGER, "/api/v1/assets", {
       asset_code: `EX${uniq().toUpperCase().slice(-8)}`,
       name: "Post-exit asset",
-      category: "TOOLS",
+      category: "ELECTRONIC",
       condition: "GOOD",
     });
     const asset = await w.app.inject({
@@ -1422,7 +1422,7 @@ describe("E2E-19 assign and return asset with QR scan and condition evidence", (
       asset_code: assetCode,
       serial_number: `SN${uniq().toUpperCase().slice(-8)}`,
       name: "Cordless drill",
-      category: "TOOLS",
+      category: "ELECTRONIC",
       condition: "GOOD",
     });
     const employeeId = await createActiveEmployee(w.app, w.admin, {

@@ -121,10 +121,26 @@ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
+-- Move the condition already recorded on a closed assignment into the column
+-- that now means it.
+--
+-- Until this migration, returning an asset overwrote `condition` -- the state
+-- it went out in -- with the state it came back in. So on an already-returned
+-- row, `condition` *is* the return condition; this puts it where it belongs
+-- rather than inventing a reading nobody took. The issue condition for those
+-- historical rows is genuinely lost, and no backfill can honestly recover it.
+UPDATE asset_assignments
+   SET return_condition = condition
+ WHERE returned_at IS NOT NULL AND return_condition IS NULL;
+
 DO $$
 BEGIN
   -- A return has a condition. Handing equipment back without anybody saying
   -- what state it is in is how a register stops meaning anything.
+  --
+  -- Added after the backfill above, not before: the constraint is checked
+  -- against every existing row, and production carries returned assignments
+  -- that predate the column.
   ALTER TABLE asset_assignments ADD CONSTRAINT chk_asset_returned_has_condition
     CHECK (returned_at IS NULL OR return_condition IS NOT NULL);
 EXCEPTION WHEN duplicate_object THEN NULL;

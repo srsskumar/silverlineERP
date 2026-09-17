@@ -2,7 +2,7 @@ import {resolveScopes,employeeScopeClause} from '../../common/scopes.js';
 import {scopedReads} from "../../common/scopedReads.js";
 import type { FastifyInstance,FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
-import { vendorSchema,itemSchema,stockSchema,invoiceSchema,assetSchema,assetAssignSchema,assetTransitionSchema,assetAuditSchema } from '@silverline/shared';
+import { vendorSchema,itemSchema,stockSchema,invoiceSchema,assetSchema,assetLookupSchema,assetAssignSchema,assetTransitionSchema,assetAuditSchema,assetLocation } from '@silverline/shared';
 import { buildAuthenticate,requirePermission,scopesForPermission } from '../../common/auth.js';
 import { actor,parse,page,inOrg,mutate,version,fail,projectAccess,employeeAccess } from '../../common/domain.js';
 
@@ -20,6 +20,29 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
  app.get('/api/v1/assets/eligible-employees',{preHandler:guard('asset.manage')},async req=>({data:(await scopedReads(pool,pool,actor(req)).query("SELECT id,emp_no,first_name,last_name FROM employees WHERE org_id=$1 AND status='ACTIVE' ORDER BY first_name,id LIMIT 100",[actor(req).orgId])).rows}));
  app.get('/api/v1/inventory/eligible-projects',{preHandler:guard('inventory.read')},async req=>({data:(await scopedReads(pool,pool,actor(req)).query("SELECT id,code,name FROM projects WHERE org_id=$1 AND status='ACTIVE' ORDER BY name,id LIMIT 100",[actor(req).orgId])).rows}));
 
+ /**
+  * The category and type must be ones this organisation actually has.
+  *
+  * Checked here rather than with a CHECK constraint, because the lists are
+  * rows an organisation extends. Without this an asset can be filed under a
+  * category that exists nowhere, and it then vanishes from every filter that
+  * joins on the lookup -- present in the register and absent from every view
+  * of it, which is worse than being refused.
+  *
+  * Legacy categories were folded into the lookup by migration 057, so rows
+  * written before this still validate.
+  */
+ async function checkAssetVocabulary(db:import('pg').PoolClient,orgId:string,input:Record<string,unknown>) {
+  if(input.category!==undefined){
+   const ok=await db.query('SELECT 1 FROM asset_categories WHERE org_id=$1 AND code=$2 AND active',[orgId,String(input.category)]);
+   if(!ok.rowCount)fail('UNKNOWN_CATEGORY',`There is no active asset category ${String(input.category)}. Add it first.`,422);
+  }
+  if(input.asset_type_id){
+   const ok=await db.query('SELECT 1 FROM asset_types WHERE org_id=$1 AND id=$2 AND active',[orgId,String(input.asset_type_id)]);
+   if(!ok.rowCount)fail('UNKNOWN_ASSET_TYPE','There is no active asset type with that id',422);
+  }
+ }
+
  for(const [path,table,schema,permission] of [
   ['vendors','vendors',vendorSchema,'inventory'],['inventory/items','inventory_items',itemSchema,'inventory'],['assets','assets',assetSchema,'asset'],
  ] as const) {
@@ -28,7 +51,21 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    let where='a.org_id=$1';
    if(q.search){values.push(`%${q.search}%`);where+=` AND (a.name ILIKE $${values.length} OR ${table==='assets'?'a.asset_code':'a.code'} ILIKE $${values.length})`;}
    if(table==='assets')where+=` AND ${await assetClause(req,values,'a.id')}`;
-   const extra=table==='inventory_items'?",COALESCE((SELECT sum(CASE WHEN direction='IN' THEN quantity ELSE -quantity END) FROM stock_transactions WHERE item_id=a.id),0)::text AS available":'';
+   const extra=table==='inventory_items'
+    ?",COALESCE((SELECT sum(CASE WHEN direction='IN' THEN quantity ELSE -quantity END) FROM stock_transactions WHERE item_id=a.id),0)::text AS available"
+    :table==='assets'
+     // The register's own columns read as words, and each asset says where
+     // it is and who has it without a second request per row.
+     ?`,(SELECT t.label FROM asset_types t WHERE t.id=a.asset_type_id) AS asset_type_label,
+        (SELECT c.label FROM asset_categories c WHERE c.org_id=a.org_id AND c.code=a.category) AS category_label,
+        (SELECT CASE WHEN count(*)>0 THEN 'IN_FIELD' ELSE 'IN_OFFICE' END
+           FROM asset_assignments x WHERE x.asset_id=a.id AND x.returned_at IS NULL) AS location,
+        (SELECT COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)),''),e.emp_no)
+           FROM asset_assignments x JOIN employees e ON e.id=x.employee_id
+          WHERE x.asset_id=a.id AND x.returned_at IS NULL LIMIT 1) AS held_by,
+        (SELECT p.name FROM asset_assignments x JOIN projects p ON p.id=x.project_id
+          WHERE x.asset_id=a.id AND x.returned_at IS NULL LIMIT 1) AS held_for_project`
+     :'';
    const rows=await pool.query(`SELECT a.*${extra} FROM ${table} a WHERE ${where} ORDER BY a.created_at DESC,a.id DESC LIMIT $2 OFFSET $3`,values);
    return {data:rows.rows.slice(0,limit),has_more:rows.rows.length>limit,next_offset:rows.rows.length>limit?offset+limit:null};
   });
@@ -36,6 +73,7 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    const input=parse(schema as any,req.body) as Record<string,unknown>,u=actor(req);
    const row=await mutate(pool,req,`${permission}.create`,table,async db=>{
     if(input.vendor_id)await inOrg(db,'vendors',String(input.vendor_id),u.orgId);
+    if(table==='assets')await checkAssetVocabulary(db,u.orgId,input);
     const keys=Object.keys(input),values=[u.orgId,u.id,...Object.values(input)];
     const r=await db.query(`INSERT INTO ${table}(org_id,created_by,${keys.join(',')}) VALUES(${values.map((_,i)=>`$${i+1}`).join(',')}) RETURNING *`,values);return r.rows[0];
    });return reply.code(201).send(row);
@@ -45,6 +83,7 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    return mutate(pool,req,`${permission}.update`,table,async db=>{
     const old=await inOrg(db,table,id,u.orgId,true);if(table==='assets')await assetAccess(req,id);version(req,old as {version:number});
     if(input.vendor_id)await inOrg(db,'vendors',String(input.vendor_id),u.orgId);
+    if(table==='assets')await checkAssetVocabulary(db,u.orgId,input);
     const keys=Object.keys(input),values=[id,...Object.values(input)];
     const r=await db.query(`UPDATE ${table} SET ${keys.map((k,i)=>`${k}=$${i+2}`).join(',')},version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,values);return r.rows[0];
    });
@@ -87,6 +126,48 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    const r=await db.query(`INSERT INTO invoices(org_id,serial_number,vendor_id,hsn,gst_enabled,gst_rate,subtotal,tax,total,payment_mode,reference,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,round(CASE WHEN $5 THEN $7::numeric*$6::numeric/100 ELSE 0 END,2),$7::numeric+round(CASE WHEN $5 THEN $7::numeric*$6::numeric/100 ELSE 0 END,2),$8,$9,$10) RETURNING *`,[u.orgId,i.serial_number,i.vendor_id,i.hsn,i.gst_enabled,i.gst_rate,i.subtotal,i.payment_mode,i.reference,u.id]);return r.rows[0];
   });return reply.code(201).send(row);
  });
+ /*
+  * The asset vocabulary (enhancement note 3).
+  *
+  * Rows rather than a fixed list, because the note asks for "an option to
+  * add more" and nobody can enumerate in advance every instrument a survey
+  * firm will buy. A register that refuses the thing you just bought gets
+  * kept in a spreadsheet instead, which is the register losing quietly.
+  *
+  * Reading them needs only asset.read -- every form that registers an asset
+  * has to populate its dropdowns. Adding one needs asset.manage: a
+  * vocabulary anybody can extend stops being a vocabulary.
+  */
+ for(const [path,table] of [['asset-types','asset_types'],['asset-categories','asset_categories']] as const) {
+  app.get(`/api/v1/${path}`,{preHandler:guard('asset.read')},async req=>{
+   const u=actor(req),q=(req.query??{}) as {include_inactive?:string};
+   const rows=(await pool.query(
+    `SELECT id,code,label,display_order,active FROM ${table}
+      WHERE org_id=$1 AND ($2::boolean OR active)
+      ORDER BY display_order,label`,
+    [u.orgId,q.include_inactive==='true'])).rows;
+   return {data:rows};
+  });
+  app.post(`/api/v1/${path}`,{preHandler:guard('asset.manage')},async(req,reply)=>{
+   const i=parse(assetLookupSchema,req.body),u=actor(req);
+   const row=await mutate(pool,req,`asset.${table}.create`,table,async db=>{
+    const clash=await db.query(`SELECT id,label,active FROM ${table} WHERE org_id=$1 AND code=$2`,[u.orgId,i.code]);
+    if(clash.rowCount){
+     // Re-adding something that was retired reinstates it rather than
+     // failing: "it already exists, inactive" is not an answer anybody can
+     // act on from a form with one text box.
+     if(!clash.rows[0].active)return (await db.query(`UPDATE ${table} SET active=true,label=$2 WHERE id=$1 RETURNING id,code,label,display_order,active`,[clash.rows[0].id,i.label])).rows[0];
+     fail('ALREADY_EXISTS',`${clash.rows[0].label} already uses that code`,409);
+    }
+    return (await db.query(
+     `INSERT INTO ${table}(org_id,code,label,display_order,created_by)
+      VALUES($1,$2,$3,COALESCE($4,500),$5) RETURNING id,code,label,display_order,active`,
+     [u.orgId,i.code,i.label,i.display_order??null,u.id])).rows[0];
+   });
+   return reply.code(201).send(row);
+  });
+ }
+
  app.get('/api/v1/assets/resolve',{preHandler:guard('asset.read')},async req=>{
   const u=actor(req),q=req.query as {code:string};
   const row=await pool.query('SELECT id FROM assets WHERE org_id=$1 AND (asset_code=$2 OR serial_number=$2)',[u.orgId,q.code]);
@@ -95,8 +176,47 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
  });
  app.get('/api/v1/assets/:id',{preHandler:guard('asset.read')},async req=>{
   const u=actor(req),id=(req.params as {id:string}).id,row=await inOrg(pool,'assets',id,u.orgId);
-  const assignments=await pool.query('SELECT * FROM asset_assignments WHERE asset_id=$1 ORDER BY issued_at DESC LIMIT 100',[id]);
-  await assetAccess(req,id);return {...row,assignments:assignments.rows};
+  /*
+   * The history of one asset, in the words people use (§note 3).
+   *
+   * Every spell in somebody's hands: who held it, on which project, what
+   * state it went out in, what state it came back in, and who took it back.
+   * Ids alone make the screen unreadable and the answer to "who had it when
+   * it broke" a second query somebody has to know to run.
+   */
+  const assignments=await pool.query(
+   `SELECT a.*,
+           COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)),''),e.emp_no) AS employee_name,
+           e.emp_no,
+           COALESCE(NULLIF(trim(concat_ws(' ', rt.first_name, rt.last_name)),''),rt.emp_no) AS returned_to_name,
+           p.name AS project_name, p.code AS project_code,
+           ru.username AS received_by_username
+      FROM asset_assignments a
+      LEFT JOIN employees e  ON e.id  = a.employee_id
+      LEFT JOIN employees rt ON rt.id = a.returned_to_employee_id
+      LEFT JOIN projects  p  ON p.id  = a.project_id
+      LEFT JOIN users     ru ON ru.id = a.received_by
+     WHERE a.asset_id=$1 ORDER BY a.issued_at DESC LIMIT 100`,[id]);
+  const type=row.asset_type_id
+   ? (await pool.query('SELECT code,label FROM asset_types WHERE id=$1',[row.asset_type_id])).rows[0]
+   : null;
+  const category=(await pool.query('SELECT code,label FROM asset_categories WHERE org_id=$1 AND code=$2',[u.orgId,row.category])).rows[0];
+  const open=assignments.rows.find(a=>!a.returned_at)??null;
+  await assetAccess(req,id);
+  return {
+   ...row,
+   asset_type_code:type?.code??null, asset_type_label:type?.label??null,
+   category_label:category?.label??row.category,
+   // Worked out from the open allocation rather than stored beside it: two
+   // columns that can disagree leave nobody able to say which is lying.
+   location:assetLocation(open),
+   currently_with:open?{
+    employee_id:open.employee_id, employee_name:open.employee_name,
+    project_id:open.project_id, project_name:open.project_name,
+    issued_at:open.issued_at, due_date:open.due_date,
+   }:null,
+   assignments:assignments.rows,
+  };
  });
  app.post('/api/v1/assets/:id/assign',{preHandler:guard('asset.manage')},async req=>{
   const u=actor(req),id=(req.params as {id:string}).id,i=parse(assetAssignSchema,req.body);
