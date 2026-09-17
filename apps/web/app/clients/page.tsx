@@ -1,5 +1,6 @@
 'use client';
 import {useState} from 'react';
+import {useReveal} from '@/lib/use-reveal';
 import {Workbench,Panel,Collection,MutationForm,Can,choices,type Row} from '@/components/v2/Workbench';
 
 /**
@@ -11,7 +12,7 @@ import {Workbench,Panel,Collection,MutationForm,Can,choices,type Row} from '@/co
  * entities, so it is surfaced rather than blocked.
  */
 export default function Page(){
- const [client,setClient]=useState<Row|null>(null);
+ const [client,setClient]=useState<Row|null>(null),clientRef=useReveal(client?String(client.id):null);
  return <Workbench title="Clients" description="The parties work is sold to. Leads, tenders, proposals and projects all key off this master.">
   <Panel title="Clients">
    <Collection path="clients" columns={[{key:'code',label:'Code'},{key:'name',label:'Name'},{key:'client_type',label:'Type'},{key:'gstin',label:'GSTIN'},{key:'status',label:'Status'}]} onSelect={setClient}/>
@@ -34,7 +35,7 @@ export default function Page(){
     </p>:null}
    </Panel>
   </Can>
-  {client?<Panel title={`${client.name} contacts`}>
+  <div ref={clientRef} className="scroll-mt-4"/>{client?<Panel title={`${client.name} contacts`}>
    <Collection path={`contacts?client_id=${client.id}`} columns={[{key:'name',label:'Name'},{key:'designation',label:'Designation'},{key:'phone',label:'Phone'},{key:'email',label:'Email'},{key:'contact_type',label:'Role'}]}/>
    <Can permission="client.manage">
     <div className="mt-4">

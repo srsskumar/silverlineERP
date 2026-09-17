@@ -32,3 +32,23 @@ export function useReveal(key: string | null | undefined) {
 
   return ref;
 }
+
+/**
+ * Wrap a detail panel so it appears and is scrolled to together.
+ *
+ * This existed already, local to the automation screen, where it was written
+ * for exactly this problem and then not shared — so five other screens went
+ * on opening their detail somewhere below the fold. It lives here now, and
+ * honours prefers-reduced-motion, which the original did not.
+ *
+ * Use it where the panel is wrapped anyway. Where the detail is several
+ * siblings, or conditional in more than one place, useReveal with a bare
+ * anchor div is less invasive.
+ */
+export function Revealed(
+  { on, children }: { on?: string | null; children: React.ReactNode },
+) {
+  const ref = useReveal(on);
+  if (!on) return null;
+  return React.createElement('div', { ref, className: 'space-y-6 scroll-mt-4' }, children);
+}
