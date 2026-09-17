@@ -538,6 +538,23 @@ export const surveyProjectSchema = z.object({
   started_on: isoDate.nullable().optional(),
   target_completion_on: isoDate.nullable().optional(),
   notes: z.string().max(2000).nullable().optional(),
+  /**
+   * The workspace the paired project belongs to.
+   *
+   * Optional: with one workspace there is nothing to choose, and asking
+   * would be a question with one answer. Only an organisation running
+   * several has to say which.
+   */
+  workspace_id: z.string().uuid().optional(),
+  /**
+   * Whether to create and link a project alongside the programme.
+   *
+   * On by default. A survey programme without a project cannot put its work
+   * on a board, assign a task to anybody or carry planned dates — and
+   * creating the two separately and remembering to link them is a step
+   * people forget, then wonder why the board is empty.
+   */
+  create_project: z.boolean().default(true),
 });
 
 /**

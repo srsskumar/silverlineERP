@@ -309,17 +309,87 @@ export async function registerSurveyRoutes(
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 
+  /**
+   * Create the project a programme is paired with.
+   *
+   * Same code and name, so the two read as one thing wherever either
+   * appears. The workspace is the one given, or the organisation's only one
+   * — with a single workspace there is nothing to choose, and an
+   * organisation running several has to say which.
+   *
+   * A code already taken in Projects gets a suffix rather than failing the
+   * whole creation: the programme is what the person asked for, and refusing
+   * it because an unrelated project happens to share a code would be the
+   * pairing making things worse than not having it.
+   */
+  async function pairProject(
+    db: PoolClient,
+    u: { orgId: string; id: string },
+    input: { code: string; name: string; workspace_id?: string;
+      started_on?: string | null; target_completion_on?: string | null },
+  ): Promise<string> {
+    let workspaceId = input.workspace_id ?? null;
+    if (!workspaceId) {
+      const spaces = (await db.query(
+        'SELECT id FROM workspaces WHERE org_id = $1 ORDER BY created_at LIMIT 2',
+        [u.orgId])).rows;
+      if (spaces.length === 0) {
+        fail('NO_WORKSPACE',
+          'Create a workspace before a survey programme, so its project has somewhere to live',
+          422);
+      }
+      if (spaces.length > 1) {
+        fail('WORKSPACE_REQUIRED',
+          'This organisation has several workspaces. Say which one the project belongs to.',
+          422);
+      }
+      workspaceId = String(spaces[0].id);
+    }
+
+    let code = input.code;
+    const clash = await db.query(
+      'SELECT 1 FROM projects WHERE org_id = $1 AND code = $2', [u.orgId, code]);
+    if (clash.rowCount) code = `${input.code}-SV`;
+
+    return String((await db.query(
+      `INSERT INTO projects(org_id, workspace_id, code, name, status,
+         planned_start_date, planned_end_date, created_by, updated_by)
+       VALUES($1,$2,$3,$4,'ACTIVE',$5::date,$6::date,$7,$7) RETURNING id`,
+      [u.orgId, workspaceId, code, input.name,
+        input.started_on ?? null, input.target_completion_on ?? null, u.id])).rows[0].id);
+  }
+
   app.post('/api/v1/survey/projects', { preHandler: guard('survey.manage') }, async (req, reply) => {
     const u = actor(req), input = parse(surveyProjectSchema, req.body);
     const row = await mutate(pool, req, 'survey.project.create', 'survey_project', async db => {
       const clash = await db.query(
         'SELECT 1 FROM survey_projects WHERE org_id = $1 AND code = $2', [u.orgId, input.code]);
       if (clash.rowCount) fail('DUPLICATE_CODE', `A survey programme ${input.code} already exists`, 409);
+      /*
+       * A programme comes with its project (§note 4).
+       *
+       * The two were separate records with an optional link, so setting up
+       * survey work meant creating a programme, creating a project, and
+       * remembering to connect them — a step people forget, and then wonder
+       * why the board is empty. They are one thing to the person using them,
+       * so they are created together.
+       *
+       * Not merged into one table: every village, return, crew row and rover
+       * allocation already points at the programme, and repointing live data
+       * risks losing the record it exists to keep. Pairing gets the same
+       * result for anybody using it, and leaves a merge possible later
+       * without a special case for programmes that have no project.
+       */
+      let projectId = input.project_id ?? null;
+      if (!projectId && input.create_project) {
+        projectId = await pairProject(db, u, input);
+      }
+
       return (await db.query(
         `INSERT INTO survey_projects(org_id, code, name, project_id, started_on,
            target_completion_on, notes, created_by, updated_by)
          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$8) RETURNING *`,
-        [u.orgId, input.code, input.name, input.project_id ?? null,
+        [u.orgId, input.code, input.name, projectId,
           input.started_on ?? null, input.target_completion_on ?? null,
           input.notes ?? null, u.id])).rows[0];
     });
@@ -374,6 +444,37 @@ export async function registerSurveyRoutes(
    * villages and five times as many rows once the stages are counted, so the
    * count is reported before anything is written.
    */
+  /**
+   * Give an existing programme a project (§note 4).
+   *
+   * For the ones created before programmes and projects were paired. Says
+   * plainly when there is already a project rather than quietly making a
+   * second one — two projects for one programme is worse than none, because
+   * half the work ends up on a board nobody opens.
+   */
+  app.post('/api/v1/survey/projects/:id/pair', { preHandler: guard('survey.manage') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(z.object({ workspace_id: z.string().uuid().optional() }), req.body);
+      return mutate(pool, req, 'survey.project.pair', 'survey_project', async db => {
+        const programme = await projectOr404(db, u.orgId, id);
+        if (programme.project_id) {
+          fail('ALREADY_PAIRED', 'This programme already has a project', 409);
+        }
+        const projectId = await pairProject(db, u, {
+          code: programme.code, name: programme.name,
+          workspace_id: input.workspace_id,
+          started_on: programme.started_on ? iso(programme.started_on) : null,
+          target_completion_on: programme.target_completion_on
+            ? iso(programme.target_completion_on) : null,
+        });
+        await db.query(
+          'UPDATE survey_projects SET project_id = $2, version = version + 1, updated_at = now() WHERE id = $1',
+          [id, projectId]);
+        return { id, project_id: projectId };
+      });
+    });
+
   app.post('/api/v1/survey/projects/:id/generate-tasks',
     { preHandler: guard('survey.manage') }, async req => {
       const u = actor(req), id = (req.params as { id: string }).id;

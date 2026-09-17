@@ -71,8 +71,16 @@ beforeAll(async () => {
     `INSERT INTO org_units(org_id,type,code,name,parent_id) VALUES($1,'mandal',$2,'KOYYURU',$3) RETURNING id`,
     [w.orgId, uniq("M"), district])).rows[0].id);
 
+  /*
+   * Deliberately unpaired.
+   *
+   * A programme now comes with its project, which is the point of the
+   * pairing — so these tests, which are about what happens *before* a
+   * project exists and about linking one by hand afterwards, have to opt
+   * out to reach that state at all.
+   */
   const p = await post(w.admin, "/api/v1/survey/projects",
-    { code: uniq("SP"), name: "Task linked programme" });
+    { code: uniq("SP"), name: "Task linked programme", create_project: false });
   programmeId = String(p.data.id);
 
   for (const name of ["ADAKULA", "Annavaram"]) {

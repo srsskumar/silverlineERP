@@ -1461,3 +1461,80 @@ describe("moving villages between programmes", () => {
     expect(r.data.already_there).toBe(1);
   });
 });
+
+describe("a programme and its project, created together", () => {
+  it("creates the project alongside the programme", async () => {
+    /*
+     * The two were separate records with an optional link, so setting up
+     * survey work meant creating a programme, creating a project, and
+     * remembering to connect them — a step people forget, then wonder why
+     * the board is empty.
+     */
+    const code = uniq("PR");
+    const r = await post(w.admin, "/api/v1/survey/projects", { code, name: "Paired programme" });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.data.project_id, "a project was created and linked").toBeTruthy();
+
+    const project = await w.pool.query(
+      "SELECT code, name, status FROM projects WHERE id = $1", [r.data.project_id]);
+    expect(project.rows[0].name).toBe("Paired programme");
+    expect(project.rows[0].code).toBe(code);
+  });
+
+  it("carries the programme's dates onto the project", async () => {
+    const r = await post(w.admin, "/api/v1/survey/projects", {
+      code: uniq("PR"), name: "Dated programme",
+      started_on: "2026-04-01", target_completion_on: "2026-12-31",
+    });
+    const project = await w.pool.query(
+      "SELECT planned_start_date, planned_end_date FROM projects WHERE id = $1",
+      [r.data.project_id]);
+    expect(String(project.rows[0].planned_start_date)).toContain("2026-04-01");
+  });
+
+  it("suffixes a code an unrelated project already uses rather than refusing", async () => {
+    // The programme is what the person asked for. Refusing it because some
+    // other project shares a code would make the pairing worse than not
+    // having it.
+    const code = uniq("CL");
+    await w.pool.query(
+      `INSERT INTO projects(org_id, workspace_id, code, name, created_by)
+       SELECT $1, (SELECT id FROM workspaces WHERE org_id=$1 LIMIT 1), $2, 'Existing', $3`,
+      [w.orgId, code, w.adminId ?? null]);
+
+    const r = await post(w.admin, "/api/v1/survey/projects", { code, name: "Clashing" });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    const project = await w.pool.query(
+      "SELECT code FROM projects WHERE id = $1", [r.data.project_id]);
+    expect(project.rows[0].code).toBe(`${code}-SV`);
+  });
+
+  it("can be told not to, for a programme that has no board work", async () => {
+    const r = await post(w.admin, "/api/v1/survey/projects", {
+      code: uniq("NP"), name: "No project", create_project: false,
+    });
+    expect(r.data.project_id).toBeNull();
+  });
+
+  it("gives an older programme a project on request", async () => {
+    const made = await post(w.admin, "/api/v1/survey/projects", {
+      code: uniq("OL"), name: "Made before pairing", create_project: false,
+    });
+    const r = await post(w.admin, `/api/v1/survey/projects/${made.data.id}/pair`, {});
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.project_id).toBeTruthy();
+
+    const check = await w.pool.query(
+      "SELECT project_id FROM survey_projects WHERE id = $1", [made.data.id]);
+    expect(String(check.rows[0].project_id)).toBe(String(r.data.project_id));
+  });
+
+  it("refuses to pair a programme that already has one", async () => {
+    // Two projects for one programme is worse than none: half the work ends
+    // up on a board nobody opens.
+    const made = await post(w.admin, "/api/v1/survey/projects",
+      { code: uniq("AP"), name: "Already paired" });
+    const r = await post(w.admin, `/api/v1/survey/projects/${made.data.id}/pair`, {});
+    expect(r.status).toBe(409);
+  });
+});

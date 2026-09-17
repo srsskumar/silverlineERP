@@ -168,6 +168,13 @@ function NewProgramme({ onCreated }: { onCreated: (id: string) => void }) {
   return (
     <Card className="space-y-3 p-4">
       <h3 className="text-sm font-semibold text-text">New survey programme</h3>
+      {/* Said here rather than discovered later: the project is what carries
+          the board, the assignees and the planned dates, and creating the two
+          separately is the step people forget. */}
+      <p className="text-xs text-text-muted">
+        A matching project is created with it, so the villages can go on the task board and
+        carry assignees and dates. You will not need to create or link one separately.
+      </p>
       <div className="grid gap-3 sm:grid-cols-3">
         <label className="space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">Code</span>
@@ -626,6 +633,37 @@ function ImportResult({ result }: { result: Row }) {
  * a one-way door worth stating plainly on the screen: the stage columns stop
  * being written, and moving a card is how a village progresses from then on.
  */
+/**
+ * Give a programme created before pairing its own project.
+ *
+ * The picker beside it can attach an existing project, which is right when
+ * one already exists. This is for the commoner case: there is no project,
+ * and making one by hand means leaving this screen, remembering the code,
+ * and coming back.
+ */
+function PairProject({ programmeId }: { programmeId: string }) {
+  const qc = useQueryClient();
+  const pair = useMutation({
+    mutationFn: async () =>
+      apiRequest(`/api/v1/survey/projects/${programmeId}/pair`, { method: 'POST', body: {} }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['survey-projects'] }),
+  });
+
+  return (
+    <div className="rounded-md border border-border bg-surface p-3">
+      <p className="mb-2 text-xs text-text-muted">
+        This programme has no project, so its villages cannot go on a board or carry
+        assignees and dates. Newer programmes get one automatically.
+      </p>
+      <Button type="button" variant="secondary" loading={pair.isPending}
+        onClick={() => pair.mutate()}>
+        Create its project
+      </Button>
+      {pair.isError ? <div className="mt-2"><ErrorCard error={pair.error} /></div> : null}
+    </div>
+  );
+}
+
 function BoardLink({ programme }: { programme: Row }) {
   const qc = useQueryClient();
   const [preview, setPreview] = React.useState<Row | null>(null);
@@ -680,6 +718,10 @@ function BoardLink({ programme }: { programme: Row }) {
           the board and in the task list like any other work — with an assignee and planned dates,
           which a survey row has nowhere else to keep.
         </p>
+
+        {!programme.project_id ? (
+          <PairProject programmeId={String(programme.id)} />
+        ) : null}
 
         <label className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
           Project the tasks belong to
