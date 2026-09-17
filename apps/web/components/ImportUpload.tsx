@@ -120,8 +120,20 @@ export function ImportUpload({ target }: { target: UploadTarget }) {
       // Headers are matched loosely, because a column somebody renamed from
       // "Serial Number" to "serial number" is the same column.
       const headers = table[0].map(normaliseHeader);
+      /*
+       * Blank cells are left out, not sent as empty strings.
+       *
+       * An empty cell means "not given". Sent as "", it fails every optional
+       * field that validates a format — a blank second phone number came
+       * back as "Invalid phone number", which is not the person's mistake
+       * and should not be their problem.
+       */
       const parsed = table.slice(1).map((line) =>
-        Object.fromEntries(headers.map((h, i) => [h, (line[i] ?? '').trim()])));
+        Object.fromEntries(
+          headers
+            .map((h, i) => [h, (line[i] ?? '').trim()] as const)
+            .filter(([, v]) => v !== ''),
+        ));
       setRows(parsed);
       setFileName(file.name);
     } catch (e) {

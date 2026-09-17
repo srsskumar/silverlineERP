@@ -16,6 +16,7 @@ import {
   documentUploadSchema,
   employeeActivateSchema,
   employeeCreateSchema,
+  employeeImportRow,
   employeeExitSchema,
   employeePatchSchema,
   employeeReactivateSchema,
@@ -707,7 +708,11 @@ export async function registerEmployeeRoutes(
       for (let index = 0; index < rawRows.length; index += 1) {
         const raw = rawRows[index] as Record<string, unknown>;
         const rowErrors: Array<{ field: string; message: string }> = [];
-        const parsedRow = employeeCreateSchema.safeParse(raw);
+        // What a spreadsheet produces, turned into what the schema expects:
+        // blank cells dropped, numbers read out of text, a skills cell split,
+        // and Excel's date serials converted. None of those is the person's
+        // mistake, so none of them should be their problem.
+        const parsedRow = employeeCreateSchema.safeParse(employeeImportRow(raw));
         if (!parsedRow.success) {
           for (const fe of toFieldErrors(parsedRow.error)) {
             rowErrors.push({ field: fe.field, message: fe.message });

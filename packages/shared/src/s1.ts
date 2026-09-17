@@ -362,3 +362,107 @@ export function resolveEffectiveHolidays(
   }
   return [...best.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 }
+
+/**
+ * A spreadsheet row, turned into what employeeCreateSchema expects.
+ *
+ * Every cell arrives as text, and an empty cell arrives as an empty string.
+ * The schema is strict for good reason — it is the same one the API enforces
+ * on a single create — so a file that is perfectly correct on the page came
+ * back with five errors about types nobody typed:
+ *
+ *   phone_secondary: Invalid phone number   (the cell was blank)
+ *   salary_basic:    Expected number        (the cell said "35000")
+ *   skills:          Expected array         (the cell said "Survey;AutoCAD")
+ *   experience_years:Expected number        (the cell said "6")
+ *   date_of_birth:   Invalid calendar date  (Excel gave its serial number)
+ *
+ * None of those is the person's mistake, so none of them should be their
+ * problem. This converts what a spreadsheet actually produces; anything it
+ * cannot convert is left alone and the schema rejects it with a message
+ * about the value, which is the case worth reporting.
+ */
+export function employeeImportRow(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object') return raw;
+  const row = { ...(raw as Record<string, unknown>) };
+
+  // An empty cell means "not given", not "given as nothing". Left in, it
+  // fails every optional field that validates its format.
+  for (const [key, value] of Object.entries(row)) {
+    if (typeof value === 'string' && value.trim() === '') delete row[key];
+  }
+
+  for (const key of ['salary_basic', 'experience_years'] as const) {
+    const v = row[key];
+    if (typeof v === 'string') {
+      // "35,000" and "₹35000" are what people actually type.
+      //
+      // Stripped of everything but digits, "about forty" becomes the empty
+      // string and Number('') is 0 — so a cell nobody could read would have
+      // imported as a salary of zero, which is worse than refusing it. The
+      // result has to contain a digit to count as a number at all.
+      const cleaned = v.replace(/[^0-9.-]/g, '');
+      const n = Number(cleaned);
+      if (/\d/.test(cleaned) && Number.isFinite(n)) row[key] = n;
+    }
+  }
+
+  if (typeof row.skills === 'string') {
+    row.skills = row.skills.split(/[;,|]/).map(s => s.trim()).filter(Boolean);
+  }
+
+  for (const key of ['date_of_birth', 'date_of_joining'] as const) {
+    const converted = spreadsheetDate(row[key]);
+    if (converted !== undefined) row[key] = converted;
+  }
+
+  return row;
+}
+
+/**
+ * A date as a spreadsheet gave it, in the form the API wants.
+ *
+ * Excel stores a date as a day count and hands it over as a number, so a
+ * date of birth arrives as 33078. It also has a famous flaw: 1900 is treated
+ * as a leap year, which it was not, so every serial after the 59th is one
+ * day ahead unless the epoch is offset to match.
+ *
+ * Text dates are accepted in the two orders people write them here —
+ * DD/MM/YYYY and DD-MM-YYYY — because a sheet typed by hand in India uses
+ * them and rejecting the row teaches nobody anything. Ambiguous American
+ * order is not guessed at: 03/04/2026 is read as the fourth of March, which
+ * is what the rest of this system means by it.
+ */
+export function spreadsheetDate(value: unknown): string | undefined {
+  if (value === null || value === undefined || value === '') return undefined;
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    /*
+     * Day 1 is 1 January 1900, and day 60 is Excel's 29 February 1900 — a
+     * date that never existed. Everything from 61 onwards is therefore one
+     * day ahead of a straight count, so the epoch shifts by a day at that
+     * point. Using one epoch for the whole range puts either the 1900 dates
+     * or every date since a day out, and a date of birth a day wrong is the
+     * kind of error nobody spots until it matters.
+     */
+    const epoch = value < 61 ? Date.UTC(1899, 11, 31) : Date.UTC(1899, 11, 30);
+    const d = new Date(epoch + value * 86_400_000);
+    return Number.isNaN(d.getTime()) ? undefined : d.toISOString().slice(0, 10);
+  }
+
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+
+  const dmy = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/.exec(text);
+  if (dmy) {
+    const [, d, m, y] = dmy;
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+
+  // A serial that arrived as text, which happens when a column is formatted
+  // as text after the dates were entered.
+  if (/^\d{4,6}$/.test(text)) return spreadsheetDate(Number(text));
+
+  return undefined;
+}

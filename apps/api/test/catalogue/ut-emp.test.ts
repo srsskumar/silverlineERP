@@ -696,3 +696,67 @@ function uniquePhone(): string {
   const n = String(Math.floor(Math.random() * 1_000_000_000)).padStart(9, "0");
   return `+919${n}`;
 }
+
+describe("uploading employees from a real spreadsheet", () => {
+  /*
+   * The reported failure: a file that was correct on the page came back with
+   * five errors about types nobody typed — a blank phone that "was not a
+   * phone number", a salary that "should be a number" while reading 35000,
+   * skills that "should be an array" while reading "Survey;AutoCAD".
+   */
+  async function upload(rows: unknown[], dry_run = false) {
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/employees/bulk-import",
+      headers: { ...w.admin, ...idem() },
+      payload: { rows, dry_run },
+    });
+    return { status: r.statusCode, body: r.json() };
+  }
+
+  it("takes a row exactly as a spreadsheet produces it", async () => {
+    const r = await upload([{
+      first_name: "Anitha", last_name: "Devi",
+      phone: "+919100088" + String(Math.floor(Math.random() * 900) + 100),
+      phone_secondary: "",
+      date_of_birth: "1990-07-24",
+      date_of_joining: "2023-04-01",
+      salary_basic: "35000",
+      experience_years: "6",
+      skills: "Survey;AutoCAD",
+      email: "",
+      address: "",
+    }]);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.imported, JSON.stringify(r.body.errors)).toBe(1);
+  });
+
+  it("reads a date the way it is written here, and an Excel serial", async () => {
+    const r = await upload([
+      {
+        first_name: "Written", phone: "+919100089101",
+        date_of_joining: "01/04/2023", date_of_birth: "24/07/1990",
+      },
+      {
+        first_name: "Serial", phone: "+919100089102",
+        date_of_joining: "2023-04-01", date_of_birth: 33078,
+      },
+    ]);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.imported, JSON.stringify(r.body.errors)).toBe(2);
+
+    const born = await w.pool.query(
+      "SELECT date_of_birth::text AS d FROM employees WHERE first_name = 'Serial'");
+    expect(born.rows[0].d).toBe("1990-07-24");
+  });
+
+  it("still refuses a value nobody could read, rather than inventing one", async () => {
+    // "about forty" stripped of non-digits is empty, and Number('') is zero —
+    // so this would once have imported a salary of nothing at all.
+    const r = await upload([{
+      first_name: "Vague", phone: "+919100089103",
+      date_of_joining: "2023-04-01", salary_basic: "about forty",
+    }]);
+    expect(r.body.imported).toBe(0);
+    expect(r.body.failed).toBe(1);
+  });
+});
