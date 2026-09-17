@@ -39,7 +39,7 @@ type Row = Record<string, unknown>;
  * when its rows are the slow kind — a village row may have to create a
  * district and a mandal before it can create the village.
  */
-const BATCH = 200;
+const BATCH = 100;
 
 /**
  * What an importer reports back.
@@ -160,6 +160,11 @@ export function ImportUpload({ target }: { target: UploadTarget }) {
         const res = await apiRequestRaw(target.path, {
           method: 'POST',
           body: { rows: batch, dry_run: dryRun },
+          // The default thirty seconds is for a request that reads a
+          // screenful. A batch of rows the server is legitimately writing
+          // needs longer, and abandoning it mid-write leaves somebody with
+          // no idea how much of their file went in.
+          timeoutMs: 180_000,
         });
         const part = (res.body as ImportOutcome) ?? {};
         for (const key of ['created', 'updated', 'allocated', 'already_allocated',

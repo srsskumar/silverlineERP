@@ -172,6 +172,16 @@ export interface RequestOptions extends Omit<RequestInit, 'body'> {
   body?: unknown;
   /** Skip the automatic 401 -> refresh -> retry cycle (used by auth endpoints). */
   skipAuthRetry?: boolean;
+  /**
+   * How long to wait before giving up, in milliseconds.
+   *
+   * Thirty seconds suits a request that reads a screenful. It does not suit
+   * a bulk import, where the server is legitimately working for a minute on
+   * rows the caller sent it — and an upload that the browser abandons while
+   * the server is still writing leaves somebody with no idea how much of
+   * their file went in.
+   */
+  timeoutMs?: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -264,7 +274,7 @@ export async function apiRequestRaw(
   path: string,
   options: RequestOptions = {},
 ): Promise<{ body: unknown; requestId?: string; status: number }> {
-  const { body, skipAuthRetry = false, headers, ...rest } = options;
+  const { body, skipAuthRetry = false, headers, timeoutMs, ...rest } = options;
   const method = (rest.method ?? 'GET').toUpperCase();
   const stableHeaders = new Headers(headers);
   if (MUTATING_METHODS.has(method) && !stableHeaders.has('Idempotency-Key')) {
@@ -298,7 +308,7 @@ export async function apiRequestRaw(
     return fetchWithApiTiming(method, path, attempt, () =>
       fetch(`${getBaseUrl()}${path}`, {
         ...rest,
-        signal:rest.signal??AbortSignal.timeout(30000),
+        signal: rest.signal ?? AbortSignal.timeout(timeoutMs ?? 30000),
         method,
         headers: reqHeaders,
         body: body === undefined ? undefined : JSON.stringify(body),

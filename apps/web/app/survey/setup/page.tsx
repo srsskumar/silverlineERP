@@ -321,7 +321,7 @@ function VillageImport({ projectId }: { projectId: string }) {
      * any timeout, and the counts are added together.
      */
     mutationFn: async (dryRun: boolean) => {
-      const BATCH = 200;
+      const BATCH = 100;
       const batches: typeof rows[] = [];
       for (let i = 0; i < rows.length; i += BATCH) batches.push(rows.slice(i, i + BATCH));
 
@@ -336,7 +336,13 @@ function VillageImport({ projectId }: { projectId: string }) {
         setProgress({ done: n * BATCH, total: rows.length });
         const res: any = await apiRequest(
           `/api/v1/survey/projects/${projectId}/villages/import`,
-          { method: 'POST', body: { rows: batch, dry_run: dryRun } });
+          {
+            method: 'POST',
+            body: { rows: batch, dry_run: dryRun },
+            // A village row may create a district and a mandal before it can
+            // create the village, so a batch is real work, not a read.
+            timeoutMs: 180_000,
+          });
         const d = res?.data ?? {};
         total.rows += Number(d.rows ?? 0);
         total.imported += Number(d.imported ?? 0);
@@ -414,7 +420,7 @@ function VillageImport({ projectId }: { projectId: string }) {
 
         {progress ? (
           <p className="text-2xs text-text-subtle">
-            Sending row {progress.done + 1}–{Math.min(progress.done + 200, progress.total)} of {progress.total}…
+            Sending row {progress.done + 1}–{Math.min(progress.done + 100, progress.total)} of {progress.total}…
           </p>
         ) : null}
 

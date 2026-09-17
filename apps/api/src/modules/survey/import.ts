@@ -75,16 +75,44 @@ export async function registerSurveyImport(
     db: PoolClient, orgId: string, userId: string,
     type: string, sourceCode: string, name: string,
     parentId: string | null, oldCode?: string | null,
+    /*
+     * Units already resolved during this import.
+     *
+     * A work list of 1,400 villages holds a handful of districts and a few
+     * dozen mandals, and without this every row looked all of them up again:
+     * around ten round trips per row, which against a managed database in
+     * another data centre is a fifth of a second each and three quarters of
+     * an hour for the file. The geography a row needs is nearly always the
+     * geography the row before it needed.
+     *
+     * Only ids are cached, and only within one request, so a name changed
+     * upstream is still picked up on the next import.
+     */
+    cache?: Map<string, string>,
   ): Promise<{ id: string; created: boolean }> {
-    const found = (await db.query(
-      `SELECT id, name FROM org_units
-       WHERE org_id = $1 AND type = $2 AND source_code = $3 LIMIT 1`,
-      [orgId, type, sourceCode])).rows[0];
+    const cacheKey = `${type}:${sourceCode}`;
+    const cached = cache?.get(cacheKey);
+    if (cached) return { id: cached, created: false };
+
+    /*
+     * The unit and the code clash in one query rather than two.
+     *
+     * The second was only ever needed to know whether `code` was already
+     * taken by a different unit of the same type, which is the same table and
+     * the same trip.
+     */
+    const probe = await db.query(
+      `SELECT id, name, source_code FROM org_units
+        WHERE org_id = $1 AND type = $2 AND (source_code = $3 OR code = $3)
+        LIMIT 2`,
+      [orgId, type, sourceCode]);
+    const found = probe.rows.find(r => r.source_code === sourceCode);
     if (found) {
       if (found.name !== name) {
         await db.query('UPDATE org_units SET name = $2, updated_at = now() WHERE id = $1',
           [found.id, name]);
       }
+      cache?.set(cacheKey, String(found.id));
       return { id: String(found.id), created: false };
     }
 
@@ -92,15 +120,16 @@ export async function registerSurveyImport(
     // source code; keeping them equal where possible makes the two systems
     // legible side by side, and the suffix only appears on a genuine clash.
     let code = sourceCode;
-    const clash = await db.query(
-      'SELECT 1 FROM org_units WHERE org_id = $1 AND type = $2 AND code = $3',
-      [orgId, type, code]);
-    if (clash.rowCount) code = `${sourceCode}-${Date.now().toString(36).slice(-4)}`;
+    // Anything the probe found that was not this unit is holding the code.
+    if (probe.rows.some(r => r.source_code !== sourceCode)) {
+      code = `${sourceCode}-${Date.now().toString(36).slice(-4)}`;
+    }
 
     const row = (await db.query(
       `INSERT INTO org_units(org_id, type, code, name, parent_id, source_code, source_code_old, created_by)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
       [orgId, type, code, name, parentId, sourceCode, oldCode || null, userId])).rows[0];
+    cache?.set(cacheKey, String(row.id));
     return { id: String(row.id), created: true };
   }
 
@@ -128,6 +157,8 @@ export async function registerSurveyImport(
         const results: Array<{
           row: number; village_code?: string; status: string; message?: string;
         }> = [];
+        // Geography resolved once per import rather than once per row.
+        const units = new Map<string, string>();
         let created = { districts: 0, divisions: 0, mandals: 0, villages: 0 };
 
         for (const [index, raw] of input.rows.entries()) {
@@ -153,7 +184,7 @@ export async function registerSurveyImport(
             const mandalName = v.mandal_name || 'Not attributed';
 
             const district = await upsertUnit(
-              db, u.orgId, u.id, 'district', districtCode, districtName, null);
+              db, u.orgId, u.id, 'district', districtCode, districtName, null, null, units);
             if (district.created) created.districts += 1;
 
             // The mandal hangs off the division where the source list gives
@@ -161,13 +192,14 @@ export async function registerSurveyImport(
             let parentOfMandal = district.id;
             if (v.division_code && v.division_name) {
               const division = await upsertUnit(
-                db, u.orgId, u.id, 'division', v.division_code, v.division_name, district.id);
+                db, u.orgId, u.id, 'division', v.division_code, v.division_name, district.id,
+                null, units);
               if (division.created) created.divisions += 1;
               parentOfMandal = division.id;
             }
 
             const mandal = await upsertUnit(
-              db, u.orgId, u.id, 'mandal', mandalCode, mandalName, parentOfMandal);
+              db, u.orgId, u.id, 'mandal', mandalCode, mandalName, parentOfMandal, null, units);
             if (mandal.created) created.mandals += 1;
 
             const village = await upsertUnit(
@@ -175,10 +207,27 @@ export async function registerSurveyImport(
               v.vill_code_old);
             if (village.created) created.villages += 1;
 
-            const listed = await db.query(
-              'SELECT 1 FROM survey_villages WHERE survey_project_id = $1 AND village_id = $2',
-              [projectId, village.id]);
-            if (listed.rowCount) {
+            /*
+             * Listed and inserted in one statement.
+             *
+             * The separate "is it already there" query doubled the cost of
+             * the commonest row and still raced: two imports of the same file
+             * could both read "not listed" and then one would fail on the
+             * constraint. Letting the constraint answer it is both faster and
+             * correct — no row back means it was already in the programme.
+             */
+            const inserted = await db.query(
+              `INSERT INTO survey_villages(org_id, survey_project_id, village_id,
+                 total_extent_ac, dgps_base, dgps_rovers, teams, vill_code_old,
+                 created_by, updated_by)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)
+               ON CONFLICT (survey_project_id, village_id) DO NOTHING
+               RETURNING id`,
+              [u.orgId, projectId, village.id, v.total_extent_ac ?? null,
+                v.dgps_base ?? 0, v.dgps_rovers ?? 0, v.teams ?? 0,
+                v.vill_code_old || null, u.id]);
+
+            if (!inserted.rowCount) {
               // Not an error: re-running an import after fixing a few rows is
               // the normal way this gets used.
               results.push({
@@ -188,15 +237,6 @@ export async function registerSurveyImport(
               await db.query('RELEASE SAVEPOINT import_row');
               continue;
             }
-
-            await db.query(
-              `INSERT INTO survey_villages(org_id, survey_project_id, village_id,
-                 total_extent_ac, dgps_base, dgps_rovers, teams, vill_code_old,
-                 created_by, updated_by)
-               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
-              [u.orgId, projectId, village.id, v.total_extent_ac ?? null,
-                v.dgps_base ?? 0, v.dgps_rovers ?? 0, v.teams ?? 0,
-                v.vill_code_old || null, u.id]);
 
             // What the row did not carry, so somebody can come back to it.
             const missing = [
