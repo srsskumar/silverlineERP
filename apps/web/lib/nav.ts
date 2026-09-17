@@ -15,8 +15,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   FileCheck,
-  Compass,
-} from 'lucide-react';
+  Compass, ScrollText } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { PERMISSIONS } from './permissions';
 
@@ -130,6 +129,9 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/org/holidays', label: 'Holidays', permission: PERMISSIONS.HOLIDAY_READ, icon: CalendarDays },
       { href: '/admin', label: 'Administration', permission: 'users.read', icon: Settings },
       { href: '/admin/import-templates', label: 'Upload & download', permission: 'users.read', icon: Download },
+      // The trail was written from the beginning and readable only as an
+      // export, which nobody hunting "who changed this" would think to open.
+      { href: '/audit', label: 'Audit trail', permission: 'audit.read', icon: ScrollText },
       { href: '/security', label: 'Security', icon: Shield },
     ],
   },
