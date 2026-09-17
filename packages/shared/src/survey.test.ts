@@ -1253,3 +1253,20 @@ describe("the date on a day's return", () => {
     expect(entry('2026-02-29').success).toBe(false);
   });
 });
+
+describe('one thing wrong per date', () => {
+  it('does not also say an impossible date is in the future', () => {
+    // "2026-13-01 has not happened yet" is true of a date that does not
+    // exist, and reads as nonsense to the person who mistyped a month.
+    const r = surveyEntrySchema.safeParse({
+      survey_village_id: '11111111-1111-4111-8111-111111111111',
+      entry_date: '2026-13-01', teams_deployed: 1, values: {},
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      const said = r.error.issues.map(i => i.message);
+      expect(said).toContain('That is not a real date');
+      expect(said).not.toContain('That date has not happened yet');
+    }
+  });
+});

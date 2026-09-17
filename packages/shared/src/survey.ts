@@ -529,16 +529,19 @@ export function checkRoverDay(rows: RoverDayEntry[]): string[] {
 
 /* --------------------------------------------------------------- schemas */
 
+/** Whether a YYYY-MM-DD string names a day the calendar actually has. */
+function realDate(s: string): boolean {
+  const d = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
 const isoDate = z.string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
   // The shape is not the same thing as a date: 2026-13-01 and 2026-02-30 both
   // match the pattern, and reach Postgres as something it refuses with a 500
   // rather than a message anybody can act on. Round-tripping through Date is
   // what separates a real calendar date from a well-formed string.
-  .refine(s => {
-    const d = new Date(`${s}T00:00:00Z`);
-    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
-  }, 'That is not a real date');
+  .refine(realDate, 'That is not a real date');
 
 /**
  * A date that has already happened, in Indian time.
@@ -553,7 +556,11 @@ const isoDate = z.string()
  * thinks it is yesterday evening.
  */
 const pastDate = isoDate.refine(
-  s => s <= businessDay(), 'That date has not happened yet',
+  // A date that is not a real date is already being reported as one, and
+  // "2026-13-01 has not happened yet" on top of that reads as nonsense.
+  // Each refusal should name one thing wrong with the value.
+  s => !realDate(s) || s <= businessDay(),
+  'That date has not happened yet',
 );
 const quantity = z.number().finite().min(0, 'A quantity cannot be negative');
 
