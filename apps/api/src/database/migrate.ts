@@ -65,6 +65,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "055_mfa_policy", file: "055_mfa_policy.sql" },
   { version: "056_payroll_leave_read", file: "056_payroll_leave_read.sql" },
   { version: "057_asset_register", file: "057_asset_register.sql" },
+  { version: "058_asset_category_case", file: "058_asset_category_case.sql" },
 ];
 
 /**
