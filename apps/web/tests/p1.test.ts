@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { ApiClientError } from '../lib/apiClient';
 import {
   buildMyPayslipQuery,
@@ -310,5 +312,21 @@ describe('P1 permission gating codes (exact values)', () => {
     expect(PERMISSIONS.PAYROLL_LOCK).toBe('payroll.lock');
     expect(PERMISSIONS.PAYROLL_CONFIGURE).toBe('payroll.configure');
     expect(PERMISSIONS.PAYSLIP_READ).toBe('payslip.read');
+  });
+});
+
+describe('the picker, for somebody who cannot see it', () => {
+  it('ties the input to its list and to the highlighted option', () => {
+    // Arrow keys already moved a highlight through the options and a screen
+    // reader had no way to know: without aria-activedescendant pointing at
+    // the highlighted option, arrowing down announces nothing. The highlight
+    // was decoration rather than state anybody could observe.
+    const src = readFileSync(
+      join(__dirname, '..', 'components', 'ui', 'Combobox.tsx'), 'utf8');
+    expect(src).toContain('aria-controls={open ? listId : undefined}');
+    expect(src).toContain('aria-activedescendant=');
+    expect(src).toContain('id={optionId(i)}');
+    // The ids have to agree, or both attributes point at nothing.
+    expect(src).toContain('id={listId}');
   });
 });

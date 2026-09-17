@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { HelpCircle } from 'lucide-react';
-import { Tooltip, TooltipContent, TooltipTrigger } from './Tooltip';
+import * as Popover from '@radix-ui/react-popover';
 import { cn } from '@/lib/cn';
 
 /**
@@ -13,9 +13,11 @@ import { cn } from '@/lib/cn';
  * two people will read two different ways. The explanation belongs next to
  * the figure rather than in a manual nobody opens while looking at a screen.
  *
- * Deliberately a button rather than a bare icon: a tooltip that only opens on
- * hover is a tooltip that never opens on a phone or for anybody navigating by
- * keyboard, which on a field system is most of the people using it.
+ * A popover rather than a tooltip, because a tooltip opens on hover and a
+ * field crew is holding a phone. There is no hover on a phone, so the whole
+ * glossary would have been invisible to most of the people it was written
+ * for. This opens on tap, on click and on Enter, closes on Escape or on a
+ * tap outside, and returns focus where it came from.
  */
 export function InfoHint({
   children,
@@ -26,12 +28,16 @@ export function InfoHint({
   label?: string;
   className?: string;
 }) {
+  const [open, setOpen] = React.useState(false);
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
         <button
           type="button"
           aria-label={label}
+          // Hover still opens it on a desktop, where hovering is free and
+          // clicking to read one sentence is not.
+          onMouseEnter={() => setOpen(true)}
           className={cn(
             'inline-flex shrink-0 rounded text-text-subtle transition-colors',
             'hover:text-text-muted focus:outline-none focus:ring-2 focus:ring-ring',
@@ -40,11 +46,23 @@ export function InfoHint({
         >
           <HelpCircle className="size-3" aria-hidden="true" />
         </button>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-[18rem] leading-relaxed">
-        {children}
-      </TooltipContent>
-    </Tooltip>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          sideOffset={6}
+          collisionPadding={8}
+          onMouseLeave={() => setOpen(false)}
+          className={cn(
+            'z-50 max-w-[18rem] rounded-md border border-border bg-overlay px-2.5 py-2',
+            'text-xs normal-case leading-relaxed tracking-normal text-text shadow-lg',
+            'data-[state=open]:animate-fade-in',
+          )}
+        >
+          {children}
+          <Popover.Arrow className="fill-border" />
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }
 

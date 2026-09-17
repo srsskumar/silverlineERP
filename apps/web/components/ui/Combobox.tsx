@@ -42,6 +42,16 @@ export function Combobox({
   const [query, setQuery] = React.useState('');
   const [open, setOpen] = React.useState(false);
   const [active, setActive] = React.useState(0);
+  /*
+   * Ids for the ARIA wiring below.
+   *
+   * Arrow keys already move a highlight through the options, and a screen
+   * reader had no way to know: without aria-activedescendant pointing at the
+   * highlighted option, somebody arrowing down the list hears nothing move.
+   * The highlight was decoration rather than state anybody could observe.
+   */
+  const listId = React.useId();
+  const optionId = (i: number) => `${listId}-option-${i}`;
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const boxRef = React.useRef<HTMLDivElement>(null);
@@ -105,6 +115,8 @@ export function Combobox({
           role="combobox"
           aria-expanded={open}
           aria-autocomplete="list"
+          aria-controls={open ? listId : undefined}
+          aria-activedescendant={open && visible[active] ? optionId(active) : undefined}
           autoComplete="off"
           disabled={disabled || isLoading}
           // The selected label shows when the box is closed; typing replaces
@@ -143,6 +155,7 @@ export function Combobox({
 
       {open ? (
         <ul
+          id={listId}
           role="listbox"
           className="absolute z-30 mt-1 max-h-64 w-full overflow-auto rounded-md border border-border bg-overlay py-1 shadow-lg"
         >
@@ -150,6 +163,7 @@ export function Combobox({
             <li key={o.id}>
               <button
                 type="button"
+                id={optionId(i)}
                 role="option"
                 aria-selected={o.id === value}
                 className={cn(
