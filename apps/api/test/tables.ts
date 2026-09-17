@@ -8,7 +8,11 @@
  * one that cares.
  *
  * Order matters — a child is listed before its parent, so a single TRUNCATE
- * satisfies every foreign key without CASCADE. CASCADE is avoided
+ * satisfies every foreign key without CASCADE. assets precedes asset_types
+ * and asset_categories for that reason, and both of those must be here at
+ * all because they reference organizations: leaving a table out that points
+ * at one being truncated fails every suite at once with a foreign key
+ * complaint naming neither the table nor this file. CASCADE is avoided
  * deliberately: it would silently empty a table nobody listed, including the
  * seeded reference data the suites are built on.
  */
@@ -33,7 +37,8 @@ export const VOLATILE_TABLES = `
   opportunities, leads, contacts, clients, provider_jobs, advisory_cases,
   payslip_revisions, project_workflow_overrides, notification_deliveries, report_registry,
   report_schedules, payslip_documents, vendors, inventory_items, invoices,
-  stock_transactions, stock_locations, assets, asset_assignments, asset_audits, cycles,
+  stock_transactions, stock_locations, asset_assignments, asset_audits, assets,
+  asset_types, asset_categories, cycles,
   custom_field_definitions, domain_events, automation_rules, automation_executions,
   webhook_subscriptions, webhook_deliveries, insight_feedback, v2_operations,
   geo_fence_employee_assignments, device_registrations, audit_events, sessions, user_roles,

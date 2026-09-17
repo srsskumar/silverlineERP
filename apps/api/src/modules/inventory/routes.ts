@@ -116,7 +116,25 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    const row=await inOrg(db,'assets',id,u.orgId,true);await assetAccess(req,id);version(req,row as {version:number});
    const edges:Record<string,string[]>={AVAILABLE:['DAMAGED','LOST'],ASSIGNED:['IN_USE','RETURNED','DAMAGED','LOST'],IN_USE:['RETURNED','DAMAGED','LOST'],RETURNED:['AVAILABLE','DAMAGED'],DAMAGED:['AVAILABLE','WRITTEN_OFF'],LOST:['RETURNED','WRITTEN_OFF'],WRITTEN_OFF:[]};
    if(!edges[row.status]?.includes(i.status))fail('INVALID_TRANSITION',`Cannot move ${row.status} to ${i.status}`,409);
-   if(['RETURNED','DAMAGED','LOST','WRITTEN_OFF'].includes(i.status))await db.query('UPDATE asset_assignments SET returned_at=now(),condition=$2 WHERE asset_id=$1 AND returned_at IS NULL',[id,i.condition]);
+   /*
+    * Closing the assignment records the *return*, and leaves the issue
+    * condition alone.
+    *
+    * This used to overwrite `condition` -- the state the asset went out in --
+    * with the state it came back in, so the register could never show that
+    * something left in good order and returned needing repair. That is the
+    * one comparison the whole record exists to support.
+    *
+    * The receiver is the acting user, and returned_to_employee_id names who
+    * physically took it: a fault found next week otherwise has nobody to ask
+    * but the person who handed it over.
+    */
+   if(['RETURNED','DAMAGED','LOST','WRITTEN_OFF'].includes(i.status))await db.query(
+    `UPDATE asset_assignments
+        SET returned_at=now(), return_condition=$2, return_condition_note=$3,
+            received_by=$4, returned_to_employee_id=$5
+      WHERE asset_id=$1 AND returned_at IS NULL`,
+    [id,i.condition,i.condition_note??null,u.id,i.returned_to_employee_id??null]);
    return {...(await db.query('UPDATE assets SET status=$2,condition=$3,version=version+1,updated_at=now() WHERE id=$1 RETURNING *',[id,i.status,i.condition])).rows[0],reason:i.reason,evidence_id:i.evidence_id};
   });
  });

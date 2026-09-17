@@ -20,7 +20,28 @@ export const stockSchema = z.object({item_id:uuid,direction:z.enum(['IN','OUT'])
 export const invoiceSchema = z.object({serial_number:text,vendor_id:uuid,hsn:z.string().max(50),gst_enabled:z.boolean(),gst_rate:decimalSchema.default('0'),subtotal:decimalSchema,payment_mode:z.enum(['CASH','BANK','UPI','CREDIT']),reference:text});
 export const assetSchema = z.object({asset_code:text,serial_number:text.optional(),name:text,category:text,vendor_id:uuid.nullable().optional(),condition:text.default('GOOD')});
 export const assetAssignSchema = z.object({employee_id:uuid,project_id:uuid.nullable().optional(),due_date:dateStringSchema.optional(),condition:text.default('GOOD'),reason:text});
-export const assetTransitionSchema = z.object({status:z.enum(['IN_USE','RETURNED','AVAILABLE','DAMAGED','LOST','WRITTEN_OFF']),condition:text,reason:text,evidence_id:uuid.optional()});
+/**
+ * Moving an asset, and handing it back (enhancement note 3).
+ *
+ * `condition` is what the person handling it now observes. On a return that
+ * is the *receiver's* reading, which is the whole point of recording it: the
+ * person giving equipment back has every reason to call it fine.
+ *
+ * `returned_to_employee_id` answers "returned to whom". Without it the trail
+ * ends at whoever had the thing, and a fault found next week has nobody to
+ * ask.
+ */
+export const assetTransitionSchema = z.object({
+  status:z.enum(['IN_USE','RETURNED','AVAILABLE','DAMAGED','LOST','WRITTEN_OFF']),
+  condition:text,
+  /** Required when the condition is "other" -- enforced by the table too. */
+  condition_note:z.string().trim().max(2000).optional(),
+  returned_to_employee_id:uuid.optional(),
+  reason:text,
+  evidence_id:uuid.optional(),
+}).refine(v=>v.condition!=='OTHER'||!!v.condition_note?.trim(),{
+  message:'Say what condition it is in',path:['condition_note'],
+});
 export const assetAuditSchema = z.object({name:text,expected_ids:z.array(uuid).max(1000),scans:z.array(z.object({asset_id:uuid,condition:text})).max(1000)});
 export const cycleSchema = z.object({project_id:uuid,name:text,start_date:dateStringSchema,end_date:dateStringSchema,goal:z.string().max(2000).optional(),rollover:z.enum(['NEXT','BACKLOG']).default('NEXT')}).refine(x=>x.end_date>=x.start_date,{message:'End must follow start',path:['end_date']});
 export const customFieldSchema = z.object({project_id:uuid.optional(),project_type_id:uuid.optional(),field_key:z.string().regex(/^[a-z][a-z0-9_]{0,49}$/),name:text,field_type:z.enum(['text','number','date','select','multi_select','user','boolean']),options:z.array(text).max(100).default([]),required:z.boolean().default(false)}).refine(v=>Boolean(v.project_id)!==Boolean(v.project_type_id),'Choose one project or project type');

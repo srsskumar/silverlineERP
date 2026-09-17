@@ -356,14 +356,28 @@ describe("UT-OPS-03 return damaged or lost asset", () => {
     expect(asset.rows[0].condition).toBe("CRACKED_SCREEN");
 
     const assignment = await w.pool.query(
-      "SELECT employee_id, returned_at, condition FROM asset_assignments WHERE asset_id = $1",
+      `SELECT employee_id, returned_at, condition, return_condition, received_by
+         FROM asset_assignments WHERE asset_id = $1`,
       [assetId],
     );
     expect(assignment.rowCount).toBe(1);
     expect(assignment.rows[0].employee_id).toBe(employeeId);
     // The assignment is closed, not deleted: the history of who held it stays.
     expect(assignment.rows[0].returned_at).toBeTruthy();
-    expect(assignment.rows[0].condition).toBe("CRACKED_SCREEN");
+    /*
+     * The two conditions are kept apart.
+     *
+     * This used to assert that `condition` became CRACKED_SCREEN — the return
+     * overwrote the state the asset went out in, so the register could never
+     * show that something left in good order and came back broken. That
+     * comparison is the whole reason the record exists, so the issue
+     * condition stays put and the observed one is recorded beside it.
+     */
+    expect(assignment.rows[0].condition, "the state it went out in").toBe("GOOD");
+    expect(assignment.rows[0].return_condition, "what the receiver saw")
+      .toBe("CRACKED_SCREEN");
+    // And who took it back, so a fault found later has somebody to ask.
+    expect(assignment.rows[0].received_by).toBeTruthy();
   });
 
   it("carries the reason and evidence through on a lost asset", async () => {

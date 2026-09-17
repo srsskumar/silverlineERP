@@ -3,6 +3,8 @@ import bcrypt from "bcryptjs";
 import { Pool } from "pg";
 import {
   ALL_PERMISSIONS,
+  ASSET_TYPE_SEEDS,
+  ASSET_CATEGORY_SEEDS,
   MFA_DEFAULT_REQUIRED_ROLES,
   V2_PERMISSIONS, V2_ROLE_GRANTS,
   CRM_PERMISSIONS,
@@ -149,6 +151,33 @@ export async function seedDatabase(
       `INSERT INTO permissions (code, description, module)
        VALUES ($1, $2, $3) ON CONFLICT (code) DO NOTHING`,
       [code, `Permission ${code}`, moduleFor(code)],
+    );
+  }
+
+  /*
+   * The asset vocabulary for this organisation.
+   *
+   * Migration 057 seeds these too, but only for organisations that exist
+   * when it runs -- and on a fresh database the migrations run before this
+   * function creates the organisation, so the migration finds nothing to
+   * seed and every asset dropdown comes up empty. Seeding here as well is
+   * what makes a new install work.
+   *
+   * Both read ASSET_TYPE_SEEDS / ASSET_CATEGORY_SEEDS, so the two cannot say
+   * different things.
+   */
+  for (const t of ASSET_TYPE_SEEDS) {
+    await pool.query(
+      `INSERT INTO asset_types (org_id, code, label, display_order)
+       VALUES ($1,$2,$3,$4) ON CONFLICT (org_id, code) DO NOTHING`,
+      [orgId, t.code, t.label, t.displayOrder],
+    );
+  }
+  for (const c of ASSET_CATEGORY_SEEDS) {
+    await pool.query(
+      `INSERT INTO asset_categories (org_id, code, label, display_order)
+       VALUES ($1,$2,$3,$4) ON CONFLICT (org_id, code) DO NOTHING`,
+      [orgId, c.code, c.label, c.displayOrder],
     );
   }
 

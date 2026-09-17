@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { MFA_DEFAULT_REQUIRED_ROLES, MFA_FLOOR_ROLES } from "@silverline/shared";
+import {
+  MFA_DEFAULT_REQUIRED_ROLES, MFA_FLOOR_ROLES,
+  ASSET_TYPE_SEEDS, ASSET_CATEGORY_SEEDS,
+} from "@silverline/shared";
 import { MIGRATION_VERSIONS } from "../src/database/migrate.js";
 import {
   describeSchemaDrift,
@@ -168,5 +171,39 @@ describe("the MFA role defaults, in two places that must agree", () => {
     // A policy that holds only while the application is the only writer is
     // not a policy.
     expect(sql).toMatch(/CHECK \(code <> 'SUPER_ADMIN' OR mfa_required\)/);
+  });
+});
+
+describe("the asset vocabulary, in two places that must agree", () => {
+  /*
+   * Migration 057 seeds types and categories for organisations that exist
+   * when it runs. On a fresh database the migrations run before the seed
+   * creates the organisation, so the migration seeds nothing and the seed is
+   * the only thing standing between a new install and empty dropdowns.
+   * Both read the same shared list; this pins that they still do.
+   */
+  const sql = readFileSync(
+    new URL("../src/database/migrations/057_asset_register.sql", import.meta.url),
+    "utf8",
+  );
+
+  it("seeds exactly the asset types the shared list names", () => {
+    const block = sql.match(/INSERT INTO asset_types[\s\S]*?ON CONFLICT/);
+    expect(block, "the type seeding statement").toBeTruthy();
+    const inSql = [...block![0].matchAll(/\('([A-Z_]+)','/g)].map(m => m[1]).sort();
+    expect(inSql).toEqual(ASSET_TYPE_SEEDS.map(t => t.code).sort());
+  });
+
+  it("seeds exactly the categories the shared list names", () => {
+    const block = sql.match(/INSERT INTO asset_categories \(org_id, code, label, display_order\)[\s\S]*?ON CONFLICT/);
+    expect(block, "the category seeding statement").toBeTruthy();
+    const inSql = [...block![0].matchAll(/\('([A-Z_]+)','/g)].map(m => m[1]).sort();
+    expect(inSql).toEqual(ASSET_CATEGORY_SEEDS.map(c => c.code).sort());
+  });
+
+  it("keeps the accessory category, which the import rules turn on", () => {
+    // canMatchOnSerial() refuses to deduplicate accessories. If the category
+    // stopped existing, that rule would quietly never fire.
+    expect(ASSET_CATEGORY_SEEDS.map(c => c.code)).toContain("ACCESSORY");
   });
 });
