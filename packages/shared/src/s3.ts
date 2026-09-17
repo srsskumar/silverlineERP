@@ -38,7 +38,18 @@ export const S3_ROLE_GRANTS: Record<RoleCode, string[]> = {
   HR_MANAGER: [...S3_ALL_PERMISSIONS],
   PROJECT_MANAGER: [S3_PERMISSIONS.LEAVE_READ, S3_PERMISSIONS.LEAVE_DECIDE, S3_PERMISSIONS.LEAVE_REQUEST],
   TEAM_LEAD: [S3_PERMISSIONS.LEAVE_READ, S3_PERMISSIONS.LEAVE_DECIDE, S3_PERMISSIONS.LEAVE_REQUEST],
-  PAYROLL_OFFICER: [],
+  /*
+   * Read only, and only because payroll depends on it.
+   *
+   * Payroll computes loss of pay straight from the leave register, so the
+   * officer signs off a deduction they could not otherwise see the basis
+   * for -- an approval nobody can check, and an employee disputing a short
+   * salary gets "the system says so" for an answer.
+   *
+   * Nothing here lets payroll approve, cancel or alter leave. That stays
+   * with the leave approvers.
+   */
+  PAYROLL_OFFICER: [S3_PERMISSIONS.LEAVE_READ],
   INVENTORY_MANAGER: [],
   EMPLOYEE: [S3_PERMISSIONS.LEAVE_REQUEST],
   CLIENT_VIEWER: [],
