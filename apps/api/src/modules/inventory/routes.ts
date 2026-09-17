@@ -34,8 +34,23 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
   */
  async function checkAssetVocabulary(db:import('pg').PoolClient,orgId:string,input:Record<string,unknown>) {
   if(input.category!==undefined){
-   const ok=await db.query('SELECT 1 FROM asset_categories WHERE org_id=$1 AND code=$2 AND active',[orgId,String(input.category)]);
-   if(!ok.rowCount)fail('UNKNOWN_CATEGORY',`There is no active asset category ${String(input.category)}. Add it first.`,422);
+   /*
+    * Given as a code or as an id.
+    *
+    * The register stores the code, but a dropdown built from the category
+    * list submits the row's id — so accepting only the code would mean every
+    * form that does the sensible thing gets refused. The id is resolved back
+    * to the code here rather than storing two kinds of value in one column.
+    */
+   const raw=String(input.category);
+   const looksLikeId=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw);
+   const found=await db.query(
+    looksLikeId
+     ?'SELECT code FROM asset_categories WHERE org_id=$1 AND id=$2 AND active'
+     :'SELECT code FROM asset_categories WHERE org_id=$1 AND code=$2 AND active',
+    [orgId,raw]);
+   if(!found.rowCount)fail('UNKNOWN_CATEGORY',`There is no active asset category ${raw}. Add it first.`,422);
+   input.category=String(found.rows[0].code);
   }
   if(input.asset_type_id){
    const ok=await db.query('SELECT 1 FROM asset_types WHERE org_id=$1 AND id=$2 AND active',[orgId,String(input.asset_type_id)]);
