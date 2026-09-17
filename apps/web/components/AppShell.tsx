@@ -145,11 +145,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {/* Desktop rail. The sidebar is its own scroll container so long nav
             never pushes the page, and the brand/footer stay pinned. */}
         <aside className="sticky top-0 hidden h-screen w-sidebar shrink-0 flex-col border-r border-border bg-surface md:flex">
-          <div className="flex h-topbar shrink-0 items-center gap-2 border-b border-border px-3">
-            <div className="flex size-5 items-center justify-center rounded bg-primary text-2xs font-bold text-primary-fg">
-              S
-            </div>
-            <span className="text-sm font-semibold tracking-tight text-text">Silverline</span>
+          <div className="flex h-topbar shrink-0 items-center border-b border-border px-3">
+            {/* The mark, at the size it stays legible. The wordmark is part
+                of the image, so no text is repeated beside it. */}
+            <img
+              src="/silverline-logo.png"
+              alt="Silverline Techno Solutions"
+              className="h-6 w-auto dark:brightness-0 dark:invert"
+            />
           </div>
           <NavList groups={groups} pathname={pathname} />
           <div className="shrink-0 border-t border-border px-3 py-2 text-2xs text-text-subtle">
@@ -160,11 +163,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {/* Mobile navigation uses a real sheet: focus trap and Esc for free. */}
         <Sheet open={navOpen} onOpenChange={setNavOpen}>
           <SheetContent side="left" className="w-sidebar">
-            <SheetTitle className="flex h-topbar shrink-0 items-center gap-2 border-b border-border px-3 text-sm font-semibold text-text">
-              <div className="flex size-5 items-center justify-center rounded bg-primary text-2xs font-bold text-primary-fg">
-                S
-              </div>
-              Silverline
+            <SheetTitle className="flex h-topbar shrink-0 items-center border-b border-border px-3">
+              <img
+                src="/silverline-logo.png"
+                alt="Silverline Techno Solutions"
+                className="h-6 w-auto dark:brightness-0 dark:invert"
+              />
             </SheetTitle>
             <NavList groups={groups} pathname={pathname} onNavigate={() => setNavOpen(false)} />
           </SheetContent>

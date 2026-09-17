@@ -540,6 +540,40 @@ export const surveyProjectSchema = z.object({
   notes: z.string().max(2000).nullable().optional(),
 });
 
+/**
+ * Adding one village by hand (enhancement note 3).
+ *
+ * Either an existing location by id, or a name and the mandal it sits in --
+ * which is what somebody adding a single village actually has. Requiring the
+ * location to exist first means creating it on another screen and coming
+ * back, for the one case where a bulk import is not worth opening.
+ */
+export const surveyVillageCreateSchema = z.object({
+  village_id: z.string().uuid().optional(),
+  village_name: z.string().trim().min(1).max(255).optional(),
+  village_code: z.string().trim().min(1).max(64).optional(),
+  /** The mandal it belongs to. Required when creating by name. */
+  mandal_id: z.string().uuid().optional(),
+  total_extent_ac: z.number().finite().positive().nullable().optional(),
+  dgps_base: z.number().int().min(0).optional(),
+  dgps_rovers: z.number().int().min(0).optional(),
+  teams: z.number().int().min(0).optional(),
+  vill_code_old: z.string().max(64).nullable().optional(),
+}).refine(v => v.village_id || (v.village_name && v.village_code && v.mandal_id), {
+  message: 'Give an existing village, or a name, code and mandal to create one',
+  path: ['village_name'],
+});
+
+/** Editing what the programme records about a village it already has. */
+export const surveyVillageEditSchema = z.object({
+  village_name: z.string().trim().min(1).max(255).optional(),
+  total_extent_ac: z.number().finite().positive().nullable().optional(),
+  dgps_base: z.number().int().min(0).optional(),
+  dgps_rovers: z.number().int().min(0).optional(),
+  teams: z.number().int().min(0).optional(),
+  vill_code_old: z.string().max(64).nullable().optional(),
+});
+
 export const surveyVillageSchema = z.object({
   village_id: z.string().uuid(),
   total_extent_ac: z.number().finite().positive().nullable().optional(),

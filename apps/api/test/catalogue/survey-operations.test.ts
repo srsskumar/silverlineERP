@@ -1121,3 +1121,75 @@ describe("alerting on work that has stopped", () => {
     expect(mine.rowCount, "the crew member hears about it").toBeGreaterThan(0);
   });
 });
+
+describe("adding and correcting one village by hand", () => {
+  it("creates the location from a name and a mandal", async () => {
+    // Somebody adding a single village has its name and the mandal it sits
+    // in, not a location id. Making them create the location elsewhere and
+    // come back is why a bulk import gets opened for one row.
+    const mandal = String((await w.pool.query(
+      "SELECT id FROM org_units WHERE org_id=$1 AND type='mandal' LIMIT 1",
+      [w.orgId])).rows[0].id);
+    const code = uniq("VN");
+    const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Hand-added village", village_code: code,
+      mandal_id: mandal, total_extent_ac: 55,
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+
+    const unit = await w.pool.query(
+      "SELECT name, parent_id FROM org_units WHERE org_id=$1 AND source_code=$2",
+      [w.orgId, code]);
+    expect(unit.rows[0].name).toBe("Hand-added village");
+    expect(String(unit.rows[0].parent_id)).toBe(mandal);
+  });
+
+  it("still takes an existing location by id", async () => {
+    const villageUnit = String((await w.pool.query(
+      `INSERT INTO org_units(org_id,type,code,name,parent_id)
+       SELECT $1,'village',$2,'Pre-existing',id FROM org_units
+       WHERE org_id=$1 AND type='mandal' LIMIT 1 RETURNING id`,
+      [w.orgId, uniq("V")])).rows[0].id);
+    const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_id: villageUnit, total_extent_ac: 20,
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+
+  it("refuses a half-filled request rather than guessing", async () => {
+    const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "No mandal given", total_extent_ac: 10,
+    });
+    expect(r.status).toBe(422);
+  });
+
+  it("corrects the extent, which otherwise needs the whole file re-imported", async () => {
+    const mandal = String((await w.pool.query(
+      "SELECT id FROM org_units WHERE org_id=$1 AND type='mandal' LIMIT 1",
+      [w.orgId])).rows[0].id);
+    const made = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Wrong extent", village_code: uniq("VE"),
+      mandal_id: mandal, total_extent_ac: 10,
+    });
+    const id = String(made.data.id);
+    const r = await patch(
+      { ...w.admin, ...(await ver("survey_villages", id)) },
+      `/api/v1/survey/villages/${id}`,
+      { total_extent_ac: 250, village_name: "Right extent" });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(Number(r.data.total_extent_ac)).toBe(250);
+
+    // The name follows the location, since a misspelling in the source list
+    // follows the village everywhere.
+    const unit = await w.pool.query(
+      "SELECT name FROM org_units WHERE id=(SELECT village_id FROM survey_villages WHERE id=$1)", [id]);
+    expect(unit.rows[0].name).toBe("Right extent");
+  });
+
+  it("is refused to a crew member", async () => {
+    const r = await post(w.directUser, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Not theirs", village_code: uniq("VX"), mandal_id: programmeId,
+    });
+    expect([401, 403, 404]).toContain(r.status);
+  });
+});

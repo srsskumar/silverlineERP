@@ -112,6 +112,7 @@ export default function SurveySetupPage() {
               </Toolbar>
 
               {projectId ? <VillageImport projectId={projectId} /> : null}
+              {projectId ? <AddVillage projectId={projectId} /> : null}
               {/*
                 * Only once the programme is actually in the list.
                 *
@@ -197,6 +198,104 @@ function NewProgramme({ onCreated }: { onCreated: (id: string) => void }) {
 }
 
 /* ---------------------------------------------------------------- import */
+
+/**
+ * Adding one village without opening a spreadsheet (§note 3).
+ *
+ * The import exists for the work list that arrives from the revenue
+ * department, several thousand rows at a time. It is the wrong tool for the
+ * village somebody forgot, and the usual workaround — a one-row CSV — is how
+ * people end up with a folder of one-row CSVs.
+ */
+function AddVillage({ projectId }: { projectId: string }) {
+  const qc = useQueryClient();
+  const [form, setForm] = React.useState({
+    village_name: '', village_code: '', mandal_id: '', total_extent_ac: '',
+  });
+
+  // The mandals already in the organisation, which is what a village hangs
+  // off. A village with no mandal has nowhere to roll up to.
+  const mandals = useQuery({
+    queryKey: ['org-units', 'mandal'],
+    queryFn: async () =>
+      ((await apiRequestRaw('/api/v1/org/units?type=mandal&limit=100')).body as { data: Row[] }).data,
+    staleTime: 300_000,
+  });
+
+  const add = useMutation({
+    mutationFn: async () =>
+      apiRequest(`/api/v1/survey/projects/${projectId}/villages`, {
+        method: 'POST',
+        body: {
+          village_name: form.village_name.trim(),
+          village_code: form.village_code.trim(),
+          mandal_id: form.mandal_id,
+          ...(form.total_extent_ac
+            ? { total_extent_ac: Number(form.total_extent_ac) }
+            : {}),
+        },
+      }),
+    onSuccess: () => {
+      setForm({ village_name: '', village_code: '', mandal_id: '', total_extent_ac: '' });
+      qc.invalidateQueries({ queryKey: ['survey-villages'] });
+      qc.invalidateQueries({ queryKey: ['survey-projects'] });
+    },
+  });
+
+  const field = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
+  const ready = form.village_name.trim() && form.village_code.trim() && form.mandal_id;
+
+  return (
+    <Section title="Add a village by hand">
+      <Card className="space-y-3 p-4">
+        <p className="text-xs text-text-muted">
+          For the one the work list missed. The import above is for the list that arrives from
+          the revenue department; this is for a single village, and it creates the location if
+          it is not there yet.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-4">
+          <label className="space-y-1">
+            <span className="text-2xs uppercase tracking-wide text-text-subtle">Village name</span>
+            <input className={field} value={form.village_name}
+              onChange={(e) => setForm({ ...form, village_name: e.target.value })} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-2xs uppercase tracking-wide text-text-subtle">Village code</span>
+            <input className={field} value={form.village_code}
+              placeholder="As the department lists it"
+              onChange={(e) => setForm({ ...form, village_code: e.target.value })} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-2xs uppercase tracking-wide text-text-subtle">Mandal</span>
+            <select className={field} value={form.mandal_id}
+              onChange={(e) => setForm({ ...form, mandal_id: e.target.value })}>
+              <option value="">Choose…</option>
+              {(mandals.data ?? []).map((m) => (
+                <option key={String(m.id)} value={String(m.id)}>{String(m.name)}</option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-2xs uppercase tracking-wide text-text-subtle">
+              Extent (Ac)
+            </span>
+            <input className={field} type="number" min={0} step="0.01"
+              value={form.total_extent_ac}
+              onChange={(e) => setForm({ ...form, total_extent_ac: e.target.value })} />
+          </label>
+        </div>
+        {add.isError ? <ErrorCard error={add.error} /> : null}
+        {add.isSuccess ? (
+          <p className="text-xs text-success">Added to the programme.</p>
+        ) : null}
+        <Button type="button" variant="primary" disabled={!ready} loading={add.isPending}
+          onClick={() => add.mutate()}>
+          Add village
+        </Button>
+      </Card>
+    </Section>
+  );
+}
 
 function VillageImport({ projectId }: { projectId: string }) {
   const qc = useQueryClient();

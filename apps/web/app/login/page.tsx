@@ -61,7 +61,14 @@ export default function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-surface-sunken px-4">
       <div className="w-full max-w-sm rounded-lg border border-border bg-surface p-6 shadow-sm">
-        <h1 className="text-xl font-bold text-text">Silverline ERP</h1>
+        {/* The logo carries the name, so the heading below it says what the
+            thing is rather than repeating who made it. */}
+        <img
+          src="/silverline-logo.png"
+          alt="Silverline Techno Solutions"
+          className="mx-auto mb-3 h-10 w-auto dark:brightness-0 dark:invert"
+        />
+        <h1 className="text-xl font-bold text-text">ERP</h1>
         <p className="mt-1 text-sm text-text-muted">Sign in to continue</p>
         <form onSubmit={handleSubmit(onSubmit)} className="mt-6 flex flex-col gap-4" noValidate>
           <FormField label="Username or mobile number" htmlFor="username" error={errors.username?.message}>

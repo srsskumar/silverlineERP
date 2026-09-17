@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import {
-  surveyProjectSchema, surveyVillageSchema, surveyEntrySchema, surveyEntryPatchSchema,
+  surveyProjectSchema, surveyVillageSchema, surveyVillageCreateSchema,
+  surveyVillageEditSchema, surveyEntrySchema, surveyEntryPatchSchema,
   measureSchema, targetSchema, stageUpdateSchema,
   rollUp, villageState, completion, acresToSqKm, periodBuckets, financialYearRange,
   PERIOD_GRAINS, periodContaining, previousPeriod, comparePeriods,
@@ -558,11 +559,36 @@ export async function registerSurveyRoutes(
   app.post('/api/v1/survey/projects/:id/villages', { preHandler: guard('survey.manage') },
     async (req, reply) => {
       const u = actor(req), id = (req.params as { id: string }).id;
-      const input = parse(surveyVillageSchema, req.body);
+      const input = parse(surveyVillageCreateSchema, req.body);
       const row = await mutate(pool, req, 'survey.village.add', 'survey_village', async db => {
         await projectOr404(db, u.orgId, id);
+        /*
+         * Either an existing location, or one created here from a name and a
+         * mandal (§note 3).
+         *
+         * Somebody adding a single village has its name and the mandal it
+         * sits in, not a location id. Making them create the location on
+         * another screen and come back is the reason a bulk import gets
+         * opened for one row.
+         */
+        let villageId = input.village_id ?? null;
+        if (!villageId) {
+          const mandal = (await db.query(
+            "SELECT id FROM org_units WHERE id = $1 AND org_id = $2 AND type = 'mandal'",
+            [input.mandal_id, u.orgId])).rows[0];
+          if (!mandal) fail('UNKNOWN_MANDAL', 'That mandal is not in this organisation', 422);
+          const existing = (await db.query(
+            "SELECT id FROM org_units WHERE org_id = $1 AND type = 'village' AND source_code = $2",
+            [u.orgId, input.village_code])).rows[0];
+          villageId = existing
+            ? String(existing.id)
+            : String((await db.query(
+              `INSERT INTO org_units(org_id, type, code, name, parent_id, source_code, created_by)
+               VALUES($1,'village',$2,$3,$4,$2,$5) RETURNING id`,
+              [u.orgId, input.village_code, input.village_name, mandal.id, u.id])).rows[0].id);
+        }
         const unit = (await db.query(
-          'SELECT * FROM org_units WHERE id = $1 AND org_id = $2', [input.village_id, u.orgId])).rows[0];
+          'SELECT * FROM org_units WHERE id = $1 AND org_id = $2', [villageId, u.orgId])).rows[0];
         if (!unit) fail('UNKNOWN_VILLAGE', 'That location is not in this organisation', 422);
         if (unit.type !== 'village') {
           fail('NOT_A_VILLAGE',
@@ -570,7 +596,7 @@ export async function registerSurveyRoutes(
         }
         const clash = await db.query(
           'SELECT 1 FROM survey_villages WHERE survey_project_id = $1 AND village_id = $2',
-          [id, input.village_id]);
+          [id, villageId]);
         // Twice would double its extent in every denominator above it.
         if (clash.rowCount) fail('ALREADY_LISTED', `${unit.name} is already in this programme`, 409);
 
@@ -578,7 +604,7 @@ export async function registerSurveyRoutes(
           `INSERT INTO survey_villages(org_id, survey_project_id, village_id, total_extent_ac,
              dgps_base, dgps_rovers, teams, vill_code_old, created_by, updated_by)
            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9) RETURNING *`,
-          [u.orgId, id, input.village_id, input.total_extent_ac ?? null,
+          [u.orgId, id, villageId, input.total_extent_ac ?? null,
             input.dgps_base ?? 0, input.dgps_rovers ?? 0, input.teams ?? 0,
             input.vill_code_old ?? null, u.id])).rows[0];
       });
@@ -1317,6 +1343,45 @@ export async function registerSurveyRoutes(
    * with the extent column empty, and editable afterwards. Kept apart from
    * the projected date, which is arithmetic and belongs to nobody.
    */
+  /**
+   * Correcting what the programme records about a village (§note 3).
+   *
+   * The extent, the allotted instruments and the old code — the fields that
+   * arrive wrong from a work list and are otherwise only fixable by
+   * re-importing the whole file. The village's own name is editable too,
+   * since a misspelling in the source list follows it everywhere.
+   *
+   * Not the village's place in the hierarchy: moving a village between
+   * mandals changes what every report it has ever appeared in means, and
+   * that is not a correction, it is a different village.
+   */
+  app.patch('/api/v1/survey/villages/:id', { preHandler: guard('survey.manage') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(surveyVillageEditSchema, req.body);
+      return mutate(pool, req, 'survey.village.update', 'survey_village', async db => {
+        const row = await inOrg(db, 'survey_villages', id, u.orgId, true);
+        version(req, row as { version: number });
+        if (input.village_name) {
+          await db.query('UPDATE org_units SET name = $2, updated_at = now() WHERE id = $1',
+            [row.village_id, input.village_name]);
+        }
+        const updated = (await db.query(
+          `UPDATE survey_villages SET
+             total_extent_ac = COALESCE($2, total_extent_ac),
+             dgps_base = COALESCE($3, dgps_base),
+             dgps_rovers = COALESCE($4, dgps_rovers),
+             teams = COALESCE($5, teams),
+             vill_code_old = COALESCE($6, vill_code_old),
+             version = version + 1, updated_at = now(), updated_by = $7
+           WHERE id = $1 RETURNING *`,
+          [id, input.total_extent_ac ?? null, input.dgps_base ?? null,
+            input.dgps_rovers ?? null, input.teams ?? null,
+            input.vill_code_old ?? null, u.id])).rows[0];
+        return { ...updated, total_extent_ac: num(updated.total_extent_ac) };
+      });
+    });
+
   app.patch('/api/v1/survey/villages/:id/plan', { preHandler: guard('survey.manage') },
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
