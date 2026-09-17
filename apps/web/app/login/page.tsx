@@ -66,7 +66,7 @@ export default function LoginPage() {
         <img
           src="/silverline-logo.png"
           alt="Silverline Techno Solutions"
-          className="mx-auto mb-3 h-10 w-auto dark:brightness-0 dark:invert"
+          className="mx-auto mb-3 h-11 w-auto dark:brightness-0 dark:invert"
         />
         <h1 className="text-xl font-bold text-text">ERP</h1>
         <p className="mt-1 text-sm text-text-muted">Sign in to continue</p>

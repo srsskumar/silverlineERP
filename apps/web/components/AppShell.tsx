@@ -148,10 +148,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex h-topbar shrink-0 items-center border-b border-border px-3">
             {/* The mark, at the size it stays legible. The wordmark is part
                 of the image, so no text is repeated beside it. */}
+            {/* The source art was ink flattened onto white, so it rendered
+                as a white panel on the dark sidebar. The file now carries
+                real transparency; in dark mode the artwork is driven to a
+                white silhouette, because the wordmark is near black and the
+                swirl a light grey — neither survives on a dark ground, and
+                inverting the colours would turn the teal an unrelated hue. */}
             <img
               src="/silverline-logo.png"
               alt="Silverline Techno Solutions"
-              className="h-6 w-auto dark:brightness-0 dark:invert"
+              className="h-7 w-auto dark:brightness-0 dark:invert"
             />
           </div>
           <NavList groups={groups} pathname={pathname} />
@@ -167,7 +173,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <img
                 src="/silverline-logo.png"
                 alt="Silverline Techno Solutions"
-                className="h-6 w-auto dark:brightness-0 dark:invert"
+                className="h-7 w-auto dark:brightness-0 dark:invert"
               />
             </SheetTitle>
             <NavList groups={groups} pathname={pathname} onNavigate={() => setNavOpen(false)} />
