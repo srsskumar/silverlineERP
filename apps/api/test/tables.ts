@@ -17,6 +17,7 @@
  * seeded reference data the suites are built on.
  */
 export const VOLATILE_TABLES = `
+  survey_boq_links,
   survey_entry_rovers, survey_entry_values, survey_stage_history,
   survey_project_employees, survey_entries, survey_targets, survey_crew,
   survey_rover_allocations, survey_village_stages,

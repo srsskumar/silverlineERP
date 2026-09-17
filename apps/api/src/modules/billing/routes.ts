@@ -4,6 +4,7 @@ import {
   boqItemSchema, raBillSchema, deductionPolicySchema, advanceSchema,
   raBillLine, computeRaBill, recoverAdvance, retentionReleaseStatus,
   RA_BILL_TRANSITIONS, type RaBillStatus, type RaBillLine, type DeductionPolicy,
+  surveyBoqLinkSchema, measuredLine, proposalHasWork, dateStringSchema,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail, projectAccess } from '../../common/domain.js';
@@ -47,7 +48,9 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
    * bill has not been accepted by the client, so treating its measurement as
    * "already billed" would understate the next claim.
    */
-  async function previouslyCertified(db: PoolClient, projectId: string, excludeBillId?: string) {
+  async function previouslyCertified(
+    db: Pool | PoolClient, projectId: string, excludeBillId?: string,
+  ) {
     const rows = (await db.query(
       `SELECT i.boq_item_id,
               max(i.cumulative_quantity) AS qty,
@@ -445,4 +448,304 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
     });
     return reply.code(201).send({ data: row });
   });
+
+  /* ------------------------------------------- billing what was measured */
+
+  /**
+   * Which BOQ lines are measured by the survey module, and how.
+   *
+   * Setting one up is a commercial decision — it says "this contract line is
+   * paid on that field measurement" — so it sits behind the same permission
+   * as the BOQ itself rather than behind survey access.
+   */
+  app.get('/api/v1/projects/:id/survey-boq-links',
+    { preHandler: guard('boq.read') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      await projectAccess(pool, req, id);
+      await inOrg(pool, 'projects', id, u.orgId);
+      return {
+        data: (await pool.query(
+          `SELECT l.id, l.boq_item_id, l.measure_id, l.stage_id, l.factor,
+                  b.item_code, b.description, b.unit AS boq_unit, b.quantity AS boq_quantity,
+                  b.rate,
+                  m.code AS measure_code, m.label AS measure_label, m.unit AS measure_unit,
+                  s.code AS stage_code, s.label AS stage_label
+             FROM survey_boq_links l
+             JOIN boq_items b ON b.id = l.boq_item_id
+             JOIN survey_measures m ON m.id = l.measure_id
+             LEFT JOIN survey_stages s ON s.id = l.stage_id
+            WHERE l.org_id = $1 AND b.project_id = $2
+            ORDER BY b.sort_order, b.item_code`,
+          [u.orgId, id])).rows,
+      };
+    });
+
+  /**
+   * The measures and stages a BOQ line can be linked to.
+   *
+   * Served from here, behind boq.read, rather than sending the billing
+   * screen to the survey module's own lists. Whoever sets up a link is a
+   * commercial person who may hold no survey permission at all, and a
+   * dropdown that renders empty because of a permission nobody mentioned is
+   * worse than no dropdown.
+   */
+  app.get('/api/v1/projects/:id/survey-measure-options',
+    { preHandler: guard('boq.read') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      await projectAccess(pool, req, id);
+      await inOrg(pool, 'projects', id, u.orgId);
+      const paired = (await pool.query(
+        'SELECT id, code, name FROM survey_projects WHERE project_id = $1 AND org_id = $2',
+        [id, u.orgId])).rows[0];
+      const [measures, stages] = await Promise.all([
+        pool.query(
+          `SELECT id, code, label, unit, basis FROM survey_measures
+            WHERE org_id = $1 AND active ORDER BY display_order, label`, [u.orgId]),
+        pool.query(
+          `SELECT id, code, label FROM survey_stages
+            WHERE org_id = $1 AND active ORDER BY display_order, label`, [u.orgId]),
+      ]);
+      return {
+        data: {
+          programme: paired ?? null,
+          measures: measures.rows,
+          stages: stages.rows,
+        },
+      };
+    });
+
+  app.post('/api/v1/projects/:id/survey-boq-links',
+    { preHandler: guard('boq.manage') }, async (req, reply) => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(surveyBoqLinkSchema, req.body);
+      await projectAccess(pool, req, id);
+      const row = await mutate(pool, req, 'survey.boq.link', 'survey_boq_link', async db => {
+        const item = await inOrg(db, 'boq_items', input.boq_item_id, u.orgId);
+        if (String(item.project_id) !== id) {
+          fail('WRONG_PROJECT',
+            'That BOQ line belongs to a different project. Open the project the line is on.',
+            422);
+        }
+        const measure = (await db.query(
+          'SELECT id, code FROM survey_measures WHERE id = $1 AND org_id = $2',
+          [input.measure_id, u.orgId])).rows[0];
+        if (!measure) {
+          fail('UNKNOWN_MEASURE',
+            'There is no such measure. Pick one from the survey measure list.', 422);
+        }
+        if (input.stage_id) {
+          const stage = (await db.query(
+            'SELECT id FROM survey_stages WHERE id = $1 AND org_id = $2',
+            [input.stage_id, u.orgId])).rows[0];
+          if (!stage) {
+            fail('UNKNOWN_STAGE',
+              'There is no such stage. Pick one from the survey pipeline.', 422);
+          }
+        }
+        /*
+         * The project has to be the one the survey programme is running
+         * against, or the quantities would come from work done somewhere
+         * else entirely.
+         */
+        const paired = (await db.query(
+          'SELECT id FROM survey_projects WHERE project_id = $1 AND org_id = $2',
+          [id, u.orgId])).rows[0];
+        if (!paired) {
+          fail('NOT_A_SURVEY_PROJECT',
+            'No survey programme is running against this project, so there are no field '
+            + 'measurements to bill from. Pair a programme to it first, from Land survey.',
+            422);
+        }
+        try {
+          return (await db.query(
+            `INSERT INTO survey_boq_links
+               (org_id, boq_item_id, measure_id, stage_id, factor, created_by)
+             VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+            [u.orgId, input.boq_item_id, input.measure_id,
+             input.stage_id ?? null, input.factor, u.id])).rows[0];
+        } catch (err) {
+          if ((err as { code?: string }).code === '23505') {
+            fail('ALREADY_LINKED',
+              'That BOQ line already draws its quantity from a measure. Remove the existing '
+              + 'link first, or use a separate BOQ line for the second measure.', 409);
+          }
+          throw err;
+        }
+      });
+      return reply.code(201).send({ data: row });
+    });
+
+  app.delete('/api/v1/survey-boq-links/:id',
+    { preHandler: guard('boq.manage') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      return mutate(pool, req, 'survey.boq.unlink', 'survey_boq_link', async db => {
+        const row = (await db.query(
+          'DELETE FROM survey_boq_links WHERE id = $1 AND org_id = $2 RETURNING *',
+          [id, u.orgId])).rows[0];
+        if (!row) {
+          fail('NOT_FOUND',
+            'That link is already gone. Reload the list to see what is there now.', 404);
+        }
+        return row;
+      });
+    });
+
+  /**
+   * What the field measured, as a bill nobody has raised yet.
+   *
+   * Cumulative by construction, because that is what a running-account bill
+   * carries: every bill states the total measured to date and the engine
+   * works out this bill's share by subtracting what was certified before.
+   *
+   * A proposal, not a bill. A measurement book is certified by an engineer
+   * who walks the ground, and software billing automatically from its own
+   * records would assert something it is in no position to assert. Every
+   * line is editable before anything is raised.
+   */
+  app.get('/api/v1/projects/:id/measured-proposal',
+    { preHandler: guard('rabill.read') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const q = req.query as { period_to?: string };
+      const periodTo = q.period_to ?? new Date().toISOString().slice(0, 10);
+      if (!dateStringSchema.safeParse(periodTo).success) {
+        fail('VALIDATION_ERROR',
+          'Give the date to measure up to as YYYY-MM-DD, and make it a real date.', 422);
+      }
+      await projectAccess(pool, req, id);
+      await inOrg(pool, 'projects', id, u.orgId);
+
+      const links = (await pool.query(
+        `SELECT l.id, l.boq_item_id, l.measure_id, l.stage_id, l.factor,
+                b.item_code, b.description, b.unit AS boq_unit,
+                b.quantity AS boq_quantity, b.rate,
+                m.code AS measure_code, m.label AS measure_label, m.unit AS measure_unit,
+                s.code AS stage_code, s.label AS stage_label
+           FROM survey_boq_links l
+           JOIN boq_items b ON b.id = l.boq_item_id AND b.status = 'ACTIVE'
+           JOIN survey_measures m ON m.id = l.measure_id
+           LEFT JOIN survey_stages s ON s.id = l.stage_id
+          WHERE l.org_id = $1 AND b.project_id = $2
+          ORDER BY b.sort_order, b.item_code`,
+        [u.orgId, id])).rows;
+
+      if (links.length === 0) {
+        return {
+          data: { period_to: periodTo, lines: [], has_work: false },
+          message: 'No BOQ line on this project draws its quantity from a field measurement yet.',
+        };
+      }
+
+      const previous = await previouslyCertified(pool, id);
+
+      /*
+       * Every line's measured total, in one pass.
+       *
+       * This was a query per BOQ line. A BOQ runs to tens of lines rather
+       * than thousands so it was never going to fall over, but a round trip
+       * per line is a shape that only gets worse, and the stage gate is the
+       * one thing that differs per line — which a lateral handles without
+       * giving any of it up.
+       *
+       * A stage is complete according to whichever source governs it, the
+       * same rule resolveStage() applies everywhere else: the linked task
+       * when there is one, the stage row's own columns when there is not.
+       * Reading only the row would bill nothing at all for a programme whose
+       * stages are run from the task board, which is most of them.
+       *
+       * Dates come out in UTC because that is the date the screens show —
+       * a bill that disagrees with the stage date on the village page would
+       * be a second thing to reconcile, which is the problem this feature
+       * exists to remove.
+       *
+       * A village counts only once its gating stage is complete *and dated*:
+       * a bill is a claim as at a date, and an undated completion cannot be
+       * placed before or after it. A task dragged to Done without an end
+       * time is exactly that, so those are counted separately rather than
+       * dropped in silence — quietly under-billing is the worse failure, and
+       * the fix is for somebody to set the date.
+       */
+      const measured = new Map((await pool.query(
+        `SELECT l.id AS link_id,
+                q.billable, q.undated_quantity, q.undated_villages
+           FROM survey_boq_links l
+           JOIN boq_items b ON b.id = l.boq_item_id AND b.status = 'ACTIVE'
+           LEFT JOIN LATERAL (
+             WITH counted AS (
+               SELECT e.survey_village_id,
+                      ev.quantity,
+                      CASE WHEN vs.task_id IS NOT NULL
+                           THEN (t.status = 'DONE')
+                           ELSE (vs.state = 'COMPLETED')
+                      END AS finished,
+                      CASE WHEN vs.task_id IS NOT NULL
+                           THEN (t.actual_end_at AT TIME ZONE 'UTC')::date
+                           ELSE vs.completed_on
+                      END AS finished_on
+                 FROM survey_entries e
+                 JOIN survey_entry_values ev
+                   ON ev.entry_id = e.id AND ev.measure_id = l.measure_id
+                 JOIN survey_villages sv ON sv.id = e.survey_village_id
+                 JOIN survey_projects sp ON sp.id = sv.survey_project_id
+                 LEFT JOIN survey_village_stages vs
+                   ON vs.survey_village_id = sv.id AND vs.stage_id = l.stage_id
+                 LEFT JOIN tasks t ON t.id = vs.task_id
+                WHERE e.org_id = l.org_id
+                  AND sp.project_id = b.project_id
+                  AND e.entry_date <= $3::date
+             )
+             SELECT
+               COALESCE(sum(quantity) FILTER (
+                 WHERE l.stage_id IS NULL
+                    OR (finished AND finished_on IS NOT NULL AND finished_on <= $3::date)
+               ), 0) AS billable,
+               COALESCE(sum(quantity) FILTER (
+                 WHERE l.stage_id IS NOT NULL AND finished AND finished_on IS NULL
+               ), 0) AS undated_quantity,
+               count(DISTINCT survey_village_id) FILTER (
+                 WHERE l.stage_id IS NOT NULL AND finished AND finished_on IS NULL
+               ) AS undated_villages
+             FROM counted
+           ) q ON true
+          WHERE l.org_id = $1 AND b.project_id = $2`,
+        [u.orgId, id, periodTo])).rows.map(r => [String(r.link_id), r]));
+
+      const lines = links.map(l => {
+        const m = measured.get(String(l.id)) ?? {
+          billable: 0, undated_quantity: 0, undated_villages: 0,
+        };
+        const computed = measuredLine({
+          measuredQuantity: Number(m.billable),
+          factor: Number(l.factor),
+          previousQuantity: previous.get(String(l.boq_item_id))?.qty ?? 0,
+          boqQuantity: Number(l.boq_quantity),
+          undatedVillages: Number(m.undated_villages),
+        });
+        return {
+          boq_item_id: l.boq_item_id,
+          item_code: l.item_code,
+          description: l.description,
+          boq_unit: l.boq_unit,
+          boq_quantity: Number(l.boq_quantity),
+          rate: Number(l.rate),
+          measure_code: l.measure_code,
+          measure_label: l.measure_label,
+          measure_unit: l.measure_unit,
+          stage_code: l.stage_code,
+          stage_label: l.stage_label,
+          factor: Number(l.factor),
+          measured_quantity: Number(m.billable),
+          undated_villages: Number(m.undated_villages),
+          undated_quantity: Number(m.undated_quantity),
+          ...computed,
+        };
+      });
+
+      return {
+        data: {
+          period_to: periodTo,
+          lines,
+          has_work: proposalHasWork(lines),
+        },
+      };
+    });
 }

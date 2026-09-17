@@ -67,6 +67,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "057_asset_register", file: "057_asset_register.sql" },
   { version: "058_asset_category_case", file: "058_asset_category_case.sql" },
   { version: "059_designations", file: "059_designations.sql" },
+  { version: "060_survey_boq_links", file: "060_survey_boq_links.sql" },
 ];
 
 /**

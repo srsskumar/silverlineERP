@@ -16,9 +16,11 @@ import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Field, Notice, RecordSheet, Section, StatusBadge, Stat } from '@/components/finance/Primitives';
 import { day, money, moneyIndian, percent, utilisationWidth } from '@/lib/finance';
+import { useToast } from '@/components/ui/Toast';
+import { messageOf } from '@/lib/form-errors';
 
 type Row = Record<string, any>;
-type Tab = 'bills' | 'boq' | 'retention' | 'cost';
+type Tab = 'bills' | 'boq' | 'measured' | 'retention' | 'cost';
 
 const DEDUCTION_LABELS: Record<string, string> = {
   RETENTION: 'Retention',
@@ -67,6 +69,7 @@ export default function BillingPage() {
   const tabs: { key: Tab; label: string; permission: string }[] = [
     { key: 'bills', label: 'RA bills', permission: 'rabill.read' },
     { key: 'boq', label: 'BOQ', permission: 'boq.read' },
+    { key: 'measured', label: 'From the field', permission: 'rabill.read' },
     { key: 'retention', label: 'Retention', permission: 'retention.read' },
     { key: 'cost', label: 'Budget vs actual', permission: 'cost.read' },
   ];
@@ -114,6 +117,8 @@ export default function BillingPage() {
           <RaBills projectId={projectId} onOpen={setSelectedBill} />
         ) : tab === 'boq' ? (
           <Boq projectId={projectId} />
+        ) : tab === 'measured' ? (
+          <MeasuredProposal projectId={projectId} />
         ) : tab === 'retention' ? (
           <Retention projectId={projectId} />
         ) : (
@@ -695,5 +700,341 @@ function CostPosition({ projectId }: { projectId: string }) {
         </Card>
       ) : null}
     </>
+  );
+}
+
+/* --------------------------------------------- billing what was measured */
+
+/**
+ * What the field measured, as a bill nobody has raised yet (§note 9).
+ *
+ * The survey module records acres surveyed per village per day. Until now the
+ * quantity on the bill was typed in from a spreadsheet kept alongside the
+ * system, and two measurements of one job drift. On a government contract the
+ * bill has to tie to the measurement book, and a drift is a rejected bill or a
+ * dispute months later with nobody able to say which number was right.
+ *
+ * A proposal, never a bill. A measurement book is certified by an engineer who
+ * walks the ground; a screen that raised the bill by itself would be asserting
+ * something it is in no position to assert. This shows the numbers and the
+ * reasons to look twice, and the person decides.
+ */
+function MeasuredProposal({ projectId }: { projectId: string }) {
+  const { session } = useAuth();
+  const canManage = hasPermission({ permissions: session?.permissions }, 'boq.manage');
+  const [asOf, setAsOf] = React.useState(() => new Date().toISOString().slice(0, 10));
+
+  const proposal = useQuery({
+    queryKey: ['measured-proposal', projectId, asOf],
+    queryFn: async () =>
+      (await apiRequestRaw(
+        `/api/v1/projects/${projectId}/measured-proposal?period_to=${asOf}`)).body as Row,
+  });
+
+  const links = useQuery({
+    queryKey: ['survey-boq-links', projectId],
+    queryFn: async () =>
+      ((await apiRequestRaw(`/api/v1/projects/${projectId}/survey-boq-links`))
+        .body as { data: Row[] }).data,
+  });
+
+  const lines: Row[] = proposal.data?.data?.lines ?? [];
+  const today = new Date().toISOString().slice(0, 10);
+
+  return (
+    <div className="space-y-4">
+      <Toolbar>
+        <label className="flex items-center gap-1.5 text-xs text-text-muted">
+          Measured up to
+          <input
+            type="date"
+            value={asOf}
+            max={today}
+            onChange={(e) => setAsOf(e.target.value)}
+            className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+          />
+        </label>
+        <span className="text-2xs text-text-subtle">
+          {/* Said here because it is the whole basis of the figures below. */}
+          Cumulative to that date, the way a running-account bill is written.
+        </span>
+      </Toolbar>
+
+      {proposal.isLoading ? <Skeleton className="h-48" /> : null}
+      {proposal.isError ? (
+        <ErrorCard error={proposal.error} onRetry={() => proposal.refetch()} />
+      ) : null}
+
+      {proposal.isSuccess && lines.length === 0 ? (
+        <EmptyState
+          title="No BOQ line is measured from the field yet"
+          description={canManage
+            ? 'Link a BOQ line to a survey measure below, and its quantity will come from the daily returns instead of a spreadsheet.'
+            : 'Somebody with BOQ access can link a BOQ line to a survey measure, and the quantity will come from the daily returns.'}
+        />
+      ) : null}
+
+      {lines.length > 0 ? (
+        <Card className="p-0">
+          <TableWrap>
+            <Table>
+              <THead>
+                <TR>
+                  <TH>Item</TH>
+                  <TH>Measured from</TH>
+                  <TH className="text-right">Measured</TH>
+                  <TH className="text-right">Cumulative</TH>
+                  <TH className="text-right">Already certified</TH>
+                  <TH className="text-right">This bill</TH>
+                  <TH className="text-right">Value</TH>
+                </TR>
+              </THead>
+              <TBody>
+                {lines.map((l) => (
+                  <TR key={String(l.boq_item_id)}>
+                    <TD>
+                      <div className="text-text">{String(l.item_code)}</div>
+                      <div className="text-2xs text-text-subtle">{String(l.description)}</div>
+                    </TD>
+                    <TD className="text-xs text-text-muted">
+                      {String(l.measure_label ?? l.measure_code)}
+                      {l.stage_label ? (
+                        <div className="text-2xs text-text-subtle">
+                          once {String(l.stage_label).toLowerCase()} is finished
+                        </div>
+                      ) : null}
+                      {Number(l.factor) !== 1 ? (
+                        <div className="text-2xs text-text-subtle">
+                          × {Number(l.factor)} to convert {String(l.measure_unit)} into {String(l.boq_unit)}
+                        </div>
+                      ) : null}
+                    </TD>
+                    <TD className="text-right tabular-nums text-text-muted">
+                      {Number(l.measured_quantity).toLocaleString('en-IN')} {String(l.measure_unit)}
+                    </TD>
+                    <TD className="text-right tabular-nums">
+                      {Number(l.cumulativeQuantity).toLocaleString('en-IN')} {String(l.boq_unit)}
+                    </TD>
+                    <TD className="text-right tabular-nums text-text-muted">
+                      {Number(l.previousQuantity).toLocaleString('en-IN')}
+                    </TD>
+                    <TD className="text-right tabular-nums font-medium">
+                      {Number(l.thisQuantity).toLocaleString('en-IN')}
+                    </TD>
+                    <TD className="text-right tabular-nums">
+                      {money(Number(l.thisQuantity) * Number(l.rate))}
+                    </TD>
+                  </TR>
+                ))}
+              </TBody>
+            </Table>
+          </TableWrap>
+        </Card>
+      ) : null}
+
+      {/* Every reason to look again before raising anything. */}
+      {lines.flatMap((l) => (l.flags as string[] ?? []).map((f) => ({ line: l, flag: f })))
+        .map(({ line, flag }, i) => (
+          <Notice
+            key={`${line.boq_item_id}:${flag}:${i}`}
+            tone={flag === 'NOTHING_NEW' ? 'info' : 'warning'}
+            title={`${String(line.item_code)} — ${flagTitle(flag)}`}
+          >
+            {flagAdvice(flag, line)}
+          </Notice>
+        ))}
+
+      {lines.length > 0 ? (
+        <Notice tone="info" title="Nothing here raises a bill">
+          These are the field&apos;s own figures, for you to check against the measurement
+          book. Raise the bill from the RA bills tab and enter the certified quantities
+          there — this screen never writes one.
+        </Notice>
+      ) : null}
+
+      {canManage ? <BoqLinks projectId={projectId} links={links} /> : null}
+    </div>
+  );
+}
+
+function flagTitle(flag: string): string {
+  if (flag === 'EXCEEDS_BOQ') return 'more than the BOQ allows';
+  if (flag === 'BELOW_CERTIFIED') return 'less than was already certified';
+  if (flag === 'NOTHING_NEW') return 'nothing new measured';
+  if (flag === 'UNDATED_COMPLETIONS') return 'some villages could not be counted';
+  return flag;
+}
+
+function flagAdvice(flag: string, line: Row): React.ReactNode {
+  if (flag === 'EXCEEDS_BOQ') {
+    return `The field has measured ${Number(line.cumulativeQuantity).toLocaleString('en-IN')} `
+      + `${String(line.boq_unit)} against a BOQ of ${Number(line.boq_quantity).toLocaleString('en-IN')}. `
+      + 'The ground may hold more than the tender estimated. Billing the excess needs a '
+      + 'variation approved first, so raise the bill up to the BOQ quantity and take the rest separately.';
+  }
+  if (flag === 'BELOW_CERTIFIED') {
+    return 'A re-measure has found less than an earlier bill already certified. Check the '
+      + 'returns for a correction before raising anything — a downward revision has to be '
+      + 'agreed, not slipped into the next bill.';
+  }
+  if (flag === 'NOTHING_NEW') {
+    return 'No further work has been measured on this item since the last certified bill. '
+      + 'There is nothing to claim for it in this period.';
+  }
+  if (flag === 'UNDATED_COMPLETIONS') {
+    return `${Number(line.undated_villages)} village(s) have finished this stage with no `
+      + `completion date, so ${Number(line.undated_quantity).toLocaleString('en-IN')} `
+      + `${String(line.measure_unit)} are not counted above. A bill is a claim as at a date, `
+      + 'and an undated completion cannot be placed either side of it. Set the dates on the '
+      + 'village or its task and they will be included.';
+  }
+  return null;
+}
+
+/** Which BOQ lines draw their quantity from a field measure, and how. */
+function BoqLinks({
+  projectId, links,
+}: {
+  projectId: string;
+  links: ReturnType<typeof useQuery<Row[]>>;
+}) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [form, setForm] = React.useState({ boq_item_id: '', measure_id: '', stage_id: '', factor: '1' });
+
+  const boq = useQuery({
+    queryKey: ['boq', projectId],
+    queryFn: async () =>
+      ((await apiRequestRaw(`/api/v1/projects/${projectId}/boq`)).body as { data: Row[] }).data,
+  });
+  /*
+   * One call for both lists, from billing's own endpoint.
+   *
+   * Whoever sets up a link is a commercial person who may hold no survey
+   * permission at all, so asking the survey module for its lists would have
+   * rendered two empty dropdowns and explained neither.
+   */
+  const options = useQuery({
+    queryKey: ['survey-measure-options', projectId],
+    staleTime: 300_000,
+    queryFn: async () =>
+      ((await apiRequestRaw(`/api/v1/projects/${projectId}/survey-measure-options`))
+        .body as { data: { measures: Row[]; stages: Row[]; programme: Row | null } }).data,
+  });
+
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ['survey-boq-links', projectId] });
+    void qc.invalidateQueries({ queryKey: ['measured-proposal', projectId] });
+  };
+
+  const add = useMutation({
+    mutationFn: async () => apiRequest(`/api/v1/projects/${projectId}/survey-boq-links`, {
+      method: 'POST',
+      body: {
+        boq_item_id: form.boq_item_id,
+        measure_id: form.measure_id,
+        stage_id: form.stage_id || null,
+        factor: Number(form.factor) || 1,
+      },
+    }),
+    onError: (e) => toast.error('The line was not linked', messageOf(e)),
+    onSuccess: () => {
+      toast.success('Linked', 'Its quantity now comes from the daily returns.');
+      setForm({ boq_item_id: '', measure_id: '', stage_id: '', factor: '1' });
+      refresh();
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: async (id: string) =>
+      apiRequest(`/api/v1/survey-boq-links/${id}`, { method: 'DELETE', body: {} }),
+    onError: (e) => toast.error('The link was not removed', messageOf(e)),
+    onSuccess: () => {
+      toast.success('Unlinked', 'That line is back to a quantity you enter by hand.');
+      refresh();
+    },
+  });
+
+  const field = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
+  const linked = new Set((links.data ?? []).map((l) => String(l.boq_item_id)));
+
+  return (
+    <Section title="Which BOQ lines are measured from the field">
+      {(links.data ?? []).length > 0 ? (
+        <ul className="mb-3 space-y-1">
+          {(links.data ?? []).map((l) => (
+            <li key={String(l.id)} className="flex items-center gap-2 text-sm">
+              <span className="text-text">{String(l.item_code)}</span>
+              <span className="text-text-subtle">←</span>
+              <span className="text-text-muted">{String(l.measure_label ?? l.measure_code)}</span>
+              {l.stage_label ? (
+                <Badge tone="neutral">once {String(l.stage_label).toLowerCase()}</Badge>
+              ) : null}
+              {Number(l.factor) !== 1 ? (
+                <span className="text-2xs text-text-subtle">× {Number(l.factor)}</span>
+              ) : null}
+              <Button type="button" variant="ghost" size="sm" className="ml-auto"
+                disabled={remove.isPending}
+                onClick={() => remove.mutate(String(l.id))}>
+                Unlink
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="flex flex-col gap-1 text-2xs text-text-muted">
+          BOQ line
+          <select className={field} value={form.boq_item_id}
+            onChange={(e) => setForm({ ...form, boq_item_id: e.target.value })}>
+            <option value="">Choose a line…</option>
+            {(boq.data ?? [])
+              .filter((b) => !linked.has(String(b.id)))
+              .map((b) => (
+                <option key={String(b.id)} value={String(b.id)}>
+                  {String(b.item_code)} — {String(b.description)} ({String(b.unit)})
+                </option>
+              ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-2xs text-text-muted">
+          Measured by
+          <select className={field} value={form.measure_id}
+            onChange={(e) => setForm({ ...form, measure_id: e.target.value })}>
+            <option value="">Choose a measure…</option>
+            {(options.data?.measures ?? []).map((m) => (
+              <option key={String(m.id)} value={String(m.id)}>
+                {String(m.label)} ({String(m.unit)})
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-2xs text-text-muted">
+          Only once finished
+          <select className={field} value={form.stage_id}
+            onChange={(e) => setForm({ ...form, stage_id: e.target.value })}>
+            <option value="">Count it as soon as it is measured</option>
+            {(options.data?.stages ?? []).map((s) => (
+              <option key={String(s.id)} value={String(s.id)}>{String(s.label)}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-2xs text-text-muted">
+          Conversion
+          <input className={`${field} w-24`} value={form.factor} inputMode="decimal"
+            onChange={(e) => setForm({ ...form, factor: e.target.value })} />
+        </label>
+        <Button type="button"
+          disabled={!form.boq_item_id || !form.measure_id || add.isPending}
+          onClick={() => add.mutate()}>
+          Link
+        </Button>
+      </div>
+      <p className="mt-2 text-2xs text-text-subtle">
+        Leave the conversion at 1 unless the contract is written in a different unit from the
+        one the field records — hectares against acres, say.
+      </p>
+    </Section>
   );
 }
