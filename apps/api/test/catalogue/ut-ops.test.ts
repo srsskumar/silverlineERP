@@ -1170,6 +1170,31 @@ describe("importing who holds what", () => {
     expect(holder.rows[0].emp_no).toBe(first);
   });
 
+  it("takes dates as a spreadsheet gives them", async () => {
+    /*
+     * Excel hands over a day count, so an issue date arrives as 46114, and a
+     * strict YYYY-MM-DD pattern refused it — along with 01/04/2026, which is
+     * how the date is written here. Neither is the person's mistake.
+     */
+    const a = await freeAsset();
+    const b = await freeAsset();
+    const emp = await activeEmpNo();
+    const r = await allocate([
+      { asset_code: a, emp_no: emp, reason: "Serial date", issued_on: 46114 },
+      { asset_code: b, emp_no: emp, reason: "Written date", issued_on: "01/04/2026" },
+    ]);
+    expect(r.body.allocated, JSON.stringify(r.body.results)).toBe(2);
+  });
+
+  it("does not mind a blank date at all", async () => {
+    const a = await freeAsset();
+    const emp = await activeEmpNo();
+    const r = await allocate([
+      { asset_code: a, emp_no: emp, reason: "No date given", issued_on: "", due_date: "" },
+    ]);
+    expect(r.body.allocated, JSON.stringify(r.body.results)).toBe(1);
+  });
+
   it("names the row that is wrong instead of failing the file", async () => {
     const good = await freeAsset();
     const emp = await activeEmpNo();

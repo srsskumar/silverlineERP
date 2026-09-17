@@ -65,11 +65,28 @@ describe('readVillageCsv', () => {
     expect(readVillageCsv('')).toEqual([]);
   });
 
-  it('leaves an optional column empty rather than absent', () => {
+  it('leaves a blank optional column out rather than sending an empty string', () => {
+    /*
+     * An empty cell means "not given". Sent as '', it coerced to zero on the
+     * numeric columns — so a village with no extent recorded was refused for
+     * having an extent that was not positive.
+     */
     const rows = readVillageCsv(
       'District Name,DistrictCode,MandalCode,Mandal Name,Village Code,Village Name,DivisionCode,Division Name\nAlluri,15,11,KOYYURU,1511077,ADAKULA,,');
-    expect(rows[0].division_code).toBe('');
-    expect(rows[0].division_name).toBe('');
+    expect('division_code' in rows[0]).toBe(false);
+    expect('division_name' in rows[0]).toBe(false);
+    // What was filled in is still there.
+    expect(rows[0].village_name).toBe('ADAKULA');
+  });
+
+  it('does not call a column missing because one row left it blank', () => {
+    // The warning would send somebody back to fix a file with nothing wrong
+    // with it.
+    const rows = readVillageCsv(
+      'DistrictCode,District Name,MandalCode,Mandal Name,Village Code,Village Name\n'
+      + ',,11,KOYYURU,1511077,ADAKULA\n'
+      + '15,Alluri,11,KOYYURU,1511078,BOMMIKA');
+    expect(missingColumns(rows)).toEqual([]);
   });
 });
 

@@ -276,3 +276,61 @@ describe("§48 a list with empty columns", () => {
     expect(villages.data.some((v: any) => v.village_name === "Gap village")).toBe(true);
   });
 });
+
+describe("a village list with cells left blank", () => {
+  /*
+   * The importer says a village with no extent "is still a village that has
+   * to be surveyed — it is reported as unweighted rather than refused", and
+   * the code did the opposite: z.coerce.number()('') is 0, and 0 then failed
+   * the positive check. A blank allotment quietly became an allotment of
+   * none.
+   */
+  it("loads a village whose extent was never recorded", async () => {
+    const r = await post(w.admin, `/api/v1/survey/projects/${projectId}/villages/import`, {
+      rows: [{
+        district_code: "D1", district_name: "A district",
+        mandal_code: "M1", mandal_name: "A mandal",
+        village_code: uniq("NX"), village_name: "No extent recorded",
+        total_extent_ac: "",
+      }],
+      dry_run: false,
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.imported, JSON.stringify(r.data.results)).toBe(1);
+    expect(r.data.rejected).toBe(0);
+  });
+
+  it("does not turn a blank allotment into an allotment of none", async () => {
+    // "Not given" and "zero" are different facts, and the second is a claim
+    // nobody made.
+    const code = uniq("NB");
+    await post(w.admin, `/api/v1/survey/projects/${projectId}/villages/import`, {
+      rows: [{
+        district_code: "D1", district_name: "A district",
+        mandal_code: "M1", mandal_name: "A mandal",
+        village_code: code, village_name: "No allotment given",
+        total_extent_ac: "40", dgps_base: "", dgps_rovers: "", teams: "",
+      }],
+      dry_run: false,
+    });
+    const row = await w.pool.query(
+      `SELECT sv.dgps_base, sv.dgps_rovers, sv.teams, sv.total_extent_ac
+         FROM survey_villages sv JOIN org_units ou ON ou.id = sv.village_id
+        WHERE ou.source_code = $1`, [code]);
+    expect(row.rowCount, "the row loaded").toBe(1);
+    expect(Number(row.rows[0].total_extent_ac)).toBe(40);
+  });
+
+  it("still refuses an extent nobody could read", async () => {
+    const r = await post(w.admin, `/api/v1/survey/projects/${projectId}/villages/import`, {
+      rows: [{
+        district_code: "D1", district_name: "A district",
+        mandal_code: "M1", mandal_name: "A mandal",
+        village_code: uniq("BAD"), village_name: "Unreadable extent",
+        total_extent_ac: "about forty acres",
+      }],
+      dry_run: true,
+    });
+    expect(r.data.rejected).toBe(1);
+  });
+});

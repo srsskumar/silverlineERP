@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, mutate, fail } from '../../common/domain.js';
 import { writeAudit } from '../../common/audit.js';
-import { canMatchOnSerial } from '@silverline/shared';
+import { canMatchOnSerial, dropBlankCells, spreadsheetDate } from '@silverline/shared';
 
 /**
  * Loading assets and inventory from a file (enhancement note 3).
@@ -48,6 +48,17 @@ const allocationRow = z.object({
   condition: z.string().trim().max(24).optional().or(z.literal('')),
   reason: z.string().trim().min(1).max(500),
 });
+
+/** A spreadsheet row with its blanks gone and its dates readable. */
+function asAllocationRow(raw: unknown): unknown {
+  const row = dropBlankCells(raw) as Record<string, unknown>;
+  if (!row || typeof row !== 'object') return raw;
+  for (const key of ['issued_on', 'due_date'] as const) {
+    const converted = spreadsheetDate(row[key]);
+    if (converted !== undefined) row[key] = converted;
+  }
+  return row;
+}
 
 const inventoryRow = z.object({
   code: z.string().trim().min(1).max(64),
@@ -226,7 +237,15 @@ export async function registerInventoryImport(
 
         for (const [index, raw] of input.rows.entries()) {
           const rowNo = index + 1;
-          const parsed = allocationRow.safeParse(raw);
+          /*
+           * Dates as a spreadsheet gives them.
+           *
+           * Excel hands over a day count, so an issue date arrives as 46114
+           * and a strict YYYY-MM-DD pattern refuses it — along with
+           * 01/04/2026, which is how the date is written here. Neither is
+           * the person's mistake.
+           */
+          const parsed = allocationRow.safeParse(asAllocationRow(raw));
           if (!parsed.success) {
             results.push({
               row: rowNo, status: 'REJECTED',
@@ -336,7 +355,7 @@ export async function registerInventoryImport(
 
         for (const [index, raw] of input.rows.entries()) {
           const rowNo = index + 1;
-          const parsed = inventoryRow.safeParse(raw);
+          const parsed = inventoryRow.safeParse(dropBlankCells(raw));
           if (!parsed.success) {
             results.push({
               row: rowNo, status: 'REJECTED',

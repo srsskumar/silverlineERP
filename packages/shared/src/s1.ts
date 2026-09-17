@@ -384,13 +384,7 @@ export function resolveEffectiveHolidays(
  */
 export function employeeImportRow(raw: unknown): unknown {
   if (!raw || typeof raw !== 'object') return raw;
-  const row = { ...(raw as Record<string, unknown>) };
-
-  // An empty cell means "not given", not "given as nothing". Left in, it
-  // fails every optional field that validates its format.
-  for (const [key, value] of Object.entries(row)) {
-    if (typeof value === 'string' && value.trim() === '') delete row[key];
-  }
+  const row = dropBlankCells(raw) as Record<string, unknown>;
 
   for (const key of ['salary_basic', 'experience_years'] as const) {
     const v = row[key];
@@ -417,6 +411,30 @@ export function employeeImportRow(raw: unknown): unknown {
   }
 
   return row;
+}
+
+/**
+ * A spreadsheet row with its empty cells removed.
+ *
+ * An empty cell means "not given", not "given as nothing", and the
+ * difference decides whether a row imports. Left in as an empty string it
+ * fails every optional field that validates a format — and worse, it passes
+ * some: z.coerce.number()('') is 0, so a blank allotment silently becomes an
+ * allotment of zero and a blank extent becomes an extent the schema then
+ * rejects for not being positive.
+ *
+ * Every importer needs this, so it lives in one place rather than being
+ * learned separately by each.
+ */
+export function dropBlankCells(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === 'string' && value.trim() === '') continue;
+    if (value === null) continue;
+    out[key] = value;
+  }
+  return out;
 }
 
 /**

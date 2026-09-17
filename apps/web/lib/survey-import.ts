@@ -68,7 +68,13 @@ export function readVillageCsv(text: string): Array<Record<string, string>> {
     const out: Record<string, string> = {};
     headers.forEach((h, i) => {
       const mapped = VILLAGE_COLUMN_ALIASES[h];
-      if (mapped) out[mapped] = (cells[i] ?? '').trim();
+      if (!mapped) return;
+      const value = (cells[i] ?? '').trim();
+      // A blank cell is left out rather than sent as an empty string: an
+      // empty extent coerced to zero and was then refused for not being
+      // positive, so a village with no extent recorded could not be loaded
+      // at all.
+      if (value !== '') out[mapped] = value;
     });
     return out;
   });
@@ -79,7 +85,18 @@ export function missingColumns(rows: Array<Record<string, string>>): string[] {
   if (rows.length === 0) return [];
   const required = ['district_code', 'district_name', 'mandal_code', 'mandal_name',
     'village_code', 'village_name'];
-  return required.filter(c => !(c in rows[0]));
+  /*
+   * A column is missing when no row carries it — not when the first row
+   * happens to leave it blank.
+   *
+   * Blank cells are now dropped rather than sent as empty strings, so
+   * checking only the first row would report a column as absent because one
+   * village had no district recorded. That warning would send somebody back
+   * to fix a file that has nothing wrong with it.
+   */
+  const present = new Set<string>();
+  for (const row of rows) for (const key of Object.keys(row)) present.add(key);
+  return required.filter(c => !present.has(c));
 }
 
 /**

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, mutate, inOrg, fail } from '../../common/domain.js';
 import { writeAudit } from '../../common/audit.js';
+import { dropBlankCells } from '@silverline/shared';
 
 /**
  * Importing the villages to be surveyed (§59.3.3).
@@ -163,7 +164,16 @@ export async function registerSurveyImport(
 
         for (const [index, raw] of input.rows.entries()) {
           const rowNo = index + 1;
-          const parsed = rowSchema.safeParse(raw);
+          /*
+           * Blank cells removed before validation.
+           *
+           * z.coerce.number()('') is 0, so an empty extent became zero and
+           * was then refused for not being positive — a village with no
+           * extent recorded was rejected outright, which is the opposite of
+           * what this importer says it does two paragraphs up. An empty
+           * allotment quietly became an allotment of none.
+           */
+          const parsed = rowSchema.safeParse(dropBlankCells(raw));
           if (!parsed.success) {
             results.push({
               row: rowNo, status: 'REJECTED',
