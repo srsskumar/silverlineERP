@@ -143,12 +143,17 @@ describe('task template', () => {
     // A second sheet would mean keying the parent identifier twice.
     const sheets = taskTemplateSheets({ people });
     expect(sheets).toHaveLength(1);
-    expect(sheets[0].columns.map((c) => c.header)).toContain('parent_title');
-    const subtask = sheets[0].rows.find((r) => r[1] !== '');
-    expect(subtask?.[1]).toBe('Survey the Ameerpet stretch');
+    const headers = sheets[0].columns.map((c) => c.header);
+    expect(headers).toContain('parent_title');
+    // Found by column name, not position: a new column at the front used to
+    // move every index and break this test rather than the template.
+    const titleAt = headers.indexOf('title');
+    const parentAt = headers.indexOf('parent_title');
+    const subtask = sheets[0].rows.find((r) => r[parentAt] !== '');
+    expect(subtask?.[parentAt]).toBe('Survey the Ameerpet stretch');
     // The parent it names has to exist on the sheet, or the example teaches a
     // pattern that fails on upload.
-    expect(sheets[0].rows.some((r) => r[0] === subtask?.[1])).toBe(true);
+    expect(sheets[0].rows.some((r) => r[titleAt] === subtask?.[parentAt])).toBe(true);
   });
 
   it('survives an empty directory without producing a broken file', async () => {
@@ -249,5 +254,45 @@ describe('import templates', () => {
       const t = text(await bytes(buildWorkbook([templateSheet(template)])));
       expect(t, template.key).toContain('<dataValidation type="list"');
     }
+  });
+});
+
+describe('the task template and its project column', () => {
+  const people = [{ id: '1', name: 'Asha Rao', emp_no: 'EMP001' }] as never;
+
+  it('carries the project a task belongs to', () => {
+    // Without it a filled-in sheet cannot say which board the work lands on,
+    // which is the one field that decides whether anybody sees the task.
+    const [sheet] = taskTemplateSheets({ people });
+    expect(sheet.columns.map((c) => c.header)).toContain('project_code');
+  });
+
+  it('offers real project codes rather than free text', () => {
+    // A typo there makes a whole upload arrive nowhere.
+    const [sheet] = taskTemplateSheets({ people, projectCodes: ['SURVEY-AP-01', 'HYD-ROAD-01'] });
+    const column = sheet.columns.find((c) => c.header === 'project_code');
+    expect(column?.options).toEqual(['SURVEY-AP-01', 'HYD-ROAD-01']);
+  });
+
+  it('adds a land survey sheet only when the stages are known', () => {
+    expect(taskTemplateSheets({ people })).toHaveLength(1);
+    const withStages = taskTemplateSheets({
+      people, surveyStages: ['Ground truthing', 'GT quality check'],
+    });
+    expect(withStages).toHaveLength(2);
+    expect(withStages[1].name).toBe('Land survey');
+  });
+
+  it('makes the survey subtask a list of stages, not free text', () => {
+    /*
+     * A survey subtask is a stage, and the stages are the same eight every
+     * time — offering them as a list is the difference between a sheet that
+     * imports and one that half-imports. On the ordinary sheet a free-text
+     * subtask title is correct, which is why the two sheets differ.
+     */
+    const stages = ['Ground truthing', 'GT quality check'];
+    const [ordinary, survey] = taskTemplateSheets({ people, surveyStages: stages });
+    expect(ordinary.columns.find((c) => c.header === 'parent_title')?.options).toBeUndefined();
+    expect(survey.columns.find((c) => c.header === 'parent_title')?.options).toEqual(stages);
   });
 });

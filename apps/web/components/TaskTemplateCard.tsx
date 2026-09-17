@@ -7,6 +7,9 @@ import { Button } from '@/components/ui/Button';
 import { listPeople } from '@/lib/people';
 import { downloadCsv, downloadWorkbook, optionsNote } from '@/lib/xlsx';
 import { taskTemplateSheets, TASK_TEMPLATE_NOTES } from '@/lib/task-template';
+import { apiRequestRaw } from '@/lib/apiClient';
+
+type Row = Record<string, any>;
 
 /**
  * Download the tasks-and-subtasks upload format.
@@ -17,7 +20,32 @@ import { taskTemplateSheets, TASK_TEMPLATE_NOTES } from '@/lib/task-template';
  */
 export function TaskTemplateCard({ projectCode }: { projectCode?: string }) {
   const people = useQuery({ queryKey: ['people'], queryFn: listPeople, staleTime: 300_000 });
-  const sheets = taskTemplateSheets({ people: people.data ?? [], projectCode });
+  // Real project codes, so the column that decides where the work lands is a
+  // list rather than something to type. A typo there makes a whole upload
+  // arrive nowhere.
+  const projects = useQuery({
+    queryKey: ['projects', 'codes'],
+    queryFn: async () =>
+      ((await apiRequestRaw('/api/v1/projects?limit=100')).body as { data: Row[] }).data,
+    staleTime: 300_000,
+  });
+  // The stage vocabulary for the survey sheet, from the server rather than a
+  // copy here that drifts the first time a stage is renamed.
+  const stages = useQuery({
+    queryKey: ['survey-stage-pipeline'],
+    queryFn: async () =>
+      ((await apiRequestRaw('/api/v1/survey/measures')).body as { data: Row }).data,
+    staleTime: 300_000,
+    retry: false,
+  });
+
+  const sheets = taskTemplateSheets({
+    people: people.data ?? [],
+    projectCode,
+    projectCodes: (projects.data ?? []).map((p) => String(p.code)).filter(Boolean),
+    surveyStages: ((stages.data?.stages ?? []) as Row[])
+      .map((s) => String(s.label)).filter(Boolean),
+  });
 
   return (
     <section className="rounded-lg border border-border bg-surface-sunken p-4">
