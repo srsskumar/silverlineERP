@@ -1576,6 +1576,106 @@ export async function registerSurveyRoutes(
     });
 
   /**
+   * Who and what is on this programme, at whatever level is being asked
+   * about (§note 3).
+   *
+   * "Show me the people and the equipment on this project at village, mandal
+   * and district level" is one question, and until now it took four screens
+   * and a spreadsheet: crew per village here, rover allocations there,
+   * employees on the programme somewhere else, and nothing joined them up.
+   *
+   * People come from two places on purpose. Crew are assigned to a *village*
+   * and roll up from there; programme staff are assigned to the programme
+   * and belong to every level of it. Counting only the first understates a
+   * district that has a manager and no crew yet; counting only the second
+   * flattens the village detail the question asks for.
+   */
+  app.get('/api/v1/survey/projects/:id/deployment',
+    { preHandler: guard('survey.read') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const { q } = page(req);
+      await projectOr404(pool, u.orgId, id, u);
+      const level = (REPORT_LEVELS as readonly string[]).includes(String(q.level))
+        ? String(q.level) as ReportLevel : 'mandal';
+
+      const rows = (await pool.query(
+        `WITH scope AS (
+           SELECT sv.id AS survey_village_id, sv.village_id,
+                  ou.name AS village_name,
+                  m.id AS mandal_id, m.name AS mandal_name,
+                  d.id AS district_id, d.name AS district_name
+             FROM survey_villages sv
+             JOIN org_units ou ON ou.id = sv.village_id
+             LEFT JOIN org_units m ON m.id = ou.parent_id
+             LEFT JOIN org_units d ON d.id = COALESCE(
+               (SELECT parent_id FROM org_units WHERE id = m.parent_id), m.parent_id)
+            WHERE sv.survey_project_id = $1 AND sv.org_id = $2
+         )
+         SELECT
+           CASE $3
+             WHEN 'village'  THEN s.village_id
+             WHEN 'district' THEN s.district_id
+             ELSE s.mandal_id
+           END AS unit_id,
+           CASE $3
+             WHEN 'village'  THEN s.village_name
+             WHEN 'district' THEN s.district_name
+             ELSE s.mandal_name
+           END AS unit_name,
+           count(DISTINCT s.survey_village_id)::int AS villages,
+           -- Crew on the villages in this unit.
+           count(DISTINCT c.employee_id) FILTER (WHERE c.released_on IS NULL)::int AS crew,
+           -- Equipment currently out against those villages.
+           count(DISTINCT r.asset_id) FILTER (WHERE r.released_on IS NULL)::int AS rovers_out,
+           COALESCE(json_agg(DISTINCT jsonb_build_object(
+             'employee_id', c.employee_id,
+             'name', COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)),''), e.emp_no),
+             'emp_no', e.emp_no
+           )) FILTER (WHERE c.employee_id IS NOT NULL AND c.released_on IS NULL), '[]') AS people,
+           COALESCE(json_agg(DISTINCT jsonb_build_object(
+             'asset_id', r.asset_id, 'asset_code', a.asset_code, 'name', a.name
+           )) FILTER (WHERE r.asset_id IS NOT NULL AND r.released_on IS NULL), '[]') AS assets
+         FROM scope s
+         LEFT JOIN survey_crew c ON c.survey_village_id = s.survey_village_id
+         LEFT JOIN employees e ON e.id = c.employee_id
+         LEFT JOIN survey_rover_allocations r ON r.survey_village_id = s.survey_village_id
+         LEFT JOIN assets a ON a.id = r.asset_id
+         GROUP BY 1, 2
+         ORDER BY 2`, [id, u.orgId, level])).rows;
+
+      // Staff put on the programme itself rather than on a village. They
+      // belong to every level of it, so they are reported once alongside
+      // rather than divided arbitrarily between units.
+      const programmeStaff = (await pool.query(
+        `SELECT pe.employee_id, pe.project_role,
+                COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)),''), e.emp_no) AS name,
+                e.emp_no
+           FROM survey_project_employees pe
+           JOIN employees e ON e.id = pe.employee_id
+          WHERE pe.survey_project_id = $1 AND pe.org_id = $2 AND pe.released_on IS NULL
+          ORDER BY name`, [id, u.orgId])).rows;
+
+      return {
+        data: {
+          level,
+          units: rows.map(r => ({
+            ...r,
+            id: r.unit_id, name: r.unit_name ?? 'Not attributed',
+          })),
+          programme_staff: programmeStaff,
+          totals: {
+            villages: rows.reduce((t, r) => t + Number(r.villages), 0),
+            crew: new Set(rows.flatMap(r =>
+              (r.people as Array<{ employee_id: string }>).map(p => p.employee_id))).size,
+            assets: new Set(rows.flatMap(r =>
+              (r.assets as Array<{ asset_id: string }>).map(a => a.asset_id))).size,
+            programme_staff: programmeStaff.length,
+          },
+        },
+      };
+    });
+
+  /**
    * Who was on site and did not file the day's return (§59, phase 2).
    *
    * Attendance already knows who turned up and which village for. Set against

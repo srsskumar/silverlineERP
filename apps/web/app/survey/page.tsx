@@ -31,7 +31,7 @@ type Row = Record<string, any>;
 
 /** One decimal, which is as fine as an acre figure is ever read on a chart. */
 const round1 = (n: number) => Math.round(n * 10) / 10;
-type Tab = 'progress' | 'report' | 'villages' | 'people' | 'bottlenecks' | 'timeline' | 'summary';
+type Tab = 'progress' | 'report' | 'villages' | 'people' | 'deployment' | 'bottlenecks' | 'timeline' | 'summary';
 
 /**
  * Land survey progress (§59).
@@ -66,7 +66,7 @@ export default function SurveyPage() {
   React.useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const wanted = q.get('tab');
-    if (wanted && (['progress', 'report', 'villages', 'people', 'bottlenecks', 'timeline', 'summary'] as string[])
+    if (wanted && (['progress', 'report', 'villages', 'people', 'deployment', 'bottlenecks', 'timeline', 'summary'] as string[])
       .includes(wanted)) setTab(wanted as Tab);
     const village = q.get('village');
     if (village) { setTab('villages'); setOpenVillage(village); }
@@ -132,13 +132,14 @@ export default function SurveyPage() {
           </select>
 
           <div className="flex gap-1">
-            {(['progress', 'report', 'villages', 'people', 'bottlenecks', 'timeline', 'summary'] as const).map((t) => (
+            {(['progress', 'report', 'villages', 'people', 'deployment', 'bottlenecks', 'timeline', 'summary'] as const).map((t) => (
               <Button key={t} type="button" variant={tab === t ? 'secondary' : 'ghost'}
                 onClick={() => setTab(t)}>
                 {t === 'progress' ? 'Progress'
                   : t === 'report' ? 'Report'
                     : t === 'villages' ? 'Villages'
                       : t === 'people' ? 'Crew & rovers'
+                        : t === 'deployment' ? 'Deployment'
                         : t === 'bottlenecks' ? 'Bottlenecks'
                           : t === 'timeline' ? 'Over time' : 'Summary'}
               </Button>
@@ -196,6 +197,9 @@ export default function SurveyPage() {
         ) : null}
         {projectId && tab === 'people' ? (
           <CrewAndRovers projectId={projectId} range={range} />
+        ) : null}
+        {projectId && tab === 'deployment' ? (
+          <Deployment projectId={projectId} level={level} setLevel={setLevel} />
         ) : null}
         {projectId && tab === 'bottlenecks' ? (
           <Bottlenecks projectId={projectId} canForecast={canForecast} />
@@ -625,6 +629,116 @@ function PeriodReport({
 function periodTotal(values: Record<string, number> | undefined): number {
   if (!values) return 0;
   return Object.values(values).reduce((t, v) => t + Number(v ?? 0), 0);
+}
+
+/* ---------------------------------------------------------- deployment */
+
+/**
+ * Who and what is on this programme, at the level being asked about
+ * (§note 3).
+ *
+ * "Show me the people and the equipment on this project at village, mandal
+ * and district level" took four screens and a spreadsheet: crew per village
+ * on one, rover allocations on another, programme staff on a third, and
+ * nothing joining them.
+ */
+function Deployment({
+  projectId, level, setLevel,
+}: {
+  projectId: string; level: ReportLevel; setLevel: (l: ReportLevel) => void;
+}) {
+  const q = useQuery({
+    queryKey: ['survey-deployment', projectId, level],
+    queryFn: async () =>
+      ((await apiRequestRaw(
+        `/api/v1/survey/projects/${projectId}/deployment?level=${level}`))
+        .body as { data: Row }).data,
+  });
+
+  if (q.isLoading) return <Skeleton className="h-64" />;
+  if (q.isError) return <ErrorCard error={q.error} onRetry={() => q.refetch()} />;
+  const d = q.data as Row;
+  const units: Row[] = d?.units ?? [];
+  const staff: Row[] = d?.programme_staff ?? [];
+
+  return (
+    <div className="space-y-4">
+      <Toolbar>
+        <select value={level} onChange={(e) => setLevel(e.target.value as ReportLevel)}
+          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+          {REPORT_LEVELS.map((l) => (
+            <option key={l} value={l}>{LEVEL_LABELS[l]}</option>
+          ))}
+        </select>
+        <span className="ml-auto text-2xs text-text-subtle">
+          {count(d?.totals?.crew)} crew and {count(d?.totals?.assets)} instruments across{' '}
+          {count(d?.totals?.villages)} villages
+        </span>
+      </Toolbar>
+
+      {staff.length > 0 ? (
+        <Card className="space-y-2 p-4">
+          <h3 className="text-sm font-semibold text-text">On the programme</h3>
+          <p className="text-xs text-text-muted">
+            {/* Dividing these between mandals would invent a posting nobody
+                made; leaving them out understates a district that has a
+                manager and no crew yet. */}
+            Assigned to the programme rather than to one village, so they belong to every
+            level of it.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {staff.map((p) => (
+              <Badge key={String(p.employee_id)} tone="neutral">
+                {String(p.name)} · {String(p.project_role).replaceAll('_', ' ').toLowerCase()}
+              </Badge>
+            ))}
+          </div>
+        </Card>
+      ) : null}
+
+      {units.length === 0 ? (
+        <EmptyState title="Nothing deployed yet"
+          description="Assign crew and allocate rovers to villages and they appear here." />
+      ) : (
+        <Card className="overflow-x-auto p-0">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-xs text-text-muted">
+                <th className="px-4 py-2">{LEVEL_LABELS[level]}</th>
+                <th className="px-4 py-2 text-right">Villages</th>
+                <th className="px-4 py-2 text-right">Crew</th>
+                <th className="px-4 py-2 text-right">Instruments</th>
+                <th className="px-4 py-2">Who</th>
+                <th className="px-4 py-2">What</th>
+              </tr>
+            </thead>
+            <tbody>
+              {units.map((u) => (
+                <tr key={String(u.id ?? u.name)} className="border-b border-border last:border-0 align-top">
+                  <td className="px-4 py-2 text-text">{String(u.name)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{count(u.villages)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{count(u.crew)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{count(u.rovers_out)}</td>
+                  <td className="px-4 py-2">
+                    {/* Names, not a count: knowing which four is what the
+                        question is actually for. */}
+                    <span className="text-2xs text-text-muted">
+                      {(u.people as Row[]).map((p) => String(p.name)).join(', ') || '—'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2">
+                    <span className="text-2xs text-text-muted">
+                      {(u.assets as Row[]).map((a) => String(a.asset_code)).join(', ') || '—'}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+    </div>
+  );
 }
 
 /* ------------------------------------------------------- crew and rovers */

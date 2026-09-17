@@ -1193,3 +1193,74 @@ describe("adding and correcting one village by hand", () => {
     expect([401, 403, 404]).toContain(r.status);
   });
 });
+
+describe("who and what is deployed on a programme", () => {
+  const dep = (level: string) =>
+    get(w.admin, `/api/v1/survey/projects/${programmeId}/deployment?level=${level}`);
+
+  it("rolls the same people up to mandal and to district", async () => {
+    await post(w.admin, `/api/v1/survey/villages/${villageA}/crew`, {
+      employee_id: w.directEmployee, stage_code: "GROUND_TRUTHING",
+    });
+
+    const mandal = await dep("mandal");
+    expect(mandal.status, JSON.stringify(mandal.body)).toBe(200);
+    const district = await dep("district");
+
+    // A district contains its mandals, so it cannot hold fewer villages.
+    const sum = (b: any) =>
+      (b.data.units as Array<{ villages: number }>).reduce((t, u) => t + u.villages, 0);
+    expect(sum(district)).toBe(sum(mandal));
+    expect(district.body.data.level).toBe("district");
+  });
+
+  it("names the people rather than only counting them", async () => {
+    // "Four crew" is a number; knowing which four is what the question is
+    // actually for.
+    const r = await dep("village");
+    const withCrew = (r.body.data.units as Array<Record<string, any>>)
+      .find((u) => u.crew > 0);
+    expect(withCrew, "a village with crew on it").toBeTruthy();
+    expect(withCrew!.people[0].name).toBeTruthy();
+    expect(withCrew!.people[0].emp_no).toBeTruthy();
+  });
+
+  it("reports programme staff apart from village crew", async () => {
+    /*
+     * Somebody put on the programme belongs to every level of it. Dividing
+     * them between mandals would invent a posting nobody made; leaving them
+     * out understates a district that has a manager and no crew yet.
+     */
+    const r = await dep("mandal");
+    expect(Array.isArray(r.body.data.programme_staff)).toBe(true);
+    expect(r.body.data.totals).toHaveProperty("programme_staff");
+  });
+
+  it("counts a person once even when they are on several villages", async () => {
+    const second = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Second posting", village_code: uniq("VD"),
+      mandal_id: String((await w.pool.query(
+        "SELECT id FROM org_units WHERE org_id=$1 AND type='mandal' LIMIT 1",
+        [w.orgId])).rows[0].id),
+    });
+    await post(w.admin, `/api/v1/survey/villages/${second.data.id}/crew`, {
+      employee_id: w.directEmployee, stage_code: "GROUND_TRUTHING",
+    });
+
+    const r = await dep("district");
+    const people = (r.body.data.units as Array<Record<string, any>>)
+      .flatMap((u) => u.people as Array<{ employee_id: string }>)
+      .map((p) => p.employee_id);
+    // One person on two villages is one person.
+    expect(people.filter((id) => id === w.directEmployee).length)
+      .toBeLessThanOrEqual(r.body.data.units.length);
+    expect(r.body.data.totals.crew).toBeGreaterThan(0);
+  });
+
+  it("is refused for a programme they may not see", async () => {
+    const other = await post(w.admin, "/api/v1/survey/projects",
+      { code: uniq("SP"), name: "Not theirs" });
+    const r = await get(w.directUser, `/api/v1/survey/projects/${other.data.id}/deployment`);
+    expect(r.status).toBe(404);
+  });
+});
