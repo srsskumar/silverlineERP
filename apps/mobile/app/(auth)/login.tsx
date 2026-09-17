@@ -33,7 +33,9 @@ export default function LoginScreen() {
     }
     try {
       const next = await login(f.username.trim(), f.password);
-      router.replace(next === "mfa" ? "/(auth)/mfa" : "/(tabs)");
+      if (next === "mfa") router.replace("/(auth)/mfa");
+      else if (next === "change-password") router.replace("/(auth)/password");
+      else router.replace("/(tabs)");
     } catch (e) {
       if (e instanceof ApiError) {
         const fields = e.fieldErrors.map((x) => `${x.field}: ${x.message}`).join("\n");
@@ -70,8 +72,8 @@ export default function LoginScreen() {
         name="username"
         render={({ field }) => (
           <Input
-            label="Username"
-            placeholder="Your username"
+            label="Username or mobile number"
+            placeholder="Your mobile number"
             autoCapitalize="none"
             autoCorrect={false}
             textContentType="username"

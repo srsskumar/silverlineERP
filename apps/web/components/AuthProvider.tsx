@@ -26,7 +26,9 @@ export interface AuthContextValue {
   session: Session | null;
   isLoading: boolean;
   error: unknown;
-  login: (username: string, password: string) => Promise<{ mfaRequired: boolean }>;
+  login: (
+    username: string, password: string,
+  ) => Promise<{ mfaRequired: boolean; mustChangePassword: boolean }>;
   verifyMfa: (token: string) => Promise<void>;
   logout: () => void;
   refetchSession: () => Promise<void>;
@@ -107,14 +109,22 @@ function AuthInner({ children }: { children: React.ReactNode }) {
         // Tokens arrive after MFA verification; hold auth until then.
         setMfaPending(true);
         pendingCredentials.current = { username, password };
-        return { mfaRequired: true };
+        return { mfaRequired: true, mustChangePassword: false };
       }
       queryClient.clear();
       setTokens(res.access_token, res.refresh_token);
       setHasTokens(true);
       // Wait for state update to enable query, then refetch
       await queryClient.refetchQueries({ queryKey: queryKeys.session.me() });
-      return { mfaRequired: false };
+      // A password somebody else chose. The account is signed in -- it has to
+      // be, or the password could never be changed -- but every other request
+      // comes back 403 until it is, so send them straight there rather than
+      // to a dashboard that cannot load.
+      return {
+        mfaRequired: false,
+        mustChangePassword: (res as { must_change_password?: boolean })
+          .must_change_password === true,
+      };
     },
     [queryClient],
   );

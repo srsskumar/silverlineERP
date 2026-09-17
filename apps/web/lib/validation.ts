@@ -1,10 +1,12 @@
 import { z } from 'zod';
 
 export const loginSchema = z.object({
+  // A username or a mobile number (§34). Still called `username` because
+  // that is the field the API takes; what it accepts is wider.
   username: z
     .string()
-    .min(1, 'Username is required')
-    .max(100, 'Username must be at most 100 characters'),
+    .min(1, 'Enter your username or mobile number')
+    .max(100, 'That is too long to be either'),
   password: z
     .string()
     .min(1, 'Password is required')

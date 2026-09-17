@@ -36,7 +36,9 @@ interface AuthState {
   user: MeResponse["user"] | null;
   roles: string[];
   permissions: string[];
-  login: (username: string, password: string) => Promise<"ok" | "mfa">;
+  login: (
+    username: string, password: string,
+  ) => Promise<"ok" | "mfa" | "change-password">;
   verifyMfa: (code: string) => Promise<void>;
   logout: () => Promise<void>;
   canDo: (required: string | readonly string[]) => boolean;
@@ -125,6 +127,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     pendingCreds = null;
     setMfaPending(false);
     await completeSignIn(res.access_token, res.refresh_token);
+    // A password somebody else chose. Signed in — it has to be, or the
+    // password could never be changed — but every other request comes back
+    // 403 until it is (§34).
+    if ((res as { must_change_password?: boolean }).must_change_password) {
+      return "change-password" as const;
+    }
     return "ok" as const;
   }, [completeSignIn]);
 

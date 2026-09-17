@@ -40,8 +40,11 @@ export default function LoginPage() {
   const onSubmit = async (values: LoginFormValues) => {
     setSubmitError(null);
     try {
-      const { mfaRequired } = await login(values.username, values.password);
-      router.replace(mfaRequired ? '/mfa' : '/dashboard');
+      const { mfaRequired, mustChangePassword } =
+        await login(values.username, values.password);
+      router.replace(
+        mfaRequired ? '/mfa' : mustChangePassword ? '/security' : '/dashboard',
+      );
     } catch (err) {
       setSubmitError(err);
     }
@@ -61,7 +64,7 @@ export default function LoginPage() {
         <h1 className="text-xl font-bold text-text">Silverline ERP</h1>
         <p className="mt-1 text-sm text-text-muted">Sign in to continue</p>
         <form onSubmit={handleSubmit(onSubmit)} className="mt-6 flex flex-col gap-4" noValidate>
-          <FormField label="Username" htmlFor="username" error={errors.username?.message}>
+          <FormField label="Username or mobile number" htmlFor="username" error={errors.username?.message}>
             <Input
               id="username"
               autoComplete="username"

@@ -107,6 +107,22 @@ export async function getEmployeesMe(): Promise<Employee> {
   return asItem<Employee>(data, "employee");
 }
 
+/**
+ * Set your own password (§34).
+ *
+ * Not queued: this is a security action the person is waiting on, and a
+ * password change replayed from an offline queue hours later would sign them
+ * out at a moment they cannot explain.
+ */
+export async function changeOwnPassword(
+  currentPassword: string, newPassword: string,
+): Promise<void> {
+  await apiFetch("/api/v1/auth/password", {
+    method: "POST",
+    body: { current_password: currentPassword, new_password: newPassword },
+  });
+}
+
 // --- Survey ---------------------------------------------------------------------
 
 /** One of the villages this person is crewed to today. */

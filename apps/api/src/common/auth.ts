@@ -64,11 +64,13 @@ export function buildAuthenticate(ctx: AuthContext) {
       });
     }
     const userRes = await ctx.pool.query(
-      "SELECT id, org_id, username, auth_status, mfa_enabled FROM users WHERE id = $1",
+      `SELECT id, org_id, username, auth_status, mfa_enabled, must_change_password
+       FROM users WHERE id = $1`,
       [claims.sub],
     );
     const row = userRes.rows[0] as
-      | { id: string; org_id: string; username: string; auth_status: string; mfa_enabled:boolean }
+      | { id: string; org_id: string; username: string; auth_status: string;
+          mfa_enabled: boolean; must_change_password: boolean }
       | undefined;
     if (!row || row.auth_status !== "ACTIVE") {
       // Generic message: never leak whether the account exists / is disabled.
@@ -127,6 +129,24 @@ export function buildAuthenticate(ctx: AuthContext) {
       worker:claims.worker===true&&!claims.family,
     };
     if(mfaEnrollmentRequired&&!req.url.startsWith("/api/v1/auth/")&&!req.url.startsWith("/api/v1/devices/register"))throw new ApiError({status:403,code:"MFA_ENROLLMENT_REQUIRED",message:"Set up an authenticator in Account security before continuing"});
+    /*
+     * A password somebody else chose is a password somebody else knows (§34).
+     *
+     * An administrator resetting a password, or creating an account with a
+     * starting one, leaves a shared secret. The account can sign in -- it has
+     * to, or the password could never be changed -- and can do nothing else
+     * until the person sets their own.
+     *
+     * Same shape as the MFA gate above, and deliberately so: the auth routes
+     * stay open because the change itself lives there.
+     */
+    if (row.must_change_password && !req.url.startsWith("/api/v1/auth/")) {
+      throw new ApiError({
+        status: 403,
+        code: "PASSWORD_CHANGE_REQUIRED",
+        message: "Set your own password before continuing",
+      });
+    }
   };
 }
 

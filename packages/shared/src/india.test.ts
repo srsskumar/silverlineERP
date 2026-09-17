@@ -6,6 +6,7 @@ import {
   splitGst, msmeDueDate, msmeDelayInterest, tdsOn, computeInvoice, isValidGstRate,
   MSME_DAYS_WITH_AGREEMENT, MSME_DAYS_WITHOUT_AGREEMENT,
   contractValueBreakdown, amountInWords, businessDay,
+  indianMobile, isIndianMobile, formatIndianMobile,
 } from './india.js';
 
 /**
@@ -451,5 +452,46 @@ describe('businessDay', () => {
   it('crosses a month and a year boundary', () => {
     expect(businessDay(new Date('2026-03-31T19:00:00Z'))).toBe('2026-04-01');
     expect(businessDay(new Date('2026-12-31T19:00:00Z'))).toBe('2027-01-01');
+  });
+});
+
+describe('Indian mobile numbers', () => {
+  it('reduces every written form of one number to the same ten digits', () => {
+    // What a crew member types is not what an administrator saved.
+    for (const written of [
+      '9100000319', '+919100000319', '+91 91000 00319', '091-9100000319',
+      '0 9100000319', '00919100000319', ' 91 91000 00319 ',
+    ]) {
+      expect(indianMobile(written), written).toBe('9100000319');
+    }
+  });
+
+  it('refuses a number that is not an Indian mobile', () => {
+    // A wrong match here is somebody logging into another person's account,
+    // so a near miss is rejected rather than half-matched.
+    expect(indianMobile('040 2345 6789')).toBeNull();   // landline
+    expect(indianMobile('5100000319')).toBeNull();      // no mobile starts 5
+    expect(indianMobile('910000031')).toBeNull();       // nine digits
+    expect(indianMobile('91000003199')).toBeNull();     // eleven
+    expect(indianMobile('139')).toBeNull();             // short code
+    expect(indianMobile('')).toBeNull();
+    expect(indianMobile(null)).toBeNull();
+    expect(indianMobile('not a number')).toBeNull();
+  });
+
+  it('does not mistake a ten-digit number starting 91 for a country code', () => {
+    // 9188... is a real mobile. Stripping "91" from it would silently match
+    // the wrong account.
+    expect(indianMobile('9188776655')).toBe('9188776655');
+  });
+
+  it('stores one written form so a number can be dialled and matched', () => {
+    expect(formatIndianMobile('91000 00319')).toBe('+919100000319');
+    expect(formatIndianMobile('040 2345 6789')).toBeNull();
+  });
+
+  it('answers whether a string is a mobile number at all', () => {
+    expect(isIndianMobile('+919100000319')).toBe(true);
+    expect(isIndianMobile('user_slv001_19')).toBe(false);
   });
 });

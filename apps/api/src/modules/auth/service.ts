@@ -4,7 +4,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { authenticator } from "otplib";
 import type { Pool, PoolClient } from "pg";
-import { ApiError } from "@silverline/shared";
+import { ApiError, indianMobile } from "@silverline/shared";
 
 export const ACCESS_TOKEN_TTL_SECONDS = 900; // 15 minutes
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -36,6 +36,7 @@ interface UserRow {
   locked_until: string | null;
   password_hash: string;
   last_login_at: string | null;
+  must_change_password: boolean;
 }
 
 export interface ServiceContext {
@@ -117,16 +118,50 @@ export interface LoginResult {
   body: Record<string, unknown>;
 }
 
+/**
+ * Find the account somebody is signing in to (§34).
+ *
+ * By username, or by mobile number. A field crew member knows their own
+ * number; they do not know "user_slv001_19" and will not keep it, so in
+ * practice somebody else logs in for them and the attendance and progress
+ * records stop meaning what they say.
+ *
+ * The username is tried first and exactly. A number is only looked up when
+ * what was typed is an Indian mobile in the first place, so an account whose
+ * username happens to be numeric still authenticates as itself.
+ *
+ * Two accounts cannot share a number -- a unique index refuses it -- but the
+ * query is written not to trust that: an ambiguous match returns nobody
+ * rather than picking one, because picking one means signing somebody into
+ * another person's account.
+ */
+async function findLoginUser(
+  ctx: ServiceContext, identifier: string,
+): Promise<UserRow | undefined> {
+  const byName = await ctx.pool.query(
+    "SELECT * FROM users WHERE username = $1 ORDER BY created_at ASC LIMIT 1",
+    [identifier],
+  );
+  if (byName.rows[0]) return byName.rows[0] as UserRow;
+
+  const digits = indianMobile(identifier);
+  if (!digits) return undefined;
+
+  // LIMIT 2, so an ambiguous number is visible rather than silently resolved.
+  const byMobile = await ctx.pool.query(
+    "SELECT * FROM users WHERE mobile_digits = $1 LIMIT 2",
+    [digits],
+  );
+  if (byMobile.rowCount !== 1) return undefined;
+  return byMobile.rows[0] as UserRow;
+}
+
 export async function login(
   ctx: ServiceContext,
   input: { username: string; password: string; totp_code?: string; device_id?:string },
   meta: { ip?: string | null; userAgent?: string | null; requestId: string },
 ): Promise<LoginResult> {
-  const userRes = await ctx.pool.query(
-    "SELECT * FROM users WHERE username = $1 ORDER BY created_at ASC LIMIT 1",
-    [input.username],
-  );
-  const user = userRes.rows[0] as UserRow | undefined;
+  const user = await findLoginUser(ctx, input.username);
 
   if (!user) {
     throw new UnknownUserError();
@@ -194,6 +229,9 @@ export async function login(
       token_type: "Bearer",
       expires_in: ACCESS_TOKEN_TTL_SECONDS,
       mfa_required: false as const,
+      // So the app can send them straight to the change screen rather than
+      // to a home page where every request would come back 403.
+      must_change_password: user.must_change_password === true,
       user: {
         id: user.id,
         username: user.username,
@@ -202,6 +240,57 @@ export async function login(
       },
     },
   };
+}
+
+/**
+ * Setting your own password (§34).
+ *
+ * Requires the current one. Without that, anybody holding a token that leaked
+ * from a shared phone could lock the owner out of their own account, and a
+ * token is far easier to come by than a password.
+ *
+ * Every other session is revoked. If the reason for changing it is that
+ * somebody else knows it, leaving their session alive defeats the change.
+ */
+export async function changePassword(
+  ctx: ServiceContext,
+  userId: string,
+  input: { current_password: string; new_password: string },
+): Promise<{ changed: true }> {
+  const row = (await ctx.pool.query(
+    "SELECT id, password_hash, must_change_password FROM users WHERE id = $1",
+    [userId])).rows[0] as
+      { id: string; password_hash: string; must_change_password: boolean } | undefined;
+  if (!row) throw invalidCredentials();
+
+  const ok = await bcrypt.compare(input.current_password, row.password_hash);
+  if (!ok) {
+    throw new ApiError({
+      status: 401,
+      code: "INVALID_CREDENTIALS",
+      message: "That is not your current password",
+    });
+  }
+
+  // Changing it to what it already is clears the must-change flag without
+  // changing anything, which is the whole of the protection defeated.
+  if (await bcrypt.compare(input.new_password, row.password_hash)) {
+    throw new ApiError({
+      status: 422,
+      code: "PASSWORD_UNCHANGED",
+      message: "Choose a password you have not been given",
+    });
+  }
+
+  const hash = await bcrypt.hash(input.new_password, 12);
+  await ctx.pool.query(
+    `UPDATE users SET password_hash = $2, must_change_password = false,
+       password_set_at = now(), updated_at = now() WHERE id = $1`,
+    [userId, hash]);
+  await ctx.pool.query(
+    "UPDATE sessions SET revoked = true, revoked_at = now() WHERE user_id = $1 AND revoked = false",
+    [userId]);
+  return { changed: true };
 }
 
 /** Generic credential failure: identical message for every bad-password case. */

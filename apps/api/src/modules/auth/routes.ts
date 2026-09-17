@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import {
   ApiError,
+  changePasswordSchema,
   loginSchema,
   logoutSchema,
   mfaVerifySchema,
@@ -13,6 +14,7 @@ import { buildAuthenticate } from "../../common/auth.js";
 import { sendError } from "../../common/httpErrors.js";
 import { createLoginRateLimiter } from "../../common/rateLimit.js";
 import {
+  changePassword,
   disableMfa,
   login,
   logout,
@@ -274,6 +276,47 @@ export async function registerAuthRoutes(
         requestId: req.requestId,
       });
       return reply.status(200).send({ disabled: true, mfa_enabled: false });
+    },
+  );
+
+  /**
+   * Setting your own password (§34).
+   *
+   * Rate limited with the login limiter: guessing the current password here
+   * is the same attack as guessing it at the login form, and leaving this
+   * door unlimited would simply move it.
+   */
+  app.post(
+    "/api/v1/auth/password",
+    { preHandler: [authenticate, loginRateLimit] },
+    async (req, reply) => {
+      const user = req.authUser;
+      if (!user) {
+        throw new ApiError({
+          status: 401, code: "UNAUTHENTICATED", message: "Authentication required",
+        });
+      }
+      const parsed = changePasswordSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return sendError(reply, req.requestId, {
+          status: 422, code: "VALIDATION_ERROR", message: "Validation failed",
+          fieldErrors: toFieldErrors(parsed.error),
+        });
+      }
+      await changePassword(ctx, user.id, parsed.data);
+      await writeAudit(opts.pool, {
+        orgId: user.orgId,
+        actorId: user.id,
+        actorIp: req.ip,
+        actorUserAgent: metaOf(req).userAgent,
+        action: "auth.password_changed",
+        entityType: "user",
+        entityId: user.id,
+        requestId: req.requestId,
+      });
+      // Every session is gone, this one included: the change is only worth
+      // making if whoever else knew the password is signed out by it.
+      return reply.status(200).send({ changed: true, sessions_revoked: true });
     },
   );
 

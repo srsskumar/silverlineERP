@@ -11,8 +11,19 @@ describe('loginSchema', () => {
     const result = loginSchema.safeParse({ username: '', password: 's3cret-pass' });
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.flatten().fieldErrors.username).toContain('Username is required');
+      // The field takes a username or a mobile number (§34), so the message
+      // has to name both or half the crew will think it is not for them.
+      expect(result.error.flatten().fieldErrors.username)
+        .toContain('Enter your username or mobile number');
     }
+  });
+
+  it('accepts a mobile number in the same field', () => {
+    // A crew member knows their own number, not the account name somebody
+    // generated for them.
+    expect(loginSchema.safeParse({
+      username: '+91 91000 77001', password: 's3cret-pass',
+    }).success).toBe(true);
   });
 
   it('rejects an empty password', () => {

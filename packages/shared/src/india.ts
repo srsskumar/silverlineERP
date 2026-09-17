@@ -555,3 +555,51 @@ export function businessDay(
     timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(at);
 }
+
+/* ------------------------------------------------------- mobile numbers */
+
+/**
+ * An Indian mobile number, reduced to the ten digits that identify it.
+ *
+ * The same number is written a dozen ways -- +91 91000 00319, 091-9100000319,
+ * 9100000319, 0 9100000319 -- and a field crew member typing their own number
+ * into a login box will not match whatever form an administrator happened to
+ * save. Comparing the ten significant digits is what makes "log in with your
+ * mobile number" mean anything.
+ *
+ * Returns null for anything that is not one: a ten-digit Indian mobile starts
+ * 6, 7, 8 or 9. Landlines, short codes and typos are rejected rather than
+ * half-matched, because a wrong match here is somebody logging into another
+ * person's account.
+ */
+export function indianMobile(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const digits = String(value).replace(/\D/g, '');
+  // Strip the country code or a trunk prefix, whichever was used. Both may
+  // appear together (0091...), so this runs until neither is left.
+  let rest = digits;
+  for (;;) {
+    if (rest.length > 10 && rest.startsWith('91')) { rest = rest.slice(2); continue; }
+    if (rest.length > 10 && rest.startsWith('0')) { rest = rest.slice(1); continue; }
+    break;
+  }
+  if (rest.length !== 10) return null;
+  if (!/^[6-9]/.test(rest)) return null;
+  return rest;
+}
+
+/** Whether a string is an Indian mobile number in any of its written forms. */
+export function isIndianMobile(value: string | null | undefined): boolean {
+  return indianMobile(value) !== null;
+}
+
+/**
+ * The form to store and display: +91 followed by the ten digits.
+ *
+ * One written form in the database means the number can be dialled from a
+ * contact card and matched without normalising on every read.
+ */
+export function formatIndianMobile(value: string | null | undefined): string | null {
+  const digits = indianMobile(value);
+  return digits === null ? null : `+91${digits}`;
+}

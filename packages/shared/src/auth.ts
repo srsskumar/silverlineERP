@@ -6,7 +6,15 @@ const totpCode = z
 
 /** POST /api/v1/auth/login */
 export const loginSchema = z.object({
-  username: z.string().min(1, "Username is required"),
+  /**
+   * A username or a mobile number (§34).
+   *
+   * Still called `username` because that is what every client already sends
+   * and renaming it would break them all for nothing. What it accepts is
+   * wider: a field crew member knows their own number and not the account
+   * name somebody generated for them.
+   */
+  username: z.string().min(1, "Enter your username or mobile number"),
   password: z.string().min(1, "Password is required"),
   /** Required when the account has MFA enabled; omit otherwise. */
   totp_code: totpCode.optional(),
@@ -14,6 +22,29 @@ export const loginSchema = z.object({
 });
 
 export type LoginInput = z.infer<typeof loginSchema>;
+
+/**
+ * POST /api/v1/auth/password — setting your own password (§34).
+ *
+ * The current password is required. A token is far easier to come by than a
+ * password -- a shared phone left unlocked is enough -- and without this,
+ * holding one would be enough to lock the owner out of their own account.
+ *
+ * Twelve characters to match what an administrator must already supply when
+ * creating an account, so the self-service route cannot be used to weaken a
+ * password below what the account was issued with.
+ */
+export const changePasswordSchema = z.object({
+  current_password: z.string().min(1, "Enter your current password"),
+  new_password: z.string()
+    .min(12, "Use at least 12 characters")
+    .max(128, "That is too long"),
+}).refine(v => v.current_password !== v.new_password, {
+  message: "Choose a password you have not been given",
+  path: ["new_password"],
+});
+
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
 
 /** POST /api/v1/auth/refresh */
 export const refreshSchema = z.object({

@@ -684,13 +684,17 @@ export async function ifMatch(
 export async function createUser(
   pool: Pool,
   orgId: string,
-  opts: { username: string; password?: string; roles?: RoleCode[]; employeeId?: string },
+  opts: {
+    username: string; password?: string; roles?: RoleCode[]; employeeId?: string;
+    /** The mobile number this account can sign in with (§34). */
+    phone?: string;
+  },
 ): Promise<string> {
   const hash = await bcrypt.hash(opts.password ?? PASSWORD, 4);
   const res = await pool.query(
-    `INSERT INTO users (org_id, username, password_hash, auth_status, employee_id)
-     VALUES ($1, $2, $3, 'ACTIVE', $4) RETURNING id`,
-    [orgId, opts.username, hash, opts.employeeId ?? null],
+    `INSERT INTO users (org_id, username, password_hash, auth_status, employee_id, phone)
+     VALUES ($1, $2, $3, 'ACTIVE', $4, $5) RETURNING id`,
+    [orgId, opts.username, hash, opts.employeeId ?? null, opts.phone ?? null],
   );
   const id = res.rows[0].id as string;
   for (const code of opts.roles ?? []) {

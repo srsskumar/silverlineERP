@@ -754,3 +754,196 @@ describe("UT-AUTH-08 sanitize structured logs", () => {
     expect(logs).not.toContain(w.admin.authorization.replace("Bearer ", ""));
   });
 });
+
+/**
+ * Signing in the way a field crew actually can (§34).
+ *
+ * A crew member knows their own mobile number. They do not know
+ * "user_slv001_19" and will not keep it, so without this somebody else logs
+ * in for them and the attendance and progress records stop meaning what they
+ * say.
+ */
+describe("signing in with a mobile number", () => {
+  const password = "Fieldwork@2026";
+  let mobileUser: string;
+
+  beforeAll(async () => {
+    mobileUser = uniq("mob");
+    await createUser(w.pool, w.orgId, {
+      username: mobileUser, password, phone: "+919100077001",
+    });
+  });
+
+  it("takes the number in whatever form it is typed", async () => {
+    // What a crew member types is not the form an administrator saved.
+    for (const typed of [
+      "9100077001", "+919100077001", "+91 91000 77001", "091-9100077001",
+      " 9100077001 ",
+    ]) {
+      const r = await login({ username: typed, password });
+      expect(r.statusCode, typed).toBe(200);
+      expect(r.json().access_token, typed).toBeTruthy();
+    }
+  });
+
+  it("still takes the username, which is what existing clients send", async () => {
+    const r = await login({ username: mobileUser, password });
+    expect(r.statusCode).toBe(200);
+  });
+
+  it("refuses a number no account uses, without saying so", async () => {
+    // Same generic answer as a bad password: whether a number is registered
+    // is itself worth knowing to somebody enumerating accounts.
+    const r = await login({ username: "9100099999", password });
+    expect(r.statusCode).toBe(401);
+    expect(r.json().code).toBe("INVALID_CREDENTIALS");
+  });
+
+  it("does not let a landline or a typo half-match an account", async () => {
+    // A wrong match here signs somebody into another person's account.
+    for (const notMobile of ["040 2345 6789", "910007700", "5100077001"]) {
+      const r = await login({ username: notMobile, password });
+      expect(r.statusCode, notMobile).toBe(401);
+    }
+  });
+
+  it("will not sign in with the right number and the wrong password", async () => {
+    const r = await login({ username: "9100077001", password: "wrong-password" });
+    expect(r.statusCode).toBe(401);
+  });
+
+  it("prefers an exact username over a number", async () => {
+    // An account whose username happens to be a number authenticates as
+    // itself, not as whoever holds that mobile.
+    const numeric = "9100077002";
+    await createUser(w.pool, w.orgId, {
+      username: numeric, password: "Numeric@2026x", phone: null as unknown as undefined,
+    });
+    const other = uniq("other");
+    await createUser(w.pool, w.orgId, {
+      username: other, password: "Other@2026xxx", phone: "+919100077002",
+    });
+
+    // The username's own password works...
+    expect((await login({ username: numeric, password: "Numeric@2026x" })).statusCode).toBe(200);
+    // ...and the other account's does not, even though it holds that number.
+    expect((await login({ username: numeric, password: "Other@2026xxx" })).statusCode).toBe(401);
+  });
+
+  it("refuses two accounts sharing one number outright", async () => {
+    // An ambiguous login cannot be resolved safely, so the duplicate is
+    // refused where it is created rather than at the login form.
+    await expect(createUser(w.pool, w.orgId, {
+      username: uniq("dup"), phone: "+919100077001",
+    })).rejects.toThrow();
+  });
+});
+
+describe("setting your own password", () => {
+  const original = "Original@2026a";
+  let userId: string;
+  let username: string;
+
+  beforeAll(async () => {
+    username = uniq("pwd");
+    userId = await createUser(w.pool, w.orgId, { username, password: original });
+  });
+
+  async function change(headers: Record<string, string>, payload: Record<string, unknown>) {
+    return w.app.inject({
+      method: "POST", url: "/api/v1/auth/password", headers, payload,
+    });
+  }
+
+  it("changes it and signs every other session out", async () => {
+    // If the reason for changing it is that somebody else knows it, leaving
+    // their session alive defeats the change.
+    const first = await login({ username, password: original });
+    const second = await login({ username, password: original });
+    const token = second.json().access_token as string;
+
+    const r = await change({ authorization: `Bearer ${token}` }, {
+      current_password: original, new_password: "BrandNew@2026xy",
+    });
+    expect(r.statusCode, r.body).toBe(200);
+
+    // The old password is gone and the new one works.
+    expect((await login({ username, password: original })).statusCode).toBe(401);
+    expect((await login({ username, password: "BrandNew@2026xy" })).statusCode).toBe(200);
+
+    // And the other session cannot be refreshed.
+    const refreshed = await w.app.inject({
+      method: "POST", url: "/api/v1/auth/refresh",
+      payload: { refresh_token: first.json().refresh_token },
+    });
+    expect(refreshed.statusCode).not.toBe(200);
+  });
+
+  it("will not take the current password on trust", async () => {
+    // A token is far easier to come by than a password -- an unlocked shared
+    // phone is enough -- so holding one must not be enough to lock the owner
+    // out of their own account.
+    const token = (await login({ username, password: "BrandNew@2026xy" })).json()
+      .access_token as string;
+    const r = await change({ authorization: `Bearer ${token}` }, {
+      current_password: "not-it", new_password: "Another@2026xyz",
+    });
+    expect(r.statusCode).toBe(401);
+  });
+
+  it("refuses to set it back to what it already is", async () => {
+    const token = (await login({ username, password: "BrandNew@2026xy" })).json()
+      .access_token as string;
+    const r = await change({ authorization: `Bearer ${token}` }, {
+      current_password: "BrandNew@2026xy", new_password: "BrandNew@2026xy",
+    });
+    expect(r.statusCode).toBe(422);
+  });
+
+  it("will not accept a password shorter than one an administrator must set", async () => {
+    // Otherwise the self-service route weakens the account below what it was
+    // issued with.
+    const token = (await login({ username, password: "BrandNew@2026xy" })).json()
+      .access_token as string;
+    const r = await change({ authorization: `Bearer ${token}` }, {
+      current_password: "BrandNew@2026xy", new_password: "short",
+    });
+    expect(r.statusCode).toBe(422);
+  });
+
+  it("stands the account down until the password somebody else chose is replaced", async () => {
+    // A password an administrator set is a password the administrator knows.
+    await w.pool.query(
+      "UPDATE users SET must_change_password = true WHERE id = $1", [userId]);
+
+    const signIn = await login({ username, password: "BrandNew@2026xy" });
+    expect(signIn.statusCode).toBe(200);
+    // Signed in — it has to be, or the password could never be changed.
+    expect(signIn.json().must_change_password).toBe(true);
+    const token = signIn.json().access_token as string;
+
+    // And can do nothing else.
+    const blocked = await w.app.inject({
+      method: "GET", url: "/api/v1/employees",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(blocked.statusCode).toBe(403);
+    expect(blocked.json().code).toBe("PASSWORD_CHANGE_REQUIRED");
+
+    // Changing it lifts the block.
+    const changed = await change({ authorization: `Bearer ${token}` }, {
+      current_password: "BrandNew@2026xy", new_password: "TheirOwn@2026ab",
+    });
+    expect(changed.statusCode, changed.body).toBe(200);
+
+    const after = await login({ username, password: "TheirOwn@2026ab" });
+    expect(after.json().must_change_password).toBe(false);
+    const ok = await w.app.inject({
+      method: "GET", url: "/api/v1/employees",
+      headers: { authorization: `Bearer ${after.json().access_token}` },
+    });
+    // This account holds no roles, so a plain permission denial is the
+    // correct answer. What must be gone is the password block.
+    expect(ok.json().code).not.toBe("PASSWORD_CHANGE_REQUIRED");
+  });
+});
