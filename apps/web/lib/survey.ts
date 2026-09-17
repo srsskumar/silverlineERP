@@ -166,8 +166,21 @@ export const DELAY_REASON_OPTIONS = [
   { code: 'OTHER', label: 'Other' },
 ] as const;
 
+/**
+ * Reasons the server records itself, which nobody picks from a form.
+ *
+ * A punch replayed from the offline queue with no return filed is accepted
+ * and stamped with this, so the day appears on the chase list rather than
+ * vanishing. It reads as an explanation, because that is what it is.
+ */
+const SYSTEM_REASONS: Record<string, string> = {
+  UNFILED_OFFLINE: 'Punched out without signal; return never filed',
+};
+
 export function reasonLabel(code: string | null | undefined): string {
-  return DELAY_REASON_OPTIONS.find(r => r.code === code)?.label ?? String(code ?? '—');
+  return DELAY_REASON_OPTIONS.find(r => r.code === code)?.label
+    ?? (code ? SYSTEM_REASONS[code] : undefined)
+    ?? String(code ?? '—');
 }
 
 export const VILLAGE_STATUS_LABELS: Record<string, string> = {

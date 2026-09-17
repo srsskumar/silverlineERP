@@ -19,6 +19,8 @@ import * as Device from "expo-device";
 import {
   getAttendanceRecords,
   getEmployeesMe,
+  getMyVillages,
+  type MyVillage,
 } from "../../src/api/endpoints";
 import {
   accuracyLabel,
@@ -52,12 +54,33 @@ import {
 import { MapCanvas } from "../../src/ui/MapCanvas";
 import { space, useTheme } from "../../src/theme";
 
+/**
+ * Why a day's return could not be filed.
+ *
+ * Mirrors DELAY_REASONS in @silverline/shared, which this app deliberately
+ * does not import (Metro workspace linking is deferred -- see src/rbac.ts).
+ * Only the reasons that can apply to a whole day in the field are offered;
+ * the full list belongs on the progress form, not the punch screen.
+ */
+const DEFER_REASONS = [
+  { code: "DATA_TECHNICAL", label: "No signal or app problem" },
+  { code: "EQUIPMENT", label: "Equipment problem" },
+  { code: "FIELD_CONDITIONS", label: "Field conditions" },
+  { code: "ACCESS", label: "Local or access issue" },
+  { code: "OTHER", label: "Other" },
+] as const;
+
 function AttendanceScreen() {
   const t = useTheme();
   const [fix, setFix] = useState<PunchFix | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [msgTone, setMsgTone] = useState<"success" | "warning" | "danger">("success");
   const [busy, setBusy] = useState<"in" | "out" | "locating" | null>(null);
+  /** The village this punch is for. Null on an office or training day. */
+  const [village, setVillage] = useState<MyVillage | null>(null);
+  /** Why the day's return cannot be filed, when it has not been. */
+  const [deferReason, setDeferReason] = useState<string | null>(null);
+  const [deferRemarks, setDeferRemarks] = useState("");
   const [excReason, setExcReason] = useState("");
   const [excMsg, setExcMsg] = useState<string | null>(null);
   const [signalNote, setSignalNote] = useState<string | null>(null);
@@ -76,6 +99,25 @@ function AttendanceScreen() {
     queryKey: ["attendance", "history"],
     queryFn: () => getAttendanceRecords({ limit: 20 }),
   });
+
+  /**
+   * The villages this person is crewed to, and what is outstanding on them.
+   *
+   * Read before the punch rather than after. Checking out of a field day asks
+   * for the day's return, and the server refuses a live punch-out that has
+   * neither the return nor a reason -- but punches go through the offline
+   * queue, which cannot put that question to anybody. So the question is
+   * asked here, while the person is still looking at the screen.
+   *
+   * A crew member with no survey work gets an empty list and sees none of
+   * this; the punch card stays exactly as it was.
+   */
+  const myVillages = useQuery({
+    queryKey: ["survey", "my-villages"],
+    queryFn: getMyVillages,
+    retry: false,
+  });
+  const villages = myVillages.data?.villages ?? [];
 
   /** Takes a fix up front so the map and fence badge are live before punching. */
   const locate = useCallback(async () => {
@@ -98,6 +140,24 @@ function AttendanceScreen() {
   const punch = async (kind: "CHECK_IN" | "CHECK_OUT") => {
     setMsg(null);
     setSignalNote(null);
+
+    /*
+     * Ask about the day's return here, not at the server.
+     *
+     * The punch goes into the offline queue and may not reach the server for
+     * hours, and the queue abandons an op the server rejects. A refusal that
+     * arrives then is no use to anybody -- so the question is put while the
+     * person can still answer it, and the punch is not sent until they have.
+     */
+    if (kind === "CHECK_OUT" && village && !village.filed_today && !deferReason) {
+      setMsg(
+        `No progress is recorded for ${village.village_name} today. `
+        + "File the day's return, or say below why you cannot.",
+      );
+      setMsgTone("warning");
+      return;
+    }
+
     setBusy(kind === "CHECK_IN" ? "in" : "out");
     try {
       let employeeId: string;
@@ -136,6 +196,13 @@ function AttendanceScreen() {
         device_id: Device.modelName ?? undefined,
         app_version: "mobile/1.0.0",
         device_signals: signals,
+        ...(village ? { survey_village_id: village.id } : {}),
+        ...(kind === "CHECK_OUT" && village && !village.filed_today && deferReason
+          ? {
+              progress_deferred_reason: deferReason,
+              ...(deferRemarks.trim() ? { progress_deferred_remarks: deferRemarks.trim() } : {}),
+            }
+          : {}),
       };
       setMsg(
         await submitQueued({
@@ -145,7 +212,12 @@ function AttendanceScreen() {
         }),
       );
       setMsgTone(signals.review_suggested ? "warning" : "success");
+      if (kind === "CHECK_OUT") {
+        setDeferReason(null);
+        setDeferRemarks("");
+      }
       void history.refetch();
+      void myVillages.refetch();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Punch failed");
       setMsgTone("danger");
@@ -254,6 +326,80 @@ function AttendanceScreen() {
       </Card>
 
       <Card title="Punch">
+        {villages.length > 0 ? (
+          <View style={{ marginBottom: space.md }}>
+            <SectionLabel>What you are punching for</SectionLabel>
+            <Row style={{ flexWrap: "wrap" }} gap={space.sm}>
+              {villages.map(v => (
+                <Button
+                  key={v.id}
+                  title={v.village_name}
+                  variant={village?.id === v.id ? "primary" : "secondary"}
+                  onPress={() => {
+                    setVillage(village?.id === v.id ? null : v);
+                    setDeferReason(null);
+                    setMsg(null);
+                  }}
+                />
+              ))}
+              <Button
+                title="Office day"
+                variant={village === null ? "primary" : "secondary"}
+                onPress={() => {
+                  setVillage(null);
+                  setDeferReason(null);
+                  setMsg(null);
+                }}
+              />
+            </Row>
+            {village ? (
+              <Row style={{ marginTop: space.sm, flexWrap: "wrap" }} gap={space.sm}>
+                <Badge text={village.stage_label} tone="neutral" />
+                <Muted>
+                  {[village.mandal_name, village.district_name].filter(Boolean).join(", ")}
+                </Muted>
+                <StatusDot
+                  text={village.filed_today ? "Return filed" : "Return not filed"}
+                  tone={village.filed_today ? "success" : "warning"}
+                />
+              </Row>
+            ) : null}
+          </View>
+        ) : null}
+
+        {village && !village.filed_today ? (
+          <View style={{ marginBottom: space.md }}>
+            <Banner
+              tone="warning"
+              icon="document-text-outline"
+              title="Today's return is not filed"
+              message={`File the day's progress for ${village.village_name} before you check out. If you cannot, say why — it will be recorded.`}
+            />
+            <Row style={{ marginTop: space.sm, flexWrap: "wrap" }} gap={space.sm}>
+              {DEFER_REASONS.map(r => (
+                <Button
+                  key={r.code}
+                  title={r.label}
+                  variant={deferReason === r.code ? "primary" : "secondary"}
+                  onPress={() => {
+                    setDeferReason(deferReason === r.code ? null : r.code);
+                    setMsg(null);
+                  }}
+                />
+              ))}
+            </Row>
+            {deferReason === "OTHER" ? (
+              <Input
+                label="What happened"
+                value={deferRemarks}
+                onChangeText={setDeferRemarks}
+                placeholder="Say what stopped the return being filed"
+                style={{ marginTop: space.sm }}
+              />
+            ) : null}
+          </View>
+        ) : null}
+
         <Row gap={space.md}>
           <Button
             title="Check in"

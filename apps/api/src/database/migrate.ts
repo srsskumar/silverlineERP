@@ -60,6 +60,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "050_survey_task_link", file: "050_survey_task_link.sql" },
   { version: "051_survey_crew_and_rovers", file: "051_survey_crew_and_rovers.sql" },
   { version: "052_survey_field_operations", file: "052_survey_field_operations.sql" },
+  { version: "053_attendance_survey_link", file: "053_attendance_survey_link.sql" },
 ];
 
 /**

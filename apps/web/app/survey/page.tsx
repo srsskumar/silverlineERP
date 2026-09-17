@@ -22,6 +22,7 @@ import {
   hasPct, paceNote, pct, pctTone, progressHeadline, roverNote, sqKm, stageLabel,
   stateTone, tallyTone, type ReportLevel,
   BOTTLENECK_LABELS, VILLAGE_STATUS_LABELS, forecastNote, villageStatusTone,
+  reasonLabel,
 } from '@/lib/survey';
 import { VillageDetail } from '@/components/survey/VillageDetail';
 
@@ -420,12 +421,78 @@ function Bottlenecks({ projectId, canForecast }: { projectId: string; canForecas
         `/api/v1/survey/projects/${projectId}/forecast`)).body as { data: Row }).data,
   });
 
+  /*
+   * Who was on site and filed nothing.
+   *
+   * Attendance already knows who turned up and which village for; set against
+   * the returns actually filed, the difference is the list to work through
+   * first. A village with nobody on it is not behind -- a village with four
+   * people on it and no return is.
+   */
+  const unfiled = useQuery({
+    queryKey: ['survey-unfiled', projectId],
+    queryFn: async () =>
+      ((await apiRequestRaw(
+        `/api/v1/survey/projects/${projectId}/unfiled`)).body as Row),
+  });
+
   if (stuck.isLoading) return <Skeleton className="h-64" />;
   if (stuck.isError) return <ErrorCard error={stuck.error} onRetry={() => stuck.refetch()} />;
   const rows: Row[] = stuck.data?.bottlenecks ?? [];
+  const missing: Row[] = unfiled.data?.data ?? [];
 
   return (
     <div className="space-y-4">
+      {missing.length > 0 ? (
+        <Card className="space-y-3 p-4">
+          <div className="flex items-baseline gap-2">
+            <h3 className="text-sm font-semibold text-text">On site, nothing filed</h3>
+            <span className="text-xs text-text-muted">
+              {unfiled.data?.unexplained ?? 0} unexplained
+              {(unfiled.data?.accounted ?? 0) > 0
+                ? `, ${unfiled.data?.accounted} accounted for` : ''}
+            </span>
+          </div>
+          <p className="text-xs text-text-muted">
+            People punched in against these villages today and no progress was recorded.
+            A day with a reason stays on the list — one such day is an answer, a fortnight
+            of them is a finding.
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-text-muted">
+                  <th className="py-1 pr-3">Village</th>
+                  <th className="py-1 pr-3">Mandal</th>
+                  <th className="py-1 pr-3">Who</th>
+                  <th className="py-1 pr-3">Reason given</th>
+                </tr>
+              </thead>
+              <tbody>
+                {missing.map((m, i) => (
+                  <tr key={`${m.survey_village_id}:${m.emp_no}:${i}`}
+                    className="border-t border-border">
+                    <td className="py-1.5 pr-3 text-text">{String(m.village_name)}</td>
+                    <td className="py-1.5 pr-3 text-text-muted">{String(m.mandal_name ?? '—')}</td>
+                    <td className="py-1.5 pr-3 text-text-muted">{String(m.employee_name)}</td>
+                    <td className="py-1.5 pr-3">
+                      {m.reason ? (
+                        <span className="text-text-muted">
+                          {reasonLabel(String(m.reason))}
+                          {m.remarks ? ` — ${String(m.remarks)}` : ''}
+                        </span>
+                      ) : (
+                        <Badge tone="warning">Not accounted for</Badge>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      ) : null}
+
       {canForecast && forecast.data ? (
         <Card className="space-y-3 p-4">
           <h3 className="text-sm font-semibold text-text">Where this lands</h3>

@@ -387,3 +387,21 @@ describe('forecastNote', () => {
     expect(note).toContain('No target date has been set');
   });
 });
+
+describe('naming a reason on the chase list', () => {
+  it('reads out a reason somebody picked', () => {
+    expect(reasonLabel('DATA_TECHNICAL')).toBe('Data or technical issue');
+  });
+
+  it('explains a reason the server stamped itself', () => {
+    // A punch replayed from the offline queue with nothing filed. It appears
+    // on the chase list rather than vanishing, so it needs words a supervisor
+    // can read — not a code they have to look up.
+    expect(reasonLabel('UNFILED_OFFLINE')).toContain('without signal');
+  });
+
+  it('shows a dash where no reason was given at all', () => {
+    // The case worth chasing first, and the one a stray "Other" would hide.
+    expect(reasonLabel(null)).toBe('—');
+  });
+});

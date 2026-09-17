@@ -107,6 +107,36 @@ export async function getEmployeesMe(): Promise<Employee> {
   return asItem<Employee>(data, "employee");
 }
 
+// --- Survey ---------------------------------------------------------------------
+
+/** One of the villages this person is crewed to today. */
+export interface MyVillage {
+  id: string;
+  village_name: string;
+  village_code: string | null;
+  mandal_name: string | null;
+  district_name: string | null;
+  project_name: string;
+  stage_code: string;
+  stage_label: string;
+  /** Whether today's progress return has already been filed for it. */
+  filed_today: boolean;
+}
+
+/**
+ * The villages this person is working, and what is outstanding on them.
+ *
+ * The punch screen needs this before the punch, not after: checking out of a
+ * field day asks for the day's return, and the app has to know which village
+ * that is and whether it is already in.
+ */
+export async function getMyVillages(): Promise<{ villages: MyVillage[]; workDate: string }> {
+  const { data } = await cachedRead("getMyVillages", () =>
+    apiFetch<{ data: MyVillage[]; work_date: string }>("/api/v1/survey/me/villages"));
+  const body = data as { data?: MyVillage[]; work_date?: string } | null;
+  return { villages: body?.data ?? [], workDate: body?.work_date ?? "" };
+}
+
 // --- Attendance ----------------------------------------------------------------
 
 export type AttendanceEventType = "CHECK_IN" | "CHECK_OUT";
@@ -115,6 +145,13 @@ export interface AttendanceEventInput {
   employee_id: string;
   event_type: AttendanceEventType;
   client_timestamp: string;
+  /** Which village this punch is for. Absent on an office or training day. */
+  survey_village_id?: string;
+  /** Why the day's return is not being filed at punch-out. */
+  progress_deferred_reason?: string;
+  progress_deferred_remarks?: string;
+  /** Set by the sync engine when this punch is a replay, not a live one. */
+  queued_offline?: boolean;
   latitude?: number;
   longitude?: number;
   gps_accuracy?: number;

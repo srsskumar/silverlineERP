@@ -21,6 +21,7 @@ import {
   isValidIdempotencyKey,
   toFieldErrors,
 } from "@silverline/shared";
+import { businessDay } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from "../../common/auth.js";
 import { writeAudit } from "../../common/audit.js";
 import { createRateLimiter } from "../../common/rateLimit.js";
@@ -40,6 +41,16 @@ export interface AttendanceRoutesOptions {
 }
 
 const SKEW_MS = SKEW_WINDOW_MIN * 60 * 1000;
+
+/**
+ * How recently a punch must have been made for the survey progress prompt to
+ * still be worth putting to the person (§59, phase 2).
+ *
+ * Fifteen minutes: long enough to ride out a flaky tower and an automatic
+ * retry, short enough that anything older is a replay from the offline queue
+ * rather than somebody standing there with the app open.
+ */
+const LIVE_PUNCH_WINDOW_MS = 15 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Row types + shapes (snake_case, mirroring the S1 employee/org conventions)
@@ -556,6 +567,63 @@ export async function registerAttendanceRoutes(
     await db.query("SELECT pg_advisory_xact_lock_shared(hashtextextended($1,0))",['payroll:'+user.orgId]);
     await enforceRecordScope(req,'attendance.punch');
 
+    /*
+     * Punching out closes the day, and for field work the day's return is
+     * part of closing it (§59, phase 2).
+     *
+     * The refusal is a prompt, not a rule. It only fires on a live punch --
+     * one the person is making right now, with the app in their hand, where
+     * being told "file the return first" is something they can act on.
+     *
+     * A punch that has already happened is never refused. The field has no
+     * signal for hours at a stretch, so punches are made into the offline
+     * queue and replayed later; the queue marks a rejected op FAILED and
+     * gives up on it. Refusing one of those would delete a punch that
+     * physically occurred and leave the person shown as still on site --
+     * corrupt attendance, which is far worse than a late return. So a
+     * replayed punch is accepted and the unfiled return is *recorded* as
+     * such, which puts it on the supervisor's list instead of losing it.
+     */
+    // "Other" with nothing written is the same as no reason at all, and the
+    // table refuses it. Say so as a validation failure rather than letting a
+    // constraint violation surface as a fault.
+    if (d.progress_deferred_reason === 'OTHER'
+        && !d.progress_deferred_remarks?.trim()) {
+      return sendError(reply, req.requestId, {
+        status: 422,
+        code: 'VALIDATION_ERROR',
+        message: 'Say what stopped the day\'s return being filed.',
+      });
+    }
+
+    if (d.event_type === 'CHECK_OUT' && d.survey_village_id && !d.progress_deferred_reason) {
+      const workDay = businessDay(new Date(d.client_timestamp));
+      const filed = await db.query(
+        `SELECT 1 FROM survey_entries
+         WHERE survey_village_id = $1::uuid AND entry_date = $2::date`,
+        [d.survey_village_id, workDay]);
+      if (!filed.rowCount) {
+        // Made while offline, or long enough ago that the app can no longer
+        // put the question to them. Either way it is history, not a prompt.
+        const ageMs = Date.now() - new Date(d.client_timestamp).getTime();
+        const alreadyHappened = d.queued_offline === true || ageMs > LIVE_PUNCH_WINDOW_MS;
+        if (!alreadyHappened) {
+          return sendError(reply, req.requestId, {
+            status: 422,
+            code: 'DAILY_PROGRESS_REQUIRED',
+            message:
+              `No progress has been recorded for this village on ${workDay}. `
+              + 'File the day\'s return before punching out, or say why it cannot be filed.',
+          });
+        }
+        // Recorded rather than silent: an unfiled return that nobody
+        // accounted for is still an unfiled return somebody must chase.
+        d.progress_deferred_reason = 'UNFILED_OFFLINE';
+        d.progress_deferred_remarks = d.progress_deferred_remarks
+          ?? 'Punched out without signal; the day\'s return was never filed.';
+      }
+    }
+
     // 1. Employee must exist in-org and be ACTIVE.
     const empRes = await db.query(
       `SELECT id, status, site_id, village_id, mandal_id, district_id FROM employees
@@ -669,8 +737,10 @@ export async function registerAttendanceRoutes(
         `INSERT INTO attendance_events
            (employee_id, event_type, client_timestamp, server_timestamp,
             lat, lng, gps_accuracy, geofence_result, geofence_id,
-            mock_location, device_id, app_version, idempotency_key, device_signals)
-         VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,'NO_FENCE',NULL,$8,$9,$10,$11,$12::jsonb)
+            mock_location, device_id, app_version, idempotency_key, device_signals,
+            survey_village_id, progress_deferred_reason, progress_deferred_remarks)
+         VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,'NO_FENCE',NULL,$8,$9,$10,$11,$12::jsonb,
+            $13::uuid,$14,$15)
          RETURNING ${EVENT_COLS}`,
         [
           emp.id,
@@ -685,6 +755,9 @@ export async function registerAttendanceRoutes(
           d.app_version ?? null,
           idemKey,
           storedSignals ? JSON.stringify(storedSignals) : null,
+          d.survey_village_id ?? null,
+          d.progress_deferred_reason ?? null,
+          d.progress_deferred_remarks ?? null,
         ],
       );
       void ins;
@@ -828,8 +901,10 @@ export async function registerAttendanceRoutes(
            (employee_id, event_type, client_timestamp, server_timestamp,
             lat, lng, gps_accuracy, geofence_result, geofence_id,
             mock_location, device_id, app_version, idempotency_key, device_signals,
-            geofence_version)
-         VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9::uuid,$10,$11,$12,$13,$14::jsonb,$15)
+            geofence_version, survey_village_id, progress_deferred_reason,
+            progress_deferred_remarks)
+         VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9::uuid,$10,$11,$12,$13,$14::jsonb,$15,
+            $16::uuid,$17,$18)
          RETURNING ${EVENT_COLS}`,
         [
           emp!.id,
@@ -847,6 +922,9 @@ export async function registerAttendanceRoutes(
           idemKey,
           storedSignals ? JSON.stringify(storedSignals) : null,
           fence?.version ?? null,
+          d.survey_village_id ?? null,
+          d.progress_deferred_reason ?? null,
+          d.progress_deferred_remarks ?? null,
         ],
       );
       return ins.rows[0] as EventRow;

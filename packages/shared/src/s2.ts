@@ -232,6 +232,38 @@ export const attendanceEventSchema = z
     // adding fields, and a strict shape would reject punches from a newer app.
     device_signals: deviceSignalsSchema.optional(),
     /**
+     * The village this punch is for (§59).
+     *
+     * Optional: an office day and a training day have no village, and every
+     * punch recorded before this existed has none either.
+     */
+    survey_village_id: z.string().uuid().optional(),
+    /**
+     * Why the day's return is not being filed at punch-out.
+     *
+     * The specification asks that punching out require the daily progress
+     * submission. Requiring it absolutely would strand a crew member with a
+     * dead battery: they could not punch out, attendance would show them
+     * still on site, and corrupt attendance is worse than a late return. So
+     * the punch is refused until they either file the return or say why they
+     * cannot, and the omission is recorded.
+     */
+    progress_deferred_reason: z.string().max(32).optional(),
+    progress_deferred_remarks: z.string().max(2000).optional(),
+    /**
+     * Set by the app when this punch was made into the offline queue and is
+     * being replayed now.
+     *
+     * A replayed punch is never refused for a missing return. The punch
+     * already happened in the physical world; the queue gives up on a
+     * rejected op, so refusing one would delete a real punch and leave the
+     * person shown as still on site. The unfiled return is recorded instead.
+     *
+     * Not a security boundary -- a client that lies about this only skips a
+     * prompt, and the unfiled return still appears on the supervisor's list.
+     */
+    queued_offline: z.boolean().optional(),
+    /**
      * Reason for writing attendance into a LOCKED payroll period (BR-05).
      *
      * Ignored unless the caller also holds payroll.lock. Present so an

@@ -47,13 +47,37 @@ export async function probeOnline(timeoutMs = 5000): Promise<boolean> {
   }
 }
 
+/**
+ * How long an op may sit in the outbox before its punch counts as history
+ * rather than something the person can still be asked about. Matches the
+ * server's live-punch window.
+ */
+const REPLAY_AFTER_MS = 60 * 1000;
+
 /** Map one outbox op onto its endpoint call. Throws on transport failure. */
 export const defaultExecutor: OpExecutor = async (op) => {
   const payload = JSON.parse(op.payload) as Record<string, unknown>;
   switch (op.entity) {
     case "attendance_event": {
+      /*
+       * Tell the server when this punch is a replay rather than a live one
+       * (§59, phase 2).
+       *
+       * A field punch-out with no progress return filed is refused, so the
+       * person is prompted to file it. That prompt only makes sense while
+       * they are standing there with the app open. Once the op has waited in
+       * the queue -- no signal, a failed attempt -- the punch has already
+       * happened, and a refusal here would mark the op FAILED and delete a
+       * punch that physically occurred. The server accepts a replay and
+       * records the unfiled return instead.
+       */
+      const waited = Date.now() - op.created_at > REPLAY_AFTER_MS;
+      const body = {
+        ...payload,
+        ...(op.retry_count > 0 || waited ? { queued_offline: true } : {}),
+      };
       const { result, status } = await postAttendanceEvent(
-        payload as unknown as Parameters<typeof postAttendanceEvent>[0],
+        body as unknown as Parameters<typeof postAttendanceEvent>[0],
         op.idempotency_key,
       );
       return { status, body: result };

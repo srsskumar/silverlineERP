@@ -728,6 +728,56 @@ export async function registerSurveyRoutes(
     };
   });
 
+  /**
+   * The villages this person is working, and whether today's return is in
+   * (§59, phase 2).
+   *
+   * This is what the punch screen needs and nothing else answers: a crew
+   * member has no project to pick from and no list to search, they have the
+   * one or two villages they were put on. Punching out asks them to file the
+   * day's return, so the app has to know which village that is and whether it
+   * is already filed -- before it sends a punch that would be refused.
+   *
+   * Guarded on survey.enter rather than survey.read: this is the working
+   * list of the person asking, not a report about anybody else.
+   */
+  app.get('/api/v1/survey/me/villages', { preHandler: guard('survey.enter') }, async req => {
+    const u = actor(req);
+    const workDate = today();
+    const rows = (await pool.query(
+      `SELECT DISTINCT ON (sv.id)
+              sv.id, sv.survey_project_id, sv.total_extent_ac,
+              ou.name AS village_name, ou.code AS village_code,
+              m.name AS mandal_name, d.name AS district_name,
+              p.name AS project_name,
+              s.code AS stage_code, s.label AS stage_label,
+              EXISTS (SELECT 1 FROM survey_entries se
+                      WHERE se.survey_village_id = sv.id
+                        AND se.entry_date = $3::date) AS filed_today
+       FROM survey_crew c
+       JOIN survey_villages sv ON sv.id = c.survey_village_id
+       JOIN survey_stages s ON s.id = c.stage_id
+       JOIN survey_projects p ON p.id = sv.survey_project_id
+       JOIN org_units ou ON ou.id = sv.village_id
+       LEFT JOIN org_units m ON m.id = ou.parent_id
+       LEFT JOIN org_units d ON d.id = COALESCE(
+         (SELECT parent_id FROM org_units WHERE id = m.parent_id), m.parent_id)
+       JOIN users usr ON usr.employee_id = c.employee_id
+       WHERE c.org_id = $1 AND usr.id = $2
+         AND c.released_on IS NULL
+         AND p.status = 'ACTIVE'
+       ORDER BY sv.id, s.display_order`, [u.orgId, u.id, workDate])).rows;
+    return {
+      data: rows.map(r => ({
+        ...r,
+        total_extent_ac: num(r.total_extent_ac),
+        filed_today: r.filed_today === true,
+      })),
+      // So the app can label the question it is about to ask.
+      work_date: workDate,
+    };
+  });
+
   app.post('/api/v1/survey/villages/:id/crew', { preHandler: guard('survey.manage') },
     async (req, reply) => {
       const u = actor(req), id = (req.params as { id: string }).id;
@@ -1456,6 +1506,74 @@ export async function registerSurveyRoutes(
             };
           }),
         },
+      };
+    });
+
+  /**
+   * Who was on site and did not file the day's return (§59, phase 2).
+   *
+   * Attendance already knows who turned up and which village for. Set against
+   * the returns actually filed, that difference is the supervisor's chase
+   * list, and nothing else produces it: a village with nobody on it is not
+   * behind, while a village with four people on it and no return is.
+   *
+   * A punch that carried a reason is listed with the reason rather than
+   * hidden. "No signal all day" is an answer, but a fortnight of it is a
+   * finding, and it can only be seen if the days are still on the list.
+   */
+  app.get('/api/v1/survey/projects/:id/unfiled',
+    { preHandler: guard('survey.read') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const { q } = page(req);
+      await projectOr404(pool, u.orgId, id, u);
+      const from = String(q.from ?? today());
+      const to = String(q.to ?? from);
+
+      const rows = (await pool.query(
+        `WITH punches AS (
+           SELECT ae.survey_village_id,
+                  (ae.client_timestamp AT TIME ZONE 'Asia/Kolkata')::date AS work_date,
+                  ae.employee_id,
+                  -- One person may punch more than once in a day; the reason
+                  -- given at the last punch-out is the one that stands.
+                  (array_agg(ae.progress_deferred_reason
+                             ORDER BY ae.server_timestamp DESC)
+                   FILTER (WHERE ae.progress_deferred_reason IS NOT NULL))[1] AS reason,
+                  (array_agg(ae.progress_deferred_remarks
+                             ORDER BY ae.server_timestamp DESC)
+                   FILTER (WHERE ae.progress_deferred_remarks IS NOT NULL))[1] AS remarks
+           FROM attendance_events ae
+           WHERE ae.survey_village_id IS NOT NULL
+             AND (ae.client_timestamp AT TIME ZONE 'Asia/Kolkata')::date
+                 BETWEEN $2::date AND $3::date
+           GROUP BY 1, 2, 3
+         )
+         SELECT p.work_date, p.survey_village_id, p.reason, p.remarks,
+                ou.name AS village_name, ou.code AS village_code,
+                m.name AS mandal_name,
+                COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''),
+                         e.emp_no) AS employee_name,
+                e.emp_no
+         FROM punches p
+         JOIN survey_villages sv ON sv.id = p.survey_village_id
+         JOIN org_units ou ON ou.id = sv.village_id
+         LEFT JOIN org_units m ON m.id = ou.parent_id
+         JOIN employees e ON e.id = p.employee_id
+         WHERE sv.survey_project_id = $1 AND sv.org_id = $4
+           AND NOT EXISTS (
+             SELECT 1 FROM survey_entries se
+             WHERE se.survey_village_id = p.survey_village_id
+               AND se.entry_date = p.work_date)
+         ORDER BY p.work_date DESC, village_name, employee_name`,
+        [id, from, to, u.orgId])).rows;
+
+      return {
+        data: rows.map(r => ({ ...r, work_date: iso(r.work_date) })),
+        from, to,
+        // Days accounted for are still outstanding; the distinction is what
+        // makes the list worth reading twice.
+        accounted: rows.filter(r => r.reason).length,
+        unexplained: rows.filter(r => !r.reason).length,
       };
     });
 

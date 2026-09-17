@@ -514,3 +514,319 @@ describe("project-scoped visibility", () => {
       [programmeId]);
   });
 });
+
+describe("punching in and out against a village", () => {
+  /**
+   * A punch, as the mobile app sends one.
+   *
+   * Without coordinates by default. This employee carries a geofence
+   * assignment, and a punch outside it is correctly queued for review rather
+   * than opening the day — which is the fence working, and not what these
+   * tests are about. One test below sends coordinates deliberately.
+   */
+  async function punch(
+    type: "CHECK_IN" | "CHECK_OUT", extra: Record<string, unknown> = {},
+  ) {
+    return post(w.directUser, "/api/v1/attendance/events", {
+      employee_id: w.directEmployee,
+      event_type: type,
+      client_timestamp: new Date().toISOString(),
+      ...extra,
+    });
+  }
+
+  /**
+   * Clear the day and open it again.
+   *
+   * A check-out against a day that is already closed is a no-op -- the route
+   * hands back the check-out that closed it. Several of these tests need a
+   * genuinely open day to say anything about the gate at all, and sharing one
+   * day between them made an earlier test's check-out answer a later one's.
+   */
+  async function freshDay(villageId?: string) {
+    await w.pool.query(
+      `DELETE FROM attendance_records WHERE employee_id = $1 AND work_date = $2::date`,
+      [w.directEmployee, workDate()]);
+    await w.pool.query(
+      `DELETE FROM attendance_events WHERE employee_id = $1
+         AND server_timestamp >= $2::date`, [w.directEmployee, workDate()]);
+    await punch("CHECK_IN", villageId ? { survey_village_id: villageId } : {});
+  }
+
+  it("records which village the punch was for", async () => {
+    // Attendance already captured the time, the position and the geofence.
+    // Which village the person turned up *for* was the missing piece.
+    const r = await punch("CHECK_IN", { survey_village_id: villageA });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+
+    const row = await w.pool.query(
+      `SELECT survey_village_id FROM attendance_events
+       WHERE employee_id = $1 AND event_type = 'CHECK_IN'
+       ORDER BY server_timestamp DESC LIMIT 1`, [w.directEmployee]);
+    expect(String(row.rows[0].survey_village_id)).toBe(villageA);
+  });
+
+  it("still captures the position, which it always did", async () => {
+    // A punch outside the fence is queued for review; either way the event
+    // is stored with its coordinates, and the village travels with it.
+    const r = await post(w.siteUser, "/api/v1/attendance/events", {
+      employee_id: w.siteEmployee,
+      event_type: "CHECK_IN",
+      client_timestamp: new Date().toISOString(),
+      latitude: 17.6868, longitude: 83.2185, gps_accuracy: 8,
+      survey_village_id: villageA,
+    });
+    expect([201, 202]).toContain(r.status);
+
+    const row = await w.pool.query(
+      `SELECT lat, lng, gps_accuracy, survey_village_id FROM attendance_events
+       WHERE employee_id = $1 ORDER BY server_timestamp DESC LIMIT 1`,
+      [w.siteEmployee]);
+    expect(Number(row.rows[0].lat)).toBeCloseTo(17.6868, 3);
+    expect(String(row.rows[0].survey_village_id)).toBe(villageA);
+  });
+
+  it("refuses to close the day while the return is unfiled", async () => {
+    // A village with nothing filed for today. villageA already has a return
+    // from the rover tests above, and the gate would correctly let that one
+    // through.
+    const unfiled = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_id: String((await w.pool.query(
+        `INSERT INTO org_units(org_id,type,code,name,parent_id)
+         SELECT $1,'village',$2,'Unfiled village',id FROM org_units
+         WHERE org_id=$1 AND type='mandal' LIMIT 1 RETURNING id`,
+        [w.orgId, uniq("V")])).rows[0].id),
+      total_extent_ac: 40,
+    });
+
+    await freshDay(unfiled.data.id);
+    const r = await punch("CHECK_OUT", { survey_village_id: unfiled.data.id });
+    expect(r.status).toBe(422);
+    expect(r.body.code).toBe("DAILY_PROGRESS_REQUIRED");
+    expect(r.body.message).toContain("before punching out");
+  });
+
+  it("lets them close the day by saying why they cannot file it", async () => {
+    // Requiring it absolutely would strand a crew member with a dead battery:
+    // they could not punch out at all, and corrupt attendance is worse than a
+    // late return.
+    const unfiled = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_id: String((await w.pool.query(
+        `INSERT INTO org_units(org_id,type,code,name,parent_id)
+         SELECT $1,'village',$2,'Deferred village',id FROM org_units
+         WHERE org_id=$1 AND type='mandal' LIMIT 1 RETURNING id`,
+        [w.orgId, uniq("V")])).rows[0].id),
+      total_extent_ac: 40,
+    });
+
+    await freshDay(unfiled.data.id);
+    const r = await punch("CHECK_OUT", {
+      survey_village_id: unfiled.data.id,
+      progress_deferred_reason: "DATA_TECHNICAL",
+      progress_deferred_remarks: "No signal at the site all day",
+    });
+    // 201 when the punch opens the day's record, 200 when it closes one that
+    // is already open. Which of the two is attendance's affair; what matters
+    // here is that the survey gate let it through.
+    expect([200, 201], JSON.stringify(r.body)).toContain(r.status);
+
+    const row = await w.pool.query(
+      `SELECT progress_deferred_reason FROM attendance_events
+       WHERE employee_id = $1 AND event_type = 'CHECK_OUT'
+         AND survey_village_id = $2`, [w.directEmployee, unfiled.data.id]);
+    // Recorded rather than silent.
+    expect(row.rows[0].progress_deferred_reason).toBe("DATA_TECHNICAL");
+  });
+
+  it("will not take \"other\" as a reason with nothing written", async () => {
+    // A reason nobody can read is the same as no reason. The table refuses it
+    // too; this says so as a validation failure rather than a fault.
+    await freshDay(villageA);
+    const r = await punch("CHECK_OUT", {
+      survey_village_id: villageA,
+      progress_deferred_reason: "OTHER",
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(422);
+    expect(r.body.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("never refuses a punch that already happened in the field", async () => {
+    // The crew works with no signal for hours. Punches go into the offline
+    // queue and replay later, and the queue gives up on a rejected op -- so
+    // refusing a replay would delete a punch that physically occurred and
+    // leave the person shown as still on site. Worse than a late return.
+    const unfiled = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_id: String((await w.pool.query(
+        `INSERT INTO org_units(org_id,type,code,name,parent_id)
+         SELECT $1,'village',$2,'Offline village',id FROM org_units
+         WHERE org_id=$1 AND type='mandal' LIMIT 1 RETURNING id`,
+        [w.orgId, uniq("V")])).rows[0].id),
+      total_extent_ac: 40,
+    });
+
+    await freshDay(unfiled.data.id);
+    const r = await punch("CHECK_OUT", {
+      survey_village_id: unfiled.data.id,
+      queued_offline: true,
+    });
+    expect([200, 201], JSON.stringify(r.body)).toContain(r.status);
+
+    // Accepted, but not silently: the unfiled return is on the record for
+    // somebody to chase.
+    const row = await w.pool.query(
+      `SELECT progress_deferred_reason, progress_deferred_remarks
+       FROM attendance_events
+       WHERE employee_id = $1 AND event_type = 'CHECK_OUT'
+         AND survey_village_id = $2`, [w.directEmployee, unfiled.data.id]);
+    expect(row.rowCount, "the punch was recorded").toBe(1);
+    expect(row.rows[0].progress_deferred_reason).toBe("UNFILED_OFFLINE");
+    expect(row.rows[0].progress_deferred_remarks).toBeTruthy();
+  });
+
+  it("treats a punch made hours ago as history, not as a prompt", async () => {
+    // Same reasoning without the client having to say so: a punch stamped
+    // long enough ago cannot be one somebody is standing there making.
+    const unfiled = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_id: String((await w.pool.query(
+        `INSERT INTO org_units(org_id,type,code,name,parent_id)
+         SELECT $1,'village',$2,'Stale village',id FROM org_units
+         WHERE org_id=$1 AND type='mandal' LIMIT 1 RETURNING id`,
+        [w.orgId, uniq("V")])).rows[0].id),
+      total_extent_ac: 40,
+    });
+
+    await freshDay(unfiled.data.id);
+    const r = await post(w.directUser, "/api/v1/attendance/events", {
+      employee_id: w.directEmployee,
+      event_type: "CHECK_OUT",
+      client_timestamp: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+      survey_village_id: unfiled.data.id,
+    });
+    expect(r.status, JSON.stringify(r.body)).not.toBe(422);
+  });
+
+  it("closes the day without argument once the return is filed", async () => {
+    // villageA has today's return from the rover tests above.
+    await freshDay(villageA);
+    const r = await punch("CHECK_OUT", { survey_village_id: villageA });
+    expect([200, 201]).toContain(r.status);
+  });
+
+  it("tells a crew member which villages are theirs and what is outstanding", async () => {
+    // The punch screen has no project picker and no search. It has the one or
+    // two villages this person was put on, and it has to know whether the
+    // day's return is already in before it sends a punch that would be
+    // refused.
+    await post(w.admin, `/api/v1/survey/villages/${villageA}/crew`, {
+      employee_id: w.directEmployee, stage_code: "GROUND_TRUTHING",
+    });
+
+    const r = await get(w.directUser, "/api/v1/survey/me/villages");
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const mine = r.body.data as Array<Record<string, unknown>>;
+    const a = mine.find(v => v.id === villageA);
+    expect(a, "the village they are crewed to").toBeTruthy();
+    expect(a!.village_name).toBeTruthy();
+    // villageA has today's return from the rover tests above.
+    expect(a!.filed_today).toBe(true);
+    expect(r.body.work_date).toBe(workDate());
+  });
+
+  it("does not hand a crew member somebody else's villages", async () => {
+    // Somebody else's village, in the same programme. Being on a programme
+    // is not being on every village in it.
+    const other = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_id: String((await w.pool.query(
+        `INSERT INTO org_units(org_id,type,code,name,parent_id)
+         SELECT $1,'village',$2,'Not theirs',id FROM org_units
+         WHERE org_id=$1 AND type='mandal' LIMIT 1 RETURNING id`,
+        [w.orgId, uniq("V")])).rows[0].id),
+      total_extent_ac: 40,
+    });
+
+    const r = await get(w.directUser, "/api/v1/survey/me/villages");
+    const ids = (r.body.data as Array<{ id: string }>).map(v => v.id);
+    expect(ids).not.toContain(other.data.id);
+  });
+
+  it("drops a village from the list once they are released from it", async () => {
+    // The list is what they are working now, not what they have ever worked.
+    const crew = await get(w.admin, `/api/v1/survey/villages/${villageA}/crew`);
+    const row = (crew.body.data as Array<{ id: string; employee_id: string }>)
+      .find(c => c.employee_id === w.directEmployee);
+    expect(row, "the crew row assigned above").toBeTruthy();
+    await post(w.admin, `/api/v1/survey/crew/${row!.id}/release`, {});
+
+    const r = await get(w.directUser, "/api/v1/survey/me/villages");
+    const ids = (r.body.data as Array<{ id: string }>).map(v => v.id);
+    expect(ids).not.toContain(villageA);
+  });
+
+  it("lists who was on site and did not file the day's return", async () => {
+    // Attendance knows who turned up. Set against the returns actually filed,
+    // the difference is the supervisor's chase list, and nothing else
+    // produces it.
+    const chased = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_id: String((await w.pool.query(
+        `INSERT INTO org_units(org_id,type,code,name,parent_id)
+         SELECT $1,'village',$2,'Chased village',id FROM org_units
+         WHERE org_id=$1 AND type='mandal' LIMIT 1 RETURNING id`,
+        [w.orgId, uniq("V")])).rows[0].id),
+      total_extent_ac: 40,
+    });
+    await freshDay(chased.data.id);
+
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/unfiled`);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const row = (r.body.data as Array<Record<string, unknown>>)
+      .find(x => x.survey_village_id === chased.data.id);
+    expect(row, "the village they punched into with nothing filed").toBeTruthy();
+    expect(row!.employee_name).toBeTruthy();
+    // Nobody accounted for it, which is the case worth chasing first.
+    expect(row!.reason).toBeNull();
+    expect(r.body.unexplained).toBeGreaterThan(0);
+  });
+
+  it("keeps an accounted-for day on the list, with its reason", async () => {
+    // "No signal all day" is an answer. A fortnight of it is a finding, and
+    // it can only be seen if those days are still on the list.
+    const excused = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_id: String((await w.pool.query(
+        `INSERT INTO org_units(org_id,type,code,name,parent_id)
+         SELECT $1,'village',$2,'Excused village',id FROM org_units
+         WHERE org_id=$1 AND type='mandal' LIMIT 1 RETURNING id`,
+        [w.orgId, uniq("V")])).rows[0].id),
+      total_extent_ac: 40,
+    });
+    await freshDay(excused.data.id);
+    await punch("CHECK_OUT", {
+      survey_village_id: excused.data.id,
+      progress_deferred_reason: "DATA_TECHNICAL",
+    });
+
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/unfiled`);
+    const row = (r.body.data as Array<Record<string, unknown>>)
+      .find(x => x.survey_village_id === excused.data.id);
+    expect(row, "still listed, not hidden").toBeTruthy();
+    expect(row!.reason).toBe("DATA_TECHNICAL");
+    expect(r.body.accounted).toBeGreaterThan(0);
+  });
+
+  it("drops a village off the chase list once its return is filed", async () => {
+    // villageA has today's return, and people punched into it above.
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/unfiled`);
+    const ids = (r.body.data as Array<{ survey_village_id: string }>)
+      .map(x => x.survey_village_id);
+    expect(ids).not.toContain(villageA);
+  });
+
+  it("leaves an office day alone, which has no village", async () => {
+    // Not every punch is field work, and one with no village has no return
+    // to demand.
+    const r = await punch("CHECK_OUT");
+    expect([200, 201, 409, 422]).toContain(r.status);
+    // Whatever attendance decides about a second check-out, it is not the
+    // survey module refusing it.
+    if (r.status === 422) expect(r.body.code).not.toBe("DAILY_PROGRESS_REQUIRED");
+  });
+});
