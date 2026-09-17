@@ -308,12 +308,53 @@ function VillageImport({ projectId }: { projectId: string }) {
     try { return readVillageCsv(text); } catch { return []; }
   }, [text]);
 
+  const [progress, setProgress] = React.useState<{ done: number; total: number } | null>(null);
+
   const run = useMutation({
-    mutationFn: async (dryRun: boolean) =>
-      apiRequest(`/api/v1/survey/projects/${projectId}/villages/import`, {
-        method: 'POST',
-        body: { rows, dry_run: dryRun },
-      }),
+    /*
+     * Sent in batches, not in one request.
+     *
+     * A 1,400-row list timed out. One request carrying every row has to
+     * validate and write all of them before it can answer, and each village
+     * may first have to create a district and a mandal — so the gateway
+     * gives up long before the work finishes. Batches finish well inside
+     * any timeout, and the counts are added together.
+     */
+    mutationFn: async (dryRun: boolean) => {
+      const BATCH = 200;
+      const batches: typeof rows[] = [];
+      for (let i = 0; i < rows.length; i += BATCH) batches.push(rows.slice(i, i + BATCH));
+
+      const total = {
+        dry_run: dryRun, rows: 0, imported: 0, validated: 0,
+        already_listed: 0, rejected: 0,
+        geography_created: { districts: 0, divisions: 0, mandals: 0, villages: 0 },
+        results: [] as Array<Record<string, unknown>>,
+      };
+
+      for (const [n, batch] of batches.entries()) {
+        setProgress({ done: n * BATCH, total: rows.length });
+        const res: any = await apiRequest(
+          `/api/v1/survey/projects/${projectId}/villages/import`,
+          { method: 'POST', body: { rows: batch, dry_run: dryRun } });
+        const d = res?.data ?? {};
+        total.rows += Number(d.rows ?? 0);
+        total.imported += Number(d.imported ?? 0);
+        total.validated += Number(d.validated ?? 0);
+        total.already_listed += Number(d.already_listed ?? 0);
+        total.rejected += Number(d.rejected ?? 0);
+        for (const k of ['districts', 'divisions', 'mandals', 'villages'] as const) {
+          total.geography_created[k] += Number(d.geography_created?.[k] ?? 0);
+        }
+        // Row numbers are per batch; shift them back to the row the person is
+        // looking at in their spreadsheet.
+        for (const r of (d.results ?? [])) {
+          total.results.push({ ...r, row: Number(r.row ?? 0) + n * BATCH });
+        }
+      }
+      setProgress(null);
+      return { data: total };
+    },
     onSuccess: (res: any) => {
       setPreview(res?.data ?? null);
       if (!res?.data?.dry_run) {
@@ -368,6 +409,12 @@ function VillageImport({ projectId }: { projectId: string }) {
                   Missing {missingColumns(rows).join(', ')} — check the header row.
                 </span>
               )}
+          </p>
+        ) : null}
+
+        {progress ? (
+          <p className="text-2xs text-text-subtle">
+            Sending row {progress.done + 1}–{Math.min(progress.done + 200, progress.total)} of {progress.total}…
           </p>
         ) : null}
 

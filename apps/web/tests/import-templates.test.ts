@@ -67,3 +67,48 @@ describe('import templates', () => {
     expect(new Set(names).size).toBe(names.length);
   });
 });
+
+describe('templates that must match the form beside them', () => {
+  /*
+   * The asset template said `code` where the register form says Asset code,
+   * and offered no vendor at all — so somebody filling in the sheet worked
+   * from a different vocabulary than the screen and had to guess which was
+   * right. These pin the two together.
+   */
+  const assets = IMPORT_TEMPLATES.find((t) => t.key === 'assets')!;
+
+  it('uses the register form\'s field names', () => {
+    for (const field of [
+      'asset_code', 'name', 'category', 'asset_type',
+      'serial_number', 'make', 'model', 'condition', 'condition_note', 'vendor',
+    ]) {
+      expect(assets.headers, field).toContain(field);
+    }
+  });
+
+  it('does not offer a column the register has no field for', () => {
+    // It used to offer purchase_cost and warranty_until, which exist nowhere.
+    for (const gone of ['purchase_cost', 'warranty_until', 'purchase_date', 'status', 'notes']) {
+      expect(assets.headers, gone).not.toContain(gone);
+    }
+  });
+
+  it('offers the same condition words the form does', () => {
+    expect(assets.options?.condition).toEqual([
+      'BRAND_NEW', 'EXCELLENT', 'GOOD', 'REPAIR', 'UNUSABLE', 'OTHER',
+    ]);
+  });
+
+  it('has an example row for every column', () => {
+    // A short example row silently shifts every value left of the gap.
+    for (const t of IMPORT_TEMPLATES) {
+      expect(t.example.length, t.key).toBe(t.headers.length);
+    }
+  });
+
+  it('marks every required column as one of its columns', () => {
+    for (const t of IMPORT_TEMPLATES) {
+      for (const r of t.required) expect(t.headers, `${t.key}/${r}`).toContain(r);
+    }
+  });
+});

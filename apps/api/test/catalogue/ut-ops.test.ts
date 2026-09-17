@@ -1025,6 +1025,36 @@ describe("importing assets", () => {
     expect(r.body.created + r.body.rejected).toBe(1);
   });
 
+  it("takes asset_code, which is what the register form calls it", async () => {
+    const code = `AC${uniq().toUpperCase().slice(-8)}`;
+    const r = await imp([{ asset_code: code, name: "Named right", category: "ELECTRONIC" }], false);
+    expect(r.body.created, JSON.stringify(r.body)).toBe(1);
+  });
+
+  it("still takes the old column name, so filled-in sheets are not stranded", async () => {
+    // The template said `code` before it said `asset_code`. Sheets built from
+    // it are out there, and refusing them would throw away work somebody has
+    // already done.
+    const code = `OC${uniq().toUpperCase().slice(-8)}`;
+    const r = await imp([{ code, name: "Old column", category: "ELECTRONIC" }], false);
+    expect(r.body.created).toBe(1);
+  });
+
+  it("refuses a row with neither spelling of the code", async () => {
+    const r = await imp([{ name: "No code at all", category: "ELECTRONIC" }]);
+    expect(r.body.rejected).toBe(1);
+  });
+
+  it("reports a vendor that matches nothing rather than dropping it", async () => {
+    // A silently missing vendor is a purchase trail that ends nowhere.
+    const r = await imp([{
+      asset_code: `VN${uniq().toUpperCase().slice(-8)}`, name: "Bought somewhere",
+      category: "ELECTRONIC", vendor: "No Such Supplier Ltd",
+    }]);
+    expect(r.body.rejected).toBe(1);
+    expect(r.body.results[0].message).toContain("No vendor named");
+  });
+
   it("rejects a row naming a category nobody has, and keeps the rest", async () => {
     // One bad row must not cost the other 199.
     const good = `OK${uniq().toUpperCase().slice(-8)}`;

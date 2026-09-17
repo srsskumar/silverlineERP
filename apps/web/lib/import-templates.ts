@@ -148,11 +148,19 @@ export const IMPORT_TEMPLATES: ImportTemplate[] = [
      * in got a file the system could not take — which is worse than no
      * template, because it looks like the system's fault.
      */
+    /*
+     * The same field names the register form uses.
+     *
+     * The template said `code` where the form says asset code, and offered
+     * no vendor at all — so somebody filling in the sheet was working from a
+     * different vocabulary than the screen beside it, and had to guess which
+     * of the two was right.
+     */
     headers: [
-      'code', 'name', 'category', 'asset_type', 'serial_number',
-      'make', 'model', 'condition', 'condition_note',
+      'asset_code', 'name', 'category', 'asset_type', 'serial_number',
+      'make', 'model', 'condition', 'condition_note', 'vendor',
     ],
-    required: ['code', 'name', 'category'],
+    required: ['asset_code', 'name', 'category'],
     options: {
       category: ['ELECTRONIC', 'ELECTRICAL', 'ACCESSORY'],
       asset_type: [
@@ -164,14 +172,15 @@ export const IMPORT_TEMPLATES: ImportTemplate[] = [
     },
     example: [
       'AST-RV-014', 'Rover 14', 'ELECTRONIC', 'ROVER', 'TS2024X0914',
-      'Trimble', 'R12i', 'GOOD', '',
+      'Trimble', 'R12i', 'GOOD', '', 'Geosurvey Instruments Pvt Ltd',
     ],
     notes: [
-      'code is how the asset is referred to everywhere else, and must be unique.',
+      'asset_code is how the asset is referred to everywhere else, and must be unique. It is the same field the register form calls Asset code.',
       'category and asset_type must already exist — add new ones under Assets first.',
       'serial_number identifies the physical unit: an upload matches on it, so a second row with the same serial updates that unit rather than creating another.',
       'Accessories are the exception — they match on code, because a box of screws has no serial worth trusting.',
       'condition_note is required when condition is OTHER.',
+      'vendor is matched by name against the vendor list. A name that matches nothing is reported on the row rather than silently dropped.',
     ],
   },
   {

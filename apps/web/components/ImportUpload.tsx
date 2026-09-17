@@ -32,15 +32,64 @@ export interface UploadTarget {
 
 type Row = Record<string, unknown>;
 
+/**
+ * Rows per request.
+ *
+ * Small enough that a batch finishes well inside any gateway timeout even
+ * when its rows are the slow kind — a village row may have to create a
+ * district and a mandal before it can create the village.
+ */
+const BATCH = 200;
+
+/**
+ * What an importer reports back.
+ *
+ * The shapes differ by endpoint and always did: the asset and stock
+ * importers answer with counts and `results`, while the employee importer
+ * answers with `validated`/`imported`/`failed` and a `rows` **array**. The
+ * summary line read `rows` as a number regardless, so an employee upload
+ * printed "[object Object] rows, nothing to change" — the array stringified.
+ */
 interface ImportOutcome {
   dry_run?: boolean;
-  rows?: number;
+  /** Assets and stock: a count. Employees: an array of per-row results. */
+  rows?: number | unknown[];
   created?: number;
   updated?: number;
   allocated?: number;
   already_allocated?: number;
   rejected?: number;
+  /** The employee importer's vocabulary. */
+  validated?: number;
+  imported?: number;
+  failed?: number;
   results?: Array<{ row: number; key?: string; status: string; message?: string }>;
+  errors?: Array<{ index: number; errors?: Array<{ field?: string; message: string }> }>;
+}
+
+/** How many rows a response accounts for, whichever shape it used. */
+function rowCount(o: ImportOutcome): number {
+  if (Array.isArray(o.rows)) return o.rows.length;
+  if (typeof o.rows === 'number') return o.rows;
+  return (o.validated ?? 0) + (o.imported ?? 0) + (o.failed ?? 0);
+}
+
+/** Rejections, in whichever vocabulary the endpoint used. */
+function problemsOf(o: ImportOutcome | null): Array<{
+  row: number; key?: string; status: string; message?: string;
+}> {
+  if (!o) return [];
+  const fromResults = (o.results ?? []).filter(
+    (r) => r.status === 'REJECTED' || r.status === 'ALREADY_ALLOCATED');
+  if (fromResults.length > 0) return fromResults;
+  // The employee importer reports failures separately, by row index.
+  return (o.errors ?? []).map((e) => ({
+    row: (e.index ?? 0) + 1,
+    status: 'REJECTED',
+    message: (e.errors ?? [])
+      .map((x) => (x.field ? `${x.field}: ${x.message}` : x.message))
+      .join('; '),
+  }));
 }
 
 export function ImportUpload({ target }: { target: UploadTarget }) {
@@ -49,6 +98,7 @@ export function ImportUpload({ target }: { target: UploadTarget }) {
   const [outcome, setOutcome] = React.useState<ImportOutcome | null>(null);
   const [error, setError] = React.useState<unknown>();
   const [busy, setBusy] = React.useState(false);
+  const [progress, setProgress] = React.useState<{ done: number; total: number } | null>(null);
 
   const read = async (file: File) => {
     setError(undefined);
@@ -80,25 +130,62 @@ export function ImportUpload({ target }: { target: UploadTarget }) {
     }
   };
 
+  /*
+   * Sent in batches, not in one request.
+   *
+   * A 1,400-row village list timed out: one request carrying every row has
+   * to validate and write all of them before it can answer, and the gateway
+   * gives up first. The file is cut into batches, each a request that
+   * finishes well inside any timeout, and the results are added together.
+   *
+   * The batch is deliberately small enough that a slow row — one that has to
+   * create a district and a mandal before it can create the village — cannot
+   * push the request over on its own.
+   */
   const send = async (dryRun: boolean) => {
     if (!rows) return;
     setBusy(true);
     setError(undefined);
+    setOutcome(null);
     try {
-      const res = await apiRequestRaw(target.path, {
-        method: 'POST',
-        body: { rows, dry_run: dryRun },
-      });
-      setOutcome((res.body as ImportOutcome) ?? null);
+      const batches: Row[][] = [];
+      for (let i = 0; i < rows.length; i += BATCH) batches.push(rows.slice(i, i + BATCH));
+
+      const merged: ImportOutcome = { dry_run: dryRun, rows: 0 };
+      const results: NonNullable<ImportOutcome['results']> = [];
+      const errors: NonNullable<ImportOutcome['errors']> = [];
+
+      for (const [n, batch] of batches.entries()) {
+        setProgress({ done: n * BATCH, total: rows.length });
+        const res = await apiRequestRaw(target.path, {
+          method: 'POST',
+          body: { rows: batch, dry_run: dryRun },
+        });
+        const part = (res.body as ImportOutcome) ?? {};
+        for (const key of ['created', 'updated', 'allocated', 'already_allocated',
+          'rejected', 'validated', 'imported', 'failed'] as const) {
+          if (typeof part[key] === 'number') {
+            merged[key] = (merged[key] ?? 0) + (part[key] as number);
+          }
+        }
+        merged.rows = (merged.rows as number) + rowCount(part);
+        // Row numbers are per batch, so they are shifted back to the row the
+        // person is looking at in their spreadsheet.
+        for (const r of part.results ?? []) results.push({ ...r, row: r.row + n * BATCH });
+        for (const e of part.errors ?? []) errors.push({ ...e, index: (e.index ?? 0) + n * BATCH });
+      }
+
+      setProgress(null);
+      setOutcome({ ...merged, results, errors });
     } catch (e) {
       setError(e);
+      setProgress(null);
     } finally {
       setBusy(false);
     }
   };
 
-  const problems = (outcome?.results ?? []).filter(
-    (r) => r.status === 'REJECTED' || r.status === 'ALREADY_ALLOCATED');
+  const problems = problemsOf(outcome);
 
   return (
     <div className="mt-3 rounded-md border border-border bg-surface p-3">
@@ -146,6 +233,13 @@ export function ImportUpload({ target }: { target: UploadTarget }) {
         </p>
       ) : null}
 
+      {progress ? (
+        <p className="mt-2 text-2xs text-text-subtle">
+          Sending row {progress.done + 1}–
+          {Math.min(progress.done + BATCH, progress.total)} of {progress.total}…
+        </p>
+      ) : null}
+
       {error ? <div className="mt-2"><ErrorCard error={error} /></div> : null}
 
       {outcome ? (
@@ -177,12 +271,18 @@ export function ImportUpload({ target }: { target: UploadTarget }) {
 
 /** What the file did, or would do, in one line. */
 function summarise(o: ImportOutcome): string {
+  const total = rowCount(o);
   const parts: string[] = [];
   if (o.created) parts.push(`${o.created} new`);
   if (o.updated) parts.push(`${o.updated} updated`);
   if (o.allocated) parts.push(`${o.allocated} allocated`);
   if (o.already_allocated) parts.push(`${o.already_allocated} already out with somebody`);
-  if (o.rejected) parts.push(`${o.rejected} rejected`);
-  if (parts.length === 0) return `${o.rows ?? 0} rows, nothing to change.`;
-  return `${parts.join(', ')} of ${o.rows ?? 0} rows.`;
+  // The employee importer counts differently: validated on a check, imported
+  // on the real run.
+  if (o.validated) parts.push(`${o.validated} ready to add`);
+  if (o.imported) parts.push(`${o.imported} added`);
+  const rejected = o.rejected ?? o.failed ?? 0;
+  if (rejected) parts.push(`${rejected} rejected`);
+  if (parts.length === 0) return `${total} row${total === 1 ? '' : 's'}, nothing to change.`;
+  return `${parts.join(', ')} of ${total} row${total === 1 ? '' : 's'}.`;
 }

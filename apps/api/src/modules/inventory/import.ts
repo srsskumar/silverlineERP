@@ -19,7 +19,14 @@ import { canMatchOnSerial } from '@silverline/shared';
  */
 
 const assetRow = z.object({
-  code: z.string().trim().min(1).max(64),
+  /*
+   * `asset_code` is what the register form calls it and what the template
+   * now says. `code` is still accepted because sheets filled in from the
+   * earlier template are out there, and refusing them would strand work
+   * somebody has already done.
+   */
+  asset_code: z.string().trim().min(1).max(64).optional(),
+  code: z.string().trim().min(1).max(64).optional(),
   name: z.string().trim().min(1).max(255),
   category: z.string().trim().min(1).max(64),
   asset_type: z.string().trim().max(64).optional().or(z.literal('')),
@@ -28,6 +35,9 @@ const assetRow = z.object({
   model: z.string().trim().max(160).optional().or(z.literal('')),
   condition: z.string().trim().max(24).optional().or(z.literal('')),
   condition_note: z.string().trim().max(2000).optional().or(z.literal('')),
+  vendor: z.string().trim().max(255).optional().or(z.literal('')),
+}).refine(v => v.asset_code || v.code, {
+  message: 'asset_code is required', path: ['asset_code'],
 });
 
 const allocationRow = z.object({
@@ -118,38 +128,54 @@ export async function registerInventoryImport(
             throw new RowError('A condition of "other" must say what condition it is in');
           }
 
+          const assetCode = (v.asset_code || v.code) as string;
+
+          // Matched by name, and reported rather than dropped when it
+          // matches nothing: a silently missing vendor is a purchase trail
+          // that ends nowhere.
+          let vendorId: string | null = null;
+          if (v.vendor) {
+            const vendor = (await db.query(
+              'SELECT id FROM vendors WHERE org_id = $1 AND lower(name) = lower($2)',
+              [u.orgId, v.vendor])).rows[0];
+            if (!vendor) throw new RowError(`No vendor named "${v.vendor}"`);
+            vendorId = String(vendor.id);
+          }
+
           const serial = v.serial_number || null;
           const matchable = canMatchOnSerial(category, serial);
           const existing = (await db.query(
             matchable
               ? 'SELECT id FROM assets WHERE org_id = $1 AND serial_number = $2'
               : 'SELECT id FROM assets WHERE org_id = $1 AND asset_code = $2',
-            [u.orgId, matchable ? serial : v.code])).rows[0];
+            [u.orgId, matchable ? serial : assetCode])).rows[0];
 
           if (existing) {
             await db.query(
               `UPDATE assets SET name=$2, category=$3, asset_type_id=$4, make=$5, model=$6,
                  condition=$7, condition_note=$8, serial_number=COALESCE($9, serial_number),
+                 vendor_id=COALESCE($10, vendor_id),
                  version=version+1, updated_at=now()
                WHERE id=$1`,
               [existing.id, v.name, category, typeId, v.make || null, v.model || null,
-                condition, v.condition_note || null, serial]);
+                condition, v.condition_note || null, serial, vendorId]);
             updated += 1;
             results.push({
-              row: rowNo, key: v.code,
+              row: rowNo, key: assetCode,
               status: input.dry_run ? 'WOULD_UPDATE' : 'UPDATED',
               message: matchable ? `Matched on serial ${serial}` : 'Matched on asset code',
             });
           } else {
             await db.query(
               `INSERT INTO assets(org_id, asset_code, name, category, asset_type_id,
-                 serial_number, make, model, condition, condition_note, created_by)
-               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-              [u.orgId, v.code, v.name, category, typeId, serial,
-                v.make || null, v.model || null, condition, v.condition_note || null, u.id]);
+                 serial_number, make, model, condition, condition_note, vendor_id, created_by)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+              [u.orgId, assetCode, v.name, category, typeId, serial,
+                v.make || null, v.model || null, condition, v.condition_note || null,
+                vendorId, u.id]);
             created += 1;
             results.push({
-              row: rowNo, key: v.code,
+              row: rowNo, key: assetCode,
               status: input.dry_run ? 'WOULD_CREATE' : 'CREATED',
             });
           }
@@ -162,7 +188,7 @@ export async function registerInventoryImport(
           if (code && !['23505', '23503', '23514'].includes(code)) throw error;
           if (!code && !(error instanceof RowError)) throw error;
           results.push({
-            row: rowNo, key: v.code, status: 'REJECTED',
+            row: rowNo, key: v.asset_code ?? v.code, status: 'REJECTED',
             message: code === '23505'
               ? 'That asset code or serial number is already used by a different asset'
               : code ? 'The row violates a data constraint' : (error as Error).message,
