@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { Download } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
+import { ImportUpload, type UploadTarget } from '@/components/ImportUpload';
 import {
   IMPORT_TEMPLATES, downloadTemplate, downloadTemplateWorkbook, templateSheet,
   type ImportTemplate,
@@ -66,9 +67,38 @@ export function TemplatePanel({ template }: { template: ImportTemplate }) {
           {template.notes.map((n) => <li key={n}>{n}</li>)}
         </ul>
       </div>
+
+      {/* The format and the place to submit it, together. This page used to
+          say "upload it from the matching screen" and for most of these no
+          such screen existed. */}
+      {UPLOAD_TARGETS[template.key] ? (
+        <ImportUpload target={UPLOAD_TARGETS[template.key]!} />
+      ) : (
+        <p className="mt-3 text-2xs text-text-subtle">
+          {ELSEWHERE[template.key] ?? 'Upload this from its own screen.'}
+        </p>
+      )}
     </section>
   );
 }
+
+/**
+ * Where each filled-in template is submitted.
+ *
+ * Employees and villages keep their own importers -- they have preview
+ * screens of their own with more to say about a row than a table of
+ * rejections can carry -- so those point at the screen instead.
+ */
+const UPLOAD_TARGETS: Record<string, UploadTarget | undefined> = {
+  assets: { path: '/api/v1/assets/import', verb: 'Add to the register' },
+  'asset-allocation': { path: '/api/v1/assets/allocations/import', verb: 'Record allocations' },
+  inventory: { path: '/api/v1/inventory/items/import', verb: 'Add to stock' },
+};
+
+const ELSEWHERE: Record<string, string> = {
+  employees: 'Upload this under Employees \u2192 Import employees, which previews each row against the register first.',
+  'survey-villages': 'Upload this under Land survey \u2192 Setup, against the programme the villages belong to.',
+};
 
 /** Every template in one place, for an admin or settings screen. */
 export function AllImportTemplates() {

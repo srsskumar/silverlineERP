@@ -947,3 +947,227 @@ describe("the asset register", () => {
     expect(history[0]).toHaveProperty("returned_to_name");
   });
 });
+
+/**
+ * Loading assets and stock from a file (enhancement note 3).
+ *
+ * Both had a download template and nowhere to submit it. A format nobody can
+ * upload is a format nobody uses.
+ */
+describe("importing assets", () => {
+  const H = () => ({ ...w.role.INVENTORY_MANAGER, ...idem() });
+
+  async function imp(rows: unknown[], dry_run = true) {
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/assets/import", headers: H(),
+      payload: { rows, dry_run },
+    });
+    return { status: r.statusCode, body: r.json() };
+  }
+
+  it("previews without writing anything, unless asked", async () => {
+    // An import that silently writes two hundred rows on a mis-typed column
+    // is one nobody runs twice.
+    const code = `IM${uniq().toUpperCase().slice(-8)}`;
+    const preview = await imp([{ code, name: "Rover", category: "ELECTRONIC" }]);
+    expect(preview.status, JSON.stringify(preview.body)).toBe(200);
+    expect(preview.body.dry_run).toBe(true);
+    expect(preview.body.results[0].status).toBe("WOULD_CREATE");
+
+    const found = await w.pool.query(
+      "SELECT 1 FROM assets WHERE asset_code = $1", [code]);
+    expect(found.rowCount, "nothing was written").toBe(0);
+  });
+
+  it("writes when the caller asks for it", async () => {
+    const code = `IM${uniq().toUpperCase().slice(-8)}`;
+    const done = await imp(
+      [{ code, name: "Rover 2", category: "ELECTRONIC", make: "Trimble", model: "R12" }], false);
+    expect(done.body.created).toBe(1);
+    const row = await w.pool.query(
+      "SELECT name, make, model FROM assets WHERE asset_code = $1", [code]);
+    expect(row.rows[0]).toMatchObject({ name: "Rover 2", make: "Trimble", model: "R12" });
+  });
+
+  it("recognises the same physical unit by its serial and updates it", async () => {
+    // Re-uploading a corrected sheet is the normal way this gets used;
+    // refusing the file because forty rows already exist helps nobody.
+    const serial = `SN${uniq().toUpperCase().slice(-8)}`;
+    await imp([{
+      code: `A1${uniq().toUpperCase().slice(-6)}`, name: "Before",
+      category: "ELECTRONIC", serial_number: serial,
+    }], false);
+    const again = await imp([{
+      code: `A2${uniq().toUpperCase().slice(-6)}`, name: "After",
+      category: "ELECTRONIC", serial_number: serial,
+    }], false);
+    expect(again.body.updated).toBe(1);
+    expect(again.body.created).toBe(0);
+
+    const rows = await w.pool.query(
+      "SELECT name FROM assets WHERE serial_number = $1", [serial]);
+    expect(rows.rowCount, "one unit, not two").toBe(1);
+    expect(rows.rows[0].name).toBe("After");
+  });
+
+  it("will not merge two accessories that share a serial", async () => {
+    /*
+     * The note's own exception, and the whole rule. A box of tripod screws
+     * has no serial worth trusting, so two rows are two boxes — merging them
+     * would silently destroy real stock.
+     */
+    const serial = "NOT-A-REAL-SERIAL";
+    const first = `AC${uniq().toUpperCase().slice(-8)}`;
+    const second = `AC${uniq().toUpperCase().slice(-8)}`;
+    await imp([{ code: first, name: "Screws", category: "ACCESSORY", serial_number: serial }], false);
+    const r = await imp([{ code: second, name: "More screws", category: "ACCESSORY", serial_number: serial }], false);
+    // Two separate items — the serial is not the identity here.
+    expect(r.body.created + r.body.rejected).toBe(1);
+  });
+
+  it("rejects a row naming a category nobody has, and keeps the rest", async () => {
+    // One bad row must not cost the other 199.
+    const good = `OK${uniq().toUpperCase().slice(-8)}`;
+    const r = await imp([
+      { code: `BAD${uniq().toUpperCase().slice(-6)}`, name: "Nope", category: "NOT_A_CATEGORY" },
+      { code: good, name: "Fine", category: "ELECTRONIC" },
+    ], false);
+    expect(r.body.rejected).toBe(1);
+    expect(r.body.created).toBe(1);
+    expect(r.body.results[0].message).toContain("no active asset category");
+    expect((await w.pool.query("SELECT 1 FROM assets WHERE asset_code=$1", [good])).rowCount).toBe(1);
+  });
+
+  it("insists on a note when a row says the condition is 'other'", async () => {
+    const r = await imp([{
+      code: `OT${uniq().toUpperCase().slice(-8)}`, name: "Odd",
+      category: "ELECTRONIC", condition: "OTHER",
+    }]);
+    expect(r.body.rejected).toBe(1);
+  });
+
+  it("is refused to somebody who may not manage assets", async () => {
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/assets/import",
+      headers: { ...w.role.EMPLOYEE, ...idem() },
+      payload: { rows: [{ code: "X", name: "Y", category: "ELECTRONIC" }] },
+    });
+    expect([401, 403]).toContain(r.statusCode);
+  });
+});
+
+describe("importing stock items", () => {
+  it("creates and then updates on the item code", async () => {
+    const code = `IT${uniq().toUpperCase().slice(-8)}`;
+    const H = { ...w.role.INVENTORY_MANAGER, ...idem() };
+    const first = await w.app.inject({
+      method: "POST", url: "/api/v1/inventory/items/import", headers: H,
+      payload: { rows: [{ code, name: "Cement", unit: "BAG" }], dry_run: false },
+    });
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.json().created).toBe(1);
+
+    const again = await w.app.inject({
+      method: "POST", url: "/api/v1/inventory/items/import",
+      headers: { ...w.role.INVENTORY_MANAGER, ...idem() },
+      payload: { rows: [{ code, name: "Cement OPC 53", unit: "BAG" }], dry_run: false },
+    });
+    expect(again.json().updated).toBe(1);
+    const row = await w.pool.query("SELECT name FROM inventory_items WHERE code=$1", [code]);
+    expect(row.rows[0].name).toBe("Cement OPC 53");
+  });
+});
+
+describe("importing who holds what", () => {
+  const H = () => ({ ...w.role.INVENTORY_MANAGER, ...idem() });
+
+  async function allocate(rows: unknown[], dry_run = false) {
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/assets/allocations/import", headers: H(),
+      payload: { rows, dry_run },
+    });
+    return { status: r.statusCode, body: r.json() };
+  }
+
+  async function freeAsset(): Promise<string> {
+    const code = `AL${uniq().toUpperCase().slice(-8)}`;
+    await post(w.app, w.role.INVENTORY_MANAGER, "/api/v1/assets", {
+      asset_code: code, name: "Allocatable", category: "ELECTRONIC", condition: "GOOD",
+    });
+    return code;
+  }
+
+  async function activeEmpNo(): Promise<string> {
+    const id = await createActiveEmployee(w.app, w.admin, { district_id: w.chainA.district });
+    return String((await w.pool.query("SELECT emp_no FROM employees WHERE id=$1", [id])).rows[0].emp_no);
+  }
+
+  it("puts fifty rovers in fifty hands without fifty forms", async () => {
+    const code = await freeAsset();
+    const emp = await activeEmpNo();
+    const r = await allocate([{ asset_code: code, emp_no: emp, reason: "Ground truthing" }]);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.allocated).toBe(1);
+
+    const open = await w.pool.query(
+      `SELECT 1 FROM asset_assignments a JOIN assets s ON s.id=a.asset_id
+        WHERE s.asset_code=$1 AND a.returned_at IS NULL`, [code]);
+    expect(open.rowCount).toBe(1);
+  });
+
+  it("reports an asset already out, rather than moving it silently", async () => {
+    /*
+     * Quietly reassigning equipment is how a register starts contradicting
+     * the people holding it — and the person who actually has the thing is
+     * the one who finds out last.
+     */
+    const code = await freeAsset();
+    const first = await activeEmpNo();
+    const second = await activeEmpNo();
+    await allocate([{ asset_code: code, emp_no: first, reason: "First" }]);
+    const again = await allocate([{ asset_code: code, emp_no: second, reason: "Second" }]);
+
+    expect(again.body.already_allocated).toBe(1);
+    expect(again.body.allocated).toBe(0);
+    expect(again.body.results[0].message).toContain("already out with");
+
+    // And it is still with the first person.
+    const holder = await w.pool.query(
+      `SELECT e.emp_no FROM asset_assignments a
+         JOIN assets s ON s.id=a.asset_id JOIN employees e ON e.id=a.employee_id
+        WHERE s.asset_code=$1 AND a.returned_at IS NULL`, [code]);
+    expect(holder.rows[0].emp_no).toBe(first);
+  });
+
+  it("names the row that is wrong instead of failing the file", async () => {
+    const good = await freeAsset();
+    const emp = await activeEmpNo();
+    const r = await allocate([
+      { asset_code: "NO-SUCH-ASSET", emp_no: emp, reason: "x" },
+      { asset_code: good, emp_no: emp, reason: "Real allocation" },
+    ]);
+    expect(r.body.rejected).toBe(1);
+    expect(r.body.allocated).toBe(1);
+    expect(r.body.results[0].message).toContain("No asset with code");
+  });
+
+  it("refuses to hand equipment to somebody who has left", async () => {
+    const code = await freeAsset();
+    const emp = await activeEmpNo();
+    await w.pool.query("UPDATE employees SET status='EXITED' WHERE emp_no=$1", [emp]);
+    const r = await allocate([{ asset_code: code, emp_no: emp, reason: "x" }]);
+    expect(r.body.rejected).toBe(1);
+    expect(r.body.results[0].message).toContain("not an active employee");
+  });
+
+  it("previews without allocating anything", async () => {
+    const code = await freeAsset();
+    const emp = await activeEmpNo();
+    const r = await allocate([{ asset_code: code, emp_no: emp, reason: "x" }], true);
+    expect(r.body.results[0].status).toBe("WOULD_ALLOCATE");
+    const open = await w.pool.query(
+      `SELECT 1 FROM asset_assignments a JOIN assets s ON s.id=a.asset_id
+        WHERE s.asset_code=$1 AND a.returned_at IS NULL`, [code]);
+    expect(open.rowCount, "nothing was written").toBe(0);
+  });
+});

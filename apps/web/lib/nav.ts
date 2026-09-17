@@ -129,7 +129,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/org/locations', label: 'Locations', permission: PERMISSIONS.ORG_UNITS_READ, icon: Building2 },
       { href: '/org/holidays', label: 'Holidays', permission: PERMISSIONS.HOLIDAY_READ, icon: CalendarDays },
       { href: '/admin', label: 'Administration', permission: 'users.read', icon: Settings },
-      { href: '/admin/import-templates', label: 'Upload formats', permission: 'users.read', icon: Download },
+      { href: '/admin/import-templates', label: 'Upload & download', permission: 'users.read', icon: Download },
       { href: '/security', label: 'Security', icon: Shield },
     ],
   },

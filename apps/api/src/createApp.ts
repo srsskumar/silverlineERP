@@ -16,6 +16,7 @@ import { registerLedgerRoutes } from "./modules/ledgers/routes.js";
 import { registerDocumentRoutes } from "./modules/documents/routes.js";
 import { registerSurveyRoutes } from "./modules/survey/routes.js";
 import { registerSurveyImport } from "./modules/survey/import.js";
+import { registerInventoryImport } from "./modules/inventory/import.js";
 import { registerAutomationRoutes } from "./modules/automation/routes.js";
 import { registerInventoryRoutes } from "./modules/inventory/routes.js";
 import { registerPlanningRoutes } from "./modules/planning/routes.js";
@@ -213,6 +214,7 @@ export async function buildApp(
   await registerDocumentRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerSurveyRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerSurveyImport(app, { pool, jwtSecret: config.jwtSecret });
+  await registerInventoryImport(app, { pool, jwtSecret: config.jwtSecret });
   await registerAdminRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerPayrollDocuments(app, { pool, jwtSecret: config.jwtSecret });
   await registerOrgImport(app,{pool,jwtSecret:config.jwtSecret});

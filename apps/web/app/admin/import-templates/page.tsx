@@ -4,23 +4,30 @@ import { AppShell } from '@/components/AppShell';
 import { PageHeader, PageBody } from '@/components/ui/Page';
 import { AllImportTemplates } from '@/components/ImportTemplateCard';
 import { TaskTemplateCard } from '@/components/TaskTemplateCard';
+import { ExportPanel } from '@/components/ExportPanel';
 
 /**
- * Every bulk-upload format in one place.
+ * Getting data in, and getting it out.
  *
- * Employees have their own importer and the template sits beside it there.
- * Inventory, assets and tasks are loaded by an administrator from a file, so
- * the formats live here rather than nowhere — which is where they were.
+ * The formats used to live here with nowhere to submit them — the page said
+ * "upload it from the matching screen" and for assets, allocations and stock
+ * no such screen existed. Each template now carries its own upload.
+ *
+ * Exports are listed here too. They are generated on the Reports screen and
+ * always were, but nobody looking for "how do I download my assets" thinks to
+ * look under Reports, so the way out is named in the same place as the way
+ * in.
  */
 export default function ImportTemplatesPage() {
   return (
     <AppShell>
       <PageHeader
-        title="Upload formats"
-        description="Download the template, fill it in, and upload it from the matching screen."
+        title="Upload and download"
+        description="Fill in a template to load data, or export what is already there."
         breadcrumb={<a href="/admin" className="hover:underline">Administration</a>}
       />
       <PageBody>
+        <ExportPanel />
         <AllImportTemplates />
         <TaskTemplateCard />
         <p className="text-2xs text-text-subtle">

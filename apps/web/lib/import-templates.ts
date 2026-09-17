@@ -127,25 +127,64 @@ export const IMPORT_TEMPLATES: ImportTemplate[] = [
     key: 'assets',
     label: 'Assets',
     fileName: 'silverline-assets-template.csv',
-    description: 'Equipment issued to people and sites, with its identifiers and value.',
+    description: 'Equipment issued to people and sites, with what it is and what state it is in.',
+    /*
+     * These are the register's actual columns.
+     *
+     * The template used to offer purchase_date, purchase_cost, warranty_until
+     * and notes, none of which the assets table has, and a status of
+     * IN_REPAIR or RETIRED, which it does not accept. Anybody who filled it
+     * in got a file the system could not take — which is worse than no
+     * template, because it looks like the system's fault.
+     */
     headers: [
-      'code', 'name', 'category', 'serial_number', 'make', 'model',
-      'purchase_date', 'purchase_cost', 'warranty_until', 'condition', 'status', 'notes',
+      'code', 'name', 'category', 'asset_type', 'serial_number',
+      'make', 'model', 'condition', 'condition_note',
     ],
-    required: ['code', 'name'],
+    required: ['code', 'name', 'category'],
     options: {
-      condition: ['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED'],
-      status: ['AVAILABLE', 'ASSIGNED', 'IN_REPAIR', 'RETIRED'],
+      category: ['ELECTRONIC', 'ELECTRICAL', 'ACCESSORY'],
+      asset_type: [
+        'ROVER', 'DRONE', 'TRIPOD', 'BIPOD', 'EXTERNAL_RADIO',
+        'EXTERNAL_RADIO_ANTENNA', 'EXTERNAL_BATTERY', 'LAPTOP', 'CPU',
+        'MONITOR', 'OTHER',
+      ],
+      condition: ['BRAND_NEW', 'EXCELLENT', 'GOOD', 'REPAIR', 'UNUSABLE', 'OTHER'],
     },
     example: [
-      'AST-TS-014', 'Total Station', 'Survey Equipment', 'TS2024X0914', 'Leica', 'TS07plus',
-      '2024-02-11', '485000', '2027-02-10', 'GOOD', 'AVAILABLE', 'Calibrated Feb 2026',
+      'AST-RV-014', 'Rover 14', 'ELECTRONIC', 'ROVER', 'TS2024X0914',
+      'Trimble', 'R12i', 'GOOD', '',
     ],
     notes: [
       'code is how the asset is referred to everywhere else, and must be unique.',
-      'serial_number is what identifies the physical unit — keep it exactly as printed on the plate.',
+      'category and asset_type must already exist — add new ones under Assets first.',
+      'serial_number identifies the physical unit: an upload matches on it, so a second row with the same serial updates that unit rather than creating another.',
+      'Accessories are the exception — they match on code, because a box of screws has no serial worth trusting.',
+      'condition_note is required when condition is OTHER.',
+    ],
+  },
+  {
+    key: 'asset-allocation',
+    label: 'Asset allocation',
+    fileName: 'silverline-asset-allocation-template.csv',
+    description: 'Who currently holds which asset, and for which project.',
+    headers: [
+      'asset_code', 'emp_no', 'project_code', 'issued_on', 'due_date',
+      'condition', 'reason',
+    ],
+    required: ['asset_code', 'emp_no', 'reason'],
+    options: {
+      condition: ['BRAND_NEW', 'EXCELLENT', 'GOOD', 'REPAIR', 'UNUSABLE', 'OTHER'],
+    },
+    example: [
+      'AST-RV-014', 'EMPSLV001001', 'SURVEY-AP-01', '2026-09-01', '2026-12-31',
+      'GOOD', 'Ground truthing, Koyyuru mandal',
+    ],
+    notes: [
+      'One row per asset currently out. An asset already allocated to somebody else is reported rather than silently moved.',
+      'condition is the state it went out in — what it comes back in is recorded at the return, by whoever receives it.',
+      'project_code may be blank for equipment issued without a project.',
       'Dates are YYYY-MM-DD.',
-      'status is AVAILABLE, ASSIGNED, IN_REPAIR or RETIRED.',
     ],
   },
 ];
