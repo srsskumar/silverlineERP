@@ -2,7 +2,7 @@ import {resolveScopes,employeeScopeClause} from '../../common/scopes.js';
 import {scopedReads} from "../../common/scopedReads.js";
 import type { FastifyInstance,FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
-import { vendorSchema,itemSchema,stockSchema,invoiceSchema,assetSchema,assetLookupSchema,assetAssignSchema,assetBulkAssignSchema,assetTransitionSchema,assetAuditSchema,assetLocation } from '@silverline/shared';
+import { vendorSchema,itemSchema,stockSchema,invoiceSchema,assetSchema,assetLookupSchema,assetAssignSchema,assetBulkAssignSchema,assetTransferSchema,assetAllocationEditSchema,assetLookupCode,assetTransitionSchema,assetAuditSchema,assetLocation } from '@silverline/shared';
 import { buildAuthenticate,requirePermission,scopesForPermission } from '../../common/auth.js';
 import { actor,parse,page,inOrg,mutate,version,fail,projectAccess,employeeAccess } from '../../common/domain.js';
 
@@ -86,6 +86,12 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
           WHERE x.asset_id=a.id AND x.returned_at IS NULL LIMIT 1) AS held_by_emp_no,
         (SELECT x.issued_at FROM asset_assignments x
           WHERE x.asset_id=a.id AND x.returned_at IS NULL LIMIT 1) AS assigned_on,
+        -- How a storeman identifies a thing: what it is and which one.
+        -- A name alone gives three rows reading "Rover" and no way to tell
+        -- which is being signed out.
+        COALESCE((SELECT t.label FROM asset_types t WHERE t.id=a.asset_type_id), a.name)
+          ||COALESCE(' · '||NULLIF(a.serial_number,''),'')
+          ||' · '||a.asset_code AS picker_label,
         (SELECT p.name FROM asset_assignments x JOIN projects p ON p.id=x.project_id
           WHERE x.asset_id=a.id AND x.returned_at IS NULL LIMIT 1) AS held_for_project`
      :'';
@@ -173,8 +179,11 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
   });
   app.post(`/api/v1/${path}`,{preHandler:guard('asset.manage')},async(req,reply)=>{
    const i=parse(assetLookupSchema,req.body),u=actor(req);
+   // Somebody adding a type from inside the register form has a name in
+   // mind, not a code.
+   const code=i.code ?? assetLookupCode(i.label);
    const row=await mutate(pool,req,`asset.${table}.create`,table,async db=>{
-    const clash=await db.query(`SELECT id,label,active FROM ${table} WHERE org_id=$1 AND code=$2`,[u.orgId,i.code]);
+    const clash=await db.query(`SELECT id,label,active FROM ${table} WHERE org_id=$1 AND code=$2`,[u.orgId,code]);
     if(clash.rowCount){
      // Re-adding something that was retired reinstates it rather than
      // failing: "it already exists, inactive" is not an answer anybody can
@@ -185,7 +194,7 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
     return (await db.query(
      `INSERT INTO ${table}(org_id,code,label,display_order,created_by)
       VALUES($1,$2,$3,COALESCE($4,500),$5) RETURNING id,code,label,display_order,active`,
-     [u.orgId,i.code,i.label,i.display_order??null,u.id])).rows[0];
+     [u.orgId,code,i.label,i.display_order??null,u.id])).rows[0];
    });
    return reply.code(201).send(row);
   });
@@ -264,6 +273,71 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
   * Refusing the whole issue because one item is elsewhere means doing the
   * other three again by hand, which is how people stop using the register.
   */
+ /**
+  * Hand an asset from whoever has it to somebody else (§note 6).
+  *
+  * Not an edit of who holds it. The open assignment records a real period in
+  * somebody's hands, and rewriting its employee would erase that they ever
+  * had it — which is the one thing the trail exists to remember. The spell
+  * is closed with the condition it came back in, and a new one opened, so
+  * both are on the record and the handover has a date.
+  */
+ app.post('/api/v1/assets/:id/transfer',{preHandler:guard('asset.manage')},async req=>{
+  const u=actor(req),id=(req.params as {id:string}).id,i=parse(assetTransferSchema,req.body);
+  await employeeAccess(pool,req,i.to_employee_id);
+  if(i.project_id)await projectAccess(pool,req,i.project_id);
+  return mutate(pool,req,'asset.transfer','asset',async db=>{
+   const asset=await inOrg(db,'assets',id,u.orgId,true);await assetAccess(req,id);
+   version(req,asset as {version:number});
+   if(i.condition==='OTHER'&&!i.condition_note?.trim())fail('VALIDATION_ERROR','Say what condition it is in',422);
+
+   const to=await inOrg(db,'employees',i.to_employee_id,u.orgId,true);
+   if(to.status!=='ACTIVE')fail('EMPLOYEE_INACTIVE','Only active employees may receive assets');
+
+   const open=(await db.query(
+    'SELECT id,employee_id FROM asset_assignments WHERE asset_id=$1 AND returned_at IS NULL',
+    [id])).rows[0];
+   if(!open)fail('NOT_ALLOCATED','This asset is not out with anybody. Issue it instead.',409);
+   if(String(open.employee_id)===i.to_employee_id)fail('SAME_HOLDER','That is who already has it',422);
+
+   await db.query(
+    `UPDATE asset_assignments
+        SET returned_at=now(), return_condition=$2, return_condition_note=$3,
+            received_by=$4, returned_to_employee_id=$5
+      WHERE id=$1`,
+    [open.id,i.condition,i.condition_note??null,u.id,i.to_employee_id]);
+   await db.query(
+    `INSERT INTO asset_assignments(org_id,asset_id,employee_id,project_id,due_date,condition,reason,created_by)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [u.orgId,id,i.to_employee_id,i.project_id??null,i.due_date??null,i.condition,i.reason,u.id]);
+   return (await db.query(
+    "UPDATE assets SET status='ASSIGNED',version=version+1,updated_at=now() WHERE id=$1 RETURNING *",
+    [id])).rows[0];
+  });
+ });
+
+ /**
+  * Correct an open allocation's dates.
+  *
+  * The date it went out, recorded wrong. Who holds it is not editable here
+  * on purpose -- that is a transfer, and it has its own record.
+  */
+ app.patch('/api/v1/asset-allocations/:id',{preHandler:guard('asset.manage')},async req=>{
+  const u=actor(req),id=(req.params as {id:string}).id,i=parse(assetAllocationEditSchema,req.body);
+  return mutate(pool,req,'asset.allocation.update','asset_assignment',async db=>{
+   const row=await inOrg(db,'asset_assignments',id,u.orgId,true);
+   if(row.returned_at)fail('ALREADY_RETURNED','That spell has ended. Correcting a closed record would rewrite history.',409);
+   await assetAccess(req,String(row.asset_id));
+   return (await db.query(
+    `UPDATE asset_assignments
+        SET issued_at=COALESCE($2::timestamptz,issued_at),
+            due_date=CASE WHEN $3::boolean THEN $4::date ELSE due_date END
+      WHERE id=$1 RETURNING *`,
+    [id,i.issued_at?`${i.issued_at}T00:00:00Z`:null,
+     i.due_date!==undefined,i.due_date??null])).rows[0];
+  });
+ });
+
  app.post('/api/v1/assets/assign-bulk',{preHandler:guard('asset.manage')},async(req,reply)=>{
   const u=actor(req),i=parse(assetBulkAssignSchema,req.body);
   await employeeAccess(pool,req,i.employee_id);

@@ -68,8 +68,19 @@ export default function Page() {
               { key: 'asset_code', label: 'Asset code', required: true },
               { key: 'name', label: 'Name', required: true },
               // Both are lists the organisation can extend, below.
-              { key: 'asset_type_id', label: 'Type', source: 'asset-types', labelKey: 'label' },
-              { key: 'category', label: 'Category', source: 'asset-categories', labelKey: 'label', required: true },
+              // Add a type without leaving the form: the alternative is
+              // abandoning it, and people respond by picking the nearest
+              // wrong type — which is how a master list stops meaning
+              // anything.
+              {
+                key: 'asset_type_id', label: 'Type', source: 'asset-types', labelKey: 'label',
+                createPath: 'asset-types', createField: 'label',
+                hint: 'Not there? Type its name and add it.',
+              },
+              {
+                key: 'category', label: 'Category', source: 'asset-categories', labelKey: 'label',
+                required: true, createPath: 'asset-categories', createField: 'label',
+              },
               { key: 'serial_number', label: 'Serial number' },
               { key: 'make', label: 'Make' },
               { key: 'model', label: 'Model' },
@@ -99,8 +110,15 @@ export default function Page() {
                 fields={[
                   { key: 'asset_code', label: 'Asset code', default: String(asset.asset_code ?? ''), required: true },
                   { key: 'name', label: 'Name', default: String(asset.name ?? ''), required: true },
-                  { key: 'asset_type_id', label: 'Type', source: 'asset-types', labelKey: 'label' },
-                  { key: 'category', label: 'Category', source: 'asset-categories', labelKey: 'label', required: true },
+                  {
+                    key: 'asset_type_id', label: 'Type', source: 'asset-types', labelKey: 'label',
+                    createPath: 'asset-types', createField: 'label',
+                  },
+                  {
+                    key: 'category', label: 'Category', source: 'asset-categories',
+                    labelKey: 'label', required: true,
+                    createPath: 'asset-categories', createField: 'label',
+                  },
                   { key: 'serial_number', label: 'Serial number', default: String(asset.serial_number ?? '') },
                   { key: 'make', label: 'Make', default: String(asset.make ?? '') },
                   { key: 'model', label: 'Model', default: String(asset.model ?? '') },
@@ -136,6 +154,38 @@ export default function Page() {
                 ]}
               />
             </Panel>
+
+            {String(asset.location) === 'IN_FIELD' ? (
+              <Panel title={`Hand ${asset.name} to somebody else`}>
+                <p className="mb-4 text-sm text-text-muted">
+                  {/* Not an edit of who holds it: the open spell records a
+                      real period in somebody's hands, and rewriting it would
+                      erase that they ever had the thing. */}
+                  Currently with <strong>{String(asset.held_by ?? 'somebody')}</strong>
+                  {asset.assigned_on ? ` since ${String(asset.assigned_on).slice(0, 10)}` : ''}.
+                  Handing it on closes that spell and opens a new one, so both stay on the
+                  record and the handover has a date.
+                </p>
+                <MutationForm
+                  key={`${asset.id}${asset.version}transfer`}
+                  path={`assets/${asset.id}/transfer`}
+                  version={asset.version as number}
+                  submit="Hand it over"
+                  onSaved={setAsset}
+                  fields={[
+                    { key: 'to_employee_id', label: 'New assignee', source: 'assets/eligible-employees', required: true },
+                    { key: 'project_id', label: 'For project', source: 'inventory/eligible-projects' },
+                    { key: 'due_date', label: 'Return due', type: 'date' },
+                    {
+                      key: 'condition', label: 'Condition at handover', type: 'select',
+                      options: CONDITIONS, default: String(asset.condition ?? 'GOOD'), required: true,
+                    },
+                    { key: 'condition_note', label: 'Condition note (required for “Other”)' },
+                    { key: 'reason', label: 'Why it is moving', required: true },
+                  ]}
+                />
+              </Panel>
+            ) : null}
 
             <Panel title="Record a return, or a change of state">
               <p className="mb-4 text-sm text-text-muted">
@@ -183,8 +233,12 @@ export default function Page() {
             submit="Issue them"
             fields={[
               {
-                key: 'asset_ids', label: 'Equipment', type: 'multi_select',
-                source: 'assets?limit=100', required: true,
+                // Type and serial, not a name: three rows reading "Rover"
+                // and no way to tell which is being signed out is how the
+                // wrong one goes into the van.
+                key: 'asset_ids', label: 'Equipment (type · serial · code)',
+                type: 'multi_select', source: 'assets?limit=100',
+                labelKey: 'picker_label', required: true,
               },
               { key: 'employee_id', label: 'To employee', source: 'assets/eligible-employees', required: true },
               { key: 'project_id', label: 'For project', source: 'inventory/eligible-projects' },

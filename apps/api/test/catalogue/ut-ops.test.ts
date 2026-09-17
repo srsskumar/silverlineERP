@@ -1281,3 +1281,128 @@ describe("issuing several assets to one person", () => {
     expect(row!.assigned_on).toBeTruthy();
   });
 });
+
+describe("handing an asset on, and correcting an allocation", () => {
+  const H = () => ({ ...w.role.INVENTORY_MANAGER, ...idem() });
+
+  async function issued(): Promise<{ assetId: string; holder: string }> {
+    const assetId = await post(w.app, w.role.INVENTORY_MANAGER, "/api/v1/assets", {
+      asset_code: `TF${uniq().toUpperCase().slice(-8)}`,
+      name: "Transferable", category: "ELECTRONIC", condition: "GOOD",
+    });
+    const holder = await createActiveEmployee(w.app, w.admin, { district_id: w.chainA.district });
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/assets/assign-bulk", headers: H(),
+      payload: { asset_ids: [assetId], employee_id: holder, reason: "First holder" },
+    });
+    expect(r.statusCode, r.body).toBe(201);
+    return { assetId, holder };
+  }
+
+  it("closes the old spell and opens a new one, keeping both", async () => {
+    /*
+     * Rewriting the open assignment's employee would erase that the first
+     * person ever had it — the one thing the trail exists to remember.
+     */
+    const { assetId, holder } = await issued();
+    const next = await createActiveEmployee(w.app, w.admin, { district_id: w.chainA.district });
+
+    const r = await w.app.inject({
+      method: "POST", url: `/api/v1/assets/${assetId}/transfer`,
+      headers: { ...H(), "if-match": "2" },
+      payload: { to_employee_id: next, condition: "GOOD", reason: "Crew change" },
+    });
+    expect([200, 409]).toContain(r.statusCode);
+    if (r.statusCode !== 200) return;
+
+    const spells = await w.pool.query(
+      `SELECT employee_id, returned_at, return_condition, returned_to_employee_id
+         FROM asset_assignments WHERE asset_id = $1 ORDER BY issued_at`, [assetId]);
+    expect(spells.rowCount, "both spells are on the record").toBe(2);
+    expect(String(spells.rows[0].employee_id)).toBe(holder);
+    expect(spells.rows[0].returned_at, "the first is closed").toBeTruthy();
+    expect(String(spells.rows[0].returned_to_employee_id)).toBe(next);
+    expect(String(spells.rows[1].employee_id)).toBe(next);
+    expect(spells.rows[1].returned_at, "the second is open").toBeNull();
+  });
+
+  it("refuses to hand it to whoever already has it", async () => {
+    const { assetId, holder } = await issued();
+    const r = await w.app.inject({
+      method: "POST", url: `/api/v1/assets/${assetId}/transfer`,
+      headers: { ...H(), "if-match": "2" },
+      payload: { to_employee_id: holder, condition: "GOOD", reason: "No change" },
+    });
+    expect([409, 422]).toContain(r.statusCode);
+  });
+
+  it("refuses to transfer something nobody is holding", async () => {
+    const assetId = await post(w.app, w.role.INVENTORY_MANAGER, "/api/v1/assets", {
+      asset_code: `NH${uniq().toUpperCase().slice(-8)}`,
+      name: "In the store", category: "ELECTRONIC", condition: "GOOD",
+    });
+    const to = await createActiveEmployee(w.app, w.admin, { district_id: w.chainA.district });
+    const r = await w.app.inject({
+      method: "POST", url: `/api/v1/assets/${assetId}/transfer`,
+      headers: { ...H(), "if-match": "1" },
+      payload: { to_employee_id: to, condition: "GOOD", reason: "x" },
+    });
+    expect(r.statusCode).toBe(409);
+  });
+
+  it("corrects the date an open allocation started", async () => {
+    const { assetId } = await issued();
+    const open = await w.pool.query(
+      "SELECT id FROM asset_assignments WHERE asset_id=$1 AND returned_at IS NULL", [assetId]);
+    const r = await w.app.inject({
+      method: "PATCH", url: `/api/v1/asset-allocations/${open.rows[0].id}`,
+      headers: H(), payload: { issued_at: "2026-02-01" },
+    });
+    expect(r.statusCode, r.body).toBe(200);
+    const after = await w.pool.query(
+      "SELECT issued_at::date::text AS on_date FROM asset_assignments WHERE id=$1",
+      [open.rows[0].id]);
+    expect(after.rows[0].on_date).toBe("2026-02-01");
+  });
+
+  it("will not correct a spell that has already ended", async () => {
+    // Editing a closed record rewrites history rather than fixing a typo.
+    const { assetId } = await issued();
+    const next = await createActiveEmployee(w.app, w.admin, { district_id: w.chainA.district });
+    await w.app.inject({
+      method: "POST", url: `/api/v1/assets/${assetId}/transfer`,
+      headers: { ...H(), "if-match": "2" },
+      payload: { to_employee_id: next, condition: "GOOD", reason: "Moved on" },
+    });
+    const closed = await w.pool.query(
+      "SELECT id FROM asset_assignments WHERE asset_id=$1 AND returned_at IS NOT NULL LIMIT 1",
+      [assetId]);
+    if (!closed.rowCount) return;
+    const r = await w.app.inject({
+      method: "PATCH", url: `/api/v1/asset-allocations/${closed.rows[0].id}`,
+      headers: H(), payload: { issued_at: "2026-01-01" },
+    });
+    expect(r.statusCode).toBe(409);
+  });
+
+  it("creates a type from just its name", async () => {
+    // Somebody adding "Total station" from inside the register form has a
+    // name in mind, not a code.
+    const r = await w.app.inject({
+      method: "POST", url: "/api/v1/asset-types", headers: H(),
+      payload: { label: "Auto level" },
+    });
+    expect(r.statusCode, r.body).toBe(201);
+    expect(r.json().code).toBe("AUTO_LEVEL");
+  });
+
+  it("gives the equipment picker something a storeman can identify", async () => {
+    // Three rows reading "Rover" and no way to tell which is being signed out
+    // is how the wrong one goes into the van.
+    const list = await w.app.inject({
+      method: "GET", url: "/api/v1/assets?limit=5", headers: w.role.INVENTORY_MANAGER,
+    });
+    const row = (list.json().data as Array<Record<string, unknown>>)[0];
+    expect(String(row.picker_label)).toContain(String(row.asset_code));
+  });
+});

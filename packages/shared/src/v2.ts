@@ -59,10 +59,56 @@ export const assetBulkAssignSchema = z.object({
 
 /** Adding a type or a category: the "option to add more" the note asks for. */
 export const assetLookupSchema = z.object({
+  /**
+   * Optional: derived from the label when it is left out.
+   *
+   * Somebody adding "Total station" from inside the register form has a name
+   * in mind, not a code. Demanding one turns a one-word answer into a form,
+   * and a form in the middle of another form is how people give up and pick
+   * the nearest wrong type instead.
+   */
   code:z.string().trim().regex(/^[A-Z][A-Z0-9_]{1,63}$/,
-    'Use capitals, digits and underscores, starting with a letter'),
+    'Use capitals, digits and underscores, starting with a letter').optional(),
   label:z.string().trim().min(1).max(160),
   display_order:z.coerce.number().int().min(0).max(9999).optional(),
+});
+
+/**
+ * Turn a typed name into a code.
+ *
+ * "Total station" becomes TOTAL_STATION. Anything that is not a letter or a
+ * digit becomes an underscore, and a leading digit is prefixed, because a
+ * code has to start with a letter.
+ */
+export function assetLookupCode(label:string):string {
+  const base=label.trim().toUpperCase().replace(/[^A-Z0-9]+/g,'_')
+    .replace(/^_+|_+$/g,'').slice(0,60);
+  if(!base) return 'TYPE';
+  return /^[A-Z]/.test(base) ? base : `X_${base}`;
+}
+
+/**
+ * Handing an asset from one person to the next (§note 6).
+ *
+ * Not an edit of who holds it. The assignment that is open records a real
+ * period in somebody's hands, and rewriting its employee would erase that
+ * they ever had it — which is the one thing the trail exists to remember.
+ * The open spell is closed and a new one opened, so both are on the record.
+ */
+export const assetTransferSchema = z.object({
+  to_employee_id:uuid,
+  project_id:uuid.nullable().optional(),
+  due_date:dateStringSchema.optional(),
+  /** What the outgoing holder handed over in. */
+  condition:text.default('GOOD'),
+  condition_note:z.string().trim().max(2000).optional(),
+  reason:text,
+});
+
+/** Correcting the date an open allocation started. */
+export const assetAllocationEditSchema = z.object({
+  issued_at:dateStringSchema.optional(),
+  due_date:dateStringSchema.nullable().optional(),
 });
 export const assetAssignSchema = z.object({employee_id:uuid,project_id:uuid.nullable().optional(),due_date:dateStringSchema.optional(),condition:text.default('GOOD'),reason:text});
 /**
