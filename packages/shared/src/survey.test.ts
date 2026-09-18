@@ -12,6 +12,7 @@ import {
   forecast, findBottlenecks, BOTTLENECK_KINDS, BOTTLENECK_LABELS, type BottleneckInput,
   type MeasureBasis, type VillageProgress,
   periodContaining, previousPeriod, comparePeriods, surveyVillageCreateSchema,
+  villageBillingBulkSchema, BILLING_SKIP_LABELS,
 } from './survey.js';
 
 const BASIS: Record<string, MeasureBasis> = Object.fromEntries(
@@ -1304,5 +1305,83 @@ describe('numbers larger than the column can hold', () => {
       village_name: 'Huge', village_code: 'H1',
       mandal_id: '11111111-1111-4111-8111-111111111111', total_extent_ac: 1e308,
     }).success).toBe(false);
+  });
+});
+
+describe('claiming a batch of villages', () => {
+  const base = {
+    survey_village_ids: ['11111111-1111-4111-8111-111111111111'],
+    milestone: 1,
+  };
+  const yesterday = new Date(Date.now() - 86400_000).toISOString().slice(0, 10);
+
+  it('takes a submission with nothing but the villages and the milestone', () => {
+    // The percentage, the date and the reference all have sensible defaults;
+    // demanding them turns a two-click job into a form.
+    const r = villageBillingBulkSchema.safeParse({ ...base, action: 'SUBMIT' });
+    expect(r.success).toBe(true);
+  });
+
+  it('previews by default, so a wrong filter cannot write anything', () => {
+    const r = villageBillingBulkSchema.parse({ ...base, action: 'SUBMIT' });
+    expect(r.dry_run).toBe(true);
+  });
+
+  it('will not record a decision without saying what was decided', () => {
+    const r = villageBillingBulkSchema.safeParse({
+      ...base, action: 'DECIDE', decided_on: yesterday,
+    });
+    expect(r.success).toBe(false);
+    expect(JSON.stringify(r.error?.issues)).toMatch(/what the department decided/i);
+  });
+
+  it('will not record a decision without the date it was decided', () => {
+    // A decided claim with no date cannot be aged, and ageing them is the
+    // reason to track them.
+    const r = villageBillingBulkSchema.safeParse({
+      ...base, action: 'DECIDE', status: 'APPROVED',
+    });
+    expect(r.success).toBe(false);
+    expect(JSON.stringify(r.error?.issues)).toMatch(/date the department decided/i);
+  });
+
+  it('refuses an empty batch rather than reporting nothing done', () => {
+    const r = villageBillingBulkSchema.safeParse({
+      ...base, survey_village_ids: [], action: 'SUBMIT',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('refuses more villages than one claim could plausibly cover', () => {
+    const r = villageBillingBulkSchema.safeParse({
+      ...base,
+      survey_village_ids: Array.from({ length: 1001 },
+        () => '11111111-1111-4111-8111-111111111111'),
+      action: 'SUBMIT',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('refuses a claim dated in the future', () => {
+    const soon = new Date(Date.now() + 5 * 86400_000).toISOString().slice(0, 10);
+    const r = villageBillingBulkSchema.safeParse({
+      ...base, action: 'SUBMIT', submitted_on: soon,
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('refuses a field it does not know rather than ignoring it', () => {
+    // A typo in a field name that is silently dropped is a batch that did
+    // not do what the caller asked and said it did.
+    const r = villageBillingBulkSchema.safeParse({
+      ...base, action: 'SUBMIT', referance_no: 'RC/2026/1',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('names every reason a village can be left out of a batch', () => {
+    for (const reason of ['ALREADY_CLAIMED', 'NOTHING_TO_DECIDE', 'ALREADY_IN_THAT_STATE'] as const) {
+      expect(BILLING_SKIP_LABELS[reason], reason).toBeTruthy();
+    }
   });
 });

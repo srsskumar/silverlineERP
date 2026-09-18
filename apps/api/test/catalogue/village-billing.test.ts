@@ -232,3 +232,174 @@ describe("removing a claim", () => {
     expect(r.status).toBe(404);
   });
 });
+
+describe("claiming a batch of villages at once", () => {
+  let batch: string[] = [];
+
+  beforeAll(async () => {
+    // Five fresh villages, so the batch tests do not fight the ones above.
+    batch = [];
+    for (let i = 0; i < 5; i += 1) batch.push(await makeVillage(`BATCH ${i}`));
+  }, 120_000);
+
+  const bulk = (body: Record<string, unknown>) =>
+    post(w.admin, "/api/v1/survey/billing/bulk", body);
+
+  it("shows what would happen and writes nothing", async () => {
+    // This is the screen where somebody finds out they had the wrong filter
+    // applied, and by then two hundred villages are claimed.
+    const r = await bulk({ survey_village_ids: batch, action: "SUBMIT", milestone: 1 });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.dry_run).toBe(true);
+    expect(r.data.would_change).toBe(5);
+
+    const check = await get(w.admin, `/api/v1/survey/villages/${batch[0]}/billing`);
+    expect(check.data).toEqual([]);
+  });
+
+  it("names the villages it would touch, not just a count", async () => {
+    const r = await bulk({ survey_village_ids: batch, action: "SUBMIT", milestone: 1 });
+    expect(r.data.villages).toContain("BATCH 0");
+  });
+
+  it("claims them all once told to", async () => {
+    const r = await bulk({
+      survey_village_ids: batch, action: "SUBMIT", milestone: 1,
+      reference_no: "RC/2026/BATCH", dry_run: false,
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.updated).toBe(5);
+
+    const check = await get(w.admin, `/api/v1/survey/villages/${batch[2]}/billing`);
+    expect(check.data[0].milestone).toBe(1);
+    expect(check.data[0].percent).toBe(50);
+    expect(check.data[0].reference_no).toBe("RC/2026/BATCH");
+  });
+
+  it("skips what is already claimed and says which, rather than failing the batch", async () => {
+    // Refusing all forty because two were already claimed means doing the
+    // other thirty-eight again by hand.
+    const extra = await makeVillage("BATCH LATE");
+    const r = await bulk({
+      survey_village_ids: [...batch, extra], action: "SUBMIT", milestone: 1, dry_run: false,
+    });
+    expect(r.data.updated).toBe(1);
+    expect(r.data.skipped).toHaveLength(5);
+    expect(r.data.skipped[0].reason).toBe("ALREADY_CLAIMED");
+    expect(r.data.skipped.map((s: any) => s.village_name)).toContain("BATCH 0");
+  });
+
+  it("claims each village's own extent when asked", async () => {
+    const r = await bulk({
+      survey_village_ids: batch, action: "SUBMIT", milestone: 2,
+      use_village_extent: true, dry_run: false,
+    });
+    expect(r.data.updated).toBe(5);
+    const check = await get(w.admin, `/api/v1/survey/villages/${batch[0]}/billing`);
+    const second = check.data.find((c: any) => c.milestone === 2);
+    // The village was created with 420 acres.
+    expect(second.extent_ac).toBe(420);
+  });
+
+  it("warns when a milestone is being claimed with an earlier one outstanding", async () => {
+    // Not refused: a variation can release them in any order, and the
+    // department decides what it accepts. But the usual cause is the wrong
+    // milestone picked, and finding that out before the letter goes is the
+    // point of the preview.
+    const fresh = await makeVillage("BATCH SKIPPER");
+    const r = await bulk({ survey_village_ids: [fresh], action: "SUBMIT", milestone: 3 });
+    expect(r.data.would_change).toBe(1);
+    expect(r.data.out_of_order).toBe(1);
+  });
+
+  it("records the department's answer across the batch", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const r = await bulk({
+      survey_village_ids: batch, action: "DECIDE", milestone: 1,
+      status: "APPROVED", decided_on: today, dry_run: false,
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.updated).toBe(5);
+
+    const check = await get(w.admin, `/api/v1/survey/villages/${batch[1]}/billing`);
+    const first = check.data.find((c: any) => c.milestone === 1);
+    expect(first.status).toBe("APPROVED");
+    expect(first.decided_on).toBe(today);
+  });
+
+  it("will not record a decision without the date it was decided", async () => {
+    const r = await bulk({
+      survey_village_ids: batch, action: "DECIDE", milestone: 1, status: "PAID",
+    });
+    expect(r.status).toBe(422);
+    expect(r.body.message).toMatch(/date the department decided/i);
+  });
+
+  it("will not record a decision without saying what was decided", async () => {
+    const r = await bulk({
+      survey_village_ids: batch, action: "DECIDE", milestone: 1,
+      decided_on: new Date().toISOString().slice(0, 10),
+    });
+    expect(r.status).toBe(422);
+  });
+
+  it("says when there is nothing at that milestone to decide", async () => {
+    const r = await bulk({
+      survey_village_ids: batch, action: "DECIDE", milestone: 7,
+      status: "PAID", decided_on: new Date().toISOString().slice(0, 10),
+    });
+    expect(r.data.would_change).toBe(0);
+    expect(r.data.skipped.every((s: any) => s.reason === "NOTHING_TO_DECIDE")).toBe(true);
+  });
+
+  it("leaves alone a claim already recorded that way", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const r = await bulk({
+      survey_village_ids: batch, action: "DECIDE", milestone: 1,
+      status: "APPROVED", decided_on: today,
+    });
+    expect(r.data.would_change).toBe(0);
+    expect(r.data.skipped[0].reason).toBe("ALREADY_IN_THAT_STATE");
+  });
+
+  it("re-claims a milestone the department returned, under one row", async () => {
+    // A returned claim leaves the milestone owed again. A second row would
+    // count the percentage twice.
+    const today = new Date().toISOString().slice(0, 10);
+    await bulk({
+      survey_village_ids: [batch[3]], action: "DECIDE", milestone: 2,
+      status: "REJECTED", decided_on: today, dry_run: false,
+    });
+    const r = await bulk({
+      survey_village_ids: [batch[3]], action: "SUBMIT", milestone: 2, dry_run: false,
+    });
+    expect(r.data.updated).toBe(1);
+
+    const check = await get(w.admin, `/api/v1/survey/villages/${batch[3]}/billing`);
+    expect(check.data.filter((c: any) => c.milestone === 2)).toHaveLength(1);
+    expect(check.data.find((c: any) => c.milestone === 2).status).toBe("SUBMITTED");
+    // The decision date from the refusal does not survive a fresh claim.
+    expect(check.data.find((c: any) => c.milestone === 2).decided_on).toBeNull();
+  });
+
+  it("reports ids it could not find rather than pretending it did them", async () => {
+    const r = await bulk({
+      survey_village_ids: [batch[0], "00000000-0000-0000-0000-000000000000"],
+      action: "SUBMIT", milestone: 5,
+    });
+    expect(r.data.not_found).toEqual(["00000000-0000-0000-0000-000000000000"]);
+    expect(r.data.would_change).toBe(1);
+  });
+
+  it("refuses an empty batch rather than reporting nothing done", async () => {
+    const r = await bulk({ survey_village_ids: [], action: "SUBMIT", milestone: 1 });
+    expect(r.status).toBe(422);
+  });
+
+  it("refuses more villages than one claim could plausibly cover", async () => {
+    const many = Array.from({ length: 1001 },
+      () => "00000000-0000-0000-0000-000000000000");
+    const r = await bulk({ survey_village_ids: many, action: "SUBMIT", milestone: 1 });
+    expect(r.status).toBe(422);
+  });
+});

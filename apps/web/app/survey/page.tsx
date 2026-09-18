@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { ExportMenu, cellNum, cellText } from '@/components/ui/ExportMenu';
+import { BillingBulkBar } from '@/components/survey/BillingBulkBar';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
@@ -75,7 +76,7 @@ export default function SurveyPage() {
    * does not rebuild it by hand and get a different list.
    */
   const [stageDrill, setStageDrill] =
-    React.useState<{ stage: string; state: string } | null>(null);
+    React.useState<{ stage: string; state: string; district: string; mandal: string } | null>(null);
   const [geoDrill, setGeoDrill] =
     React.useState<{ level: ReportLevel; name: string } | null>(null);
   React.useEffect(() => {
@@ -104,11 +105,28 @@ export default function SurveyPage() {
     if (!projectId && projects.data?.length) setProjectId(String(projects.data[0].id));
   }, [projects.data, projectId]);
 
+  /*
+   * What part of the programme the progress screen is reporting on.
+   *
+   * Sent to the server rather than applied to the rows here: every figure on
+   * that screen — the headline percentage, the pace, the stage tallies, the
+   * rover utilisation — has to be recomputed over the filtered villages, and
+   * a filter applied after the arithmetic would leave the programme's number
+   * standing under a district's heading.
+   */
+  const [scope, setScope] = React.useState({
+    district: '', mandal: '', village_id: '', stage: '', stage_state: 'OUTSTANDING',
+  });
+
   const progress = useQuery({
-    queryKey: ['survey-progress', projectId, level, range],
+    queryKey: ['survey-progress', projectId, level, range, scope],
     enabled: canRead && !!projectId && tab === 'progress',
     queryFn: async () => {
       const q = new URLSearchParams({ level, from: range.from, to: range.to });
+      if (scope.district) q.set('district', scope.district);
+      if (scope.mandal) q.set('mandal', scope.mandal);
+      if (scope.village_id) q.set('village_id', scope.village_id);
+      if (scope.stage) { q.set('stage', scope.stage); q.set('stage_state', scope.stage_state); }
       return ((await apiRequestRaw(
         `/api/v1/survey/projects/${projectId}/progress?${q}`)).body as { data: Row }).data;
     },
@@ -209,8 +227,20 @@ export default function SurveyPage() {
         {projectId && tab === 'progress' ? (
           <Progress
             query={progress} level={level} setLevel={setLevel} range={range}
+            scope={scope} setScope={setScope}
             onDrillDown={(stageCode, state) => {
-              setStageDrill({ stage: stageCode, state });
+              /*
+               * Carry the filter across with the question.
+               *
+               * The count that was clicked was a count of *these* villages.
+               * Opening the whole programme's villages at that stage answers
+               * a different question from the one the reader asked, and the
+               * list would not match the number they clicked.
+               */
+              setStageDrill({
+                stage: stageCode, state,
+                district: scope.district, mandal: scope.mandal,
+              });
               setTab('villages');
             }}
             onOpenRow={(lvl, id, name) => {
@@ -250,11 +280,18 @@ export default function SurveyPage() {
 
 /* --------------------------------------------------------------- progress */
 
+type Scope = {
+  district: string; mandal: string; village_id: string;
+  stage: string; stage_state: string;
+};
+
 function Progress({
-  query, level, setLevel, range, onDrillDown, onOpenRow,
+  query, level, setLevel, range, scope, setScope, onDrillDown, onOpenRow,
 }: {
   query: any; level: ReportLevel; setLevel: (l: ReportLevel) => void;
   range: { from: string; to: string };
+  /** Which part of the programme these figures cover. */
+  scope: Scope; setScope: (s: Scope) => void;
   /** A stage tally was clicked: show those villages. */
   onDrillDown?: (stageCode: string, state: string) => void;
   /** A roll-up row was clicked: open the village, or the mandal's villages. */
@@ -271,9 +308,163 @@ function Progress({
   // Only the measures that express progress get a percentage column; the rest
   // are counts and are shown as counts.
   const scored = measures.filter((m) => m.basis !== 'NONE');
+  const options = data.options ?? { districts: [], mandals: [], villages: [] };
+  const narrowed = Boolean(scope.district || scope.mandal || scope.village_id || scope.stage);
+  const pipeline: Row[] = data.pipeline ?? [];
+
+  const sel = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
+
+  /*
+   * The roll-up as it stands on screen, in a file.
+   *
+   * Built from the rendered rows rather than re-fetched: a download holding
+   * the whole programme under a heading that says one district is how two
+   * versions of the same figure start circulating.
+   */
+  const sheet = {
+    name: `Progress by ${LEVEL_LABELS[level]}`.slice(0, 31),
+    columns: [
+      { header: LEVEL_LABELS[level], width: 28 },
+      { header: 'Villages', width: 10 },
+      { header: 'Finished', width: 10 },
+      { header: 'Not started', width: 12 },
+      { header: 'Extent (Ac)', width: 14 },
+      { header: 'Surveyed (Ac)', width: 14 },
+      { header: 'Complete (%)', width: 14 },
+      ...scored.flatMap((m) => ([
+        { header: `${m.group_label ? `${m.group_label} — ` : ''}${m.label}`, width: 20 },
+        { header: `${m.label} (%)`, width: 12 },
+      ])),
+    ],
+    rows: rows.map((r) => [
+      cellText(r.name), cellNum(r.villages), cellNum(r.completed), cellNum(r.notStarted),
+      cellNum(r.extentAc), cellNum(r.surveyedAc), cellNum(r.overallPct),
+      ...scored.flatMap((m) => ([
+        cellNum(r.measures?.[m.code]?.done),
+        cellNum(r.measures?.[m.code]?.pct),
+      ])),
+    ]),
+  };
+
+  /** What the figures cover, in words, for the file name and the heading. */
+  const scopeNote = [
+    scope.village_id
+      ? options.villages.find((v: Row) => String(v.id) === scope.village_id)?.name
+      : null,
+    scope.mandal || null,
+    scope.district || null,
+    scope.stage
+      ? `${stageLabel(scope.stage, pipeline as any)} ${scope.stage_state === 'OUTSTANDING'
+        ? 'not finished'
+        : (STAGE_STATE_LABELS[scope.stage_state] ?? scope.stage_state).toLowerCase()}`
+      : null,
+  ].filter(Boolean).join(' · ');
 
   return (
     <div className="space-y-4">
+      {/*
+        * Which part of the programme is being reported on.
+        *
+        * The screen answered one question — how is the whole programme doing
+        * — and the question people ask is about a district, a mandal, or the
+        * villages stuck at one stage. The filter goes to the server, so
+        * every figure below is recomputed over the villages it leaves.
+        */}
+      <Card className="space-y-2 p-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="text-2xs text-text-subtle">
+            <span className="mb-1 block">District</span>
+            <select className={sel} value={scope.district}
+              onChange={(e) => setScope({
+                ...scope, district: e.target.value, mandal: '', village_id: '',
+              })}>
+              <option value="">Every district</option>
+              {(options.districts ?? []).map((d: string) => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="text-2xs text-text-subtle">
+            <span className="mb-1 block">Mandal</span>
+            <select className={sel} value={scope.mandal}
+              onChange={(e) => setScope({ ...scope, mandal: e.target.value, village_id: '' })}>
+              <option value="">Every mandal</option>
+              {(options.mandals ?? []).map((mm: string) => (
+                <option key={mm} value={mm}>{mm}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="text-2xs text-text-subtle">
+            <span className="mb-1 block">Village</span>
+            <select className={sel} value={scope.village_id}
+              onChange={(e) => setScope({ ...scope, village_id: e.target.value })}>
+              <option value="">Every village</option>
+              {(options.villages ?? []).map((v: Row) => (
+                <option key={String(v.id)} value={String(v.id)}>{String(v.name)}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="text-2xs text-text-subtle">
+            <span className="mb-1 block">Stage</span>
+            <select className={sel} value={scope.stage}
+              onChange={(e) => setScope({ ...scope, stage: e.target.value })}>
+              <option value="">Any stage</option>
+              {pipeline.map((st) => (
+                <option key={String(st.code)} value={String(st.code)}>{String(st.label)}</option>
+              ))}
+            </select>
+          </label>
+
+          {scope.stage ? (
+            <label className="text-2xs text-text-subtle">
+              <span className="mb-1 block">Which is</span>
+              <select className={sel} value={scope.stage_state}
+                onChange={(e) => setScope({ ...scope, stage_state: e.target.value })}>
+                <option value="OUTSTANDING">not finished</option>
+                <option value="NOT_STARTED">still to start</option>
+                <option value="IN_PROGRESS">in progress</option>
+                <option value="ON_HOLD">on hold</option>
+                <option value="COMPLETED">finished</option>
+              </select>
+            </label>
+          ) : null}
+
+          {narrowed ? (
+            <Button type="button" variant="ghost" onClick={() => setScope({
+              district: '', mandal: '', village_id: '', stage: '', stage_state: 'OUTSTANDING',
+            })}>Whole programme</Button>
+          ) : null}
+
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <span className="text-2xs text-text-subtle">
+              {narrowed
+                ? `${count(data.filter?.villages)} of ${count(data.filter?.of_villages)} villages`
+                : `${count(data.filter?.of_villages ?? total.villages)} villages`}
+            </span>
+            <ExportMenu sheet={sheet}
+              fileName={`survey-progress-${level}${narrowed ? '-filtered' : ''}`}
+              note={`by ${LEVEL_LABELS[level].toLowerCase()}`} />
+          </div>
+        </div>
+
+        {narrowed ? (
+          <p className="text-2xs text-text-subtle">
+            Every figure below covers {scopeNote} only — the percentages, the pace and the
+            rover counts are all recomputed over these villages.
+          </p>
+        ) : null}
+      </Card>
+
+      {narrowed && total.villages === 0 ? (
+        <EmptyState
+          title="No villages match that"
+          description="Nothing in this programme sits in that combination. Widen the filter or clear it to see the whole programme."
+        />
+      ) : null}
+
       <Card className="space-y-3 p-4">
         <p className="text-sm text-text">{progressHeadline(total)}</p>
         <div className="grid gap-2 sm:grid-cols-5">
@@ -323,7 +514,7 @@ function Progress({
               </TR>
             </THead>
             <TBody>
-              {(data.pipeline ?? []).map((stage: Row) => {
+              {pipeline.map((stage: Row) => {
                 const t = data.by_stage?.[String(stage.code)];
                 if (!t) return null;
                 return (
@@ -1543,8 +1734,8 @@ function Villages({
   projectId: string; canManage: boolean; canEnter: boolean;
   /** A village another screen linked to, opened on arrival. */
   openVillage?: string | null;
-  /** A stage and state handed over from the roll-up's tally. */
-  stageDrill?: { stage: string; state: string } | null;
+  /** A stage, a state and the geography they were counted over. */
+  stageDrill?: { stage: string; state: string; district: string; mandal: string } | null;
   /** A mandal or district handed over from a roll-up row. */
   geoDrill?: { level: ReportLevel; name: string } | null;
   onDrillConsumed?: () => void;
@@ -1565,6 +1756,14 @@ function Villages({
    * answers rather than a milestone box and a claimed/unclaimed tick.
    */
   const [billing, setBilling] = React.useState('');
+  /*
+   * Which villages a bulk action would touch.
+   *
+   * Held as ids rather than as the filter itself: a filter re-evaluated at
+   * apply time is not the list somebody read on screen, and between the
+   * preview and the press it can quietly change under them.
+   */
+  const [picked, setPicked] = React.useState<Set<string>>(() => new Set());
 
   /*
    * Take up a filter another part of the screen handed over.
@@ -1576,7 +1775,11 @@ function Villages({
     if (stageDrill) {
       setStage(stageDrill.stage);
       setStageState(stageDrill.state);
-      setDistrict(''); setMandal(''); setFilter('');
+      // The geography the count was taken over, so the list matches the
+      // number that was clicked.
+      setDistrict(stageDrill.district ?? '');
+      setMandal(stageDrill.mandal ?? '');
+      setFilter('');
       onDrillConsumed?.();
     } else if (geoDrill) {
       if (geoDrill.level === 'mandal') { setMandal(geoDrill.name); setDistrict(''); }
@@ -1662,6 +1865,23 @@ function Villages({
       />
     );
   }
+
+  /*
+   * A selection is only ever of rows the filter is showing.
+   *
+   * Picking forty villages, changing the filter, and claiming what is now
+   * selected is how a claim goes out against villages nobody looked at. The
+   * selection is intersected with the visible rows on every render, so what
+   * the bar says is selected is always what is on screen.
+   */
+  const visibleIds = rows.map((v) => String(v.id));
+  const selectedHere = visibleIds.filter((id) => picked.has(id));
+  const allPicked = visibleIds.length > 0 && selectedHere.length === visibleIds.length;
+  const toggle = (id: string) => setPicked((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   return (
     <div className="space-y-3">
@@ -1773,10 +1993,47 @@ function Villages({
         />
       </Toolbar>
 
+      {/*
+        * Claiming what the filter is showing.
+        *
+        * "Every village where vectorisation is finished and nothing has been
+        * claimed" is one covering letter, and building it by opening forty
+        * villages in turn is how two get missed.
+        */}
+      <BillingBulkBar
+        selected={selectedHere}
+        canManage={canManage}
+        onDone={() => setPicked(new Set())}
+        onClear={() => setPicked(new Set())}
+      />
+
       <TableWrap>
         <Table>
           <THead>
             <TR>
+              {canManage ? (
+                <TH className="w-8">
+                  <input
+                    type="checkbox"
+                    aria-label={allPicked ? 'Clear the selection' : 'Select every village shown'}
+                    title={allPicked
+                      ? 'Clear the selection'
+                      : `Select all ${visibleIds.length} village(s) the filter is showing`}
+                    checked={allPicked}
+                    /* Some but not all: the box says so rather than reading
+                       as "none selected" when forty are. */
+                    ref={(el) => {
+                      if (el) el.indeterminate = selectedHere.length > 0 && !allPicked;
+                    }}
+                    onChange={() => setPicked((prev) => {
+                      const next = new Set(prev);
+                      if (allPicked) visibleIds.forEach((id) => next.delete(id));
+                      else visibleIds.forEach((id) => next.add(id));
+                      return next;
+                    })}
+                  />
+                </TH>
+              ) : null}
               {/* A running number, so a row can be referred to out loud and
                   found again in a list of a thousand. It follows the filter
                   rather than the underlying record, which is what somebody
@@ -1814,6 +2071,16 @@ function Villages({
               return (
                 <React.Fragment key={String(v.id)}>
                   <TR>
+                    {canManage ? (
+                      <TD>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${String(v.village_name)}`}
+                          checked={picked.has(String(v.id))}
+                          onChange={() => toggle(String(v.id))}
+                        />
+                      </TD>
+                    ) : null}
                     <TD className="text-right tabular-nums text-2xs text-text-subtle">
                       {index + 1}
                     </TD>
@@ -1904,7 +2171,7 @@ function Villages({
                   </TR>
                   {isOpen ? (
                     <TR>
-                      <TD colSpan={10} className="bg-surface-sunken p-0">
+                      <TD colSpan={canManage ? 11 : 10} className="bg-surface-sunken p-0">
                         <VillageDetail
                           village={v}
                           pipeline={pipeline}

@@ -1618,3 +1618,91 @@ export function claimedPercent(
       .reduce((sum, c) => sum + Number(c.percent || 0), 0) * 100,
   ) / 100;
 }
+
+/**
+ * Claiming, or recording a decision on, a batch of villages at once.
+ *
+ * Forty villages going into one claim is one decision and one covering
+ * letter, not forty. Doing it a village at a time is how thirty-eight go in
+ * and two are found months later, unclaimed, on a programme everybody
+ * believes is fully billed.
+ *
+ * Two actions, because they are the two things that happen to a batch: the
+ * claim goes out, and later the department answers it.
+ */
+export const villageBillingBulkSchema = z.object({
+  survey_village_ids: z.array(z.string().uuid())
+    .min(1, 'Choose at least one village')
+    // A thousand is more villages than any single claim covers, and it caps
+    // what one request can do by accident.
+    .max(1000, 'That is more than 1,000 villages at once'),
+  action: z.enum(['SUBMIT', 'DECIDE']),
+  milestone: z.number().int()
+    .min(1, 'Milestones are numbered from 1')
+    .max(9, 'A contract with more than nine claims is not one this handles'),
+
+  /* --- submitting --- */
+  percent: z.number().finite()
+    .gt(0, 'A claim releases some share of the value')
+    .max(100, 'A claim cannot release more than the whole village')
+    .optional(),
+  submitted_on: pastDate.optional(),
+  reference_no: z.string().max(64).nullable().optional(),
+  /**
+   * Claim each village's recorded extent.
+   *
+   * The extent claimed is normally the village's own, and typing it forty
+   * times is forty chances to transpose a digit. Off by default, because a
+   * claim for an extent nobody checked is worse than a claim with none.
+   */
+  use_village_extent: z.boolean().optional(),
+  remarks: z.string().max(2000).nullable().optional(),
+
+  /* --- deciding --- */
+  status: z.enum(['APPROVED', 'REJECTED', 'PAID']).optional(),
+  decided_on: pastDate.optional(),
+
+  /**
+   * Show what would happen, and write nothing.
+   *
+   * This is the screen where somebody discovers they had the wrong filter
+   * applied — after it has already claimed two hundred villages.
+   */
+  dry_run: z.boolean().default(true),
+}).strict().superRefine((v, ctx) => {
+  if (v.action === 'DECIDE') {
+    if (!v.status) {
+      ctx.addIssue({
+        code: 'custom', path: ['status'],
+        message: 'Choose what the department decided',
+      });
+    }
+    if (!v.decided_on) {
+      // A decided claim with no date cannot be aged, and ageing them is the
+      // reason to track them at all.
+      ctx.addIssue({
+        code: 'custom', path: ['decided_on'],
+        message: 'Enter the date the department decided these',
+      });
+    }
+  }
+});
+
+export type VillageBillingBulkInput = z.infer<typeof villageBillingBulkSchema>;
+
+/**
+ * Why a village in the batch was left alone.
+ *
+ * Named rather than counted: "12 skipped" tells somebody to go looking,
+ * while "12 already claimed at this milestone" tells them nothing is wrong.
+ */
+export type BillingSkipReason =
+  | 'ALREADY_CLAIMED'
+  | 'NOTHING_TO_DECIDE'
+  | 'ALREADY_IN_THAT_STATE';
+
+export const BILLING_SKIP_LABELS: Record<BillingSkipReason, string> = {
+  ALREADY_CLAIMED: 'already submitted at this milestone',
+  NOTHING_TO_DECIDE: 'nothing submitted at this milestone to decide',
+  ALREADY_IN_THAT_STATE: 'already recorded that way',
+};

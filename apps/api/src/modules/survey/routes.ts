@@ -17,6 +17,7 @@ import {
   villageStatusSchema, villagePlanSchema, delayReasonLabel, DELAY_REASONS,
   villageBillingSchema, villageBillingPatchSchema, MILESTONE_PERCENT,
   billingDecisionRequired, claimedPercent, type BillingStatus,
+  villageBillingBulkSchema,
   type MeasureBasis, type PeriodGrain, type ReportLevel, type StageState, type VillageProgress,
   businessDay,
 } from '@silverline/shared';
@@ -2302,6 +2303,162 @@ export async function registerSurveyRoutes(
       };
     });
 
+  /**
+   * Claim, or record a decision on, a batch of villages (§066).
+   *
+   * Forty villages go into one claim under one covering letter. Recording
+   * that a village at a time is how thirty-eight go in and two are found
+   * months later, unclaimed, on a programme everybody believes is fully
+   * billed.
+   *
+   * Nothing is written until the caller has seen what would happen. This is
+   * the screen where somebody discovers they had the wrong filter applied,
+   * and by then two hundred villages are claimed.
+   *
+   * A village that cannot take the action is named and skipped rather than
+   * failing the batch: refusing all forty because two were already claimed
+   * means doing the other thirty-eight again by hand.
+   */
+  app.post('/api/v1/survey/billing/bulk', { preHandler: guard('survey.manage') },
+    async req => {
+      const u = actor(req);
+      const input = parse(villageBillingBulkSchema, req.body);
+      const ids = [...new Set(input.survey_village_ids)];
+
+      return {
+        data: await mutate(pool, req, 'survey.village.billing.bulk',
+          'survey_village_billing', async db => {
+            /*
+             * Every village in the batch, with what already stands against
+             * this milestone. One query rather than one per village: a
+             * thousand round trips inside a transaction holds locks for
+             * minutes and times the request out.
+             *
+             * Scoped by org here, and the count of what came back is
+             * compared against what was asked for — a village id from
+             * another organisation simply is not in the result, and is
+             * reported as not found rather than acted on.
+             */
+            const rows = (await db.query(
+              `SELECT sv.id, ou.name AS village_name, sv.total_extent_ac,
+                      b.id AS claim_id, b.status AS claim_status, b.version AS claim_version,
+                      EXISTS (
+                        SELECT 1 FROM survey_village_billing prior
+                         WHERE prior.survey_village_id = sv.id
+                           AND prior.milestone < $3 AND prior.status <> 'REJECTED'
+                      ) AS has_prior
+                 FROM survey_villages sv
+                 JOIN org_units ou ON ou.id = sv.village_id
+                 LEFT JOIN survey_village_billing b
+                        ON b.survey_village_id = sv.id AND b.milestone = $3
+                WHERE sv.org_id = $1 AND sv.id = ANY($2::uuid[])
+                ORDER BY ou.name`,
+              [u.orgId, ids, input.milestone])).rows;
+
+            const found = new Set(rows.map(r => String(r.id)));
+            const notFound = ids.filter(id => !found.has(id));
+
+            const eligible: typeof rows = [];
+            const skipped: Array<{ village_name: string; reason: string }> = [];
+
+            for (const r of rows) {
+              const standing = r.claim_id && r.claim_status !== 'REJECTED';
+              if (input.action === 'SUBMIT') {
+                // A returned claim is claimable again — the milestone is
+                // owed once more — so only a standing one blocks.
+                if (standing) {
+                  skipped.push({ village_name: String(r.village_name), reason: 'ALREADY_CLAIMED' });
+                  continue;
+                }
+              } else {
+                if (!r.claim_id) {
+                  skipped.push({ village_name: String(r.village_name), reason: 'NOTHING_TO_DECIDE' });
+                  continue;
+                }
+                if (String(r.claim_status) === input.status) {
+                  skipped.push({
+                    village_name: String(r.village_name), reason: 'ALREADY_IN_THAT_STATE',
+                  });
+                  continue;
+                }
+              }
+              eligible.push(r);
+            }
+
+            /*
+             * Claiming a milestone with an earlier one outstanding.
+             *
+             * Not refused — a contract variation can release them in any
+             * order, and the department, not this software, decides what it
+             * will accept. Counted and reported, because the usual cause is
+             * the wrong milestone picked, and finding that out before the
+             * letter goes out is the whole point of the preview.
+             */
+            const outOfOrder = input.action === 'SUBMIT' && input.milestone > 1
+              ? eligible.filter(r => !r.has_prior).length : 0;
+
+            if (input.dry_run) {
+              return {
+                dry_run: true,
+                would_change: eligible.length,
+                villages: eligible.slice(0, 20).map(r => String(r.village_name)),
+                skipped, not_found: notFound, out_of_order: outOfOrder,
+                // Only meaningful when claiming each village's own extent.
+                without_extent: input.action === 'SUBMIT' && input.use_village_extent
+                  ? eligible.filter(r => r.total_extent_ac === null).length : 0,
+              };
+            }
+
+            if (input.action === 'SUBMIT') {
+              for (const r of eligible) {
+                // A milestone claimed, returned, and claimed again keeps one
+                // row: the second claim amends the first, or the percentages
+                // stop adding to a hundred.
+                if (r.claim_id) {
+                  await db.query(
+                    `UPDATE survey_village_billing
+                        SET status = 'SUBMITTED', percent = $2, submitted_on = COALESCE($3::date, CURRENT_DATE),
+                            decided_on = NULL, reference_no = $4, extent_ac = $5, remarks = $6,
+                            version = version + 1, updated_at = now(), updated_by = $7
+                      WHERE id = $1`,
+                    [r.claim_id, input.percent ?? MILESTONE_PERCENT[input.milestone] ?? 0,
+                      input.submitted_on ?? null, input.reference_no ?? null,
+                      input.use_village_extent ? r.total_extent_ac : null,
+                      input.remarks ?? null, u.id]);
+                  continue;
+                }
+                await db.query(
+                  `INSERT INTO survey_village_billing(org_id, survey_village_id, milestone,
+                     percent, status, submitted_on, reference_no, extent_ac, remarks,
+                     created_by, updated_by)
+                   VALUES($1,$2,$3,$4,'SUBMITTED',COALESCE($5::date, CURRENT_DATE),$6,$7,$8,$9,$9)`,
+                  [u.orgId, r.id, input.milestone,
+                    input.percent ?? MILESTONE_PERCENT[input.milestone] ?? 0,
+                    input.submitted_on ?? null, input.reference_no ?? null,
+                    input.use_village_extent ? r.total_extent_ac : null,
+                    input.remarks ?? null, u.id]);
+              }
+            } else {
+              await db.query(
+                `UPDATE survey_village_billing
+                    SET status = $2, decided_on = $3::date,
+                        remarks = COALESCE($4, remarks),
+                        version = version + 1, updated_at = now(), updated_by = $5
+                  WHERE id = ANY($1::uuid[])`,
+                [eligible.map(r => r.claim_id), input.status, input.decided_on ?? null,
+                  input.remarks ?? null, u.id]);
+            }
+
+            return {
+              dry_run: false,
+              updated: eligible.length,
+              villages: eligible.slice(0, 20).map(r => String(r.village_name)),
+              skipped, not_found: notFound, out_of_order: outOfOrder,
+            };
+          }),
+      };
+    });
+
   /* ------------------------------------------- who is on the programme */
 
   app.get('/api/v1/survey/projects/:id/employees', { preHandler: guard('survey.read') },
@@ -2843,11 +3000,61 @@ export async function registerSurveyRoutes(
       const asOf = String(q.to ?? q.as_of ?? today());
       const from = q.from ? String(q.from) : undefined;
 
-      const [m, codes, pos, pipeline] = await Promise.all([
+      const [m, codes, all, pipeline] = await Promise.all([
         measures(pool, u.orgId), stageCodes(pool, u.orgId),
         positions(pool, u.orgId, id, { asOf }),
         stagePipeline(pool, u.orgId),
       ]);
+
+      /*
+       * Narrowing the programme to part of itself.
+       *
+       * Applied to the villages before anything is added up, not to the
+       * table afterwards: a screen that filters the rows but leaves "42%
+       * complete" standing above them is reporting the programme's figure
+       * under the district's heading, and somebody will quote it.
+       *
+       * District and mandal match by name, which is what the picker offers
+       * and what a person reads. Names are unique inside a programme's
+       * geography; where they are not, the village filter is exact.
+       */
+      const fDistrict = q.district ? String(q.district) : '';
+      const fMandal = q.mandal ? String(q.mandal) : '';
+      const fVillage = q.village_id ? String(q.village_id) : '';
+      const fStage = q.stage ? String(q.stage) : '';
+      // Outstanding means not finished: not started, in progress and on hold
+      // together. It is the state people ask about and the one no single
+      // stage value holds.
+      const fStageState = q.stage_state ? String(q.stage_state) : 'OUTSTANDING';
+
+      const districtOf = (row: Record<string, any>) => row.parent_type === 'district'
+        ? row.parent_name
+        : row.grandparent_type === 'district' ? row.grandparent_name : null;
+
+      const pos = all.filter(p => {
+        if (fDistrict && String(districtOf(p.row) ?? '') !== fDistrict) return false;
+        if (fMandal && String(p.row.mandal_name ?? '') !== fMandal) return false;
+        if (fVillage && String(p.villageId) !== fVillage) return false;
+        if (fStage) {
+          const at = String(p.stages?.[fStage] ?? 'NOT_STARTED');
+          if (fStageState === 'OUTSTANDING' ? at === 'COMPLETED' : at !== fStageState) return false;
+        }
+        return true;
+      });
+
+      const filtered = pos.length !== all.length;
+      const villageIds = pos.map(p => p.villageId);
+
+      /*
+       * Rovers and pace, over the same villages.
+       *
+       * Left unfiltered they would report the whole programme's instruments
+       * beside one district's acres, and the utilisation figure that came
+       * out would belong to neither.
+       */
+      const scope = filtered ? ' AND sv.id = ANY($4::uuid[])' : '';
+      const entryScope = filtered ? ' AND e.survey_village_id = ANY($4::uuid[])' : '';
+      const roverArgs = filtered ? [u.orgId, id, asOf, villageIds] : [u.orgId, id, asOf];
 
       // Rovers: allocated on the day against what the crews reported using.
       // Idle is the figure worth having, and neither half of it means
@@ -2858,11 +3065,11 @@ export async function registerSurveyRoutes(
              JOIN survey_villages sv ON sv.id = ra.survey_village_id
             WHERE sv.survey_project_id = $2 AND ra.org_id = $1
               AND ra.allocated_on <= $3::date
-              AND (ra.released_on IS NULL OR ra.released_on >= $3::date)) AS allocated,
+              AND (ra.released_on IS NULL OR ra.released_on >= $3::date)${scope}) AS allocated,
            (SELECT COALESCE(sum(e.dgps_rovers), 0)::int FROM survey_entries e
-            WHERE e.org_id = $1 AND e.survey_project_id = $2 AND e.entry_date = $3::date)
+            WHERE e.org_id = $1 AND e.survey_project_id = $2 AND e.entry_date = $3::date${entryScope})
              AS used`,
-        [u.orgId, id, asOf])).rows[0];
+        roverArgs)).rows[0];
       const rovers = {
         as_of: asOf,
         ...roverUtilisation({
@@ -2871,13 +3078,20 @@ export async function registerSurveyRoutes(
       };
 
       // Pace over the window asked for, defaulting to the programme's life.
+      const paceArgs: unknown[] = [u.orgId, id, asOf];
+      let paceClause = '';
+      if (from) { paceArgs.push(from); paceClause += ` AND e.entry_date >= $${paceArgs.length}::date`; }
+      if (filtered) {
+        paceArgs.push(villageIds);
+        paceClause += ` AND e.survey_village_id = ANY($${paceArgs.length}::uuid[])`;
+      }
       const paceWindow = (await pool.query(
         `SELECT count(DISTINCT e.entry_date)::int AS active_days,
                 min(e.entry_date) AS first_day
          FROM survey_entries e
          WHERE e.org_id = $1 AND e.survey_project_id = $2
-           AND e.entry_date <= $3::date ${from ? 'AND e.entry_date >= $4::date' : ''}`,
-        from ? [u.orgId, id, asOf, from] : [u.orgId, id, asOf])).rows[0];
+           AND e.entry_date <= $3::date${paceClause}`,
+        paceArgs)).rows[0];
       const firstDay = iso(paceWindow.first_day) ?? asOf;
       const calendarDays = Math.max(1, Math.round(
         (Date.parse(`${asOf}T00:00:00Z`) - Date.parse(`${firstDay}T00:00:00Z`)) / 86_400_000) + 1);
@@ -2935,11 +3149,42 @@ export async function registerSurveyRoutes(
         };
       }).sort((a, b) => a.name.localeCompare(b.name));
 
+      /*
+       * The geography the pickers should offer.
+       *
+       * Taken from the programme's own villages, not from a master list: a
+       * programme covering three mandals should not offer a picker with two
+       * hundred. Mandals narrow to the district once one is chosen, because
+       * a picker that offers mandals from elsewhere invites an empty screen.
+       */
+      const districts = [...new Set(all
+        .map(p => String(districtOf(p.row) ?? '')).filter(Boolean))].sort();
+      const mandals = [...new Set(all
+        .filter(p => !fDistrict || String(districtOf(p.row) ?? '') === fDistrict)
+        .map(p => String(p.row.mandal_name ?? '')).filter(Boolean))].sort();
+      const villages = all
+        .filter(p => (!fDistrict || String(districtOf(p.row) ?? '') === fDistrict)
+          && (!fMandal || String(p.row.mandal_name ?? '') === fMandal))
+        .map(p => ({ id: p.villageId, name: String(p.row.village_name) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
       return {
         data: {
           level,
           as_of: asOf,
           from: from ?? null,
+          // What the figures below cover, so a screen can say so rather than
+          // leaving a reader to remember what they picked.
+          filter: {
+            district: fDistrict || null,
+            mandal: fMandal || null,
+            village_id: fVillage || null,
+            stage: fStage || null,
+            stage_state: fStage ? fStageState : null,
+            villages: pos.length,
+            of_villages: all.length,
+          },
+          options: { districts, mandals, villages },
           rows,
           // The whole programme, computed from the same villages, so the
           // headline and the rows below it cannot disagree.
