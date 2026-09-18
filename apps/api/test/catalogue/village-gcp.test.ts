@@ -363,3 +363,62 @@ describe("a date that is not a date", () => {
     expect(r.status).toBe(200);
   });
 });
+
+describe("who may record a control point", () => {
+  /*
+   * The point is established by whoever stands on it with the base station:
+   * a surveyor or a team lead. Neither holds survey.manage, so requiring it
+   * meant the one person who knew the fix could not enter it. The
+   * coordinates travelled to the office as a photograph of a notebook and
+   * were retyped by somebody who had never seen the pillar, which is exactly
+   * where a digit goes missing from a ten-figure coordinate.
+   */
+  beforeAll(async () => {
+    // Visibility into a programme comes from being on it. Which is the same
+    // fact as being the person who establishes its control: nobody stands on
+    // the pillar of a village they were never put on.
+    await post(w.admin, `/api/v1/survey/villages/${villageB}/crew`, {
+      employee_id: w.directEmployee, stage_code: "GROUND_TRUTHING",
+    });
+  });
+
+  it("lets a crew member record the point they are standing on", async () => {
+    const r = await post(w.directUser, `/api/v1/survey/villages/${villageB}/gcps`, {
+      point_code: uniq("FIELD"),
+      latitude: 17.512345, longitude: 82.612345,
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+
+  it("lets them correct their own figures", async () => {
+    const made = await post(w.directUser, `/api/v1/survey/villages/${villageB}/gcps`, {
+      point_code: uniq("FIX"), latitude: 17.5, longitude: 82.6,
+    });
+    expect(made.status).toBe(201);
+    // Corrections carry the version they are correcting, here as everywhere:
+    // two people fixing the same coordinate is exactly the case that needs it.
+    const r = await send("PATCH",
+      { ...w.directUser, "if-match": String(made.data.version) },
+      `/api/v1/survey/gcps/${made.data.id}`, { latitude: 17.512999 });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(Number(r.data.latitude)).toBeCloseTo(17.512999, 6);
+  });
+
+  it("does not let them delete one", async () => {
+    // An established point is what everything in the village was surveyed
+    // from. Removing it is a decision about the record, not an observation,
+    // and it stays with the desk.
+    const made = await post(w.directUser, `/api/v1/survey/villages/${villageB}/gcps`, {
+      point_code: uniq("KEEP"), latitude: 17.51, longitude: 82.61,
+    });
+    const r = await send("DELETE", w.directUser, `/api/v1/survey/gcps/${made.data.id}`);
+    expect(r.status).toBe(403);
+  });
+
+  it("does not let a read-only role record one", async () => {
+    const r = await post(w.role.CLIENT_VIEWER, `/api/v1/survey/villages/${villageB}/gcps`, {
+      point_code: uniq("NOPE"), latitude: 17.5, longitude: 82.6,
+    });
+    expect(r.status).toBe(403);
+  });
+});

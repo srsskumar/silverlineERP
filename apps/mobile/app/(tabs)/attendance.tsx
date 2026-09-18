@@ -152,7 +152,7 @@ function AttendanceScreen() {
     if (kind === "CHECK_OUT" && village && !village.filed_today && !deferReason) {
       setMsg(
         `No progress is recorded for ${village.village_name} today. `
-        + "File the day's return, or say below why you cannot.",
+        + "File it on the Survey tab, or say below why you cannot.",
       );
       setMsgTone("warning");
       return;

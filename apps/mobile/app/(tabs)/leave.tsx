@@ -188,7 +188,7 @@ function LeaveScreen() {
         <Input
           label="From"
           placeholder="YYYY-MM-DD"
-          keyboardType="numbers-and-punctuation"
+          keyboardType="numeric"
           autoCapitalize="none"
           value={from}
           onChangeText={setFrom}
@@ -196,7 +196,7 @@ function LeaveScreen() {
         <Input
           label="To"
           placeholder="YYYY-MM-DD"
-          keyboardType="numbers-and-punctuation"
+          keyboardType="numeric"
           autoCapitalize="none"
           value={to}
           onChangeText={setTo}

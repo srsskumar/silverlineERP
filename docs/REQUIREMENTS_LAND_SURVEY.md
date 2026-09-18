@@ -155,3 +155,32 @@ measured against.
   geo-fences; land parcel polygons are a different problem.
 - Billing against survey output. The survey project may be linked to an
   ordinary project when that is wanted.
+
+## 59.9 Filing from the field
+
+**59.9.1** The day's return is recorded on the phone, in the village, by the
+crew that did the work. The web screen remains, because a supervisor amends
+and a project manager back-fills; but the first entry belongs where the work
+happened. Until this existed every one of the returns in the system had been
+typed by an administrator from a photograph of a notebook, and the app asked
+at punch-out for a return it gave no way to file.
+
+**59.9.2** Returns and control points are queued on the device and sent when
+there is signal. A village with coverage is the exception, not the rule.
+
+**59.9.3** Every rule the server applies to a return is applied on the device
+first, using the same functions. A queued return refused hours later has
+nobody left to ask, and the queue abandons what the server rejects. This is
+why the programme's low-progress threshold is sent to the phone: the question
+"why was today short?" can only be answered while the person is standing
+there.
+
+**59.9.4** Ground control points are recorded by whoever establishes them.
+That is a surveyor or a team lead, holding `survey.enter` and not
+`survey.manage`. Deleting an established point stays with `survey.manage`:
+everything in the village was surveyed from it, and removing it is a decision
+about the record rather than an observation.
+
+**59.9.5** The phone's own fix fills the coordinate fields as a starting
+position and says so. A phone is metres-accurate; a control point is not, and
+a field pre-filled from GPS without a caption is a field nobody overwrites.

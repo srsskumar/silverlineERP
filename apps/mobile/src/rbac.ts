@@ -59,6 +59,12 @@ export const PERMISSIONS = {
   INVENTORY_MANAGE: "inventory.manage",
   PAYROLL_READ: "payroll.read",
   PAYROLL_MANAGE: "payroll.manage",
+  // S59 land survey. Entry covers the day's return and the control points
+  // recorded standing on them; the master list and the targets completion is
+  // measured against are survey.manage and survey.target, neither of which
+  // the app asks for.
+  SURVEY_READ: "survey.read",
+  SURVEY_ENTER: "survey.enter",
 } as const;
 
 export type PermissionCode =
@@ -79,7 +85,7 @@ export function can(
   return need.every((p) => granted.includes(p as string));
 }
 
-export type TabKey = "home" | "attendance" | "tasks" | "leave" | "more";
+export type TabKey = "home" | "attendance" | "tasks" | "leave" | "survey" | "more";
 
 /**
  * Which permissions gate each bottom tab's *content*.
@@ -91,6 +97,14 @@ export const TAB_PERMISSIONS: Record<TabKey, string[]> = {
   attendance: [PERMISSIONS.ATTENDANCE_PUNCH, PERMISSIONS.ATTENDANCE_READ],
   tasks: [PERMISSIONS.TASK_READ],
   leave: [PERMISSIONS.LEAVE_REQUEST, PERMISSIONS.LEAVE_READ],
+  /*
+   * Read gates the tab; entry gates the forms inside it. They differ on
+   * purpose: an auditor or a client viewer may be on a village's crew list
+   * and hold only survey.read, and a screen that shows them the work and says
+   * plainly that they cannot record against it beats a form that refuses on
+   * submit.
+   */
+  survey: [PERMISSIONS.SURVEY_READ],
   more: [],
 };
 

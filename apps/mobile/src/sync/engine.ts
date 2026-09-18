@@ -13,6 +13,8 @@ import {
   postLeaveRequest,
   postTaskComment,
   postTaskEvidence,
+  postSurveyEntry,
+  postVillageGcp,
   postTask as apiPostTask,
 } from "../api/endpoints";
 import { enqueueOp, flushQueue, type OpExecutor } from "./queue";
@@ -129,6 +131,35 @@ export const defaultExecutor: OpExecutor = async (op) => {
           payload as unknown as Parameters<typeof postLeaveRequest>[0], op.idempotency_key,
         ),
       };
+    case "survey_entry":
+      /*
+       * The day's return, filed from the village.
+       *
+       * Queued rather than sent directly because the villages this runs in
+       * have no signal to speak of, and a return that can only be filed
+       * where there are bars is a return that gets written on paper and
+       * typed at a desk a week later. The server refuses a second entry for
+       * the same village-day outright, so a replay of an op that actually
+       * landed is rejected as ALREADY_ENTERED rather than doubling the day.
+       */
+      return {
+        status: 201,
+        body: await postSurveyEntry(
+          payload as unknown as Parameters<typeof postSurveyEntry>[0], op.idempotency_key,
+        ),
+      };
+    case "survey_gcp": {
+      // Established once per village, standing on the point. The village id
+      // is in the path rather than the body, so it is peeled off here.
+      const { survey_village_id, ...body } = payload;
+      return {
+        status: 201,
+        body: await postVillageGcp(
+          String(survey_village_id),
+          body as unknown as Parameters<typeof postVillageGcp>[1], op.idempotency_key,
+        ),
+      };
+    }
     case "notification_read":case "leave_decision":case "client_error": {
       const path=op.entity==='notification_read'?`/api/v1/notifications/${String(payload.notification_id)}/read`:op.entity==='client_error'?'/api/v1/client-errors':`/api/v1/leave/requests/${String(payload.request_id)}/decision`;
       const {request_id,notification_id,...body}=payload;

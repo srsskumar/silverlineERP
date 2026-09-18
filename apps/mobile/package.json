@@ -62,7 +62,8 @@
     "shared": "npm run build --workspace=@silverline/shared",
     "prestart": "npm run shared",
     "prebuild": "npm run shared",
-    "preios": "npm run shared"
+    "preios": "npm run shared",
+    "pretest": "npm run shared"
   },
   "private": true
 }

@@ -757,6 +757,36 @@ describe("punching in and out against a village", () => {
     // villageA has today's return from the rover tests above.
     expect(a!.filed_today).toBe(true);
     expect(r.body.work_date).toBe(workDate());
+    /*
+     * The programme's low-progress threshold travels with the village.
+     *
+     * The return is filed from a village with no signal and sits in the
+     * phone's outbox; the server would refuse a short day with no reason
+     * given, but hours later, with nobody left to ask. The rule has to be
+     * known where the question is put, so it is sent — present as a key even
+     * when the programme sets none, so the app can tell "no threshold" from
+     * "an old build that never asked".
+     */
+    expect(a).toHaveProperty("low_progress_threshold_ac");
+  });
+
+  it("carries the threshold the app has to apply before it queues a return", async () => {
+    const before = await w.pool.query(
+      "SELECT low_progress_threshold_ac FROM survey_projects WHERE id = $1", [programmeId]);
+    await w.pool.query(
+      "UPDATE survey_projects SET low_progress_threshold_ac = 12 WHERE id = $1", [programmeId]);
+    try {
+      const r = await get(w.directUser, "/api/v1/survey/me/villages");
+      const v = (r.body.data as Array<Record<string, unknown>>).find(x => x.id === villageA);
+      expect(v, "the village they are crewed to").toBeTruthy();
+      // A number, not the string postgres hands back for a numeric column —
+      // the app compares it against a typed figure.
+      expect(v!.low_progress_threshold_ac).toBe(12);
+    } finally {
+      await w.pool.query(
+        "UPDATE survey_projects SET low_progress_threshold_ac = $2 WHERE id = $1",
+        [programmeId, before.rows[0].low_progress_threshold_ac]);
+    }
   });
 
   it("does not hand a crew member somebody else's villages", async () => {

@@ -79,7 +79,7 @@ export function Payslip() {
         value={month}
         onChangeText={setMonth}
         maxLength={7}
-        keyboardType="numbers-and-punctuation"
+        keyboardType="numeric"
         error={month.length === 7 && !valid ? "Use the format YYYY-MM." : undefined}
       />
       {q.isLoading ? <Subtle>Loading payslip…</Subtle> : null}

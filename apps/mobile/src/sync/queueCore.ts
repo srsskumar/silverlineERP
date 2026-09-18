@@ -39,6 +39,8 @@ export type QueueEntity =
   | "leave_request"
   | "leave_decision"
   | "notification_read"
+  | "survey_entry"
+  | "survey_gcp"
   | "client_error";
 
 

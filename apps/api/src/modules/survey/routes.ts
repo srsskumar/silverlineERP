@@ -1157,6 +1157,12 @@ export async function registerSurveyRoutes(
               ou.name AS village_name, ou.code AS village_code,
               m.name AS mandal_name, d.name AS district_name,
               p.name AS project_name,
+              -- Sent to the device so the app can apply the same low-progress
+              -- rule the server will. The return is filed from a village with
+              -- no signal and queued, and a refusal that arrives hours later
+              -- cannot ask anybody anything: the question has to be put while
+              -- the person is still standing there.
+              p.low_progress_threshold_ac,
               s.code AS stage_code, s.label AS stage_label,
               EXISTS (SELECT 1 FROM survey_entries se
                       WHERE se.survey_village_id = sv.id
@@ -1178,6 +1184,7 @@ export async function registerSurveyRoutes(
       data: rows.map(r => ({
         ...r,
         total_extent_ac: num(r.total_extent_ac),
+        low_progress_threshold_ac: num(r.low_progress_threshold_ac),
         filed_today: r.filed_today === true,
       })),
       // So the app can label the question it is about to ask.
@@ -2476,7 +2483,22 @@ export async function registerSurveyRoutes(
       };
     });
 
-  app.post('/api/v1/survey/villages/:id/gcps', { preHandler: guard('survey.manage') },
+  /*
+   * Recording a control point is field work, not master data (§070).
+   *
+   * The point is established by whoever stands on it with the base: a
+   * surveyor or a team lead, neither of whom holds survey.manage. Requiring
+   * it meant the one person who knows the fix could not enter it, so the
+   * coordinates travelled to the office by photograph and were retyped by
+   * somebody who had never seen the pillar. Retyping a ten-digit coordinate
+   * is exactly where a digit goes missing.
+   *
+   * So creating and correcting a point is survey.enter, the same right that
+   * records the day's figures. Deleting one stays survey.manage: an
+   * established point is referenced by everything surveyed from it, and
+   * removing it is a decision about the record rather than an observation.
+   */
+  app.post('/api/v1/survey/villages/:id/gcps', { preHandler: guard('survey.enter') },
     async (req, reply) => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(gcpSchema, req.body);
@@ -2517,7 +2539,7 @@ export async function registerSurveyRoutes(
       return { data };
     });
 
-  app.patch('/api/v1/survey/gcps/:id', { preHandler: guard('survey.manage') },
+  app.patch('/api/v1/survey/gcps/:id', { preHandler: guard('survey.enter') },
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(gcpPatchSchema, req.body);

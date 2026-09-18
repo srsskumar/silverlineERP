@@ -128,6 +128,9 @@ export async function changeOwnPassword(
 /** One of the villages this person is crewed to today. */
 export interface MyVillage {
   id: string;
+  survey_project_id: string;
+  /** The denominator for every extent-based percentage. Null when unknown. */
+  total_extent_ac: number | null;
   village_name: string;
   village_code: string | null;
   mandal_name: string | null;
@@ -135,6 +138,12 @@ export interface MyVillage {
   project_name: string;
   stage_code: string;
   stage_label: string;
+  /**
+   * The programme's low-progress threshold in acres, or null when it sets
+   * none. Carried to the device so the app applies the same rule the server
+   * will, before the return goes into a queue that cannot ask questions.
+   */
+  low_progress_threshold_ac: number | null;
   /** Whether today's progress return has already been filed for it. */
   filed_today: boolean;
 }
@@ -151,6 +160,151 @@ export async function getMyVillages(): Promise<{ villages: MyVillage[]; workDate
     apiFetch<{ data: MyVillage[]; work_date: string }>("/api/v1/survey/me/villages"));
   const body = data as { data?: MyVillage[]; work_date?: string } | null;
   return { villages: body?.data ?? [], workDate: body?.work_date ?? "" };
+}
+
+/** A measure the day's return asks a quantity for. */
+export interface SurveyMeasure {
+  id: string;
+  code: string;
+  label: string;
+  group_label: string | null;
+  unit: string;
+  /** EXTENT measures divide by the village extent; COUNT ones need a target. */
+  basis: string;
+  display_order: number;
+}
+
+export interface SurveyStage {
+  id: string;
+  code: string;
+  label: string;
+  display_order: number;
+}
+
+export async function getSurveyMeasures(): Promise<{
+  measures: SurveyMeasure[];
+  stages: SurveyStage[];
+}> {
+  const { data } = await cachedRead("getSurveyMeasures", () =>
+    apiFetch<{ data: { measures: SurveyMeasure[]; stages: SurveyStage[] } }>(
+      "/api/v1/survey/measures",
+    ));
+  const body = (data as { data?: { measures?: SurveyMeasure[]; stages?: SurveyStage[] } } | null);
+  return { measures: body?.data?.measures ?? [], stages: body?.data?.stages ?? [] };
+}
+
+/** One instrument allocated to a village. */
+export interface VillageRover {
+  id: string;
+  asset_id: string;
+  asset_code: string;
+  asset_name: string;
+  serial_number: string | null;
+  category: string | null;
+  /** Still allocated — released kit is history and is not asked about. */
+  out: boolean;
+}
+
+/**
+ * The kit allocated to a village.
+ *
+ * Returned whole, including the tripods and radios: filtering to survey
+ * instruments is the caller's decision, and the count of everything else is
+ * worth showing rather than silently dropping.
+ */
+export async function getVillageRovers(villageId: string): Promise<VillageRover[]> {
+  const { data } = await cachedRead(`getVillageRovers:${villageId}`, () =>
+    apiFetch<{ data: VillageRover[] }>(
+      `/api/v1/survey/villages/${villageId}/rovers`,
+    ));
+  return (data as { data?: VillageRover[] } | null)?.data ?? [];
+}
+
+/** One rover's day, as the return records it. */
+export interface RoverDayInput {
+  asset_id: string;
+  status: "UTILIZED" | "IDLE";
+  idle_reason?: string | null;
+  remarks?: string | null;
+}
+
+/**
+ * One day's progress for one village.
+ *
+ * No cumulative field, here or anywhere: the running total is summed from
+ * these and never typed. Mirrors surveyEntrySchema in packages/shared.
+ */
+export interface SurveyEntryInput {
+  survey_village_id: string;
+  entry_date: string;
+  values: Record<string, number>;
+  rovers?: RoverDayInput[];
+  notes?: string | null;
+  low_progress_reason?: string | null;
+  low_progress_remarks?: string | null;
+  /** Null and zero differ: null is "nobody was asked", zero is "nobody came". */
+  govt_staff_present?: number | null;
+  crew_present?: number | null;
+}
+
+export async function postSurveyEntry(
+  input: SurveyEntryInput,
+  idempotencyKey?: string,
+): Promise<unknown> {
+  const { data } = await apiFetch("/api/v1/survey/entries", {
+    method: "POST",
+    body: input,
+    idempotencyKey,
+  });
+  return asItem(data);
+}
+
+/** A control point already recorded for a village. */
+export interface VillageGcp {
+  id: string;
+  point_code: string;
+  latitude: number;
+  longitude: number;
+  elevation_m: number | null;
+  easting_m: number | null;
+  northing_m: number | null;
+  grid_zone: string | null;
+  remarks: string | null;
+  established_on: string | null;
+  recorded_by_name: string | null;
+  /** Sanity-check codes from the server — advisory, never a refusal. */
+  warnings?: string[];
+}
+
+export async function getVillageGcps(villageId: string): Promise<VillageGcp[]> {
+  const { data } = await cachedRead(`getVillageGcps:${villageId}`, () =>
+    apiFetch<{ data: VillageGcp[] }>(`/api/v1/survey/villages/${villageId}/gcps`));
+  return (data as { data?: VillageGcp[] } | null)?.data ?? [];
+}
+
+export interface GcpInput {
+  point_code: string;
+  latitude: number;
+  longitude: number;
+  elevation_m?: number | null;
+  easting_m?: number | null;
+  northing_m?: number | null;
+  grid_zone?: string | null;
+  remarks?: string | null;
+  established_on?: string | null;
+}
+
+export async function postVillageGcp(
+  villageId: string,
+  input: GcpInput,
+  idempotencyKey?: string,
+): Promise<unknown> {
+  const { data } = await apiFetch(`/api/v1/survey/villages/${villageId}/gcps`, {
+    method: "POST",
+    body: input,
+    idempotencyKey,
+  });
+  return asItem(data);
 }
 
 // --- Attendance ----------------------------------------------------------------
