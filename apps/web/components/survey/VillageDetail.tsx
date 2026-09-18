@@ -65,7 +65,7 @@ export function VillageDetail({
    * they came to do; making them find it again in an expanded panel is a
    * step that exists only because the software could not be bothered.
    */
-  openSection?: 'stages' | 'crew' | 'rovers' | 'billing' | null;
+  openSection?: 'stages' | 'crew' | 'rovers' | 'billing' | 'gcp' | null;
 }) {
   const focus = React.useRef<HTMLDivElement | null>(null);
   React.useEffect(() => {
@@ -87,6 +87,16 @@ export function VillageDetail({
       <div {...mark('stages')}>
         <StagePipeline village={village} pipeline={pipeline} canEnter={canEnter} />
       </div>
+      {/*
+        * Control points first (§069).
+        *
+        * Establishing them is the one-time job done *before* ground truthing
+        * starts, so it belongs above the five panels about work that comes
+        * after it. It was at the bottom and people could not find it.
+        */}
+      <div {...mark('gcp')}>
+        <ControlPoints village={village} canManage={canManage} />
+      </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <div {...mark('crew')}>
           <Crew villageId={String(village.id)} pipeline={pipeline} canManage={canManage} />
@@ -99,7 +109,6 @@ export function VillageDetail({
           <Billing village={village} pipeline={pipeline} canManage={canManage} />
         </div>
         <CertifiedTotals village={village} canCertify={canCertify} />
-        <ControlPoints village={village} canManage={canManage} />
       </div>
       <DailySheet village={village} />
     </div>

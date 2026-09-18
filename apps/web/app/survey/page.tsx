@@ -20,7 +20,11 @@ import { hasPermission } from '@/lib/permissions';
 import { Notice, Section, Stat } from '@/components/finance/Primitives';
 import { GLOSSARY } from '@/components/ui/InfoHint';
 import { day, businessToday } from '@/lib/finance';
-import { staffingNote, formatCoordinate, GCP_WARNING_NOTES } from '@silverline/shared';
+import { useToast } from '@/components/ui/Toast';
+import { messageOf } from '@/lib/form-errors';
+import {
+  staffingNote, formatCoordinate, GCP_WARNING_NOTES, checkGcp,
+} from '@silverline/shared';
 import {
   GRAINS, LEVEL_LABELS, REPORT_LEVELS, STAGE_STATE_LABELS, TALLY_LABELS, TALLY_ORDER,
   VILLAGE_STATE_LABELS, acres, barWidth, count, financialYearToDate, groupMeasures,
@@ -286,7 +290,7 @@ export default function SurveyPage() {
               (p) => String(p.id) === projectId)?.name ?? '')} />
         ) : null}
         {projectId && tab === 'control' ? (
-          <ControlList projectId={projectId}
+          <ControlList projectId={projectId} canManage={canManage}
             projectName={String((projects.data ?? []).find(
               (p) => String(p.id) === projectId)?.name ?? '')}
             onOpenVillage={(id) => { setOpenVillage(id); setTab('villages'); }} />
@@ -2150,7 +2154,7 @@ function Villages({
   const [open, setOpen] = React.useState<string | null>(null);
   /* Which part of the opened village to bring into view. */
   const [section, setSection] =
-    React.useState<'stages' | 'crew' | 'rovers' | 'billing' | null>(null);
+    React.useState<'stages' | 'crew' | 'rovers' | 'billing' | 'gcp' | null>(null);
   const [filter, setFilter] = React.useState('');
   const [district, setDistrict] = React.useState('');
   const [mandal, setMandal] = React.useState('');
@@ -2629,6 +2633,11 @@ function Villages({
                               onClick={() => { setOpen(String(v.id)); setSection('rovers'); }}>
                               Instruments
                             </Button>
+                            <Button type="button" variant="ghost"
+                              title={`Record the ground control point for ${String(v.village_name)}`}
+                              onClick={() => { setOpen(String(v.id)); setSection('gcp'); }}>
+                              GCP
+                            </Button>
                           </>
                         ) : null}
                         {canEnter ? (
@@ -2883,6 +2892,183 @@ function Timeline({
   );
 }
 
+/**
+ * Recording control points without leaving the list.
+ *
+ * This is a one-time run through a programme, done at a desk off a
+ * surveyor's notebook. The form used to live five panels down inside an
+ * expanded village row, which meant finding each village in another tab and
+ * scrolling past everything about work that happens afterwards — an
+ * afternoon's typing turned into a fortnight, and nobody could find it.
+ *
+ * It stays open after each save and moves to the next village that has no
+ * point yet, because the job is a hundred of these in a row.
+ */
+function GcpRecorder({
+  villages, loading, alreadyHave, onDone, onClose,
+}: {
+  villages: Row[];
+  loading: boolean;
+  /** Villages that already carry a point, so the picker can say so. */
+  alreadyHave: Set<string>;
+  onDone: () => void;
+  onClose: () => void;
+}) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const blank = {
+    survey_village_id: '', point_code: 'GCP-1',
+    latitude: '', longitude: '', elevation_m: '', established_on: '', remarks: '',
+  };
+  const [form, setForm] = React.useState(blank);
+
+  // The villages still owing a point, in list order. The job is worked down
+  // this list, so the form offers the next one rather than the first.
+  const owing = React.useMemo(
+    () => villages.filter((v) => !alreadyHave.has(String(v.id))),
+    [villages, alreadyHave]);
+
+  React.useEffect(() => {
+    if (!form.survey_village_id && owing.length) {
+      setForm((f) => ({ ...f, survey_village_id: String(owing[0].id) }));
+    }
+  }, [owing, form.survey_village_id]);
+
+  const save = useMutation({
+    mutationFn: async () =>
+      apiRequest(`/api/v1/survey/villages/${form.survey_village_id}/gcps`, {
+        method: 'POST',
+        body: {
+          point_code: form.point_code.trim(),
+          latitude: Number(form.latitude),
+          longitude: Number(form.longitude),
+          elevation_m: form.elevation_m === '' ? undefined : Number(form.elevation_m),
+          established_on: form.established_on || undefined,
+          remarks: form.remarks.trim() || undefined,
+        },
+      }),
+    onError: (e) => toast.error('The control point was not recorded', messageOf(e)),
+    onSuccess: () => {
+      const done = form.survey_village_id;
+      const next = owing.find((v) => String(v.id) !== done);
+      toast.success('Control point recorded',
+        next ? `Moved on to ${String(next.village_name)}.` : 'Every village now has one.');
+      // Kept open on the next village: the job is a hundred of these.
+      setForm({ ...blank, survey_village_id: next ? String(next.id) : '' });
+      qc.invalidateQueries({ queryKey: ['survey-gcps'] });
+      onDone();
+    },
+  });
+
+  const lat = Number(form.latitude), lng = Number(form.longitude);
+  const warnings = form.latitude !== '' && form.longitude !== ''
+    && Number.isFinite(lat) && Number.isFinite(lng) ? checkGcp(lat, lng) : [];
+  const chosen = villages.find((v) => String(v.id) === form.survey_village_id);
+  const field = 'w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
+
+  return (
+    <Card className="space-y-3 p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <h3 className="text-base font-semibold text-text">Record a control point</h3>
+          <p className="text-xs text-text-muted">
+            The fixed point the DGPS base was set over. Usually one per village, recorded
+            once before ground truthing starts.
+          </p>
+        </div>
+        <span className="text-2xs text-text-subtle">
+          {owing.length} village{owing.length === 1 ? '' : 's'} with no point yet
+        </span>
+      </div>
+
+      {loading ? <Skeleton className="h-10" /> : null}
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <label className="text-2xs text-text-subtle sm:col-span-2">
+          Village
+          <select className={field} value={form.survey_village_id}
+            onChange={(e) => setForm({ ...form, survey_village_id: e.target.value })}>
+            <option value="">Choose a village…</option>
+            {villages.map((v) => (
+              <option key={String(v.id)} value={String(v.id)}>
+                {String(v.village_name)}
+                {v.mandal_name ? ` — ${String(v.mandal_name)}` : ''}
+                {/* Said in the picker, so a second point is a decision
+                    rather than a surprise 409. */}
+                {alreadyHave.has(String(v.id)) ? ' (already has one)' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-2xs text-text-subtle">
+          Point name
+          <input className={field} value={form.point_code} placeholder="GCP-1"
+            onChange={(e) => setForm({ ...form, point_code: e.target.value })} />
+        </label>
+
+        <label className="text-2xs text-text-subtle">
+          Latitude (degrees)
+          <input className={field} inputMode="decimal" value={form.latitude}
+            placeholder="17.6868231"
+            onChange={(e) => setForm({ ...form, latitude: e.target.value })} />
+        </label>
+        <label className="text-2xs text-text-subtle">
+          Longitude (degrees)
+          <input className={field} inputMode="decimal" value={form.longitude}
+            placeholder="83.2184815"
+            onChange={(e) => setForm({ ...form, longitude: e.target.value })} />
+        </label>
+        <label className="text-2xs text-text-subtle">
+          Elevation (m)
+          <input className={field} inputMode="decimal" value={form.elevation_m}
+            placeholder="45.212"
+            onChange={(e) => setForm({ ...form, elevation_m: e.target.value })} />
+        </label>
+
+        <label className="text-2xs text-text-subtle">
+          Established on
+          <input type="date" className={field} value={form.established_on}
+            max={businessToday()}
+            onChange={(e) => setForm({ ...form, established_on: e.target.value })} />
+        </label>
+        <label className="text-2xs text-text-subtle sm:col-span-2">
+          How it was fixed
+          <input className={field} value={form.remarks}
+            placeholder="Tied to BM 42; 45 min base observation, PDOP 1.4"
+            onChange={(e) => setForm({ ...form, remarks: e.target.value })} />
+        </label>
+      </div>
+
+      {warnings.length > 0 ? (
+        <Notice tone="warning" title="Check these coordinates">
+          <ul className="space-y-0.5">
+            {warnings.map((wn) => (
+              <li key={wn}>{GCP_WARNING_NOTES[wn as keyof typeof GCP_WARNING_NOTES]}</li>
+            ))}
+          </ul>
+          <p className="mt-1">You can still save them — this is a check, not a refusal.</p>
+        </Notice>
+      ) : null}
+
+      {chosen && alreadyHave.has(String(chosen.id)) ? (
+        <Notice tone="info" title={`${String(chosen.village_name)} already has a control point`}>
+          A second one is fine on a large village — give it a different name, such as GCP-2.
+        </Notice>
+      ) : null}
+
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" variant="primary" loading={save.isPending}
+          disabled={!form.survey_village_id || !form.point_code.trim()
+            || form.latitude === '' || form.longitude === ''}
+          onClick={() => save.mutate()}>
+          Record point
+        </Button>
+        <Button type="button" variant="ghost" onClick={onClose}>Done</Button>
+      </div>
+    </Card>
+  );
+}
+
 /* ----------------------------------------- ground control points (§069) */
 
 /**
@@ -2893,18 +3079,34 @@ function Timeline({
  * the first thing anybody wants when a boundary is disputed two years later.
  */
 function ControlList({
-  projectId, projectName, onOpenVillage,
+  projectId, projectName, canManage, onOpenVillage,
 }: {
-  projectId: string; projectName: string;
+  projectId: string; projectName: string; canManage: boolean;
   onOpenVillage?: (villageId: string) => void;
 }) {
   const [find, setFind] = React.useState('');
   const [onlyOdd, setOnlyOdd] = React.useState(false);
+  const [adding, setAdding] = React.useState(false);
 
   const q = useQuery({
     queryKey: ['survey-gcps', 'project', projectId],
     queryFn: async () => ((await apiRequestRaw(
       `/api/v1/survey/projects/${projectId}/gcps`)).body as { data: Row[] }).data,
+  });
+
+  /*
+   * The villages, for the picker.
+   *
+   * Recording control points is a one-time run through a programme, done at
+   * a desk off a surveyor's notebook. Making somebody find each village in
+   * another tab and expand it first turns an afternoon's typing into a
+   * fortnight, which is why nobody could find where to do it.
+   */
+  const villages = useQuery({
+    queryKey: ['survey-villages', projectId],
+    enabled: adding,
+    queryFn: async () => ((await apiRequestRaw(
+      `/api/v1/survey/projects/${projectId}/villages`)).body as { data: Row[] }).data,
   });
 
   if (q.isLoading) return <Skeleton className="h-64" />;
@@ -2954,18 +3156,44 @@ function ControlList({
     ]),
   };
 
+  const recorder = canManage && adding ? (
+    <GcpRecorder
+      villages={villages.data ?? []}
+      loading={villages.isLoading}
+      alreadyHave={new Set(all.map((g) => String(g.survey_village_id)))}
+      onDone={() => q.refetch()}
+      onClose={() => setAdding(false)}
+    />
+  ) : null;
+
   if (all.length === 0) {
     return (
-      <EmptyState
-        title="No control points recorded yet"
-        description="Open a village and record the point the base was set over. It is a one-time job, done before ground truthing starts."
-      />
+      <div className="space-y-3">
+        {recorder}
+        {!adding ? (
+          <EmptyState
+            title="No control points recorded yet"
+            description="A control point is the fixed point the DGPS base was set over. Recording them is a one-time job, done before ground truthing starts — usually one point per village."
+            action={canManage ? (
+              <Button type="button" variant="primary" onClick={() => setAdding(true)}>
+                Record a control point
+              </Button>
+            ) : undefined}
+          />
+        ) : null}
+      </div>
     );
   }
 
   return (
     <div className="space-y-3">
       <Toolbar>
+        {canManage ? (
+          <Button type="button" variant={adding ? 'secondary' : 'primary'}
+            onClick={() => setAdding((a) => !a)}>
+            {adding ? 'Close' : 'Record a control point'}
+          </Button>
+        ) : null}
         <input value={find} onChange={(e) => setFind(e.target.value)}
           placeholder="Find a point, village or mandal…"
           className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text" />
@@ -2985,6 +3213,8 @@ function ControlList({
         </span>
         <ExportMenu sheet={sheet} fileName="survey-control-points" />
       </Toolbar>
+
+      {recorder}
 
       {flagged > 0 && !onlyOdd ? (
         <Notice tone="warning"
