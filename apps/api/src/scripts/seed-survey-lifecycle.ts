@@ -30,7 +30,7 @@
  */
 
 import "../common/env.js";
-import { Pool, type PoolClient } from "pg";
+import { createPool } from "../database/db.js";
 
 const PROGRAMME = process.env.SEED_PROGRAMME ?? "Land Resurvey 2026";
 
@@ -115,11 +115,15 @@ const REACHED: Record<Profile, number> = {
 };
 
 async function main(): Promise<void> {
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.PGSSLROOTCERT ? { rejectUnauthorized: true } : undefined,
-    max: 4,
-  });
+  /*
+   * The application's own pool factory, not a hand-rolled one.
+   *
+   * It resolves the TLS mode from the connection string and the environment
+   * the same way the API does — a script that invents its own SSL handling
+   * fails against the managed pooler with a certificate error that says
+   * nothing about what to do next.
+   */
+  const pool = createPool(process.env.DATABASE_URL ?? "", process.env);
   const db = await pool.connect();
 
   try {
@@ -181,6 +185,60 @@ async function main(): Promise<void> {
         `SELECT employee_id FROM survey_crew
           WHERE survey_village_id = $1 AND released_on IS NULL LIMIT 6`, [v.id])).rows
         .map(x => String(x.employee_id));
+
+      /*
+       * Days written before this script existed, filled in.
+       *
+       * An earlier pass left a scatter of returns with no attendance on them
+       * at all, and a village whose ground truthing ran for sixteen days but
+       * only has attendance on three is not a village anybody can ask how
+       * many crew-days went into it. Their quantities are left untouched —
+       * only the columns that were never populated get written.
+       */
+      const bare = (await db.query(
+        `SELECT e.id, e.entry_date
+           FROM survey_entries e
+          WHERE e.survey_village_id = $1
+            AND (e.govt_staff_present IS NULL OR e.crew_present IS NULL)`, [v.id])).rows;
+
+      for (let b = 0; b < bare.length; b += 1) {
+        const roll = r();
+        const govtPresent = roll < 0.11 ? 0
+          : roll < 0.28 ? Math.max(0, govtAllocated - 1)
+            : govtAllocated;
+        const crewRoll = r();
+        const crewPresent = crewRoll < 0.08 ? Math.max(1, crewAllocated - 2)
+          : crewRoll < 0.20 ? Math.max(1, crewAllocated - 1)
+            : crewAllocated;
+        await db.query(
+          `UPDATE survey_entries
+              SET govt_staff_present = COALESCE(govt_staff_present, $2),
+                  crew_present = COALESCE(crew_present, $3),
+                  low_progress_reason = CASE
+                    WHEN low_progress_reason IS NULL AND $2 = 0 THEN 'NO_DEPT_STAFF'
+                    ELSE low_progress_reason END,
+                  updated_at = now(), updated_by = $4
+            WHERE id = $1`,
+          [bare[b].id, govtPresent, crewPresent, userId]);
+        backfilled += 1;
+
+        // And what the instruments did, where that was never recorded either.
+        for (let k = 0; k < rovers.length; k += 1) {
+          const idle = govtPresent === 0 ? true : r() < 0.22;
+          await db.query(
+            `INSERT INTO survey_entry_rovers(org_id, entry_id, asset_id, status,
+               idle_reason, area_ac, employee_id)
+             VALUES($1,$2,$3,$4,$5,$6,$7)
+             ON CONFLICT (entry_id, asset_id) DO NOTHING`,
+            [orgId, bare[b].id, rovers[k],
+              idle ? "IDLE" : "UTILIZED",
+              idle ? (govtPresent === 0 ? "NO_DEPT_STAFF"
+                : IDLE_REASONS[(i + b + k) % IDLE_REASONS.length]) : null,
+              idle ? null : null,
+              crew[k % Math.max(1, crew.length)] ?? null]);
+        }
+      }
+
 
       /*
        * A village with returns against it has been worked.
@@ -490,59 +548,6 @@ async function main(): Promise<void> {
             [orgId, v.id, measureId, round(sum * between(r, 0.96, 1.03), 3),
               "Recount at handover; two parcels merged with the adjoining survey number",
               userId]);
-        }
-      }
-
-      /*
-       * Days written before this script existed, filled in.
-       *
-       * An earlier pass left a scatter of returns with no attendance on them
-       * at all, and a village whose ground truthing ran for sixteen days but
-       * only has attendance on three is not a village anybody can ask how
-       * many crew-days went into it. Their quantities are left untouched —
-       * only the columns that were never populated get written.
-       */
-      const bare = (await db.query(
-        `SELECT e.id, e.entry_date
-           FROM survey_entries e
-          WHERE e.survey_village_id = $1
-            AND (e.govt_staff_present IS NULL OR e.crew_present IS NULL)`, [v.id])).rows;
-
-      for (let b = 0; b < bare.length; b += 1) {
-        const roll = r();
-        const govtPresent = roll < 0.11 ? 0
-          : roll < 0.28 ? Math.max(0, govtAllocated - 1)
-            : govtAllocated;
-        const crewRoll = r();
-        const crewPresent = crewRoll < 0.08 ? Math.max(1, crewAllocated - 2)
-          : crewRoll < 0.20 ? Math.max(1, crewAllocated - 1)
-            : crewAllocated;
-        await db.query(
-          `UPDATE survey_entries
-              SET govt_staff_present = COALESCE(govt_staff_present, $2),
-                  crew_present = COALESCE(crew_present, $3),
-                  low_progress_reason = CASE
-                    WHEN low_progress_reason IS NULL AND $2 = 0 THEN 'NO_DEPT_STAFF'
-                    ELSE low_progress_reason END,
-                  updated_at = now(), updated_by = $4
-            WHERE id = $1`,
-          [bare[b].id, govtPresent, crewPresent, userId]);
-        backfilled += 1;
-
-        // And what the instruments did, where that was never recorded either.
-        for (let k = 0; k < rovers.length; k += 1) {
-          const idle = govtPresent === 0 ? true : r() < 0.22;
-          await db.query(
-            `INSERT INTO survey_entry_rovers(org_id, entry_id, asset_id, status,
-               idle_reason, area_ac, employee_id)
-             VALUES($1,$2,$3,$4,$5,$6,$7)
-             ON CONFLICT (entry_id, asset_id) DO NOTHING`,
-            [orgId, bare[b].id, rovers[k],
-              idle ? "IDLE" : "UTILIZED",
-              idle ? (govtPresent === 0 ? "NO_DEPT_STAFF"
-                : IDLE_REASONS[(i + b + k) % IDLE_REASONS.length]) : null,
-              idle ? null : null,
-              crew[k % Math.max(1, crew.length)] ?? null]);
         }
       }
 
