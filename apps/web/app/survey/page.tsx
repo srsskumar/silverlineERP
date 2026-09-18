@@ -55,6 +55,9 @@ export default function SurveyPage() {
   // Management information. The specification is explicit that a GT user
   // does not see forecasting.
   const canForecast = hasPermission(perms, 'survey.forecast');
+  // Closing out a finished village: team leads as well as managers, because
+  // certifying what you surveyed is part of running it.
+  const canCertify = hasPermission(perms, 'survey.certify');
 
   const today = React.useMemo(() => businessToday(), []);
   const fy = React.useMemo(() => financialYearToDate(today), [today]);
@@ -259,6 +262,7 @@ export default function SurveyPage() {
         ) : null}
         {projectId && tab === 'villages' ? (
           <Villages projectId={projectId} canManage={canManage} canEnter={canEnter}
+            canCertify={canCertify}
             projectName={String((projects.data ?? []).find(
               (p) => String(p.id) === projectId)?.name ?? '')}
             openVillage={openVillage}
@@ -2123,10 +2127,11 @@ function Bottlenecks({ projectId, canForecast }: { projectId: string; canForecas
  * the stage remarks.
  */
 function Villages({
-  projectId, projectName, canManage, canEnter, openVillage, stageDrill, geoDrill,
+  projectId, projectName, canManage, canEnter, canCertify, openVillage, stageDrill, geoDrill,
   onDrillConsumed,
 }: {
-  projectId: string; projectName: string; canManage: boolean; canEnter: boolean;
+  projectId: string; projectName: string;
+  canManage: boolean; canEnter: boolean; canCertify: boolean;
   /** A village another screen linked to, opened on arrival. */
   openVillage?: string | null;
   /** A stage, a state and the geography they were counted over. */
@@ -2329,7 +2334,7 @@ function Villages({
               return [
                 String(i + 1), cellText(v.village_name), cellText(v.village_code),
                 cellText(v.district_name), cellText(v.mandal_name),
-                cellNum(v.total_extent_ac), cellNum(walked),
+                cellNum(v.total_extent_ac), cellNum(v.total_extent_sq_km), cellNum(walked),
                 planned > 0 ? cellNum((walked / planned) * 100) : '',
                 at ? `${stageLabel(String(at.code), pipeline as any)} — ${
                   (STAGE_STATE_LABELS[String(v.stages?.[String(at.code)] ?? 'NOT_STARTED')]
@@ -2476,6 +2481,10 @@ function Villages({
                 * remaining — showing only one of them hides it.
                 */}
               <TH className="text-right">Extent</TH>
+              {/* The revenue record is in acres and every government letter
+                  is in square kilometres. Carrying both stops the conversion
+                  being done by hand, differently each time. */}
+              <TH className="text-right">Extent (km²)</TH>
               <TH className="text-right">Surveyed</TH>
               <TH>Where it has got to</TH>
               {/* What has been claimed, beside where the work has got to:
@@ -2541,6 +2550,9 @@ function Villages({
                     <TD className="text-xs text-text-muted">{v.district_name ?? '—'}</TD>
                     <TD className="text-xs text-text-muted">{v.mandal_name ?? '—'}</TD>
                     <TD className="text-right tabular-nums">{acres(v.total_extent_ac)}</TD>
+                    <TD className="text-right tabular-nums text-text-muted">
+                      {sqKm(v.total_extent_sq_km)}
+                    </TD>
                     <TD className="text-right tabular-nums">
                       {(() => {
                         const walked = surveyedExtent(v, measures as any);
@@ -2633,12 +2645,13 @@ function Villages({
                   </TR>
                   {isOpen ? (
                     <TR>
-                      <TD colSpan={canManage ? 11 : 10} className="bg-surface-sunken p-0">
+                      <TD colSpan={canManage ? 12 : 11} className="bg-surface-sunken p-0">
                         <VillageDetail
                           village={v}
                           pipeline={pipeline}
                           canManage={canManage}
                           canEnter={canEnter}
+                          canCertify={canCertify}
                           openSection={section}
                         />
                       </TD>
@@ -2939,6 +2952,14 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
       { header: 'Crew-days', width: 14 },
       { header: 'Govt turnout (%)', width: 18 },
       { header: 'Days dept sent nobody', width: 22 },
+      // What was out and who came (§note 19).
+      { header: 'Rovers allocated', width: 18 },
+      { header: 'Rover-days used', width: 18 },
+      { header: 'Rover-days idle', width: 18 },
+      { header: 'Rover utilisation (%)', width: 20 },
+      { header: 'Crew assigned', width: 16 },
+      { header: 'Return days', width: 14 },
+      { header: 'Team-days', width: 14 },
     ],
     rows: rows.map((r) => [
       cellText(r.mandal), cellText(r.village),
@@ -2950,6 +2971,9 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
       cellNum(r.gt_govt_staff_allocated), cellNum(r.gt_crew_allocated),
       cellNum(r.attendance_days), cellNum(r.govt_staff_days), cellNum(r.crew_days),
       cellNum(r.govt_staff_pct), cellNum(r.days_no_govt_staff),
+      cellNum(r.rovers_allocated), cellNum(r.rover_days_used), cellNum(r.rover_days_idle),
+      cellNum(r.rover_utilisation_pct), cellNum(r.crew_assigned),
+      cellNum(r.return_days), cellNum(r.team_days),
     ]),
   };
 
@@ -3001,6 +3025,15 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
             <TH className="text-right">Actual extent</TH>
             <TH>GT dates</TH>
             <TH>Assigned to</TH>
+            {/*
+              * What was out and who came (§note 19).
+              *
+              * A village that is behind is usually behind for one of two
+              * reasons — the instruments sat idle, or the department did not
+              * send anybody — and neither was on the sheet people scan.
+              */}
+            <TH className="text-right">Rovers</TH>
+            <TH className="text-right">Crew</TH>
             <TH className="text-right">Turnout</TH>
           </TR>
         </THead>
@@ -3041,6 +3074,33 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
               {/* Who is on it, by employee name. The daily entry records a
                   team count; the task records the person. */}
               <TD className="text-xs text-text-muted">{r.assignee_name ?? '—'}</TD>
+              <TD className="text-right text-2xs">
+                {Number(r.rovers_allocated ?? 0) === 0
+                  && Number(r.rover_days_used ?? 0) === 0 ? (
+                  <span className="text-text-subtle">—</span>
+                ) : (
+                  <>
+                    <div className="text-text">{count(r.rovers_allocated)} out</div>
+                    <div className="text-text-subtle">
+                      {count(r.rover_days_used)} used / {count(r.rover_days_idle)} idle
+                    </div>
+                    {r.rover_utilisation_pct !== null && r.rover_utilisation_pct !== undefined ? (
+                      <div className={Number(r.rover_utilisation_pct) < 60
+                        ? 'text-warning' : 'text-text-subtle'}>
+                        {pct(r.rover_utilisation_pct)}
+                      </div>
+                    ) : null}
+                  </>
+                )}
+              </TD>
+              <TD className="text-right text-2xs">
+                <div className="text-text">{count(r.crew_assigned)}</div>
+                {Number(r.return_days ?? 0) > 0 ? (
+                  <div className="text-text-subtle">
+                    {count(r.team_days)} team-days over {count(r.return_days)}
+                  </div>
+                ) : null}
+              </TD>
               {/*
                 * Who was allotted and who came (§067).
                 *

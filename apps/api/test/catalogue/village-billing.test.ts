@@ -55,7 +55,24 @@ async function makeVillage(name: string): Promise<string> {
   const sv = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`,
     { village_id: unit, total_extent_ac: 420 });
   expect(sv.status, JSON.stringify(sv.body)).toBe(201);
-  return String(sv.data.id);
+  const id = String(sv.data.id);
+
+  /*
+   * Walked all the way through, because a claim is only due once the stage
+   * it falls at has been signed off (§note 17). These tests are about what
+   * happens to a claim, not about when one may be raised — that rule has its
+   * own suite — so every village here has earned all three.
+   */
+  for (const code of ["GROUND_TRUTHING", "GT_QC", "VECTORIZATION", "VECTORIZATION_QC",
+    "RECORDS_PREPARATION", "LPM_GENERATION", "SUBMISSION"]) {
+    const extra = code === "GROUND_TRUTHING"
+      ? { gt_govt_staff_allocated: 2, gt_crew_allocated: 4 } : {};
+    const moved = await post(w.admin, `/api/v1/survey/villages/${id}/stage`, {
+      stage_code: code, state: "COMPLETED", completed_on: workDate(), ...extra,
+    });
+    expect(moved.status, `${code}: ${JSON.stringify(moved.body)}`).toBe(200);
+  }
+  return id;
 }
 
 beforeAll(async () => {

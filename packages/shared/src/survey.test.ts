@@ -14,6 +14,7 @@ import {
   periodContaining, previousPeriod, comparePeriods, surveyVillageCreateSchema,
   villageBillingBulkSchema, BILLING_SKIP_LABELS,
   summariseStaffing, staffingNote, stageTracksStaffing, type StaffingDay,
+  milestoneEarned, milestoneBlockedNote, villageFinalsSchema, certifiedDifference,
 } from './survey.js';
 
 const BASIS: Record<string, MeasureBasis> = Object.fromEntries(
@@ -1494,5 +1495,104 @@ describe('which stage asks about attendance', () => {
       expect(stageTracksStaffing(code), code).toBe(false);
     }
     expect(stageTracksStaffing(null)).toBe(false);
+  });
+});
+
+describe('what a milestone may be claimed on', () => {
+  const label = (c: string) => c.replace(/_/g, ' ').toLowerCase();
+
+  it('holds the first claim until ground-truthing QC signs the village off', () => {
+    // The contract does not release money for work in progress, and a claim
+    // the department returns costs a month.
+    expect(milestoneEarned(1, { GROUND_TRUTHING: 'COMPLETED' })).toBe(false);
+    expect(milestoneEarned(1, { GT_QC: 'IN_PROGRESS' })).toBe(false);
+    expect(milestoneEarned(1, { GT_QC: 'COMPLETED' })).toBe(true);
+  });
+
+  it('holds the second until vectorisation QC signs it off', () => {
+    expect(milestoneEarned(2, { GT_QC: 'COMPLETED' })).toBe(false);
+    expect(milestoneEarned(2, { VECTORIZATION: 'COMPLETED' })).toBe(false);
+    expect(milestoneEarned(2, { VECTORIZATION_QC: 'COMPLETED' })).toBe(true);
+  });
+
+  it('holds the third until the deliverables have gone in', () => {
+    expect(milestoneEarned(3, { VECTORIZATION_QC: 'COMPLETED' })).toBe(false);
+    expect(milestoneEarned(3, { SUBMISSION: 'COMPLETED' })).toBe(true);
+  });
+
+  it('treats a village with no stages at all as having earned nothing', () => {
+    for (const m of [1, 2, 3]) {
+      expect(milestoneEarned(m, {}), String(m)).toBe(false);
+      expect(milestoneEarned(m, null), String(m)).toBe(false);
+    }
+  });
+
+  it('does not gate a milestone the contract says nothing about', () => {
+    // A later contract with a fourth claim is data, not a code change, and
+    // refusing what no rule covers would block it outright.
+    expect(milestoneEarned(4, {})).toBe(true);
+  });
+
+  it('says what is missing and what would earn it', () => {
+    const note = milestoneBlockedNote(1, {}, label);
+    expect(note).toMatch(/gt qc/i);
+    expect(note).toMatch(/has not started/i);
+    expect(note).toMatch(/first milestone/i);
+  });
+
+  it('distinguishes a stage running from one never begun', () => {
+    // "In progress, not finished" and "has not started" send somebody to
+    // different places.
+    const running = milestoneBlockedNote(2, { VECTORIZATION_QC: 'IN_PROGRESS' }, label);
+    expect(running).toMatch(/not finished/i);
+    expect(running).not.toMatch(/has not started/i);
+  });
+
+  it('has nothing to say about a milestone that has been earned', () => {
+    expect(milestoneBlockedNote(1, { GT_QC: 'COMPLETED' }, label)).toBeNull();
+  });
+});
+
+describe('certifying a finished village', () => {
+  it('demands a reason for a figure that differs from the record', () => {
+    const r = villageFinalsSchema.safeParse({
+      finals: [{ measure_code: 'GOVT_LAND_EXTENT_AC', quantity: 120 }],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('refuses a reason that says nothing', () => {
+    const r = villageFinalsSchema.safeParse({
+      finals: [{ measure_code: 'GOVT_LAND_EXTENT_AC', quantity: 120, reason: '  ' }],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('takes a certified figure with its reason', () => {
+    const r = villageFinalsSchema.safeParse({
+      finals: [{
+        measure_code: 'GOVT_LAND_EXTENT_AC', quantity: 118.5,
+        reason: 'Recount at handover; two parcels merged',
+      }],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('refuses an empty certification rather than reporting nothing done', () => {
+    expect(villageFinalsSchema.safeParse({ finals: [] }).success).toBe(false);
+  });
+
+  it('reports the difference, never hiding it', () => {
+    /*
+     * A certified figure that silently replaced the daily sum would be the
+     * spreadsheet again, just inside the database. The gap between them is
+     * the thing a reviewer actually looks at.
+     */
+    expect(certifiedDifference({
+      code: 'X', recorded: 120, certified: 118.5, reason: 'Recount',
+    })).toBe(-1.5);
+    expect(certifiedDifference({
+      code: 'X', recorded: 120, certified: null, reason: null,
+    })).toBeNull();
   });
 });

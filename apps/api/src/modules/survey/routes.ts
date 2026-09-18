@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import {
   surveyProjectSchema, surveyVillageSchema, surveyVillageCreateSchema,
@@ -19,6 +19,7 @@ import {
   billingDecisionRequired, claimedPercent, type BillingStatus,
   villageBillingBulkSchema,
   summariseStaffing, stageTracksStaffing, priorRange, type StaffingDay,
+  milestoneEarned, MILESTONE_REQUIRES, villageFinalsSchema,
   type MeasureBasis, type PeriodGrain, type ReportLevel, type StageState, type VillageProgress,
   businessDay,
 } from '@silverline/shared';
@@ -251,14 +252,51 @@ export async function registerSurveyRoutes(
       };
     }
 
-    return rows.map(r => ({
-      villageId: String(r.id),
-      extentAc: num(r.total_extent_ac),
-      done: done.get(String(r.id)) ?? {},
-      targets: target.get(String(r.id)) ?? {},
-      stages: stage.get(String(r.id)) ?? {},
-      row: { ...r, stage_dates: stageDates.get(String(r.id)) ?? {} },
-    }));
+    /*
+     * Certified totals override the running sum, where somebody has set one
+     * (§068).
+     *
+     * A finished village is recounted at handover, and the certified figure
+     * is what goes to the department. Applied here so every roll-up,
+     * percentage and report agrees on one answer; the daily sum is still on
+     * the row beside it, so the difference is never hidden.
+     *
+     * Only for an unbounded read. A period report asks what was done *in*
+     * those dates, and a certified total is a statement about the village,
+     * not about the week — folding it into a period would put the whole
+     * village's recount into whichever week somebody happened to certify it.
+     */
+    const certified = opts.from ? new Map<string, Record<string, number>>() :
+      (await db.query(
+        `SELECT f.survey_village_id, mm.code, f.quantity
+           FROM survey_village_finals f
+           JOIN survey_measures mm ON mm.id = f.measure_id
+           JOIN survey_villages sv ON sv.id = f.survey_village_id
+          WHERE f.org_id = $1 AND sv.survey_project_id = $2`, [orgId, projectId])).rows
+        .reduce((acc, r) => {
+          const key = String(r.survey_village_id);
+          (acc.get(key) ?? acc.set(key, {}).get(key)!)[String(r.code)] = Number(r.quantity);
+          return acc;
+        }, new Map<string, Record<string, number>>());
+
+    return rows.map(r => {
+      const recorded = done.get(String(r.id)) ?? {};
+      const final = certified.get(String(r.id));
+      return {
+        villageId: String(r.id),
+        extentAc: num(r.total_extent_ac),
+        done: final ? { ...recorded, ...final } : recorded,
+        targets: target.get(String(r.id)) ?? {},
+        stages: stage.get(String(r.id)) ?? {},
+        row: {
+          ...r,
+          stage_dates: stageDates.get(String(r.id)) ?? {},
+          // Kept beside the certified figure, never replaced by it.
+          recorded_done: recorded,
+          certified_done: final ?? null,
+        },
+      };
+    });
   }
 
   /**
@@ -2195,6 +2233,444 @@ export async function registerSurveyRoutes(
       };
     });
 
+  /**
+   * A village's stage states, resolved the same way everything else does.
+   *
+   * Where a stage is driven by a task the task is the truth; where it is
+   * not, the stage row is. Reading the row alone would report a village as
+   * unfinished when its board says otherwise.
+   */
+  async function stageStatesOf(
+    db: Pool | PoolClient, villageId: string,
+  ): Promise<Record<string, StageState>> {
+    const rows = (await db.query(
+      `SELECT s.code, vs.state, vs.task_id, t.status AS task_status
+         FROM survey_village_stages vs
+         JOIN survey_stages s ON s.id = vs.stage_id
+         LEFT JOIN tasks t ON t.id = vs.task_id
+        WHERE vs.survey_village_id = $1`, [villageId])).rows;
+    const out: Record<string, StageState> = {};
+    for (const row of rows) {
+      out[String(row.code)] = row.task_id
+        ? resolveStage({
+          stageCode: String(row.code), linked: true, taskStatus: row.task_status,
+        }).state
+        : (row.state as StageState);
+    }
+    return out;
+  }
+
+  /**
+   * Refuse a claim the village has not earned yet (§note 17).
+   *
+   * The contract releases the first claim when ground-truthing QC signs the
+   * village off, the second at vectorisation QC, the third when the
+   * deliverables have gone in. Claiming earlier is a claim the department
+   * returns, and a returned claim costs a month — so this refuses rather
+   * than warns.
+   */
+  async function earnedOr422(
+    db: Pool | PoolClient, req: FastifyRequest, orgId: string,
+    villageId: string, milestone: number,
+  ): Promise<void> {
+    const stages = await stageStatesOf(db, villageId);
+    if (milestoneEarned(milestone, stages)) return;
+    const required = MILESTONE_REQUIRES[milestone];
+    const label = (await db.query(
+      'SELECT label FROM survey_stages WHERE org_id = $1 AND code = $2',
+      [orgId, required])).rows[0]?.label ?? required;
+    const at = stages[required] ?? 'NOT_STARTED';
+    fail('MILESTONE_NOT_EARNED',
+      `Milestone ${milestone} falls due when ${label} is signed off, and it is `
+      + `${at === 'NOT_STARTED' ? 'not started' : at.replace(/_/g, ' ').toLowerCase()} `
+      + 'on this village. Complete that stage first — a claim raised early is one '
+      + 'the department returns.', 422);
+  }
+
+  /**
+   * A village's returns, day by day, with what was out and who came (§note 19).
+   *
+   * The summary sheet totals a village's life; this is the working underneath
+   * it. "Eighty-two per cent turnout" is a figure somebody queries, and the
+   * answer is the six days in the middle of March where the department sent
+   * nobody — which is only visible a day at a time.
+   *
+   * The totals are computed here from the same rows the table shows, so the
+   * line at the bottom can never disagree with the lines above it.
+   */
+  app.get('/api/v1/survey/villages/:id/daily', { preHandler: guard('survey.read') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const { q } = page(req);
+      const village = await villageOr404(pool, u.orgId, id, u);
+      const to = String(q.to ?? today());
+      const from = String(q.from ?? '1900-01-01');
+
+      const rows = (await pool.query(
+        `SELECT e.id, e.entry_date, e.teams_deployed,
+                e.govt_staff_present, e.crew_present,
+                e.low_progress_reason, e.notes,
+                (SELECT count(*)::int FROM survey_entry_rovers r
+                  WHERE r.entry_id = e.id AND r.status = 'UTILIZED') AS rovers_used,
+                (SELECT count(*)::int FROM survey_entry_rovers r
+                  WHERE r.entry_id = e.id AND r.status = 'IDLE') AS rovers_idle,
+                -- Instruments standing against the village on that day, which
+                -- is what "used" and "idle" have to be read against.
+                (SELECT count(*)::int FROM survey_rover_allocations ra
+                  WHERE ra.survey_village_id = e.survey_village_id
+                    AND ra.allocated_on <= e.entry_date
+                    AND (ra.released_on IS NULL OR ra.released_on >= e.entry_date))
+                  AS rovers_allocated,
+                (SELECT json_object_agg(mm.code, ev.quantity)
+                   FROM survey_entry_values ev
+                   JOIN survey_measures mm ON mm.id = ev.measure_id
+                  WHERE ev.entry_id = e.id) AS values
+           FROM survey_entries e
+          WHERE e.org_id = $1 AND e.survey_village_id = $2
+            AND e.entry_date BETWEEN $3::date AND $4::date
+          ORDER BY e.entry_date`,
+        [u.orgId, id, from, to])).rows;
+
+      const m = await measures(pool, u.orgId);
+      const days = rows.map(r => ({
+        entry_date: iso(r.entry_date),
+        teams_deployed: Number(r.teams_deployed ?? 0),
+        rovers_allocated: Number(r.rovers_allocated ?? 0),
+        rovers_used: Number(r.rovers_used ?? 0),
+        rovers_idle: Number(r.rovers_idle ?? 0),
+        govt_staff_present: r.govt_staff_present === null ? null : Number(r.govt_staff_present),
+        crew_present: r.crew_present === null ? null : Number(r.crew_present),
+        low_progress_reason: r.low_progress_reason,
+        low_progress_label: r.low_progress_reason ? reasonLabel(r.low_progress_reason) : null,
+        notes: r.notes,
+        values: r.values ?? {},
+      }));
+
+      const sum = (pick: (d: typeof days[number]) => number | null) =>
+        days.reduce((t, d) => t + (pick(d) ?? 0), 0);
+
+      return {
+        data: {
+          village: {
+            id: village.id,
+            gt_govt_staff_allocated: village.gt_govt_staff_allocated === null
+              ? null : Number(village.gt_govt_staff_allocated),
+            gt_crew_allocated: village.gt_crew_allocated === null
+              ? null : Number(village.gt_crew_allocated),
+          },
+          from, to,
+          days,
+          measures: m.rows.map(r => ({
+            code: r.code, label: r.label, unit: r.unit, basis: r.basis,
+          })),
+          // The line at the bottom, from the same rows as the lines above.
+          totals: {
+            return_days: days.length,
+            team_days: sum(d => d.teams_deployed),
+            rover_days_used: sum(d => d.rovers_used),
+            rover_days_idle: sum(d => d.rovers_idle),
+            govt_staff_days: sum(d => d.govt_staff_present),
+            crew_days: sum(d => d.crew_present),
+            values: Object.fromEntries(m.codes.map(code => [
+              code, round2(days.reduce((t, d) =>
+                t + Number((d.values as Record<string, number>)[code] ?? 0), 0)),
+            ])),
+            ...summariseStaffing(days.map((d): StaffingDay => ({
+              govtStaffPresent: d.govt_staff_present,
+              crewPresent: d.crew_present,
+              govtStaffAllocated: village.gt_govt_staff_allocated === null
+                ? null : Number(village.gt_govt_staff_allocated),
+              crewAllocated: village.gt_crew_allocated === null
+                ? null : Number(village.gt_crew_allocated),
+            }))),
+          },
+        },
+      };
+    });
+
+  /* ------------------------------------- why a crewed village has no kit */
+
+  /**
+   * The instruments this village's crew hold, and where they actually are.
+   *
+   * A rover follows the person it is issued to, so assigning crew to a
+   * village usually brings their kit with them. Usually — not always: one
+   * person is crew on several villages at once, and an instrument can only
+   * be in one place. The database enforces that with an exclusion
+   * constraint, so the carry silently skips.
+   *
+   * The result was a village with four people on it and no instruments, and
+   * nothing on the screen explaining why. The answer is never "the software
+   * forgot" — it is "that rover is in Koyyuru until Thursday" — and that is
+   * a sentence somebody can act on.
+   */
+  app.get('/api/v1/survey/villages/:id/kit-gap', { preHandler: guard('survey.read') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      await villageOr404(pool, u.orgId, id, u);
+
+      const rows = (await pool.query(
+        `SELECT DISTINCT
+                aa.asset_id, a.asset_code, COALESCE(a.name, a.asset_code) AS asset_name,
+                c.employee_id,
+                COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), e.emp_no)
+                  AS employee_name,
+                held.survey_village_id AS held_by_village_id,
+                ou.name AS held_by_village_name,
+                held.allocated_on AS held_since
+           FROM survey_crew c
+           JOIN employees e ON e.id = c.employee_id
+           JOIN asset_assignments aa
+             ON aa.employee_id = c.employee_id AND aa.returned_at IS NULL
+           JOIN assets a ON a.id = aa.asset_id
+           LEFT JOIN survey_rover_allocations held
+             ON held.asset_id = aa.asset_id AND held.released_on IS NULL
+           LEFT JOIN survey_villages hv ON hv.id = held.survey_village_id
+           LEFT JOIN org_units ou ON ou.id = hv.village_id
+          WHERE c.survey_village_id = $2 AND c.released_on IS NULL AND c.org_id = $1
+            -- Only kit that is not already here. What is here is not a gap.
+            AND (held.survey_village_id IS NULL OR held.survey_village_id <> $2)
+          ORDER BY employee_name, a.asset_code`,
+        [u.orgId, id])).rows;
+
+      return {
+        data: rows.map(r => ({
+          asset_id: r.asset_id,
+          asset_code: r.asset_code,
+          asset_name: r.asset_name,
+          employee_id: r.employee_id,
+          employee_name: r.employee_name,
+          // Null where the instrument is simply free — those can be brought
+          // here with nothing to release first.
+          held_by_village_id: r.held_by_village_id,
+          held_by_village_name: r.held_by_village_name,
+          held_since: iso(r.held_since),
+        })),
+      };
+    });
+
+  /**
+   * Bring named instruments to this village.
+   *
+   * Releases them from wherever they are as of the day before, because a
+   * rover is accounted to one village per day and the day it was last out
+   * belongs to the village that worked it. The alternative — refusing
+   * because the constraint would fire — is what made the screen look broken.
+   */
+  app.post('/api/v1/survey/villages/:id/rovers/claim',
+    { preHandler: guard('survey.manage') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(z.object({
+        asset_ids: z.array(z.string().uuid()).min(1, 'Choose at least one instrument').max(100),
+        on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      }).strict(), req.body);
+
+      return {
+        data: await mutate(pool, req, 'survey.rover.claim', 'survey_rover_allocation', async db => {
+          await villageOr404(db, u.orgId, id, u);
+          const on = input.on ?? today();
+          const brought: string[] = [], refused: Array<{ asset_code: string; why: string }> = [];
+          const arriving: Array<{ asset_code: string; on: string }> = [];
+
+          for (const assetId of input.asset_ids) {
+            const asset = (await db.query(
+              'SELECT asset_code FROM assets WHERE id = $1 AND org_id = $2',
+              [assetId, u.orgId])).rows[0];
+            if (!asset) { refused.push({ asset_code: assetId, why: 'not found' }); continue; }
+
+            /*
+             * Released the day before it arrives here, so no instrument is
+             * on two villages for one day.
+             *
+             * Never before it got there, though: a rover that arrived this
+             * morning cannot be released yesterday, and the check constraint
+             * on these dates says so. In that case the stint stands as a
+             * single day and this village gets it tomorrow — which is what
+             * happens on the ground anyway, since somebody has to drive it
+             * over.
+             */
+            await db.query(
+              `UPDATE survey_rover_allocations
+                  SET released_on = GREATEST(allocated_on, $3::date - 1)
+                WHERE org_id = $1 AND asset_id = $2 AND released_on IS NULL`,
+              [u.orgId, assetId, on]);
+
+            await db.query('SAVEPOINT claim_row');
+            try {
+              await db.query(
+                `INSERT INTO survey_rover_allocations(org_id, survey_village_id, asset_id,
+                   allocated_on, created_by)
+                 VALUES($1,$2,$3,
+                   GREATEST($4::date,
+                     COALESCE((SELECT max(r.released_on) + 1 FROM survey_rover_allocations r
+                                WHERE r.asset_id = $3), '-infinity'::date)),
+                   $5)`,
+                [u.orgId, id, assetId, on, u.id]);
+              brought.push(String(asset.asset_code));
+              // Said, not assumed: an instrument that cannot arrive until
+              // tomorrow is not one the crew has today.
+              const landed = (await db.query(
+                `SELECT allocated_on FROM survey_rover_allocations
+                  WHERE asset_id = $1 AND survey_village_id = $2 AND released_on IS NULL
+                  ORDER BY allocated_on DESC LIMIT 1`, [assetId, id])).rows[0];
+              if (landed && iso(landed.allocated_on) !== on) {
+                arriving.push({
+                  asset_code: String(asset.asset_code), on: iso(landed.allocated_on)!,
+                });
+              }
+              await db.query('RELEASE SAVEPOINT claim_row');
+            } catch (error) {
+              await db.query('ROLLBACK TO SAVEPOINT claim_row');
+              if ((error as { code?: string }).code !== '23P01') throw error;
+              refused.push({
+                asset_code: String(asset.asset_code),
+                why: 'still accounted to another village for these dates',
+              });
+            }
+          }
+          return { brought: brought.length, brought_codes: brought, refused, arriving };
+        }),
+      };
+    });
+
+  /* --------------------------------- certifying a finished village (§068) */
+
+  /**
+   * What a village is certified at, against what its returns add up to.
+   *
+   * Every figure in this module is the sum of daily returns, and that is the
+   * right default. It is not what goes to the department: at handover the
+   * village is recounted, parcels merge, a hamlet turns out to have been
+   * counted twice, and the certified figure differs from the running sum.
+   *
+   * Both are always reported. A certified number that silently replaced the
+   * record it came from would be the spreadsheet this module exists to
+   * replace, just inside the database — and the difference between them is
+   * what a reviewer actually looks at.
+   */
+  app.get('/api/v1/survey/villages/:id/finals', { preHandler: guard('survey.read') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      await villageOr404(pool, u.orgId, id, u);
+      const m = await measures(pool, u.orgId);
+
+      const recorded = new Map<string, number>((await pool.query(
+        `SELECT mm.code, sum(ev.quantity) AS total
+           FROM survey_entries e
+           JOIN survey_entry_values ev ON ev.entry_id = e.id
+           JOIN survey_measures mm ON mm.id = ev.measure_id
+          WHERE e.org_id = $1 AND e.survey_village_id = $2
+          GROUP BY mm.code`, [u.orgId, id])).rows
+        .map(r => [String(r.code), Number(r.total)]));
+
+      const certified = new Map<string, Record<string, unknown>>((await pool.query(
+        `SELECT f.*, mm.code,
+                COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), usr.username)
+                  AS certified_by_name
+           FROM survey_village_finals f
+           JOIN survey_measures mm ON mm.id = f.measure_id
+           LEFT JOIN users usr ON usr.id = f.certified_by
+           LEFT JOIN employees e ON e.id = usr.employee_id
+          WHERE f.org_id = $1 AND f.survey_village_id = $2`, [u.orgId, id])).rows
+        .map(r => [String(r.code), r]));
+
+      return {
+        data: m.rows.map(mm => {
+          const code = String(mm.code);
+          const f = certified.get(code);
+          const rec = recorded.get(code) ?? 0;
+          const cert = f ? Number(f.quantity) : null;
+          return {
+            code, label: mm.label, group_label: mm.group_label,
+            unit: mm.unit, basis: mm.basis,
+            // What the daily returns add up to, untouched.
+            recorded: round2(rec),
+            // What somebody stands behind, where anybody has.
+            certified: cert,
+            difference: cert === null ? null : round2(cert - rec),
+            reason: f ? f.reason : null,
+            certified_by_name: f ? f.certified_by_name : null,
+            certified_at: f ? iso(f.certified_at) : null,
+            final_id: f ? f.id : null,
+            version: f ? f.version : null,
+          };
+        }),
+      };
+    });
+
+  /**
+   * Certify a finished village's totals.
+   *
+   * Open to the people who ran the work — team leads as well as managers —
+   * because closing out a village is part of running it. Deliberately not
+   * folded into survey.manage: a team lead certifies what they surveyed
+   * without also being able to set the targets they are measured against.
+   */
+  app.put('/api/v1/survey/villages/:id/finals', { preHandler: guard('survey.certify') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(villageFinalsSchema, req.body);
+      return {
+        data: await mutate(pool, req, 'survey.village.certify', 'survey_village', async db => {
+          await villageOr404(db, u.orgId, id, u);
+
+          /*
+           * Only a village that has finished something.
+           *
+           * Certifying a village still being surveyed would freeze a figure
+           * the crews are still adding to, and every day's return after it
+           * would widen a difference nobody meant to create.
+           */
+          const stages = await stageStatesOf(db, id);
+          const anyDone = Object.values(stages).some(v => v === 'COMPLETED');
+          if (!anyDone) {
+            fail('NOTHING_FINISHED',
+              'Nothing has been signed off on this village yet. Certified totals are for '
+              + 'closing out work that is finished — complete a stage first.', 422);
+          }
+
+          const m = await measures(db, u.orgId);
+          const written: string[] = [];
+          for (const f of input.finals) {
+            const measure = m.byCode.get(f.measure_code);
+            if (!measure) {
+              fail('UNKNOWN_MEASURE', `There is no measure ${f.measure_code}`, 422);
+            }
+            await db.query(
+              `INSERT INTO survey_village_finals(org_id, survey_village_id, measure_id,
+                 quantity, reason, certified_by, created_by, updated_by)
+               VALUES($1,$2,$3,$4,$5,$6,$6,$6)
+               ON CONFLICT (survey_village_id, measure_id)
+               DO UPDATE SET quantity = EXCLUDED.quantity, reason = EXCLUDED.reason,
+                             certified_by = EXCLUDED.certified_by, certified_at = now(),
+                             version = survey_village_finals.version + 1,
+                             updated_at = now(), updated_by = EXCLUDED.updated_by`,
+              [u.orgId, id, measure.id, f.quantity, f.reason, u.id]);
+            written.push(f.measure_code);
+          }
+          return { certified: written.length, measures: written };
+        }),
+      };
+    });
+
+  /** Take a certified figure back off, so the village reads as its returns again. */
+  app.delete('/api/v1/survey/villages/:id/finals/:code',
+    { preHandler: guard('survey.certify') }, async req => {
+      const u = actor(req);
+      const { id, code } = req.params as { id: string; code: string };
+      return {
+        data: await mutate(pool, req, 'survey.village.certify.clear', 'survey_village', async db => {
+          await villageOr404(db, u.orgId, id, u);
+          const done = await db.query(
+            `DELETE FROM survey_village_finals f
+              USING survey_measures mm
+              WHERE f.measure_id = mm.id AND mm.code = $3
+                AND f.org_id = $1 AND f.survey_village_id = $2`, [u.orgId, id, code]);
+          return { cleared: done.rowCount ?? 0, code };
+        }),
+      };
+    });
+
   /* ----------------------------------------- submitted for billing (§066) */
 
   /**
@@ -2247,6 +2723,7 @@ export async function registerSurveyRoutes(
       const data = await mutate(pool, req, 'survey.village.billing', 'survey_village_billing',
         async db => {
           await villageOr404(db, u.orgId, id, u);
+          await earnedOr422(db, req, u.orgId, id, input.milestone);
           const existing = await db.query(
             'SELECT milestone FROM survey_village_billing WHERE survey_village_id = $1 AND milestone = $2',
             [id, input.milestone]);
@@ -2428,6 +2905,24 @@ export async function registerSurveyRoutes(
             const rows = (await db.query(
               `SELECT sv.id, ou.name AS village_name, sv.total_extent_ac,
                       b.id AS claim_id, b.status AS claim_status, b.version AS claim_version,
+                      /*
+                       * Whether the village has earned this milestone yet.
+                       *
+                       * Resolved through the task where the stage is driven
+                       * by one, exactly as the rest of the module does it —
+                       * reading the stage row alone would call a village
+                       * unfinished when its board says otherwise.
+                       */
+                      EXISTS (
+                        SELECT 1 FROM survey_village_stages vs
+                          JOIN survey_stages st ON st.id = vs.stage_id
+                          LEFT JOIN tasks tk ON tk.id = vs.task_id
+                         WHERE vs.survey_village_id = sv.id
+                           AND st.code = $4
+                           AND CASE WHEN vs.task_id IS NOT NULL
+                                    THEN tk.status = 'DONE'
+                                    ELSE vs.state = 'COMPLETED' END
+                      ) AS earned,
                       (SELECT count(DISTINCT prior.milestone)
                          FROM survey_village_billing prior
                         WHERE prior.survey_village_id = sv.id
@@ -2439,7 +2934,10 @@ export async function registerSurveyRoutes(
                         ON b.survey_village_id = sv.id AND b.milestone = $3
                 WHERE sv.org_id = $1 AND sv.id = ANY($2::uuid[])
                 ORDER BY ou.name`,
-              [u.orgId, ids, input.milestone])).rows;
+              [u.orgId, ids, input.milestone,
+                // Null where the contract gates nothing, which no village
+                // then matches — handled below rather than in SQL.
+                MILESTONE_REQUIRES[input.milestone] ?? null])).rows;
 
             const found = new Set(rows.map(r => String(r.id)));
             const notFound = ids.filter(id => !found.has(id));
@@ -2454,6 +2952,18 @@ export async function registerSurveyRoutes(
                 // owed once more — so only a standing one blocks.
                 if (standing) {
                   skipped.push({ village_name: String(r.village_name), reason: 'ALREADY_CLAIMED' });
+                  continue;
+                }
+                /*
+                 * A milestone the village has not earned is left out, named.
+                 *
+                 * The single-claim route refuses outright; a batch of four
+                 * hundred cannot, or one unfinished village would stop the
+                 * other three hundred and ninety-nine. Skipped and counted,
+                 * so the preview says exactly how many and why.
+                 */
+                if (MILESTONE_REQUIRES[input.milestone] && !r.earned) {
+                  skipped.push({ village_name: String(r.village_name), reason: 'NOT_EARNED' });
                   continue;
                 }
               } else {
@@ -3685,7 +4195,11 @@ export async function registerSurveyRoutes(
                                       OR e.crew_present IS NOT NULL)::int AS days_recorded,
                   COALESCE(sum(e.govt_staff_present), 0)::int AS govt_staff_days,
                   COALESCE(sum(e.crew_present), 0)::int       AS crew_days,
-                  count(*) FILTER (WHERE e.govt_staff_present = 0)::int AS days_no_govt_staff
+                  count(*) FILTER (WHERE e.govt_staff_present = 0)::int AS days_no_govt_staff,
+                  -- Days anybody filed anything at all, which is what the
+                  -- rover and team figures below are per.
+                  count(*)::int AS return_days,
+                  COALESCE(sum(e.teams_deployed), 0)::int AS team_days
              FROM survey_entries e
              JOIN survey_villages sv ON sv.id = e.survey_village_id
             WHERE e.org_id = $1 AND sv.survey_project_id = $2
@@ -3695,11 +4209,75 @@ export async function registerSurveyRoutes(
             govt_staff_days: Number(r.govt_staff_days),
             crew_days: Number(r.crew_days),
             days_no_govt_staff: Number(r.days_no_govt_staff),
+            return_days: Number(r.return_days),
+            team_days: Number(r.team_days),
           }]));
+
+      /*
+       * Instruments and people per village (§note 19).
+       *
+       * Rover-days come from the per-rover rows on each return, which is the
+       * only place that knows an instrument sat idle rather than simply not
+       * being mentioned. Allocated is the standing allocation today; used
+       * and idle are what the returns say over the village's whole life.
+       *
+       * Two queries for the whole programme rather than two per village: a
+       * thousand villages is two thousand round trips done the obvious way,
+       * and this sheet is pulled for a whole programme.
+       */
+      const kit = new Map<string, Record<string, number>>(
+        (await pool.query(
+          /*
+           * Two aggregates, joined afterwards rather than in one FROM.
+           *
+           * Joining allocations and rover-days in the same query multiplies
+           * one by the other: two instruments out turns three rover-days
+           * into six, and the summary silently disagrees with the daily
+           * sheet it is summarising.
+           */
+          `WITH allocated AS (
+             SELECT ra.survey_village_id, count(DISTINCT ra.asset_id)::int AS n
+               FROM survey_rover_allocations ra
+               JOIN survey_villages sv ON sv.id = ra.survey_village_id
+              WHERE ra.org_id = $1 AND sv.survey_project_id = $2 AND ra.released_on IS NULL
+              GROUP BY 1
+           ), worked AS (
+             SELECT e.survey_village_id,
+                    count(*) FILTER (WHERE er.status = 'UTILIZED')::int AS used,
+                    count(*) FILTER (WHERE er.status = 'IDLE')::int     AS idle
+               FROM survey_entry_rovers er
+               JOIN survey_entries e ON e.id = er.entry_id
+               JOIN survey_villages sv ON sv.id = e.survey_village_id
+              WHERE e.org_id = $1 AND sv.survey_project_id = $2
+              GROUP BY 1
+           )
+           SELECT sv.id AS survey_village_id,
+                  COALESCE(a.n, 0) AS rovers_allocated,
+                  COALESCE(wk.used, 0) AS rover_days_used,
+                  COALESCE(wk.idle, 0) AS rover_days_idle
+             FROM survey_villages sv
+             LEFT JOIN allocated a ON a.survey_village_id = sv.id
+             LEFT JOIN worked wk ON wk.survey_village_id = sv.id
+            WHERE sv.org_id = $1 AND sv.survey_project_id = $2`, [u.orgId, id])).rows
+          .map(r => [String(r.survey_village_id), {
+            rovers_allocated: Number(r.rovers_allocated),
+            rover_days_used: Number(r.rover_days_used),
+            rover_days_idle: Number(r.rover_days_idle),
+          }]));
+
+      const crewCount = new Map<string, number>(
+        (await pool.query(
+          `SELECT c.survey_village_id, count(DISTINCT c.employee_id)::int AS crew
+             FROM survey_crew c
+             JOIN survey_villages sv ON sv.id = c.survey_village_id
+            WHERE c.org_id = $1 AND sv.survey_project_id = $2 AND c.released_on IS NULL
+            GROUP BY 1`, [u.orgId, id])).rows
+          .map(r => [String(r.survey_village_id), Number(r.crew)]));
 
       return {
         data: pos.map(p => {
           const att = attendance.get(p.villageId);
+          const k = kit.get(p.villageId);
           const dates = p.row.stage_dates as Record<string,
             { started: string | null; completed: string | null; remarks?: string | null }>;
           const surveyed = (p.done.GOVT_LAND_EXTENT_AC ?? 0) + (p.done.PRIVATE_LAND_EXTENT_AC ?? 0);
@@ -3758,6 +4336,25 @@ export async function registerSurveyRoutes(
               ? Math.round((att.crew_days
                 / (att.days_recorded * Number(p.row.gt_crew_allocated))) * 1000) / 10
               : null,
+            /*
+             * Instruments and people on the village (§note 19).
+             *
+             * Allocated is what stands today; used and idle are rover-days
+             * over the village's whole life, from the per-rover rows on each
+             * return. A day nobody filed is in neither — it is a reporting
+             * gap, not an idle instrument, and they need different
+             * conversations.
+             */
+            rovers_allocated: k?.rovers_allocated ?? 0,
+            rover_days_used: k?.rover_days_used ?? 0,
+            rover_days_idle: k?.rover_days_idle ?? 0,
+            rover_utilisation_pct: k && (k.rover_days_used + k.rover_days_idle) > 0
+              ? Math.round((k.rover_days_used
+                / (k.rover_days_used + k.rover_days_idle)) * 1000) / 10
+              : null,
+            crew_assigned: crewCount.get(p.villageId) ?? 0,
+            return_days: att?.return_days ?? 0,
+            team_days: att?.team_days ?? 0,
           };
         }),
       };

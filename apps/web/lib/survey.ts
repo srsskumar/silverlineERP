@@ -83,7 +83,11 @@ export function acres(value: number | null | undefined): string {
 
 export function sqKm(value: number | null | undefined): string {
   if (value === null || value === undefined) return '—';
-  return `${value.toLocaleString('en-IN', { maximumFractionDigits: 3 })} km²`;
+  // Two decimals: a hundredth of a square kilometre is two and a half acres,
+  // which is finer than any village extent is actually known to.
+  return `${value.toLocaleString('en-IN', {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  })} km²`;
 }
 
 /** A plain count, grouped the Indian way. */

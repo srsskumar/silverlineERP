@@ -773,6 +773,10 @@ export const SURVEY_PERMISSIONS = [
   // A forecast is management information. The specification is explicit that
   // a GT user does not see it, so it is its own permission.
   'survey.forecast', 'survey.assign', 'survey.qc', 'survey.vectorize',
+  // Certifying a finished village is not managing one. A team lead closes
+  // out the villages they ran without being able to set the targets their
+  // own completion is measured against.
+  'survey.certify',
 ] as const;
 
 export const SURVEY_ROLE_GRANTS: Record<RoleCode, string[]> = {
@@ -781,11 +785,11 @@ export const SURVEY_ROLE_GRANTS: Record<RoleCode, string[]> = {
   // Runs the programme: sets the work list, the targets and who is on it, and
   // is the first role the specification lets see a forecast.
   PROJECT_MANAGER: ['survey.read', 'survey.enter', 'survey.manage', 'survey.target',
-    'survey.forecast', 'survey.assign', 'survey.qc', 'survey.vectorize'],
+    'survey.forecast', 'survey.assign', 'survey.qc', 'survey.vectorize', 'survey.certify'],
   // Records what the crew did and puts people on villages. Deliberately
   // cannot set the target its own completion is measured against, and does
   // not see the forecast.
-  TEAM_LEAD: ['survey.read', 'survey.enter', 'survey.assign'],
+  TEAM_LEAD: ['survey.read', 'survey.enter', 'survey.assign', 'survey.certify'],
   EMPLOYEE: ['survey.read', 'survey.enter'],
   AUDITOR: ['survey.read', 'survey.forecast'],
   HR_MANAGER: ['survey.read'],
@@ -1748,12 +1752,16 @@ export type VillageBillingBulkInput = z.infer<typeof villageBillingBulkSchema>;
 export type BillingSkipReason =
   | 'ALREADY_CLAIMED'
   | 'NOTHING_TO_DECIDE'
-  | 'ALREADY_IN_THAT_STATE';
+  | 'ALREADY_IN_THAT_STATE'
+  | 'NOT_EARNED';
 
 export const BILLING_SKIP_LABELS: Record<BillingSkipReason, string> = {
   ALREADY_CLAIMED: 'already submitted at this milestone',
   NOTHING_TO_DECIDE: 'nothing submitted at this milestone to decide',
   ALREADY_IN_THAT_STATE: 'already recorded that way',
+  // Named for the stage, because "not earned" alone sends somebody looking
+  // for a setting rather than for the QC that has not been signed off.
+  NOT_EARNED: 'the stage this milestone falls due at is not signed off yet',
 };
 
 /* ----------------------------------------------- ground-truthing staffing */
@@ -1897,4 +1905,92 @@ export function priorRange(r: { from: string; to: string }): Period {
     from: iso(start), to: iso(end),
     label: `${iso(start)} to ${iso(end)}`,
   };
+}
+
+/* --------------------------------------- what a milestone may be claimed on */
+
+/**
+ * The stage each billing milestone is earned at.
+ *
+ * The contract does not release money for work in progress. The first claim
+ * falls due when ground-truthing QC has signed the village off, the second
+ * when vectorisation QC has, the third when the final deliverables have gone
+ * in. Claiming earlier is a claim the department returns, and a returned
+ * claim costs a month.
+ *
+ * Held here rather than in the route so the screen can grey out what cannot
+ * be claimed and say why, using the same rule that will refuse it.
+ */
+export const MILESTONE_REQUIRES: Record<number, string> = {
+  1: 'GT_QC',
+  2: 'VECTORIZATION_QC',
+  3: 'SUBMISSION',
+};
+
+/**
+ * Whether a village has earned a milestone yet.
+ *
+ * `stages` is the village's stage map. Only COMPLETED counts: a stage in
+ * progress is work that might still come back.
+ */
+export function milestoneEarned(
+  milestone: number, stages: Record<string, string> | null | undefined,
+): boolean {
+  const required = MILESTONE_REQUIRES[milestone];
+  // A milestone the contract does not gate is one anybody may claim; the
+  // three that matter are all listed above.
+  if (!required) return true;
+  return (stages ?? {})[required] === 'COMPLETED';
+}
+
+/** Why a milestone cannot be claimed yet, in words somebody can act on. */
+export function milestoneBlockedNote(
+  milestone: number, stages: Record<string, string> | null | undefined,
+  stageLabelOf: (code: string) => string,
+): string | null {
+  if (milestoneEarned(milestone, stages)) return null;
+  const required = MILESTONE_REQUIRES[milestone];
+  const at = (stages ?? {})[required] ?? 'NOT_STARTED';
+  const label = stageLabelOf(required);
+  return at === 'NOT_STARTED'
+    ? `${label} has not started on this village. ${
+      MILESTONE_LABELS[milestone] ?? `Milestone ${milestone}`} falls due when it is signed off.`
+    : `${label} is ${at.replace(/_/g, ' ').toLowerCase()}, not finished. ${
+      MILESTONE_LABELS[milestone] ?? `Milestone ${milestone}`} falls due when it is signed off.`;
+}
+
+/* ------------------------------------------- certifying a finished village */
+
+export const villageFinalSchema = z.object({
+  /** Measure code, so the caller need not look up an id. */
+  measure_code: z.string().min(1).max(64),
+  quantity: quantity,
+  // Mandatory: a figure that differs from the record with no explanation is
+  // exactly what this exists to stop.
+  reason: z.string().trim().min(3, 'Say why the certified figure differs').max(2000),
+}).strict();
+
+export const villageFinalsSchema = z.object({
+  finals: z.array(villageFinalSchema)
+    .min(1, 'Certify at least one measure')
+    .max(50, 'That is more measures than any programme has'),
+}).strict();
+
+/**
+ * What a village is certified at, against what its returns add up to.
+ *
+ * Both are reported, always. A certified figure that silently replaced the
+ * daily sum would be the spreadsheet again, just inside the database — and
+ * the difference between them is the thing a reviewer actually looks at.
+ */
+export interface CertifiedFigure {
+  code: string;
+  recorded: number;
+  certified: number | null;
+  reason: string | null;
+}
+
+export function certifiedDifference(f: CertifiedFigure): number | null {
+  if (f.certified === null) return null;
+  return Math.round((f.certified - f.recorded) * 10000) / 10000;
 }

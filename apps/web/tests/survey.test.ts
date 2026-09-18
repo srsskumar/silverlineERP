@@ -627,3 +627,18 @@ describe('pulling villages by what has been claimed', () => {
     }
   });
 });
+
+describe('extent in square kilometres', () => {
+  it('always shows two decimals, so a column of them lines up', () => {
+    // A hundredth of a square kilometre is two and a half acres, which is
+    // finer than any village extent is actually known to.
+    expect(sqKm(4)).toBe('4.00 km²');
+    expect(sqKm(4.5)).toBe('4.50 km²');
+    expect(sqKm(4.567)).toBe('4.57 km²');
+  });
+
+  it('says nothing rather than zero for a village with no extent', () => {
+    expect(sqKm(null)).toBe('—');
+    expect(sqKm(undefined)).toBe('—');
+  });
+});

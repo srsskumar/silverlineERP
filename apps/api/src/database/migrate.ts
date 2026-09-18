@@ -75,6 +75,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "065_role_visibility", file: "065_role_visibility.sql" },
   { version: "066_village_billing_milestones", file: "066_village_billing_milestones.sql" },
   { version: "067_gt_staffing", file: "067_gt_staffing.sql" },
+  { version: "068_village_certified_totals", file: "068_village_certified_totals.sql" },
 ];
 
 /**

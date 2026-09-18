@@ -16,8 +16,10 @@ import { day, businessToday } from '@/lib/finance';
 import { STAGE_STATE_LABELS, stageLabel, stateTone } from '@/lib/survey';
 import {
   MILESTONE_PERCENT, MILESTONE_LABELS, BILLING_STATUS_LABELS,
-  billingDecisionRequired, stageTracksStaffing, type BillingStatus,
+  billingDecisionRequired, stageTracksStaffing, milestoneEarned, milestoneBlockedNote,
+  staffingNote, type BillingStatus,
 } from '@silverline/shared';
+import { ExportMenu } from '@/components/ui/ExportMenu';
 
 type Row = Record<string, any>;
 
@@ -47,12 +49,14 @@ async function fetchAllAssets(): Promise<Row[]> {
  * stuck", and answering it means keeping the others on screen.
  */
 export function VillageDetail({
-  village, pipeline, canManage, canEnter, openSection,
+  village, pipeline, canManage, canEnter, canCertify, openSection,
 }: {
   village: Row;
   pipeline: Row[];
   canManage: boolean;
   canEnter: boolean;
+  /** Closing out a finished village: team leads as well as managers. */
+  canCertify: boolean;
   /**
    * Which part to bring into view on arrival.
    *
@@ -91,9 +95,11 @@ export function VillageDetail({
         </div>
         <CrewAssets villageId={String(village.id)} />
         <div {...mark('billing')}>
-          <Billing village={village} canManage={canManage} />
+          <Billing village={village} pipeline={pipeline} canManage={canManage} />
         </div>
+        <CertifiedTotals village={village} canCertify={canCertify} />
       </div>
+      <DailySheet village={village} />
     </div>
   );
 }
@@ -661,6 +667,48 @@ function Rovers({ villageId, canManage }: { villageId: string; canManage: boolea
   const candidates = (assets.data ?? []).filter(
     (a) => String(a.category ?? '').toUpperCase() === 'SURVEY');
 
+  /*
+   * Kit this village's crew hold that is somewhere else (§note 18).
+   *
+   * A rover follows the person it is issued to, so putting crew on a village
+   * usually brings their instruments. Usually — one person is crew on
+   * several villages at once and an instrument can only be in one place, so
+   * the carry silently skips.
+   *
+   * The result was a village with four people on it and nothing allocated,
+   * and nothing anywhere explaining why. The answer is never "the software
+   * forgot"; it is "that rover is in Koyyuru until Thursday".
+   */
+  const gap = useQuery({
+    queryKey: ['survey-kit-gap', villageId],
+    queryFn: async () => ((await apiRequestRaw(
+      `/api/v1/survey/villages/${villageId}/kit-gap`)).body as { data: Row[] }).data,
+  });
+  const missing: Row[] = gap.data ?? [];
+
+  const claim = useMutation({
+    mutationFn: async (assetIds: string[]) =>
+      apiRequest(`/api/v1/survey/villages/${villageId}/rovers/claim`, {
+        method: 'POST', body: { asset_ids: assetIds },
+      }),
+    onError: (e) => toast.error('The instrument was not moved', messageOf(e)),
+    onSuccess: (res: unknown) => {
+      const d = ((res as { data?: Row }).data ?? {}) as Row;
+      const late = (d.arriving as Row[] ?? []);
+      toast.success(
+        `${Number(d.brought)} instrument(s) moved here`,
+        late.length > 0
+          // A rover cannot leave a village before it got there, so one that
+          // arrived this morning reaches the next village tomorrow.
+          ? `${late.map((a) => `${String(a.asset_code)} arrives ${day(String(a.on))}`).join(', ')}`
+          : 'Released from where it was, as of yesterday.',
+      );
+      qc.invalidateQueries({ queryKey: ['survey-rovers', villageId] });
+      qc.invalidateQueries({ queryKey: ['survey-kit-gap'] });
+      qc.invalidateQueries({ queryKey: ['survey-villages'] });
+    },
+  });
+
   return (
     <section className="rounded-lg border border-border bg-surface-sunken p-3">
       <div className="flex items-baseline justify-between gap-2">
@@ -673,6 +721,53 @@ function Rovers({ villageId, canManage }: { villageId: string; canManage: boolea
           </Button>
         ) : null}
       </div>
+
+      {missing.length > 0 ? (
+        <div className="mt-2">
+          <Notice tone={rows.length === 0 ? 'warning' : 'info'}
+            title={rows.length === 0
+              ? 'This village has crew but no instruments'
+              : `${missing.length} more instrument(s) belong to this crew`}>
+            <div className="space-y-1">
+              <p>
+                {/* Named, because "some kit is elsewhere" is not something
+                    anybody can act on. */}
+                An instrument follows the person it is issued to, and these are out
+                on another village — one rover cannot be in two places.
+              </p>
+              <ul className="space-y-0.5">
+                {missing.map((k) => (
+                  <li key={String(k.asset_id)} className="flex flex-wrap items-center gap-1">
+                    <span className="font-mono text-2xs">{String(k.asset_code)}</span>
+                    <span className="text-2xs">
+                      issued to {String(k.employee_name)} ·{' '}
+                      {k.held_by_village_name
+                        ? `with ${String(k.held_by_village_name)} since ${day(String(k.held_since))}`
+                        : 'not allocated anywhere'}
+                    </span>
+                    {canManage ? (
+                      <Button type="button" variant="ghost" loading={claim.isPending}
+                        title={k.held_by_village_name
+                          ? `Release it from ${String(k.held_by_village_name)} and bring it here`
+                          : 'Allocate it to this village'}
+                        onClick={() => claim.mutate([String(k.asset_id)])}>
+                        Bring it here
+                      </Button>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+              {canManage && missing.length > 1 ? (
+                <Button type="button" variant="secondary" loading={claim.isPending}
+                  onClick={() => claim.mutate(missing.map((k) => String(k.asset_id)))}>
+                  Bring all {missing.length} here
+                </Button>
+              ) : null}
+            </div>
+          </Notice>
+        </div>
+      ) : null}
+
 
       {adding ? (
         <div className="mt-2 grid gap-2 sm:grid-cols-3">
@@ -805,11 +900,14 @@ function Rovers({ villageId, canManage }: { villageId: string; canManage: boolea
  * raises the claim, and pretending otherwise would bill work that has not
  * been submitted.
  */
-function Billing({ village, canManage }: { village: Row; canManage: boolean }) {
+function Billing({
+  village, pipeline, canManage,
+}: { village: Row; pipeline: Row[]; canManage: boolean }) {
   const villageId = String(village.id);
   const qc = useQueryClient();
   const toast = useToast();
   const [adding, setAdding] = React.useState(false);
+  const [editing, setEditing] = React.useState<string | null>(null);
   const blank = {
     milestone: '1', submitted_on: businessToday(), reference_no: '', extent_ac: '', remarks: '',
   };
@@ -854,8 +952,11 @@ function Billing({ village, canManage }: { village: Row; canManage: boolean }) {
         body: {
           status: v.status,
           // A decided claim carries the day it was decided, or it cannot be
-          // aged — and ageing them is why they are tracked.
-          ...(billingDecisionRequired(v.status) ? { decided_on: businessToday() } : {}),
+          // aged — and ageing them is why they are tracked. Undoing one
+          // clears the date, so no decision date outlives its decision.
+          ...(billingDecisionRequired(v.status)
+            ? { decided_on: businessToday() }
+            : { decided_on: null }),
         },
       }),
     onError: (e) => toast.error('The claim was not updated', messageOf(e)),
@@ -876,7 +977,23 @@ function Billing({ village, canManage }: { village: Row; canManage: boolean }) {
   const claimed = Number(claims.data?.meta?.claimed_percent ?? 0);
   // The milestones left to claim, so the picker does not offer one twice.
   const taken = new Set(rows.filter((r) => r.status !== 'REJECTED').map((r) => Number(r.milestone)));
-  const open = [1, 2, 3].filter((m) => !taken.has(m));
+  const stages: Record<string, string> = village.stages ?? {};
+  const labelOf = (code: string) =>
+    String(pipeline.find((p) => String(p.code) === code)?.label ?? code.replace(/_/g, ' '));
+  /*
+   * Only what the village has earned (§note 17).
+   *
+   * The contract releases the first claim when ground-truthing QC signs the
+   * village off, the second at vectorisation QC, the third when the
+   * deliverables have gone in. The server refuses the rest; offering them
+   * here and letting somebody find out afterwards is the same rule wearing
+   * worse manners.
+   */
+  const unclaimed = [1, 2, 3].filter((m) => !taken.has(m));
+  const open = unclaimed.filter((m) => milestoneEarned(m, stages));
+  const notYet = unclaimed
+    .map((m) => ({ m, why: milestoneBlockedNote(m, stages, labelOf) }))
+    .filter((x) => x.why);
 
   React.useEffect(() => {
     // Default to the next claim due rather than to the first.
@@ -911,6 +1028,22 @@ function Billing({ village, canManage }: { village: Row; canManage: boolean }) {
       {claims.isLoading ? <Skeleton className="mt-2 h-16" /> : null}
       {claims.isError ? (
         <ErrorCard error={claims.error} onRetry={() => claims.refetch()} />
+      ) : null}
+
+      {/*
+        * What cannot be claimed yet, and what would earn it.
+        *
+        * Leaving these out of the picker without saying why turns a contract
+        * rule into a missing option, and somebody goes looking for a setting.
+        */}
+      {notYet.length > 0 ? (
+        <ul className="mt-2 space-y-0.5">
+          {notYet.map((x) => (
+            <li key={x.m} className="text-2xs text-text-subtle">
+              <span className="text-text-muted">{MILESTONE_LABELS[x.m]}:</span> {x.why}
+            </li>
+          ))}
+        </ul>
       ) : null}
 
       {adding ? (
@@ -983,7 +1116,8 @@ function Billing({ village, canManage }: { village: Row; canManage: boolean }) {
               {rows.map((c) => {
                 const status = String(c.status) as BillingStatus;
                 return (
-                  <TR key={String(c.id)}>
+                  <React.Fragment key={String(c.id)}>
+                  <TR>
                     <TD className="text-text">
                       {MILESTONE_LABELS[Number(c.milestone)] ?? `Milestone ${c.milestone}`}
                     </TD>
@@ -1030,17 +1164,559 @@ function Billing({ village, canManage }: { village: Row; canManage: boolean }) {
                                 id: String(c.id), version: Number(c.version), status: 'PAID',
                               })}>Paid</Button>
                           ) : null}
+                          {/*
+                            * Putting a decision back.
+                            *
+                            * Somebody presses "Approved" on the wrong row, or
+                            * the department's letter turns out to be about a
+                            * different village. Without this the only way back
+                            * was to delete the claim and lose when it was
+                            * submitted, which is the part that matters.
+                            */}
+                          {status !== 'SUBMITTED' ? (
+                            <Button type="button" variant="ghost"
+                              title="Undo the decision and leave it as submitted"
+                              onClick={() => decide.mutate({
+                                id: String(c.id), version: Number(c.version),
+                                status: 'SUBMITTED',
+                              })}>Undo decision</Button>
+                          ) : null}
+                          <Button type="button" variant="ghost"
+                            onClick={() => setEditing(
+                              editing === String(c.id) ? null : String(c.id))}>
+                            {editing === String(c.id) ? 'Cancel' : 'Edit'}
+                          </Button>
                           <Button type="button" variant="ghost"
                             onClick={() => remove.mutate(String(c.id))}>Remove</Button>
                         </div>
                       ) : null}
                     </TD>
                   </TR>
+                  {editing === String(c.id) ? (
+                    <TR>
+                      <TD colSpan={6} className="bg-surface p-0">
+                        <ClaimEdit claim={c} onDone={() => { setEditing(null); refresh(); }} />
+                      </TD>
+                    </TR>
+                  ) : null}
+                  </React.Fragment>
                 );
               })}
             </TBody>
           </Table>
         </TableWrap>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * Correcting a claim after it has gone in.
+ *
+ * The reference number is typed off a covering letter and the date off a
+ * despatch register, and both get mistyped. Without this the only way to fix
+ * one was to delete the claim and raise it again, which loses the day it was
+ * actually submitted — the one field the department cares about.
+ *
+ * The milestone is not editable. A claim for a different milestone is a
+ * different claim, and changing it under the same row would silently move
+ * money between two stages of the contract.
+ */
+function ClaimEdit({ claim, onDone }: { claim: Row; onDone: () => void }) {
+  const toast = useToast();
+  const [form, setForm] = React.useState({
+    percent: String(claim.percent ?? ''),
+    submitted_on: String(claim.submitted_on ?? ''),
+    decided_on: claim.decided_on ? String(claim.decided_on) : '',
+    reference_no: claim.reference_no ? String(claim.reference_no) : '',
+    extent_ac: claim.extent_ac === null || claim.extent_ac === undefined
+      ? '' : String(claim.extent_ac),
+    remarks: claim.remarks ? String(claim.remarks) : '',
+  });
+
+  const save = useMutation({
+    mutationFn: async () => apiRequest(`/api/v1/survey/billing/${claim.id}`, {
+      method: 'PATCH',
+      headers: { 'If-Match': String(claim.version) },
+      body: {
+        percent: form.percent === '' ? undefined : Number(form.percent),
+        submitted_on: form.submitted_on || undefined,
+        // Blank clears it: a decision date with no decision behind it is
+        // worse than none.
+        decided_on: form.decided_on || null,
+        reference_no: form.reference_no.trim() || null,
+        extent_ac: form.extent_ac === '' ? null : Number(form.extent_ac),
+        remarks: form.remarks.trim() || null,
+      },
+    }),
+    onError: (e) => toast.error('The claim was not changed', messageOf(e)),
+    onSuccess: () => { toast.success('Claim updated'); onDone(); },
+  });
+
+  return (
+    <div className="grid gap-2 border-t border-border p-3 sm:grid-cols-3">
+      <label className="text-2xs text-text-subtle">
+        Share (%)
+        <input className={field} inputMode="decimal" value={form.percent}
+          onChange={(e) => setForm({ ...form, percent: e.target.value })} />
+      </label>
+      <label className="text-2xs text-text-subtle">
+        Submitted on
+        <input type="date" className={field} value={form.submitted_on} max={businessToday()}
+          onChange={(e) => setForm({ ...form, submitted_on: e.target.value })} />
+      </label>
+      <label className="text-2xs text-text-subtle">
+        Decided on
+        <input type="date" className={field} value={form.decided_on} max={businessToday()}
+          onChange={(e) => setForm({ ...form, decided_on: e.target.value })} />
+        <span className="mt-0.5 block">Leave blank if it is still with the department.</span>
+      </label>
+      <label className="text-2xs text-text-subtle">
+        Department reference
+        <input className={field} value={form.reference_no} placeholder="RC/2026/114"
+          onChange={(e) => setForm({ ...form, reference_no: e.target.value })} />
+      </label>
+      <label className="text-2xs text-text-subtle">
+        Extent claimed (Ac)
+        <input className={field} inputMode="decimal" value={form.extent_ac}
+          onChange={(e) => setForm({ ...form, extent_ac: e.target.value })} />
+      </label>
+      <label className="text-2xs text-text-subtle">
+        Remarks
+        <input className={field} value={form.remarks}
+          onChange={(e) => setForm({ ...form, remarks: e.target.value })} />
+      </label>
+      <div className="sm:col-span-3">
+        <Button type="button" variant="primary" loading={save.isPending}
+          onClick={() => save.mutate()}>Save changes</Button>
+      </div>
+    </div>
+  );
+}
+
+
+/* ------------------------------------------------- certified totals (§068) */
+
+/**
+ * What the village is certified at, against what its returns add up to.
+ *
+ * Every figure in this module is the sum of daily returns, and that is the
+ * right default. It is not what goes to the department: at handover the
+ * village is recounted, parcels merge, a hamlet turns out to have been
+ * counted twice.
+ *
+ * Both numbers stay on screen. A certified figure that replaced the record it
+ * came from would be the spreadsheet this module exists to replace, just
+ * inside the database — and the gap between them is what a reviewer looks at.
+ */
+function CertifiedTotals({ village, canCertify }: { village: Row; canCertify: boolean }) {
+  const villageId = String(village.id);
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [open, setOpen] = React.useState(false);
+  const [draft, setDraft] = React.useState<Record<string, { quantity: string; reason: string }>>({});
+
+  const finished = Object.values((village.stages ?? {}) as Record<string, string>)
+    .some((v) => v === 'COMPLETED');
+
+  const figures = useQuery({
+    queryKey: ['survey-finals', villageId],
+    enabled: open || finished,
+    queryFn: async () => ((await apiRequestRaw(
+      `/api/v1/survey/villages/${villageId}/finals`)).body as { data: Row[] }).data,
+  });
+
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['survey-finals', villageId] });
+    qc.invalidateQueries({ queryKey: ['survey-villages'] });
+    qc.invalidateQueries({ queryKey: ['survey-progress'] });
+    qc.invalidateQueries({ queryKey: ['survey-summary'] });
+  };
+
+  const save = useMutation({
+    mutationFn: async () => apiRequest(`/api/v1/survey/villages/${villageId}/finals`, {
+      method: 'PUT',
+      body: {
+        finals: Object.entries(draft)
+          .filter(([, v]) => v.quantity !== '' && v.reason.trim() !== '')
+          .map(([code, v]) => ({
+            measure_code: code, quantity: Number(v.quantity), reason: v.reason.trim(),
+          })),
+      },
+    }),
+    onError: (e) => toast.error('Nothing was certified', messageOf(e)),
+    onSuccess: () => {
+      toast.success('Certified',
+        'Every roll-up now reports the certified figure, with the daily sum beside it.');
+      setDraft({}); refresh();
+    },
+  });
+
+  const clear = useMutation({
+    mutationFn: async (code: string) =>
+      apiRequest(`/api/v1/survey/villages/${villageId}/finals/${code}`, { method: 'DELETE' }),
+    onError: (e) => toast.error('It was not cleared', messageOf(e)),
+    onSuccess: () => {
+      toast.success('Cleared', 'The village reads as its daily returns again.');
+      refresh();
+    },
+  });
+
+  if (!finished) return null;
+
+  const rows: Row[] = figures.data ?? [];
+  // Only measures anybody has recorded or certified: the full list is
+  // eleven rows of zeroes on most villages.
+  const shown = rows.filter((r) => Number(r.recorded) > 0 || r.certified !== null);
+  const ready = Object.values(draft)
+    .filter((v) => v.quantity !== '' && v.reason.trim() !== '').length;
+
+  return (
+    <section className="rounded-lg border border-border bg-surface-sunken p-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-text-subtle">
+          Certified totals
+        </h4>
+        {canCertify ? (
+          <Button type="button" variant="ghost" onClick={() => setOpen((o) => !o)}>
+            {open ? 'Done' : 'Certify totals'}
+          </Button>
+        ) : null}
+      </div>
+
+      <p className="mt-1 text-2xs text-text-subtle">
+        What the daily returns add up to, and what somebody stands behind at handover.
+        Both are kept: the difference is the point.
+      </p>
+
+      {figures.isLoading ? <Skeleton className="mt-2 h-16" /> : null}
+      {figures.isError ? (
+        <ErrorCard error={figures.error} onRetry={() => figures.refetch()} />
+      ) : null}
+
+      {shown.length === 0 && !figures.isLoading ? (
+        <p className="mt-2 text-xs text-text-muted">Nothing recorded against this village yet.</p>
+      ) : null}
+
+      {shown.length > 0 ? (
+        <TableWrap className="mt-2">
+          <Table>
+            <THead>
+              <TR>
+                <TH>Measure</TH>
+                <TH className="text-right">From daily returns</TH>
+                <TH className="text-right">Certified</TH>
+                <TH className="text-right">Difference</TH>
+                <TH>Why</TH>
+                {open ? <TH /> : null}
+              </TR>
+            </THead>
+            <TBody>
+              {shown.map((r) => {
+                const code = String(r.code);
+                const d = draft[code] ?? { quantity: '', reason: '' };
+                return (
+                  <TR key={code}>
+                    <TD className="text-text">
+                      {String(r.label)}
+                      {r.unit ? (
+                        <span className="ml-1 text-2xs text-text-subtle">{String(r.unit)}</span>
+                      ) : null}
+                    </TD>
+                    <TD className="text-right tabular-nums text-text-muted">
+                      {Number(r.recorded)}
+                    </TD>
+                    <TD className="text-right tabular-nums">
+                      {open ? (
+                        <input className={`${field} text-right`} inputMode="decimal"
+                          placeholder={String(r.certified ?? r.recorded)}
+                          value={d.quantity}
+                          onChange={(e) => setDraft({
+                            ...draft, [code]: { ...d, quantity: e.target.value },
+                          })} />
+                      ) : r.certified === null
+                        ? <span className="text-text-subtle">—</span>
+                        : <span className="font-medium text-text">{Number(r.certified)}</span>}
+                    </TD>
+                    <TD className="text-right tabular-nums">
+                      {r.difference === null ? (
+                        <span className="text-text-subtle">—</span>
+                      ) : (
+                        <span className={Number(r.difference) === 0 ? 'text-text-subtle'
+                          : Number(r.difference) < 0 ? 'text-warning' : 'text-success'}>
+                          {Number(r.difference) > 0 ? '+' : ''}{Number(r.difference)}
+                        </span>
+                      )}
+                    </TD>
+                    <TD className="text-2xs text-text-muted">
+                      {open ? (
+                        <input className={field} placeholder="Recount at handover"
+                          value={d.reason}
+                          onChange={(e) => setDraft({
+                            ...draft, [code]: { ...d, reason: e.target.value },
+                          })} />
+                      ) : (
+                        <>
+                          {r.reason ? String(r.reason) : '—'}
+                          {r.certified_by_name ? (
+                            <div className="text-text-subtle">
+                              {String(r.certified_by_name)}
+                              {r.certified_at ? ` · ${day(r.certified_at)}` : ''}
+                            </div>
+                          ) : null}
+                        </>
+                      )}
+                    </TD>
+                    {open ? (
+                      <TD className="text-right">
+                        {r.certified !== null ? (
+                          <Button type="button" variant="ghost"
+                            onClick={() => clear.mutate(code)}>Clear</Button>
+                        ) : null}
+                      </TD>
+                    ) : null}
+                  </TR>
+                );
+              })}
+            </TBody>
+          </Table>
+        </TableWrap>
+      ) : null}
+
+      {open ? (
+        <div className="mt-2 space-y-2">
+          <Notice tone="info" title="A certified figure needs a reason">
+            {/* A number that differs from the record with no explanation is
+                exactly what this exists to stop. */}
+            Enter the figure and why it differs from the daily returns. Both are required,
+            and both are recorded against your name.
+          </Notice>
+          <Button type="button" variant="primary" loading={save.isPending} disabled={ready === 0}
+            onClick={() => save.mutate()}>
+            Certify {ready || ''} measure{ready === 1 ? '' : 's'}
+          </Button>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+
+/* -------------------------------------------- the village, day by day (§19) */
+
+/**
+ * Every return this village has filed, with what was out and who came.
+ *
+ * The summary totals a village's life; this is the working underneath it.
+ * "Eighty-two per cent turnout" is a figure somebody queries, and the answer
+ * is the six days in the middle of March where the department sent nobody —
+ * which is only visible a day at a time.
+ *
+ * The line at the bottom is computed by the server from the same rows the
+ * table shows, so it can never disagree with the lines above it.
+ */
+function DailySheet({ village }: { village: Row }) {
+  const villageId = String(village.id);
+  const [open, setOpen] = React.useState(false);
+
+  const q = useQuery({
+    queryKey: ['survey-village-daily', villageId],
+    enabled: open,
+    queryFn: async () => ((await apiRequestRaw(
+      `/api/v1/survey/villages/${villageId}/daily`)).body as { data: Row }).data,
+  });
+
+  const d = q.data;
+  const days: Row[] = d?.days ?? [];
+  const measures: Row[] = d?.measures ?? [];
+  // Only measures anybody recorded here: eleven columns of zeroes is not a
+  // table, it is a wall.
+  const active = measures.filter((m) =>
+    days.some((x) => Number((x.values as Row)[String(m.code)] ?? 0) > 0));
+  const t: Row = d?.totals ?? {};
+  const allotted = `${d?.village?.gt_govt_staff_allocated ?? '—'} govt / ${
+    d?.village?.gt_crew_allocated ?? '—'} crew`;
+
+  const sheetSpec = {
+    name: 'Day by day',
+    title: {
+      heading: `${String(village.village_name ?? 'Village')} — day by day`,
+      period: days.length
+        ? `${day(String(days[0].entry_date))} to ${day(String(days[days.length - 1].entry_date))}`
+        : 'No returns yet',
+      filters: `Agreed staffing: ${allotted}`,
+      extra: [
+        ['Return days', String(t.return_days ?? 0)],
+        ['Rover-days used / idle', `${t.rover_days_used ?? 0} / ${t.rover_days_idle ?? 0}`],
+        ['Government staff-days', `${t.govtStaffDays ?? 0} of ${t.govtStaffExpected ?? 0}`],
+        ['Crew-days', `${t.crewDays ?? 0} of ${t.crewExpected ?? 0}`],
+      ] as Array<[string, string]>,
+    },
+    columns: [
+      { header: 'Date', width: 14 },
+      { header: 'Teams', width: 10 },
+      { header: 'Rovers out', width: 12 },
+      { header: 'Rovers used', width: 12 },
+      { header: 'Rovers idle', width: 12 },
+      { header: 'Govt staff present', width: 18 },
+      { header: 'Crew present', width: 14 },
+      ...active.map((m) => ({ header: String(m.label), width: 18 })),
+      { header: 'Thin-day reason', width: 24 },
+      { header: 'Notes', width: 40 },
+    ],
+    rows: days.map((x) => [
+      String(x.entry_date), String(x.teams_deployed ?? 0),
+      String(x.rovers_allocated ?? 0), String(x.rovers_used ?? 0), String(x.rovers_idle ?? 0),
+      x.govt_staff_present === null ? '' : String(x.govt_staff_present),
+      x.crew_present === null ? '' : String(x.crew_present),
+      ...active.map((m) => {
+        const v = (x.values as Row)[String(m.code)];
+        return v === undefined || v === null ? '' : String(v);
+      }),
+      x.low_progress_label ? String(x.low_progress_label) : '',
+      x.notes ? String(x.notes) : '',
+    ]),
+  };
+
+  return (
+    <section className="rounded-lg border border-border bg-surface-sunken p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-text-subtle">
+          Day by day
+        </h4>
+        <div className="flex items-center gap-1">
+          {open && days.length > 0 ? (
+            <ExportMenu sheet={sheetSpec}
+              fileName={`village-daily-${String(village.village_code ?? villageId).slice(0, 20)}`} />
+          ) : null}
+          <Button type="button" variant="ghost" onClick={() => setOpen((o) => !o)}>
+            {open ? 'Hide' : 'Show every return'}
+          </Button>
+        </div>
+      </div>
+
+      {!open ? (
+        <p className="mt-1 text-2xs text-text-subtle">
+          Every return filed against this village, with the instruments out and who turned up.
+        </p>
+      ) : null}
+
+      {open && q.isLoading ? <Skeleton className="mt-2 h-32" /> : null}
+      {open && q.isError ? <ErrorCard error={q.error} onRetry={() => q.refetch()} /> : null}
+
+      {open && q.isSuccess && days.length === 0 ? (
+        <p className="mt-2 text-xs text-text-muted">
+          Nothing has been filed against this village yet.
+        </p>
+      ) : null}
+
+      {open && days.length > 0 ? (
+        <>
+          <p className="mt-1 text-2xs text-text-subtle">
+            Agreed with the mandal: {allotted}. Instruments are read against how many were
+            out that day — one of two is a different day from one of six.
+          </p>
+          <TableWrap className="mt-2">
+            <Table>
+              <THead>
+                <TR>
+                  <TH>Date</TH>
+                  <TH className="text-right">Teams</TH>
+                  <TH className="text-right">Rovers out / used / idle</TH>
+                  <TH className="text-right">Govt staff</TH>
+                  <TH className="text-right">Crew</TH>
+                  {active.map((m) => (
+                    <TH key={String(m.code)} className="text-right">{String(m.label)}</TH>
+                  ))}
+                  <TH>Why it was thin</TH>
+                </TR>
+              </THead>
+              <TBody>
+                {days.map((x) => {
+                  const shortGovt = x.govt_staff_present !== null
+                    && d?.village?.gt_govt_staff_allocated != null
+                    && Number(x.govt_staff_present) < Number(d.village.gt_govt_staff_allocated);
+                  return (
+                    <TR key={String(x.entry_date)}>
+                      <TD className="tabular-nums text-text">{day(String(x.entry_date))}</TD>
+                      <TD className="text-right tabular-nums">{Number(x.teams_deployed ?? 0)}</TD>
+                      <TD className="text-right tabular-nums">
+                        {Number(x.rovers_allocated ?? 0)} / {Number(x.rovers_used ?? 0)} /{' '}
+                        <span className={Number(x.rovers_idle ?? 0) > 0
+                          ? 'text-warning' : 'text-text-subtle'}>
+                          {Number(x.rovers_idle ?? 0)}
+                        </span>
+                      </TD>
+                      <TD className="text-right tabular-nums">
+                        {x.govt_staff_present === null ? (
+                          <span className="text-text-subtle">—</span>
+                        ) : (
+                          <span className={Number(x.govt_staff_present) === 0 ? 'text-danger'
+                            : shortGovt ? 'text-warning' : 'text-text'}>
+                            {Number(x.govt_staff_present)}
+                          </span>
+                        )}
+                      </TD>
+                      <TD className="text-right tabular-nums">
+                        {x.crew_present === null ? (
+                          <span className="text-text-subtle">—</span>
+                        ) : Number(x.crew_present)}
+                      </TD>
+                      {active.map((m) => (
+                        <TD key={String(m.code)} className="text-right tabular-nums">
+                          {(x.values as Row)[String(m.code)] ?? '—'}
+                        </TD>
+                      ))}
+                      <TD className="text-2xs text-text-muted">
+                        {x.low_progress_label ? String(x.low_progress_label) : '—'}
+                      </TD>
+                    </TR>
+                  );
+                })}
+                {/* Totalled by the server from these same rows, so the line
+                    at the bottom cannot disagree with the ones above it. */}
+                <TR>
+                  <TD className="border-t-2 border-border font-medium text-text">Total</TD>
+                  <TD className="border-t-2 border-border text-right tabular-nums font-medium">
+                    {Number(t.team_days ?? 0)}
+                  </TD>
+                  <TD className="border-t-2 border-border text-right tabular-nums font-medium">
+                    — / {Number(t.rover_days_used ?? 0)} / {Number(t.rover_days_idle ?? 0)}
+                  </TD>
+                  <TD className="border-t-2 border-border text-right tabular-nums font-medium">
+                    {Number(t.govtStaffDays ?? 0)}
+                    {t.govtStaffExpected ? (
+                      <span className="text-2xs font-normal text-text-subtle">
+                        {' '}of {Number(t.govtStaffExpected)}
+                      </span>
+                    ) : null}
+                  </TD>
+                  <TD className="border-t-2 border-border text-right tabular-nums font-medium">
+                    {Number(t.crewDays ?? 0)}
+                    {t.crewExpected ? (
+                      <span className="text-2xs font-normal text-text-subtle">
+                        {' '}of {Number(t.crewExpected)}
+                      </span>
+                    ) : null}
+                  </TD>
+                  {active.map((m) => (
+                    <TD key={String(m.code)}
+                      className="border-t-2 border-border text-right tabular-nums font-medium">
+                      {Number((t.values as Row)?.[String(m.code)] ?? 0)}
+                    </TD>
+                  ))}
+                  <TD className="border-t-2 border-border text-2xs text-text-subtle">
+                    over {Number(t.return_days ?? 0)} return day
+                    {Number(t.return_days ?? 0) === 1 ? '' : 's'}
+                  </TD>
+                </TR>
+              </TBody>
+            </Table>
+          </TableWrap>
+          <p className="mt-1 text-2xs text-text-subtle">
+            {staffingNote(t as any)}
+          </p>
+        </>
       ) : null}
     </section>
   );
