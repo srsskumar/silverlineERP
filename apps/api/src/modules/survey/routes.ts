@@ -1148,7 +1148,17 @@ export async function registerSurveyRoutes(
    * Guarded on survey.enter rather than survey.read: this is the working
    * list of the person asking, not a report about anybody else.
    */
-  app.get('/api/v1/survey/me/villages', { preHandler: guard('survey.enter') }, async req => {
+  /*
+   * Which villages this person is working. A read, and guarded as one.
+   *
+   * It was survey.enter, which is the right to record rather than the right
+   * to look, and the two are not the same person here: a client viewer and an
+   * auditor both appear on crew lists on this programme. They were shown a
+   * 403 for the question "what am I on?", which is a question their own crew
+   * row already answers. Writing a return is refused where the return is
+   * written, on POST /survey/entries.
+   */
+  app.get('/api/v1/survey/me/villages', { preHandler: guard('survey.read') }, async req => {
     const u = actor(req);
     const workDate = today();
     const rows = (await pool.query(

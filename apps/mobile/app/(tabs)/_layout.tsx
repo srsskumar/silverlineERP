@@ -32,13 +32,16 @@ export default function TabsLayout() {
    * request. Offline before the list has ever loaded, the tab stays hidden;
    * anything already filed is in the outbox regardless.
    */
+  const maySeeSurvey = canDo("survey.read");
   const mine = useQuery({
     queryKey: ["survey", "my-villages"],
     queryFn: getMyVillages,
-    enabled: signedIn,
+    // Not asked at all without the right to the answer: a 403 on every cold
+    // start is noise in the logs and a wasted round trip on a field handset.
+    enabled: signedIn && maySeeSurvey,
     retry: false,
   });
-  const showSurvey = canDo("survey.read") && (mine.data?.villages.length ?? 0) > 0;
+  const showSurvey = maySeeSurvey && (mine.data?.villages.length ?? 0) > 0;
 
   if (!ready) return null;
   if (!signedIn) return <Redirect href="/(auth)/login" />;

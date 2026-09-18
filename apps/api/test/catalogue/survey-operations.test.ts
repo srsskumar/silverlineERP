@@ -789,6 +789,24 @@ describe("punching in and out against a village", () => {
     }
   });
 
+  it("answers a read-only crew member rather than refusing them", async () => {
+    /*
+     * A client viewer and an auditor both hold crew rows on this programme,
+     * and both hold survey.read without survey.enter. Asking "which villages
+     * am I on?" is a read of their own crew row; refusing it left the app
+     * unable to tell them why the forms were closed to them. The refusal
+     * belongs where the writing happens.
+     */
+    const r = await get(w.role.CLIENT_VIEWER, "/api/v1/survey/me/villages");
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(Array.isArray(r.body.data)).toBe(true);
+
+    const write = await post(w.role.CLIENT_VIEWER, "/api/v1/survey/entries", {
+      survey_village_id: villageA, entry_date: workDate(), values: {},
+    });
+    expect(write.status).toBe(403);
+  });
+
   it("does not hand a crew member somebody else's villages", async () => {
     // Somebody else's village, in the same programme. Being on a programme
     // is not being on every village in it.

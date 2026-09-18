@@ -17,7 +17,10 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const mobileRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
+// fileURLToPath on the string, not on a `new URL(...)`: the DOM URL this
+// project's lib brings in is not the one node:url declares, and the two only
+// disagree at the type level.
+const mobileRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function sources(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
