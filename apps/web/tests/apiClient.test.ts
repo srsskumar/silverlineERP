@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   ApiClientError,
   __resetAuthStateForTests,
@@ -130,5 +132,33 @@ describe('apiClient', () => {
     expect((err as ApiClientError).code).toBe('UNAUTHORIZED');
     expect(getAccessToken()).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('claiming JSON only when there is JSON', () => {
+  /*
+   * The Content-Type header went on every request, body or not, and Fastify
+   * refuses to parse an empty body that says it is JSON. Every caller that
+   * sent a mutating request with nothing in it got a 400 it could not
+   * explain: marking one notification read, deleting a board, detaching a
+   * label, deleting a task. The buttons were there, the requests went out,
+   * and nothing happened.
+   */
+  const source = readFileSync(join(__dirname, '..', 'lib', 'apiClient.ts'), 'utf8');
+
+  it('sets the header from the body, not unconditionally', () => {
+    expect(source).toContain("...(body === undefined ? {} : { 'Content-Type': 'application/json' })");
+  });
+
+  it('no longer sets it for every request', () => {
+    const headerBlock = source.slice(
+      source.indexOf('const reqHeaders'),
+      source.indexOf('const token = getAccessToken()'),
+    );
+    expect(headerBlock).not.toMatch(/^\s*'Content-Type': 'application\/json',$/m);
+  });
+
+  it('still sends a body when one is given', () => {
+    expect(source).toContain('body: body === undefined ? undefined : JSON.stringify(body)');
   });
 });

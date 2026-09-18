@@ -298,8 +298,17 @@ export async function apiRequestRaw(
   let attempt = 0;
   const doFetch = async (): Promise<Response> => {
     attempt += 1;
+    /*
+     * Only claim JSON when there is JSON.
+     *
+     * The header went on every request, body or not, and Fastify refuses to
+     * parse an empty body that says it is JSON — so any caller that sent a
+     * mutating request with nothing in it got a 400 it could not explain.
+     * Marking one notification read did exactly that, and had never worked:
+     * the button was there, the request went out, and the row stayed unread.
+     */
     const reqHeaders: Record<string, string> = {
-      'Content-Type': 'application/json',
+      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
       ...Object.fromEntries(stableHeaders.entries()),
     };
     if (stableHeaders.has('Idempotency-Key')) { delete reqHeaders['idempotency-key']; reqHeaders['Idempotency-Key'] = stableHeaders.get('Idempotency-Key')!; }
