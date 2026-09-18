@@ -1464,7 +1464,11 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       await villageOr404(pool, u.orgId, id, u);
       const rows = (await pool.query(
-        `SELECT r.*, a.asset_code, a.name AS asset_name, a.serial_number, a.condition
+        `SELECT r.*, a.asset_code, a.name AS asset_name, a.serial_number, a.condition,
+                -- So a caller can tell a rover from the tripod that travelled
+                -- with it: the kit follows the crew, the daily return does not
+                -- ask them to account for a welding set.
+                a.category
          FROM survey_rover_allocations r
          JOIN assets a ON a.id = r.asset_id
          WHERE r.survey_village_id = $1 AND r.org_id = $2

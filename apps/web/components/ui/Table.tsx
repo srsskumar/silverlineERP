@@ -1,9 +1,34 @@
 import * as React from 'react';
 import { cn } from '@/lib/cn';
 
-/** Wrap a table so wide content scrolls inside the card, never the page. */
-export function TableWrap({ className, ...rest }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn('w-full overflow-x-auto', className)} {...rest} />;
+/**
+ * Wrap a table so wide content scrolls inside the card, never the page.
+ *
+ * `tall` also caps the height, which is what makes a wide table usable.
+ * A thousand rows in a box that grows to fit them puts the horizontal
+ * scrollbar a thousand rows down: to move a wide table sideways you first
+ * scroll to the bottom of the page, drag, then scroll back up to read what
+ * you uncovered. Capping the height keeps the bar in view, and the sticky
+ * header keeps the column names with it.
+ *
+ * Not the default, because a short table in a fixed-height box looks broken
+ * and scrolls a list that would have fitted on the screen.
+ */
+export function TableWrap({
+  className, tall, ...rest
+}: React.HTMLAttributes<HTMLDivElement> & { tall?: boolean }) {
+  return (
+    <div
+      className={cn(
+        'w-full overflow-x-auto',
+        // Tall enough to read, short enough that the scrollbar is reachable
+        // without leaving the rows behind.
+        tall && 'max-h-[70vh] overflow-y-auto',
+        className,
+      )}
+      {...rest}
+    />
+  );
 }
 
 export function Table({ className, ...rest }: React.TableHTMLAttributes<HTMLTableElement>) {

@@ -1,0 +1,202 @@
+/**
+ * Every survey tab, mounted for real, through loading and loaded.
+ *
+ * The Villages tab shipped to production showing an error boundary instead of
+ * a village list. It threw "rendered more hooks than during the previous
+ * render" — a `useMemo` that had ended up below an early return, so the first
+ * render ran one hook fewer than the second.
+ *
+ * A green typecheck, a green build and seventeen hundred passing tests all
+ * missed it, because not one of them rendered a component. These do.
+ *
+ * Deliberately shallow on assertions and broad on coverage: what matters is
+ * that each screen survives the transition from loading to loaded, which is
+ * the moment a misplaced hook blows up. What the screen then says is the job
+ * of the logic suite next door.
+ */
+import * as React from 'react';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+/* ------------------------------------------------------------ the fixtures */
+
+const VILLAGE = {
+  id: 'v1', village_id: 'ou1', village_name: 'Adakula', village_code: '1501041',
+  district_name: 'Alluri Sitharama Raju', mandal_name: 'Koyyuru',
+  total_extent_ac: 200, total_extent_sq_km: 0.81,
+  stages: { GROUND_TRUTHING: 'IN_PROGRESS' }, stage_dates: {},
+  done: { GOVT_LAND_EXTENT_AC: 120 },
+  claimed_milestones: [], claimed_percent: 0,
+  assignee_name: 'Ravi Kumar', version: 1,
+};
+
+const PROGRESS = {
+  level: 'mandal', as_of: '2026-09-19', from: null,
+  staffing: { daysRecorded: 2, govtStaffDays: 3, crewDays: 8, govtStaffExpected: 4,
+    crewExpected: 8, govtStaffPct: 75, crewPct: 100, daysWithNoGovtStaff: 1, daysShort: 1 },
+  filter: { district: null, mandal: null, village_id: null, stage: null,
+    stage_state: null, villages: 1, of_villages: 1 },
+  options: { districts: ['Alluri Sitharama Raju'], mandals: ['Koyyuru'],
+    villages: [{ id: 'v1', name: 'Adakula' }] },
+  rows: [{ id: 'm1', name: 'Koyyuru', villages: 1, completed: 0, notStarted: 0,
+    extentAc: 200, surveyedAc: 120, overallPct: 60, measures: {}, period_done: null,
+    by_stage: {}, out_of_sequence: 0 }],
+  total: { villages: 1, completed: 0, notStarted: 0, inProgress: 1, extentAc: 200,
+    extentSqKm: 0.81, surveyedAc: 120, overallPct: 60, unweighted: 0, measures: {} },
+  by_stage: { GROUND_TRUTHING: { notStarted: 0, inProgress: 1, onHold: 0, completed: 0 } },
+  rovers: { as_of: '2026-09-19', allocated: 2, used: 1, idle: 1, utilisationPct: 50, overUsed: false },
+  pace: { activeDays: 2, projectedFinish: '2026-12-01', daysToFinish: 70, areaPerActiveDay: 60 },
+  pipeline: [
+    { code: 'GROUND_TRUTHING', label: 'Ground truthing', requires: null, tracks_daily_progress: true },
+    { code: 'GT_QC', label: 'GT quality check', requires: 'GROUND_TRUTHING', tracks_daily_progress: false },
+  ],
+  measures: [
+    { code: 'GOVT_LAND_EXTENT_AC', label: 'Government land', group_label: null, unit: 'Ac', basis: 'EXTENT' },
+    { code: 'GOVT_LAND_POINTS', label: 'Government points', group_label: null, unit: 'no', basis: 'COUNT' },
+  ],
+};
+
+const REPORT = {
+  grain: 'WEEK', level: 'mandal', as_of: '2026-09-19',
+  period: { from: '2026-09-14', to: '2026-09-20', label: 'Week of 2026-09-14' },
+  previous_period: { from: '2026-09-07', to: '2026-09-13', label: 'Week of 2026-09-07' },
+  programme: { id: 'p1', name: 'Krishna', code: 'KR1' },
+  area: { current: 120, previous: 90, direction: 'UP', changePct: 33, unit: 'Ac' },
+  measures: { GOVT_LAND_EXTENT_AC: { current: 120, previous: 90, direction: 'UP', changePct: 33 } },
+  measure_list: PROGRESS.measures,
+  effort: { active_days: 4, calendar_days: 7, villages_worked: 1, team_days: 8, area_per_active_day: 30 },
+  rovers: { utilised: 3, idle: 1, idle_reasons: ['ROVER'] },
+  staffing: PROGRESS.staffing, previous_staffing: PROGRESS.staffing,
+  stage_movements: [], units: [{ id: 'm1', name: 'Koyyuru', villages: 1,
+    period: { GOVT_LAND_EXTENT_AC: 120 }, previous: { GOVT_LAND_EXTENT_AC: 90 },
+    cumulative: { doneAc: 120, pct: 60, measures: {} } }],
+  overall: { measures: {} },
+};
+
+/** Every endpoint these screens reach for, keyed by a fragment of the path. */
+const ROUTES: Array<[string, unknown]> = [
+  ['/progress', PROGRESS],
+  ['/report', REPORT],
+  ['/villages', [VILLAGE]],
+  ['/summary', [{ mandal: 'Koyyuru', village: 'Adakula', extent_ac: 200, extent_sq_km: 0.81,
+    gt_status: 'COMPLETED', vectorization_status: 'NOT_STARTED', points: 400, lpms: 0,
+    actual_extent_ac: 190, actual_extent_sq_km: 0.77, gt_started_on: '2026-09-01',
+    gt_completed_on: '2026-09-10', assignee_name: 'Ravi Kumar',
+    gt_govt_staff_allocated: 2, gt_crew_allocated: 4, attendance_days: 2,
+    govt_staff_days: 3, crew_days: 8, days_no_govt_staff: 1, govt_staff_pct: 75,
+    crew_pct: 100, rovers_allocated: 2, rover_days_used: 3, rover_days_idle: 1,
+    rover_utilisation_pct: 75, crew_assigned: 4, return_days: 2, team_days: 8,
+    stages: {}, out_of_sequence: [], stage_remarks: {} }]],
+  ['/gcps', [{ id: 'g1', survey_village_id: 'v1', village_name: 'Adakula',
+    mandal_name: 'Koyyuru', village_code: '1501041', point_code: 'GCP-1',
+    latitude: 17.6868231, longitude: 83.2184815, elevation_m: 45.2,
+    easting_m: 736412.318, northing_m: 1956043.772, grid_zone: '44N',
+    remarks: 'Tied to BM 42', established_on: '2026-09-01', warnings: [], version: 1 }]],
+  ['/deployment', { level: 'mandal', units: [{ id: 'm1', name: 'Koyyuru', villages: 1,
+    crew: 4, rovers_out: 2, villages_uncrewed: 0, villages_unequipped: 0,
+    people: [{ employee_id: 'e1', name: 'Ravi Kumar', emp_no: 'E1' }],
+    assets: [{ asset_id: 'a1', asset_code: 'RVR-1', name: 'DGPS 1' }] }],
+    programme_staff: [], totals: { villages: 1, crew: 4, assets: 2, programme_staff: 0,
+      villages_uncrewed: 0, villages_unequipped: 0 } }],
+  ['/timeline', { grain: 'MONTH', from: '2026-04-01', to: '2026-09-19',
+    financial_year: { label: '2026-27' },
+    periods: [{ from: '2026-09-01', to: '2026-09-30', label: 'Sep 2026', villages: 1,
+      measures: { GOVT_LAND_EXTENT_AC: 120 },
+      staffing: PROGRESS.staffing }] }],
+  ['/employee-productivity', { employees: [] }],
+  ['/rover-productivity', { rovers: [] }],
+  ['/bottlenecks', { bottlenecks: [], forecast: null }],
+  ['/forecast', { projectedFinish: null }],
+  ['/projects', [{ id: 'p1', name: 'Krishna', code: 'KR1', village_count: 1 }]],
+];
+
+beforeEach(() => {
+  vi.resetModules();
+  vi.doMock('@/lib/apiClient', () => ({
+    apiRequest: vi.fn(async () => ({ data: {} })),
+    apiRequestRaw: vi.fn(async (path: string) => {
+      for (const [fragment, body] of ROUTES) {
+        if (path.includes(fragment)) return { body: { data: body }, requestId: 't' };
+      }
+      return { body: { data: [] }, requestId: 't' };
+    }),
+  }));
+  vi.doMock('@/components/AuthProvider', () => ({
+    useAuth: () => ({
+      session: {
+        permissions: ['survey.read', 'survey.enter', 'survey.manage',
+          'survey.certify', 'survey.forecast', 'survey.assign'],
+        roles: ['ADMIN'], user: { id: 'u1', username: 'qa' },
+      },
+      status: 'authenticated', logout: vi.fn(), login: vi.fn(),
+    }),
+    AuthProvider: ({ children }: { children: React.ReactNode }) => children,
+  }));
+  vi.doMock('@/components/AppShell', () => ({
+    AppShell: ({ children }: { children: React.ReactNode }) =>
+      React.createElement('div', null, children),
+  }));
+});
+
+function wrap(node: React.ReactElement) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return render(
+    React.createElement(QueryClientProvider, { client }, node),
+  );
+}
+
+const TABS = ['Progress', 'Report', 'Villages', 'Crew & rovers', 'Deployment',
+  'Bottlenecks', 'Trend', 'Summary', 'Control points'] as const;
+
+describe('the land survey screen', () => {
+  it('mounts without throwing', async () => {
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() => expect(screen.getByText('Land survey')).toBeInTheDocument());
+  });
+
+  it('offers every tab', async () => {
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    for (const tab of TABS) {
+      await waitFor(() => expect(screen.getByRole('button', { name: tab })).toBeInTheDocument());
+    }
+  });
+
+  /*
+   * The regression this whole suite exists for.
+   *
+   * Each tab goes from a loading render to a loaded one, which is the moment
+   * a hook below an early return changes the hook count and React throws.
+   * Rendering the tab once would not catch it; the transition is the test.
+   */
+  for (const tab of TABS) {
+    it(`survives loading and then showing ${tab}`, async () => {
+      const errors: unknown[] = [];
+      const spy = vi.spyOn(console, 'error').mockImplementation((...args) => {
+        errors.push(args[0]);
+      });
+      try {
+        const { default: SurveyPage } = await import('@/app/survey/page');
+        wrap(React.createElement(SurveyPage));
+        await waitFor(() =>
+          expect(screen.getByRole('button', { name: tab })).toBeInTheDocument());
+        screen.getByRole('button', { name: tab }).click();
+        // Long enough for the tab's own queries to resolve and re-render.
+        await waitFor(() => expect(
+          screen.getByRole('button', { name: tab })).toBeInTheDocument());
+        await new Promise((r) => setTimeout(r, 60));
+
+        const hookErrors = errors
+          .map(String)
+          .filter((e) => /hook|Rendered more|Rendered fewer|Minified React error/i.test(e));
+        expect(hookErrors, `${tab}: ${hookErrors.join(' | ')}`).toEqual([]);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  }
+});

@@ -63,7 +63,7 @@ export default function SurveyEntryPage() {
   // One row per rover allocated to this village. The specification asks for
   // the update to be against each rover, and an idle one must say why.
   const [roverDays, setRoverDays] = React.useState<Record<string, {
-    status: 'UTILIZED' | 'IDLE'; idle_reason: string; remarks: string; area_ac: string;
+    status: 'UTILIZED' | 'IDLE'; idle_reason: string; remarks: string;
   }>>({});
   const [lowReason, setLowReason] = React.useState('');
   const [lowRemarks, setLowRemarks] = React.useState('');
@@ -108,7 +108,18 @@ export default function SurveyEntryPage() {
       ((await apiRequestRaw(
         `/api/v1/survey/villages/${villageId}/rovers`)).body as { data: Row[] }).data,
   });
-  const outToday: Row[] = (rovers.data ?? []).filter((r) => r.out);
+  /*
+   * Only the survey instruments, not everything the crew is carrying.
+   *
+   * Kit follows the person it is issued to, so a village's allocation picks
+   * up tripods, radios, laptops and — on this data — a welding set. Asking a
+   * crew to mark a welding set "in use or idle" every evening is noise that
+   * teaches them to click through the whole section.
+   */
+  const outToday: Row[] = (rovers.data ?? [])
+    .filter((r) => r.out && String(r.category ?? '').toUpperCase() === 'SURVEY');
+  const otherKitOut = (rovers.data ?? [])
+    .filter((r) => r.out && String(r.category ?? '').toUpperCase() !== 'SURVEY').length;
 
   React.useEffect(() => {
     // Default every allocated rover to "in use". The common day is that they
@@ -117,7 +128,7 @@ export default function SurveyEntryPage() {
     const next: typeof roverDays = {};
     for (const r of outToday) {
       next[String(r.asset_id)] = roverDays[String(r.asset_id)]
-        ?? { status: 'UTILIZED', idle_reason: '', remarks: '', area_ac: '' };
+        ?? { status: 'UTILIZED', idle_reason: '', remarks: '' };
     }
     setRoverDays(next);
   }, [villageId, rovers.data]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -154,36 +165,16 @@ export default function SurveyEntryPage() {
 
   const extentTarget = Number(village?.total_extent_ac ?? 0);
 
-  /**
-   * Today's acres, counted two ways.
+  /*
+   * The day's acres used to be counted twice — once per rover and once in the
+   * measures — and the two were compared here.
    *
-   * Each rover reports its own acres and the extent measures are typed
-   * separately, so the same day's work is entered twice by two different
-   * routes. They should agree. Showing both means a crew notices the day they
-   * do not, instead of a report doing it a month later.
+   * The per-rover figure is gone. One return covers a village-day and
+   * several instruments work it together, so nobody ever knew which rover
+   * had covered which acres: the split was invented at the keyboard and then
+   * carried downstream as though it had been measured. A cross-check against
+   * a number somebody made up is not a cross-check.
    */
-  const roverAcresToday = React.useMemo(
-    () => Object.values(roverDays).reduce((total, r) => {
-      const n = Number(r.area_ac);
-      return total + (r.status === 'UTILIZED' && Number.isFinite(n) ? n : 0);
-    }, 0),
-    [roverDays],
-  );
-
-  const extentTypedToday = React.useMemo(
-    () => measures
-      .filter((m) => String(m.basis) === 'EXTENT')
-      .reduce((total, m) => {
-        const n = Number(values[String(m.code)]);
-        return total + (Number.isFinite(n) ? n : 0);
-      }, 0),
-    [measures, values],
-  );
-
-  // A tolerance, because acres carry decimals and nobody should be chased
-  // over a rounding difference.
-  const acresDisagree = roverAcresToday > 0 && extentTypedToday > 0
-    && Math.abs(roverAcresToday - extentTypedToday) > 0.01;
 
   // Prefill the crew and instruments from the village's allotment: the same
   // numbers most days, and retyping them is how they end up wrong.
@@ -242,7 +233,8 @@ export default function SurveyEntryPage() {
             status: r.status,
             idle_reason: r.status === 'IDLE' ? (r.idle_reason || undefined) : undefined,
             remarks: r.remarks || undefined,
-            area_ac: r.area_ac === '' ? undefined : Number(r.area_ac),
+            // Not collected any more: one return covers the village-day and
+            // several instruments work it together.
           })),
           low_progress_reason: lowReason || undefined,
           low_progress_remarks: lowRemarks || undefined,
@@ -484,16 +476,26 @@ export default function SurveyEntryPage() {
                     <span className="text-2xs text-text-subtle">
                       An idle rover has to say why — that is what makes the idle count useful.
                     </span>
-                    {/* Each rover answers for itself; this is the day. */}
-                    <span className="w-full text-2xs text-text-muted">
-                      {acres(roverAcresToday)} across {outToday.length} rover(s) today
-                    </span>
+                    {/*
+                      * What was covered is entered once, in the measures
+                      * below, for the whole village-day. Splitting it per
+                      * rover asked for a number nobody has: one return
+                      * covers the day and several instruments worked it
+                      * together, so the split was invented at the keyboard
+                      * and then reported as if it had been measured.
+                      */}
+                    {otherKitOut > 0 ? (
+                      <span className="w-full text-2xs text-text-subtle">
+                        {otherKitOut} other item(s) of kit are out on this village and are
+                        not accounted for here — only survey instruments are.
+                      </span>
+                    ) : null}
                   </div>
                   <div className="mt-2 space-y-2">
                     {outToday.map((r) => {
                       const key = String(r.asset_id);
                       const row = roverDays[key] ?? {
-                        status: 'UTILIZED' as const, idle_reason: '', remarks: '', area_ac: '',
+                        status: 'UTILIZED' as const, idle_reason: '', remarks: '',
                       };
                       const set = (patch: Partial<typeof row>) =>
                         setRoverDays({ ...roverDays, [key]: { ...row, ...patch } });
@@ -501,8 +503,16 @@ export default function SurveyEntryPage() {
                         <div key={key}
                           className="rounded-md border border-border bg-surface px-3 py-2">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-medium text-text">{r.asset_name}</span>
-                            <span className="text-2xs text-text-subtle">{r.asset_code}</span>
+                            {/* The instrument opens its own record: "which
+                                rover is AST-114 again" is a question asked in
+                                the middle of filing a return. */}
+                            <Link href={`/assets?q=${encodeURIComponent(String(r.asset_code))}`}
+                              className="text-sm font-medium text-text underline-offset-2 hover:text-primary hover:underline">
+                              {r.asset_name}
+                            </Link>
+                            <span className="font-mono text-2xs text-text-subtle">
+                              {r.asset_code}
+                            </span>
                             <div className="ml-auto flex gap-1">
                               {(['UTILIZED', 'IDLE'] as const).map((st) => (
                                 <Button key={st} type="button"
@@ -520,15 +530,7 @@ export default function SurveyEntryPage() {
                             </div>
                           </div>
 
-                          {row.status === 'UTILIZED' ? (
-                            <label className="mt-2 flex items-center gap-2 text-2xs text-text-subtle">
-                              Acres covered with this rover
-                              <input type="number" min={0} step="any"
-                                className="w-28 rounded-md border border-border bg-surface px-2 py-1 text-sm text-text"
-                                value={row.area_ac}
-                                onChange={(e) => set({ area_ac: e.target.value })} />
-                            </label>
-                          ) : (
+                          {row.status === 'UTILIZED' ? null : (
                             <div className="mt-2 grid gap-2 sm:grid-cols-2">
                               <select
                                 className={field}
@@ -587,14 +589,6 @@ export default function SurveyEntryPage() {
                   ) : null}
                 </span>
               </div>
-
-              {acresDisagree ? (
-                <p className="text-2xs text-warning">
-                  The rovers account for {acres(roverAcresToday)} today and the extents above
-                  add up to {acres(extentTypedToday)}. Both are saved as entered — worth a look
-                  before you file, because they are the same acres counted twice.
-                </p>
-              ) : null}
 
               {groups.map((g) => (
                 <section key={g.group} className="rounded-lg border border-border bg-surface-sunken p-3">

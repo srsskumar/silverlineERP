@@ -384,7 +384,9 @@ function Progress({
       { header: 'Finished', width: 10 },
       { header: 'Not started', width: 12 },
       { header: 'Extent (Ac)', width: 14 },
+      { header: 'Extent (km²)', width: 14 },
       { header: 'Surveyed (Ac)', width: 14 },
+      { header: 'Surveyed (km²)', width: 16 },
       { header: 'Complete (%)', width: 14 },
       ...scored.flatMap((m) => ([
         { header: `${m.group_label ? `${m.group_label} — ` : ''}${m.label}`, width: 20 },
@@ -393,7 +395,9 @@ function Progress({
     ],
     rows: rows.map((r) => [
       cellText(r.name), cellNum(r.villages), cellNum(r.completed), cellNum(r.notStarted),
-      cellNum(r.extentAc), cellNum(r.surveyedAc), cellNum(r.overallPct),
+      cellNum(r.extentAc), cellNum(acresToSqKm(Number(r.extentAc ?? 0))),
+      cellNum(r.surveyedAc), cellNum(acresToSqKm(Number(r.surveyedAc ?? 0))),
+      cellNum(r.overallPct),
       ...scored.flatMap((m) => ([
         cellNum(r.measures?.[m.code]?.done),
         cellNum(r.measures?.[m.code]?.pct),
@@ -511,7 +515,10 @@ function Progress({
         <div className="grid gap-2 sm:grid-cols-5">
           <Stat label="Extent to survey" value={acres(total.extentAc)} hint={sqKm(total.extentSqKm)}
             explain={GLOSSARY.extent} />
+          {/* Both units, as the extent above already carries: the revenue
+              record is in acres and every government letter is in km². */}
           <Stat label="Surveyed" value={acres(total.surveyedAc)}
+            hint={sqKm(acresToSqKm(Number(total.surveyedAc ?? 0)))}
             tone={hasPct(total.overallPct) && total.overallPct >= 100 ? 'success' : undefined} />
           <Stat label="Completion" value={pct(total.overallPct)} tone={pctTone(total.overallPct)}
             explain={GLOSSARY.completion} />
@@ -706,8 +713,18 @@ function Progress({
                     <TD className="text-right tabular-nums">
                       {r.completed}/{r.villages}
                     </TD>
-                    <TD className="text-right tabular-nums">{acres(r.extentAc)}</TD>
-                    <TD className="text-right tabular-nums">{acres(r.surveyedAc)}</TD>
+                    <TD className="text-right tabular-nums">
+                      {acres(r.extentAc)}
+                      <div className="text-2xs text-text-subtle">
+                        {sqKm(acresToSqKm(Number(r.extentAc ?? 0)))}
+                      </div>
+                    </TD>
+                    <TD className="text-right tabular-nums">
+                      {acres(r.surveyedAc)}
+                      <div className="text-2xs text-text-subtle">
+                        {sqKm(acresToSqKm(Number(r.surveyedAc ?? 0)))}
+                      </div>
+                    </TD>
                     <TD>
                       <div className="flex items-center gap-2">
                         <div className="h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-surface-sunken">
@@ -2464,7 +2481,9 @@ function Villages({
         onClear={() => setPicked(new Set())}
       />
 
-      <TableWrap>
+      {/* Capped height: the horizontal scrollbar for a twelve-column table
+          has to be reachable without scrolling past a thousand villages. */}
+      <TableWrap tall>
         <Table>
           <THead>
             <TR>
@@ -3296,7 +3315,7 @@ function ControlList({
         </Notice>
       ) : null}
 
-      <TableWrap>
+      <TableWrap tall>
         <Table>
           <THead>
             <TR>
@@ -3532,7 +3551,7 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
         <EmptyState title="No villages match that"
           description="Nothing on this sheet fits that combination. Widen the filter or clear it." />
       ) : (
-    <TableWrap>
+    <TableWrap tall>
       <Table>
         <THead>
           <TR>
