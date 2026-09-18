@@ -687,7 +687,18 @@ export const surveyEntrySchema = z.object({
 
 export const surveyEntryPatchSchema = surveyEntrySchema
   .omit({ survey_village_id: true, entry_date: true })
-  .partial();
+  .partial()
+  .extend({
+    /**
+     * Why the figure changed.
+     *
+     * A corrected number with no reason is a number somebody will query
+     * later and nobody will be able to answer for. Optional rather than
+     * required: a crew member fixing their own typing within the hour should
+     * not have to write an essay, and the trail still records who and what.
+     */
+    amendment_reason: z.string().trim().max(500).optional(),
+  });
 
 export const measureSchema = z.object({
   code: z.string().min(1).max(64).regex(/^[A-Z0-9_]+$/,

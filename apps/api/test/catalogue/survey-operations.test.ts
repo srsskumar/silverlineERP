@@ -1973,3 +1973,116 @@ describe("kit follows the crew", () => {
     expect(await allocated(village, b.asset)).toBe(1);
   });
 });
+
+describe("correcting a day already recorded", () => {
+  /*
+   * A figure that cannot be corrected gets corrected anyway — in a
+   * spreadsheet beside the system, which is where the two versions start to
+   * disagree. So amending is allowed, and everything about it is written
+   * down.
+   */
+  let village = "";
+
+  beforeAll(async () => {
+    const mandal = String((await w.pool.query(
+      "SELECT id FROM org_units WHERE org_id=$1 AND type='mandal' LIMIT 1",
+      [w.orgId])).rows[0].id);
+    const v = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Amend village", village_code: uniq("AV"),
+      mandal_id: mandal, total_extent_ac: 100,
+    });
+    village = String(v.data.id);
+  });
+
+  async function recorded(date: string, acres: number) {
+    const r = await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: village, entry_date: date, teams_deployed: 2,
+      values: { GOVT_LAND_EXTENT_AC: acres },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    return r.data;
+  }
+
+  const amend = async (entry: any, body: Record<string, unknown>, h = w.admin) => {
+    const res = await w.app.inject({
+      method: "PATCH", url: `/api/v1/survey/entries/${entry.id}`,
+      headers: { ...h, ...idem(), "x-record-version": String(entry.version) },
+      payload: body,
+    });
+    let parsed: any = null;
+    try { parsed = res.json(); } catch { parsed = null; }
+    return { status: res.statusCode, body: parsed, data: parsed?.data ?? parsed };
+  };
+
+  it("corrects today's figure", async () => {
+    const entry = await recorded(day(0), 25);
+    const r = await amend(entry, {
+      values: { GOVT_LAND_EXTENT_AC: 250 },
+      amendment_reason: "Miskeyed: 25 for 250",
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+
+    const back = await get(w.admin, `/api/v1/survey/entries?survey_village_id=${village}`);
+    const row = back.data.find((e: any) => e.id === entry.id);
+    expect(Number(row.values.GOVT_LAND_EXTENT_AC)).toBe(250);
+  });
+
+  it("keeps what the figure was, not only what it became", async () => {
+    // "Who changed 250 to 25" is the only question anybody asks of an
+    // amended figure, and the answer needs both numbers. mutate() writes the
+    // after state alone, which is enough for a creation and useless here.
+    const entry = await recorded(day(-1), 40);
+    await amend(entry, { values: { GOVT_LAND_EXTENT_AC: 44 }, amendment_reason: "Re-measured" });
+
+    const trail = await w.pool.query(
+      `SELECT before_state, after_state, reason FROM audit_events
+        WHERE action = 'survey.entry.amend' AND entity_id = $1`, [entry.id]);
+    expect(trail.rows).toHaveLength(1);
+    expect(trail.rows[0].before_state.values.GOVT_LAND_EXTENT_AC).toBe(40);
+    expect(trail.rows[0].after_state.values.GOVT_LAND_EXTENT_AC).toBe(44);
+    expect(trail.rows[0].reason).toBe("Re-measured");
+  });
+
+  it("refuses an earlier day to somebody who only records them", async () => {
+    // By then the figure has been rolled up, reported on and possibly
+    // billed, so changing it is a decision about the record, not a typo.
+    const entry = await recorded(day(-2), 30);
+    const r = await amend(entry, { values: { GOVT_LAND_EXTENT_AC: 300 } }, w.role.EMPLOYEE);
+    expect([401, 403]).toContain(r.status);
+    if (r.status === 403) expect(JSON.stringify(r.body)).toContain("programme manager");
+  });
+
+  it("lets a programme manager correct an earlier day", async () => {
+    const entry = await recorded(day(-3), 12);
+    const r = await amend(entry, {
+      values: { GOVT_LAND_EXTENT_AC: 21 }, amendment_reason: "Transposed",
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+  });
+
+  it("refuses a correction made against a stale version", async () => {
+    // Two people correcting the same day would otherwise overwrite each
+    // other with no sign it happened.
+    const entry = await recorded(day(-4), 15);
+    await amend(entry, { values: { GOVT_LAND_EXTENT_AC: 16 } });
+    const again = await amend(entry, { values: { GOVT_LAND_EXTENT_AC: 17 } });
+    expect(again.status).toBe(409);
+  });
+
+  it("removes a figure set to nothing rather than storing a zero", async () => {
+    const entry = await recorded(day(-5), 8);
+    const r = await amend(entry, { values: { GOVT_LAND_EXTENT_AC: 0 } });
+    expect(r.status).toBe(200);
+    const left = await w.pool.query(
+      "SELECT count(*)::int AS n FROM survey_entry_values WHERE entry_id = $1", [entry.id]);
+    expect(left.rows[0].n).toBe(0);
+  });
+
+  it("reports what the rovers did, not just how many were out", async () => {
+    // A day where every rover sat idle read the same as a day they were all
+    // working.
+    const back = await get(w.admin, `/api/v1/survey/entries?survey_village_id=${village}`);
+    expect(back.data[0]).toHaveProperty("rovers_used");
+    expect(back.data[0]).toHaveProperty("rovers_idle");
+  });
+});

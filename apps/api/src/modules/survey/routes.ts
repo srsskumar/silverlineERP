@@ -1657,6 +1657,20 @@ export async function registerSurveyRoutes(
     return { data: row };
   });
 
+  /**
+   * Correct a day already recorded (§note 15).
+   *
+   * A figure that cannot be corrected gets corrected anyway — in a
+   * spreadsheet beside the system, which is where the two versions start to
+   * disagree. So amending is allowed, and everything about it is written
+   * down.
+   *
+   * Today's return may be corrected by whoever can record one: a crew member
+   * who typed 25 for 250 should not need an administrator, and the day is
+   * still theirs. An earlier day needs survey.manage, because by then the
+   * figure has been rolled up, reported on and possibly billed, and changing
+   * it is a decision about the record rather than a typo.
+   */
   app.patch('/api/v1/survey/entries/:id', { preHandler: guard('survey.enter') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
     const input = parse(surveyEntryPatchSchema, req.body);
@@ -1664,7 +1678,36 @@ export async function registerSurveyRoutes(
       data: await mutate(pool, req, 'survey.entry.update', 'survey_entry', async db => {
         const row = await inOrg(db, 'survey_entries', id, u.orgId, true);
         version(req, row as { version: number });
+
+        const entryDay = String(row.entry_date).slice(0, 10);
+        if (entryDay !== businessDay() && !u.permissions.includes('survey.manage')) {
+          fail('PAST_DAY_AMENDMENT',
+            `${entryDay} has already been rolled up and reported on. Correcting an earlier `
+            + 'day is a decision about the record rather than a typo, so it needs a '
+            + 'programme manager. Ask them, or record the difference on today.', 403);
+        }
+
         const m = await measures(db, u.orgId);
+
+        /*
+         * What it was, before it becomes what it is.
+         *
+         * mutate() writes the after state and nothing else, which is enough
+         * for a creation and useless for a correction: "who changed 250 to
+         * 25" is the only question anybody asks of an amended figure, and
+         * the answer needs both numbers.
+         */
+        const before = {
+          entry_date: entryDay,
+          teams_deployed: row.teams_deployed,
+          dgps_base: row.dgps_base,
+          dgps_rovers: row.dgps_rovers,
+          notes: row.notes,
+          values: Object.fromEntries((await db.query(
+            `SELECT mm.code, ev.quantity FROM survey_entry_values ev
+               JOIN survey_measures mm ON mm.id = ev.measure_id
+              WHERE ev.entry_id = $1`, [id])).rows.map(r => [r.code, Number(r.quantity)])),
+        };
 
         const sets: string[] = [], values: unknown[] = [id];
         for (const key of ['teams_deployed', 'dgps_base', 'dgps_rovers', 'notes'] as const) {
@@ -1697,8 +1740,31 @@ export async function registerSurveyRoutes(
             }
         }
 
-        return (await db.query(
+        const updated = (await db.query(
           'UPDATE survey_entries SET version = version + 1 WHERE id = $1 RETURNING *', [id])).rows[0];
+
+        const after = {
+          entry_date: entryDay,
+          teams_deployed: updated.teams_deployed,
+          dgps_base: updated.dgps_base,
+          dgps_rovers: updated.dgps_rovers,
+          notes: updated.notes,
+          values: Object.fromEntries((await db.query(
+            `SELECT mm.code, ev.quantity FROM survey_entry_values ev
+               JOIN survey_measures mm ON mm.id = ev.measure_id
+              WHERE ev.entry_id = $1`, [id])).rows.map(r => [r.code, Number(r.quantity)])),
+        };
+
+        // Its own entry, carrying both states, so the audit screen can show
+        // what moved rather than only what it ended up as.
+        await db.query(
+          `INSERT INTO audit_events(org_id, actor_id, action, entity_type, entity_id,
+             before_state, after_state, reason, request_id)
+           VALUES($1,$2,'survey.entry.amend','survey_entry',$3,$4,$5,$6,$7)`,
+          [u.orgId, u.id, id, JSON.stringify(before), JSON.stringify(after),
+           input.amendment_reason ?? null, req.requestId]);
+
+        return updated;
       }),
     };
   });
@@ -1715,6 +1781,17 @@ export async function registerSurveyRoutes(
 
     const rows = (await pool.query(
       `SELECT e.*, v.name AS village_name, u.username AS recorded_by,
+              /*
+               * What the instruments did that day.
+               *
+               * The row carried the number allocated and nothing about how
+               * they were used, so a day where every rover sat idle read the
+               * same as a day they were all out working.
+               */
+              (SELECT count(*)::int FROM survey_entry_rovers r
+                WHERE r.entry_id = e.id AND r.status = 'UTILIZED') AS rovers_used,
+              (SELECT count(*)::int FROM survey_entry_rovers r
+                WHERE r.entry_id = e.id AND r.status = 'IDLE') AS rovers_idle,
               COALESCE(NULLIF(trim(concat_ws(' ', emp.first_name, emp.last_name)), ''), u.username) AS recorded_by_name,
               (SELECT json_object_agg(mm.code, ev.quantity)
                  FROM survey_entry_values ev JOIN survey_measures mm ON mm.id = ev.measure_id

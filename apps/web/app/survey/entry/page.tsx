@@ -17,6 +17,8 @@ import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Tabl
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Notice, Stat } from '@/components/finance/Primitives';
+import { useToast } from '@/components/ui/Toast';
+import { messageOf } from '@/lib/form-errors';
 import { day, businessToday } from '@/lib/finance';
 import {
   DELAY_REASON_OPTIONS, VILLAGE_STATE_LABELS, acres, count, groupMeasures, pct, stateTone,
@@ -197,7 +199,14 @@ export default function SurveyEntryPage() {
    * account for, one by one, below. Reporting a different number alongside
    * them makes the utilisation figures answer a question nobody asked.
    */
+  const roverCountTouched = React.useRef(false);
   React.useEffect(() => {
+    // Prefill, once per village. Re-running it on every render of the
+    // allocation list would overwrite a number somebody had just typed.
+    roverCountTouched.current = false;
+  }, [villageId]);
+  React.useEffect(() => {
+    if (roverCountTouched.current) return;
     setDeployed((d) => (d.rovers === outToday.length ? d : { ...d, rovers: outToday.length }));
   }, [villageId, rovers.data, outToday.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -238,6 +247,15 @@ export default function SurveyEntryPage() {
       setLowRemarks('');
       qc.invalidateQueries({ queryKey: ['survey-villages'] });
       qc.invalidateQueries({ queryKey: ['survey-progress'] });
+      /*
+       * And the list of what is already recorded.
+       *
+       * It was left stale, so a day just filed did not appear below and the
+       * screen looked as though nothing had happened — which is why people
+       * pressed Save again and got told the day was already recorded. The
+       * entry was there the whole time; the page had simply not looked.
+       */
+      qc.invalidateQueries({ queryKey: ['survey-entries', villageId] });
     },
   });
 
@@ -348,18 +366,38 @@ export default function SurveyEntryPage() {
                   * instruments are named one by one below; this is how many
                   * of them there are.
                   */}
+                {/*
+                  * Counted from the allocations, and still editable.
+                  *
+                  * The count is prefilled from the instruments actually out on
+                  * this village, because that is right almost every day and
+                  * retyping it is how it goes wrong. But the field has to give:
+                  * an instrument arrives late, one goes back early, and a form
+                  * that refuses to record what happened sends the correction
+                  * into a spreadsheet instead. It says when it no longer agrees
+                  * with the allocations rather than quietly disagreeing.
+                  */}
                 <label className="space-y-1">
                   <span className="flex items-baseline justify-between gap-2">
                     <span className="text-2xs uppercase tracking-wide text-text-subtle">
-                      Rovers assigned
+                      Rovers out today
                     </span>
                     <span className="text-2xs text-text-subtle"
-                      title="Counted from the rovers allocated to this village">
-                      allocated
+                      title="Prefilled from the rovers allocated to this village. Change it if the day was different.">
+                      {deployed.rovers === outToday.length
+                        ? 'from the allocations'
+                        : `allocated: ${outToday.length}`}
                     </span>
                   </span>
-                  <input type="number" className={field} value={deployed.rovers} readOnly
-                    aria-readonly="true" />
+                  <input
+                    type="number" min={0} className={field} value={deployed.rovers}
+                    onChange={(e) => {
+                      roverCountTouched.current = true;
+                      setDeployed({
+                        ...deployed, rovers: Math.max(0, Number(e.target.value) || 0),
+                      });
+                    }}
+                  />
                 </label>
               </div>
 
@@ -587,6 +625,7 @@ export default function SurveyEntryPage() {
  * attempted, and so a wrong figure can be found and corrected.
  */
 function RecentEntries({ villageId }: { villageId: string }) {
+  const [amending, setAmending] = React.useState<string | null>(null);
   const q = useQuery({
     queryKey: ['survey-entries', villageId],
     queryFn: async () =>
@@ -616,11 +655,18 @@ function RecentEntries({ villageId }: { villageId: string }) {
             <TR>
               <TH>Date</TH>
               <TH className="text-right">Teams</TH>
+              {/* What the instruments did, not just how many were out. A day
+                  where every rover sat idle read the same as a day they were
+                  all working. */}
+              <TH className="text-right">Rovers out</TH>
+              <TH className="text-right">Used</TH>
+              <TH className="text-right">Idle</TH>
               {codes.map((c) => (
                 <TH key={c} className="text-right">{c.replaceAll('_', ' ').toLowerCase()}</TH>
               ))}
               <TH>Recorded by</TH>
               <TH>Notes</TH>
+              <TH />
             </TR>
           </THead>
           <TBody>
@@ -628,6 +674,12 @@ function RecentEntries({ villageId }: { villageId: string }) {
               <TR key={r.id}>
                 <TD>{day(r.entry_date)}</TD>
                 <TD className="text-right tabular-nums">{r.teams_deployed}</TD>
+                <TD className="text-right tabular-nums">{count(Number(r.dgps_rovers ?? 0))}</TD>
+                <TD className="text-right tabular-nums">{count(Number(r.rovers_used ?? 0))}</TD>
+                <TD className={`text-right tabular-nums ${
+                  Number(r.rovers_idle ?? 0) > 0 ? 'text-warning' : 'text-text-muted'}`}>
+                  {count(Number(r.rovers_idle ?? 0))}
+                </TD>
                 {codes.map((c) => (
                   <TD key={c} className="text-right tabular-nums">
                     {r.values?.[c] ? count(Number(r.values[c])) : '—'}
@@ -636,11 +688,155 @@ function RecentEntries({ villageId }: { villageId: string }) {
                 {/* The employee name, not the sign-in name. */}
                 <TD className="text-xs text-text-muted">{r.recorded_by_name ?? r.recorded_by}</TD>
                 <TD className="text-2xs text-text-subtle">{r.notes ?? ''}</TD>
+                <TD className="text-right">
+                  <Button type="button" variant="ghost" size="sm"
+                    onClick={() => setAmending(amending === String(r.id) ? null : String(r.id))}>
+                    {amending === String(r.id) ? 'Close' : 'Amend'}
+                  </Button>
+                </TD>
+              </TR>
+            ))}
+            {rows.filter((r) => String(r.id) === amending).map((r) => (
+              <TR key={`amend-${r.id}`}>
+                <TD colSpan={codes.length + 8}>
+                  <AmendEntry
+                    entry={r}
+                    villageId={villageId}
+                    onDone={() => setAmending(null)}
+                  />
+                </TD>
               </TR>
             ))}
           </TBody>
         </Table>
       </TableWrap>
     </section>
+  );
+}
+
+/**
+ * Correct a day already recorded (§note 15).
+ *
+ * A figure that cannot be corrected gets corrected anyway — in a spreadsheet
+ * beside the system, which is where the two versions start to disagree. So
+ * the correction happens here, and everything about it is written down: what
+ * it was, what it became, who changed it and why.
+ *
+ * Today's return may be corrected by whoever recorded it. An earlier day
+ * needs a programme manager, because by then the figure has been rolled up,
+ * reported on and possibly billed.
+ */
+function AmendEntry({
+  entry, villageId, onDone,
+}: {
+  entry: Row;
+  villageId: string;
+  onDone: () => void;
+}) {
+  const { session } = useAuth();
+  const canManage = hasPermission({ permissions: session?.permissions }, 'survey.manage');
+  const qc = useQueryClient();
+  const toast = useToast();
+  const isToday = String(entry.entry_date).slice(0, 10) === businessToday();
+  const mayAmend = isToday || canManage;
+
+  const existing = (entry.values ?? {}) as Record<string, number>;
+  const [values, setValues] = React.useState<Record<string, string>>(
+    Object.fromEntries(Object.entries(existing).map(([k, v]) => [k, String(v)])),
+  );
+  const [teams, setTeams] = React.useState(String(entry.teams_deployed ?? 0));
+  const [rovers, setRovers] = React.useState(String(entry.dgps_rovers ?? 0));
+  const [notes, setNotes] = React.useState(String(entry.notes ?? ''));
+  const [reason, setReason] = React.useState('');
+
+  const amend = useMutation({
+    mutationFn: async () => {
+      const numeric: Record<string, number> = {};
+      // Every measure is sent, including the ones set to nothing: a zero is
+      // how the server is told to remove a figure that should not be there.
+      for (const code of new Set([...Object.keys(existing), ...Object.keys(values)])) {
+        const n = Number(values[code]);
+        numeric[code] = Number.isFinite(n) ? n : 0;
+      }
+      return apiRequest(`/api/v1/survey/entries/${entry.id}`, {
+        method: 'PATCH',
+        headers: { 'X-Record-Version': String(entry.version ?? 1) },
+        body: {
+          teams_deployed: Number(teams) || 0,
+          dgps_rovers: Number(rovers) || 0,
+          notes: notes || null,
+          values: numeric,
+          amendment_reason: reason || undefined,
+        },
+      });
+    },
+    onError: (e) => toast.error('The day was not changed', messageOf(e)),
+    onSuccess: () => {
+      toast.success(`${day(entry.entry_date)} corrected`,
+        'The change is on the audit trail with what it was before.');
+      void qc.invalidateQueries({ queryKey: ['survey-entries', villageId] });
+      void qc.invalidateQueries({ queryKey: ['survey-villages'] });
+      void qc.invalidateQueries({ queryKey: ['survey-progress'] });
+      onDone();
+    },
+  });
+
+  const field = 'w-24 rounded-md border border-border bg-surface px-2 py-1 text-sm text-text';
+
+  if (!mayAmend) {
+    return (
+      <Notice tone="info" title="This day needs a programme manager">
+        {day(entry.entry_date)} has already been rolled up and reported on. Correcting an
+        earlier day is a decision about the record rather than a typo, so it is theirs to
+        make — ask them, or record the difference on today.
+      </Notice>
+    );
+  }
+
+  return (
+    <div className="space-y-3 rounded-lg border border-border bg-surface-sunken p-3">
+      <p className="text-xs text-text-muted">
+        Correcting {day(entry.entry_date)}. What it was, what it becomes and who changed it
+        are kept, so the figure can be answered for later.
+      </p>
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="flex flex-col gap-1 text-2xs text-text-muted">
+          Teams
+          <input className={field} type="number" min={0} value={teams}
+            onChange={(e) => setTeams(e.target.value)} />
+        </label>
+        <label className="flex flex-col gap-1 text-2xs text-text-muted">
+          Rovers out
+          <input className={field} type="number" min={0} value={rovers}
+            onChange={(e) => setRovers(e.target.value)} />
+        </label>
+        {Object.keys(existing).map((code) => (
+          <label key={code} className="flex flex-col gap-1 text-2xs text-text-muted">
+            {code.replaceAll('_', ' ').toLowerCase()}
+            <input className={field} type="number" min={0} step="any"
+              value={values[code] ?? ''}
+              onChange={(e) => setValues({ ...values, [code]: e.target.value })} />
+          </label>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="flex flex-1 flex-col gap-1 text-2xs text-text-muted">
+          Notes
+          <input className="w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-text"
+            value={notes} onChange={(e) => setNotes(e.target.value)} />
+        </label>
+        <label className="flex flex-1 flex-col gap-1 text-2xs text-text-muted">
+          Why it changed
+          <input
+            className="w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-text"
+            placeholder="Miskeyed, re-measured, wrong village…"
+            value={reason} onChange={(e) => setReason(e.target.value)} />
+        </label>
+        <Button type="button" disabled={amend.isPending} onClick={() => amend.mutate()}>
+          Save the correction
+        </Button>
+        <Button type="button" variant="ghost" onClick={onDone}>Cancel</Button>
+      </div>
+    </div>
   );
 }
