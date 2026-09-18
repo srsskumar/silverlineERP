@@ -104,15 +104,27 @@ export function fieldLabel(field: string): string {
   // something; "rows.3.phone" -> "Phone on row 4", counting the way people do.
   const parts = field.split(".");
   if (parts.length > 1) {
+    const last = parts[parts.length - 1];
+    /*
+     * A path ending in a number is one item of a list, not a field.
+     *
+     * "employee_ids.0" was read as a field called "0" on row 1 and came out
+     * as "0 on row 1 is required", which is not a sentence about anything.
+     * The list is what the reader chose from, and the number is where in it.
+     */
+    if (/^\d+$/.test(last)) {
+      return `${fieldLabel(parts.slice(0, -1).join("."))} \u2014 item ${Number(last) + 1}`;
+    }
     const rowAt = parts.findIndex(p => /^\d+$/.test(p));
-    const leaf = fieldLabel(parts[parts.length - 1]);
+    const leaf = fieldLabel(last);
     if (rowAt >= 0) return `${leaf} on row ${Number(parts[rowAt]) + 1}`;
     return leaf;
   }
   // An ALL-CAPS token is a code people read as a code — a measure, a stage,
   // a status. Spacing it out makes it less recognisable, not more.
   if (/^[A-Z0-9_]+$/.test(field)) return field;
-  const words = field.replace(/_id$/, "").replace(/_/g, " ").trim();
+  // _ids as well as _id: a list of them is still named for the thing.
+  const words = field.replace(/_ids?$/, "").replace(/_/g, " ").trim();
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : field;
 }
 

@@ -100,3 +100,20 @@ describe('the headline above the list', () => {
     expect(validationSummary([])).toBe('Check the details and try again');
   });
 });
+
+describe('one item of a list', () => {
+  it('names the list and the position, not a field called zero', () => {
+    // "employee_ids.0" was read as a field called "0" on row 1 and came out
+    // as "0 on row 1 is required", which is not a sentence about anything.
+    expect(fieldLabel('employee_ids.0')).toBe('People — item 1');
+    expect(fieldLabel('asset_ids.2')).toBe('Equipment — item 3');
+  });
+
+  it('still counts spreadsheet rows the way the reader does', () => {
+    expect(fieldLabel('rows.3.phone')).toBe('Phone on row 4');
+  });
+
+  it('falls back sensibly for a list nobody named', () => {
+    expect(fieldLabel('widget_ids.0')).toBe('Widget — item 1');
+  });
+});
