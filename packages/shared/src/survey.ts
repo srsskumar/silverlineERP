@@ -2011,12 +2011,69 @@ export const gcpSchema = z.object({
     .min(-500, 'That is below any land on earth — check the figure')
     .max(9000, 'That is above Everest — check the figure')
     .nullable().optional(),
+  /*
+   * The same point on a projected grid (§070).
+   *
+   * A controller gives a fix both ways, and the drawings and LPM sheets are
+   * in the grid while latitude and longitude are what travels between
+   * systems. Stored rather than converted: an Indian survey may be on WGS84
+   * UTM or on an older Everest-based grid, and computing one from the other
+   * would assert a projection the survey may not be using.
+   */
+  easting_m: z.number().finite()
+    .min(0, 'An easting is a positive distance in metres')
+    .max(1_000_000, 'That is larger than any easting on a UTM grid — check the figure')
+    .nullable().optional(),
+  northing_m: z.number().finite()
+    .min(0, 'A northing is a positive distance in metres')
+    .max(10_000_000, 'That is larger than any northing on a UTM grid — check the figure')
+    .nullable().optional(),
+  grid_zone: z.string().trim().max(16).nullable().optional(),
   remarks: z.string().max(2000).nullable().optional(),
   established_on: pastDate.nullable().optional(),
-}).strict();
+}).strict().superRefine((v, ctx) => {
+  // A grid reference with no zone cannot be resolved to a place, and a zone
+  // with no reference is noise. Either both numbers and a zone, or none.
+  const hasE = v.easting_m !== null && v.easting_m !== undefined;
+  const hasN = v.northing_m !== null && v.northing_m !== undefined;
+  if (hasE !== hasN) {
+    ctx.addIssue({
+      code: 'custom', path: [hasE ? 'northing_m' : 'easting_m'],
+      message: 'A grid reference needs both a northing and an easting',
+    });
+  }
+  if ((hasE || hasN) && !v.grid_zone?.trim()) {
+    ctx.addIssue({
+      code: 'custom', path: ['grid_zone'],
+      message: 'Name the grid, such as 44N — without it these are two numbers, not a position',
+    });
+  }
+});
 
-export const gcpPatchSchema = gcpSchema.partial().strict()
-  .refine(v => Object.keys(v).length > 0, 'Change at least one field');
+/*
+ * The same fields, all optional, for a correction.
+ *
+ * Built from the object rather than from `gcpSchema`, which carries the
+ * both-or-neither rule as an effect and so cannot be made partial. The rule
+ * is restated here against whatever the patch actually sets.
+ */
+export const gcpPatchSchema = z.object({
+  point_code: z.string().trim().min(1).max(64).optional(),
+  latitude: z.number().finite().min(-90).max(90).optional(),
+  longitude: z.number().finite().min(-180).max(180).optional(),
+  elevation_m: z.number().finite().min(-500).max(9000).nullable().optional(),
+  easting_m: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+  northing_m: z.number().finite().min(0).max(10_000_000).nullable().optional(),
+  grid_zone: z.string().trim().max(16).nullable().optional(),
+  remarks: z.string().max(2000).nullable().optional(),
+  established_on: pastDate.nullable().optional(),
+}).strict()
+  .refine(v => Object.keys(v).length > 0, 'Change at least one field')
+  .refine(
+    v => (v.easting_m === undefined) === (v.northing_m === undefined)
+      || v.easting_m === null || v.northing_m === null,
+    { message: 'A grid reference needs both a northing and an easting', path: ['northing_m'] },
+  );
 
 /**
  * Roughly where India is, in degrees.
@@ -2079,4 +2136,44 @@ export function formatCoordinate(value: number, axis: 'lat' | 'lng'): string {
     ? (value >= 0 ? 'N' : 'S')
     : (value >= 0 ? 'E' : 'W');
   return `${Math.abs(value).toFixed(6)}° ${hemisphere}`;
+}
+
+/**
+ * How far the surveyed extent has drifted from the revenue record.
+ *
+ * Signed: a village that came in smaller than the record is a different
+ * conversation from one that came in larger — the first is usually land that
+ * turned out to be assigned elsewhere, the second is usually an encroachment
+ * or a boundary the record never caught up with. Reporting the magnitude
+ * alone would merge the two.
+ *
+ * Null where there is nothing to compare against: a village with no recorded
+ * extent has not drifted from anything, and calling that 100% would put every
+ * village with a hole in its master data at the top of the exceptions list.
+ */
+export function extentVariancePct(
+  plannedAc: number | null | undefined,
+  actualAc: number | null | undefined,
+): number | null {
+  const planned = Number(plannedAc ?? 0);
+  const actual = Number(actualAc ?? 0);
+  if (!Number.isFinite(planned) || planned <= 0) return null;
+  if (!Number.isFinite(actual) || actual <= 0) return null;
+  return Math.round(((actual - planned) / planned) * 1000) / 10;
+}
+
+/**
+ * Whether a village's extent has drifted far enough to be worth looking at.
+ *
+ * The threshold is the reader's to set, because what counts as a discrepancy
+ * depends on the terrain and the contract: five per cent is alarming on flat
+ * delta land and routine in the agency areas.
+ */
+export function extentVaries(
+  plannedAc: number | null | undefined,
+  actualAc: number | null | undefined,
+  thresholdPct: number,
+): boolean {
+  const v = extentVariancePct(plannedAc, actualAc);
+  return v !== null && Math.abs(v) >= Math.abs(thresholdPct);
 }

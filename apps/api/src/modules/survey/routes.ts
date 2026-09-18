@@ -2423,6 +2423,8 @@ export async function registerSurveyRoutes(
           latitude: Number(r.latitude),
           longitude: Number(r.longitude),
           elevation_m: num(r.elevation_m),
+          easting_m: num(r.easting_m),
+          northing_m: num(r.northing_m),
           established_on: iso(r.established_on),
           // Recomputed on read rather than stored: the bounds are a judgement
           // that may be improved, and a stored warning would go stale.
@@ -2448,15 +2450,20 @@ export async function registerSurveyRoutes(
           }
           const row = (await db.query(
             `INSERT INTO survey_village_gcps(org_id, survey_village_id, point_code,
-               latitude, longitude, elevation_m, remarks, established_on, created_by, updated_by)
-             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9) RETURNING *`,
+               latitude, longitude, elevation_m, easting_m, northing_m, grid_zone,
+               remarks, established_on, created_by, updated_by)
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12) RETURNING *`,
             [u.orgId, id, input.point_code, input.latitude, input.longitude,
-              input.elevation_m ?? null, input.remarks ?? null,
+              input.elevation_m ?? null,
+              input.easting_m ?? null, input.northing_m ?? null,
+              input.grid_zone?.trim() || null,
+              input.remarks ?? null,
               input.established_on ?? null, u.id])).rows[0];
           return {
             ...row,
             latitude: Number(row.latitude), longitude: Number(row.longitude),
             elevation_m: num(row.elevation_m),
+            easting_m: num(row.easting_m), northing_m: num(row.northing_m),
             // Returned so the caller can show what looks odd without asking
             // again. Never a refusal: every one of these is also something a
             // legitimate programme produces.
@@ -2480,7 +2487,7 @@ export async function registerSurveyRoutes(
 
           const sets: string[] = [], values: unknown[] = [id];
           for (const key of ['point_code', 'latitude', 'longitude', 'elevation_m',
-            'remarks', 'established_on'] as const) {
+            'easting_m', 'northing_m', 'grid_zone', 'remarks', 'established_on'] as const) {
             if (input[key] !== undefined) { values.push(input[key]); sets.push(`${key} = $${values.length}`); }
           }
           if (!sets.length) return row;
@@ -2493,6 +2500,7 @@ export async function registerSurveyRoutes(
             ...updated,
             latitude: Number(updated.latitude), longitude: Number(updated.longitude),
             elevation_m: num(updated.elevation_m),
+            easting_m: num(updated.easting_m), northing_m: num(updated.northing_m),
             warnings: checkGcp(Number(updated.latitude), Number(updated.longitude)),
           };
         }),
@@ -2538,6 +2546,7 @@ export async function registerSurveyRoutes(
           ...r,
           latitude: Number(r.latitude), longitude: Number(r.longitude),
           elevation_m: num(r.elevation_m),
+          easting_m: num(r.easting_m), northing_m: num(r.northing_m),
           established_on: iso(r.established_on),
           warnings: checkGcp(Number(r.latitude), Number(r.longitude)),
         })),
@@ -4464,6 +4473,11 @@ export async function registerSurveyRoutes(
             // What was actually surveyed, against what was expected. The gap
             // between the two is the point of the column.
             actual_extent_ac: Math.round(surveyed * 10000) / 10000,
+            // Derived, never stored: two columns holding one quantity in
+            // different units disagree the moment either is edited. Every
+            // government letter is in square kilometres and the revenue
+            // record is in acres, so both are carried.
+            actual_extent_sq_km: acresToSqKm(Math.round(surveyed * 10000) / 10000),
             state: villageState(p, codes),
             // From the linked task, where there is one. The daily entry
             // records a team count; the task records the person.

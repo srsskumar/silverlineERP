@@ -24,6 +24,7 @@ import { useToast } from '@/components/ui/Toast';
 import { messageOf } from '@/lib/form-errors';
 import {
   staffingNote, formatCoordinate, GCP_WARNING_NOTES, checkGcp,
+  extentVariancePct, extentVaries, acresToSqKm,
 } from '@silverline/shared';
 import {
   GRAINS, LEVEL_LABELS, REPORT_LEVELS, STAGE_STATE_LABELS, TALLY_LABELS, TALLY_ORDER,
@@ -2345,7 +2346,8 @@ function Villages({
               return [
                 String(i + 1), cellText(v.village_name), cellText(v.village_code),
                 cellText(v.district_name), cellText(v.mandal_name),
-                cellNum(v.total_extent_ac), cellNum(v.total_extent_sq_km), cellNum(walked),
+                cellNum(v.total_extent_ac), cellNum(v.total_extent_sq_km),
+        cellNum(walked), cellNum(acresToSqKm(walked)),
                 planned > 0 ? cellNum((walked / planned) * 100) : '',
                 at ? `${stageLabel(String(at.code), pipeline as any)} — ${
                   (STAGE_STATE_LABELS[String(v.stages?.[String(at.code)] ?? 'NOT_STARTED')]
@@ -2577,6 +2579,11 @@ function Villages({
                               <span className="ml-1 text-2xs text-text-subtle">
                                 {pct((walked / planned) * 100)}
                               </span>
+                            ) : null}
+                            {walked > 0 ? (
+                              <div className="text-2xs text-text-subtle">
+                                {sqKm(acresToSqKm(walked))}
+                              </div>
                             ) : null}
                           </>
                         );
@@ -2918,7 +2925,9 @@ function GcpRecorder({
   const qc = useQueryClient();
   const blank = {
     survey_village_id: '', point_code: 'GCP-1',
-    latitude: '', longitude: '', elevation_m: '', established_on: '', remarks: '',
+    latitude: '', longitude: '', elevation_m: '',
+    easting_m: '', northing_m: '', grid_zone: '',
+    established_on: '', remarks: '',
   };
   const [form, setForm] = React.useState(blank);
 
@@ -2943,6 +2952,9 @@ function GcpRecorder({
           latitude: Number(form.latitude),
           longitude: Number(form.longitude),
           elevation_m: form.elevation_m === '' ? undefined : Number(form.elevation_m),
+          easting_m: form.easting_m === '' ? undefined : Number(form.easting_m),
+          northing_m: form.northing_m === '' ? undefined : Number(form.northing_m),
+          grid_zone: form.grid_zone.trim() || undefined,
           established_on: form.established_on || undefined,
           remarks: form.remarks.trim() || undefined,
         },
@@ -3025,6 +3037,26 @@ function GcpRecorder({
             onChange={(e) => setForm({ ...form, elevation_m: e.target.value })} />
         </label>
 
+        {/* The same point on a projected grid (§070): the controller gives
+            both, and the drawings are in the grid. */}
+        <label className="text-2xs text-text-subtle">
+          Easting (m)
+          <input className={field} inputMode="decimal" value={form.easting_m}
+            placeholder="736412.318"
+            onChange={(e) => setForm({ ...form, easting_m: e.target.value })} />
+        </label>
+        <label className="text-2xs text-text-subtle">
+          Northing (m)
+          <input className={field} inputMode="decimal" value={form.northing_m}
+            placeholder="1956043.772"
+            onChange={(e) => setForm({ ...form, northing_m: e.target.value })} />
+        </label>
+        <label className="text-2xs text-text-subtle">
+          Grid zone
+          <input className={field} value={form.grid_zone} placeholder="44N"
+            onChange={(e) => setForm({ ...form, grid_zone: e.target.value })} />
+        </label>
+
         <label className="text-2xs text-text-subtle">
           Established on
           <input type="date" className={field} value={form.established_on}
@@ -3087,6 +3119,9 @@ function ControlList({
   const [find, setFind] = React.useState('');
   const [onlyOdd, setOnlyOdd] = React.useState(false);
   const [adding, setAdding] = React.useState(false);
+  // Control points are established mandal by mandal, and the list that goes
+  // back to a mandal office is that mandal's.
+  const [mandal, setMandal] = React.useState('');
 
   const q = useQuery({
     queryKey: ['survey-gcps', 'project', projectId],
@@ -3113,8 +3148,12 @@ function ControlList({
   if (q.isError) return <ErrorCard error={q.error} onRetry={() => q.refetch()} />;
 
   const all: Row[] = q.data ?? [];
+  // Taken from the points themselves, so the picker offers only mandals that
+  // actually have control points recorded.
+  const mandals = [...new Set(all.map((g) => String(g.mandal_name ?? '')).filter(Boolean))].sort();
   const needle = find.trim().toLowerCase();
   const rows = all.filter((g) => {
+    if (mandal && String(g.mandal_name ?? '') !== mandal) return false;
     if (onlyOdd && ((g.warnings as string[]) ?? []).length === 0) return false;
     if (!needle) return true;
     return [g.point_code, g.village_name, g.mandal_name, g.remarks]
@@ -3129,6 +3168,7 @@ function ControlList({
       project: projectName,
       period: 'As recorded',
       filters: [
+        mandal ? `${mandal} mandal` : null,
         onlyOdd ? 'only points with a warning' : null,
         needle ? `matching \u201c${find.trim()}\u201d` : null,
       ].filter(Boolean).join(' \u00b7 '),
@@ -3142,6 +3182,9 @@ function ControlList({
       { header: 'Latitude', width: 16 },
       { header: 'Longitude', width: 16 },
       { header: 'Elevation (m)', width: 14 },
+      { header: 'Easting (m)', width: 16 },
+      { header: 'Northing (m)', width: 16 },
+      { header: 'Grid zone', width: 12 },
       { header: 'Established on', width: 16 },
       { header: 'How it was fixed', width: 50 },
     ],
@@ -3152,7 +3195,15 @@ function ControlList({
       // decimals is not a control point.
       String(Number(g.latitude).toFixed(7)),
       String(Number(g.longitude).toFixed(7)),
-      cellNum(g.elevation_m), cellText(g.established_on), cellText(g.remarks),
+      cellNum(g.elevation_m),
+      // Millimetres kept: a grid reference that loses its decimals is not a
+      // grid reference.
+      g.easting_m === null || g.easting_m === undefined
+        ? '' : Number(g.easting_m).toFixed(3),
+      g.northing_m === null || g.northing_m === undefined
+        ? '' : Number(g.northing_m).toFixed(3),
+      cellText(g.grid_zone),
+      cellText(g.established_on), cellText(g.remarks),
     ]),
   };
 
@@ -3197,6 +3248,11 @@ function ControlList({
         <input value={find} onChange={(e) => setFind(e.target.value)}
           placeholder="Find a point, village or mandal…"
           className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text" />
+        <select value={mandal} onChange={(e) => setMandal(e.target.value)}
+          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+          <option value="">All mandals</option>
+          {mandals.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
         {flagged > 0 ? (
           <label className="flex items-center gap-1.5 text-2xs text-text-muted">
             <input type="checkbox" checked={onlyOdd}
@@ -3204,9 +3260,9 @@ function ControlList({
             Only the {flagged} that look wrong
           </label>
         ) : null}
-        {(find || onlyOdd) ? (
+        {(find || onlyOdd || mandal) ? (
           <Button type="button" variant="ghost"
-            onClick={() => { setFind(''); setOnlyOdd(false); }}>Clear</Button>
+            onClick={() => { setFind(''); setOnlyOdd(false); setMandal(''); }}>Clear</Button>
         ) : null}
         <span className="ml-auto text-2xs text-text-subtle">
           {rows.length} of {all.length} points
@@ -3236,6 +3292,7 @@ function ControlList({
               <TH className="text-right">Latitude</TH>
               <TH className="text-right">Longitude</TH>
               <TH className="text-right">Elevation</TH>
+              <TH className="text-right">Grid (E / N)</TH>
               <TH>How it was fixed</TH>
             </TR>
           </THead>
@@ -3267,6 +3324,17 @@ function ControlList({
                     ? <span className="text-text-subtle">—</span>
                     : `${Number(g.elevation_m)} m`}
                 </TD>
+                <TD className="text-right font-mono text-2xs tabular-nums">
+                  {g.easting_m === null || g.easting_m === undefined ? (
+                    <span className="font-sans text-text-subtle">—</span>
+                  ) : (
+                    <>
+                      <div>{Number(g.easting_m).toFixed(3)} E</div>
+                      <div>{Number(g.northing_m).toFixed(3)} N</div>
+                      <div className="font-sans text-text-subtle">{String(g.grid_zone ?? '')}</div>
+                    </>
+                  )}
+                </TD>
                 <TD className="text-2xs text-text-muted">
                   {g.remarks ? String(g.remarks) : '—'}
                   {((g.warnings as string[]) ?? []).map((wn) => (
@@ -3296,6 +3364,17 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
   const [find, setFind] = React.useState('');
   const [mandal, setMandal] = React.useState('');
   const [gt, setGt] = React.useState('');
+  /*
+   * Villages whose surveyed extent has drifted from the revenue record.
+   *
+   * The question after ground truthing signs off is always the same: which
+   * villages did not come in at the extent the record says they are. The
+   * threshold is the reader's to set, because what counts as a discrepancy
+   * depends on the terrain — five per cent is alarming on flat delta land
+   * and routine in the agency areas.
+   */
+  const [varyOn, setVaryOn] = React.useState(false);
+  const [varyPct, setVaryPct] = React.useState('10');
 
   if (q.isLoading) return <Skeleton className="h-64" />;
   if (q.isError) return <ErrorCard error={q.error} onRetry={() => q.refetch()} />;
@@ -3312,6 +3391,12 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
   const rows = all.filter((r) => {
     if (mandal && String(r.mandal ?? '') !== mandal) return false;
     if (gt && String(r.gt_status ?? 'NOT_STARTED') !== gt) return false;
+    if (varyOn) {
+      // Only villages whose ground truthing is finished: a village still
+      // being walked has not drifted from anything, it is simply part-done.
+      if (String(r.gt_status ?? 'NOT_STARTED') !== 'COMPLETED') return false;
+      if (!extentVaries(r.extent_ac, r.actual_extent_ac, Number(varyPct) || 0)) return false;
+    }
     if (!needle) return true;
     return [r.village, r.mandal, r.assignee_name]
       .some((f) => String(f ?? '').toLowerCase().includes(needle));
@@ -3349,6 +3434,8 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
       { header: 'Points', width: 12 },
       { header: 'LPMs', width: 10 },
       { header: 'Actual extent (Ac)', width: 18 },
+      { header: 'Actual extent (km²)', width: 20 },
+      { header: 'Variance vs record (%)', width: 22 },
       { header: 'GT started', width: 14 },
       { header: 'GT completed', width: 14 },
       { header: 'Assigned to', width: 24 },
@@ -3375,6 +3462,7 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
       cellText(STAGE_STATE_LABELS[String(r.gt_status)] ?? r.gt_status),
       cellText(STAGE_STATE_LABELS[String(r.vectorization_status)] ?? r.vectorization_status),
       cellNum(r.points), cellNum(r.lpms), cellNum(r.actual_extent_ac),
+      cellNum(r.actual_extent_sq_km), cellNum(extentVariancePct(r.extent_ac, r.actual_extent_ac)),
       cellText(r.gt_started_on), cellText(r.gt_completed_on), cellText(r.assignee_name),
       cellNum(r.gt_govt_staff_allocated), cellNum(r.gt_crew_allocated),
       cellNum(r.attendance_days), cellNum(r.govt_staff_days), cellNum(r.crew_days),
@@ -3404,9 +3492,21 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
             <option key={st} value={st}>{STAGE_STATE_LABELS[st] ?? st}</option>
           ))}
         </select>
-        {(mandal || gt || find) ? (
+        <label className="flex items-center gap-1.5 text-2xs text-text-muted"
+          title="Villages where ground truthing is finished and the surveyed extent differs from the revenue record">
+          <input type="checkbox" checked={varyOn}
+            onChange={(e) => setVaryOn(e.target.checked)} />
+          Extent differs by
+          <input className="w-14 rounded-md border border-border bg-surface px-1.5 py-1 text-sm text-text"
+            inputMode="decimal" value={varyPct}
+            onChange={(e) => setVaryPct(e.target.value)} />
+          % or more
+        </label>
+        {(mandal || gt || find || varyOn) ? (
           <Button type="button" variant="ghost"
-            onClick={() => { setMandal(''); setGt(''); setFind(''); }}>Clear</Button>
+            onClick={() => {
+              setMandal(''); setGt(''); setFind(''); setVaryOn(false);
+            }}>Clear</Button>
         ) : null}
         <span className="ml-auto text-2xs text-text-subtle">
           {rows.length} of {all.length} villages
@@ -3466,14 +3566,23 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
               <TD className="text-right tabular-nums">{count(r.lpms)}</TD>
               <TD className="text-right tabular-nums">
                 {acres(r.actual_extent_ac)}
+                {/* Both units, because the revenue record is in acres and
+                    every government letter is in square kilometres. */}
+                <div className="text-2xs text-text-subtle">
+                  {sqKm(r.actual_extent_sq_km)}
+                </div>
                 {/* The gap between planned and actual is the point of the
                     column, so it is stated rather than left to be worked out. */}
-                {r.extent_ac && r.actual_extent_ac > 0 ? (
-                  <div className="text-2xs text-text-subtle">
-                    {r.actual_extent_ac > r.extent_ac ? '+' : ''}
-                    {(r.actual_extent_ac - r.extent_ac).toFixed(2)} vs planned
-                  </div>
-                ) : null}
+                {(() => {
+                  const v = extentVariancePct(r.extent_ac, r.actual_extent_ac);
+                  if (v === null) return null;
+                  return (
+                    <div className={Math.abs(v) >= 10 ? 'text-2xs text-warning'
+                      : 'text-2xs text-text-subtle'}>
+                      {v > 0 ? '+' : ''}{v}% vs record
+                    </div>
+                  );
+                })()}
               </TD>
               <TD className="text-2xs text-text-subtle">
                 {r.gt_started_on ? day(r.gt_started_on) : '—'}

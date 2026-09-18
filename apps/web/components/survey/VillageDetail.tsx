@@ -1755,6 +1755,7 @@ function ControlPoints({ village, canManage }: { village: Row; canManage: boolea
   const [adding, setAdding] = React.useState(false);
   const blank = {
     point_code: '', latitude: '', longitude: '', elevation_m: '',
+    easting_m: '', northing_m: '', grid_zone: '',
     established_on: '', remarks: '',
   };
   const [form, setForm] = React.useState(blank);
@@ -1775,6 +1776,9 @@ function ControlPoints({ village, canManage }: { village: Row; canManage: boolea
         latitude: Number(form.latitude),
         longitude: Number(form.longitude),
         elevation_m: form.elevation_m === '' ? undefined : Number(form.elevation_m),
+        easting_m: form.easting_m === '' ? undefined : Number(form.easting_m),
+        northing_m: form.northing_m === '' ? undefined : Number(form.northing_m),
+        grid_zone: form.grid_zone.trim() || undefined,
         established_on: form.established_on || undefined,
         remarks: form.remarks.trim() || undefined,
       },
@@ -1866,7 +1870,35 @@ function ControlPoints({ village, canManage }: { village: Row; canManage: boolea
               onChange={(e) => setForm({ ...form, elevation_m: e.target.value })} />
             <span className="mt-0.5 block">Optional — a horizontal point is still a point.</span>
           </label>
+          {/*
+            * The same point on a projected grid (§070).
+            *
+            * The controller gives both. Drawings and LPM sheets are in the
+            * grid; latitude and longitude are what travels between systems.
+            * Recording only one means somebody converts by hand every time
+            * the other is needed.
+            */}
           <label className="text-2xs text-text-subtle">
+            Easting (m)
+            <input className={field} inputMode="decimal" value={form.easting_m}
+              placeholder="736412.318"
+              onChange={(e) => setForm({ ...form, easting_m: e.target.value })} />
+          </label>
+          <label className="text-2xs text-text-subtle">
+            Northing (m)
+            <input className={field} inputMode="decimal" value={form.northing_m}
+              placeholder="1956043.772"
+              onChange={(e) => setForm({ ...form, northing_m: e.target.value })} />
+          </label>
+          <label className="text-2xs text-text-subtle">
+            Grid zone
+            <input className={field} value={form.grid_zone} placeholder="44N"
+              onChange={(e) => setForm({ ...form, grid_zone: e.target.value })} />
+            <span className="mt-0.5 block">
+              Needed with a northing and easting — without it they are two numbers.
+            </span>
+          </label>
+          <label className="text-2xs text-text-subtle sm:col-span-2">
             Remarks
             <input className={field} value={form.remarks}
               placeholder="Tied to BM 42; 45 min base observation, PDOP 1.4"
@@ -1912,6 +1944,7 @@ function ControlPoints({ village, canManage }: { village: Row; canManage: boolea
                 <TH className="text-right">Latitude</TH>
                 <TH className="text-right">Longitude</TH>
                 <TH className="text-right">Elevation</TH>
+                <TH className="text-right">Grid (E / N)</TH>
                 <TH>How it was fixed</TH>
                 {canManage ? <TH /> : null}
               </TR>
@@ -1937,6 +1970,17 @@ function ControlPoints({ village, canManage }: { village: Row; canManage: boolea
                     {g.elevation_m === null || g.elevation_m === undefined
                       ? <span className="text-text-subtle">—</span>
                       : `${Number(g.elevation_m)} m`}
+                  </TD>
+                  <TD className="text-right font-mono text-2xs tabular-nums">
+                    {g.easting_m === null || g.easting_m === undefined ? (
+                      <span className="font-sans text-text-subtle">—</span>
+                    ) : (
+                      <>
+                        <div>{Number(g.easting_m).toFixed(3)} E</div>
+                        <div>{Number(g.northing_m).toFixed(3)} N</div>
+                        <div className="font-sans text-text-subtle">{String(g.grid_zone ?? '')}</div>
+                      </>
+                    )}
                   </TD>
                   <TD className="text-2xs text-text-muted">
                     {g.remarks ? String(g.remarks) : '—'}

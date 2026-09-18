@@ -197,3 +197,73 @@ describe("the control list for the whole programme", () => {
     expect(r.data.every((g: any) => g.point_code && g.latitude)).toBe(true);
   });
 });
+
+describe("grid coordinates beside the geographic ones (§070)", () => {
+  it("records a northing and easting with the grid they are on", async () => {
+    // Drawings and LPM sheets are in the grid; latitude and longitude are
+    // what travels between systems. Recording only one means somebody
+    // converts by hand every time the other is needed.
+    const r = await post(w.admin, `/api/v1/survey/villages/${villageA}/gcps`, {
+      point_code: "GCP-GRID",
+      latitude: 17.6868231, longitude: 83.2184815,
+      easting_m: 736412.318, northing_m: 1956043.772, grid_zone: "44N",
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.data.easting_m).toBe(736412.318);
+    expect(r.data.northing_m).toBe(1956043.772);
+    expect(r.data.grid_zone).toBe("44N");
+  });
+
+  it("keeps the grid reference to the millimetre it was given to", async () => {
+    const list = await get(w.admin, `/api/v1/survey/villages/${villageA}/gcps`);
+    const g = list.data.find((x: any) => x.point_code === "GCP-GRID");
+    expect(g.northing_m).toBe(1956043.772);
+  });
+
+  it("refuses an easting with no northing against it", async () => {
+    const r = await post(w.admin, `/api/v1/survey/villages/${villageB}/gcps`, {
+      point_code: "GCP-HALF", latitude: 16.5, longitude: 80.6,
+      easting_m: 736412.318, grid_zone: "44N",
+    });
+    expect(r.status).toBe(422);
+    expect(r.body.message).toMatch(/both a northing and an easting/i);
+  });
+
+  it("refuses a grid reference that does not say which grid", async () => {
+    // Without a zone a northing and easting are two numbers, not a position,
+    // and a hand conversion against the wrong zone is a point in the wrong
+    // state.
+    const r = await post(w.admin, `/api/v1/survey/villages/${villageB}/gcps`, {
+      point_code: "GCP-NOZONE", latitude: 16.5, longitude: 80.6,
+      easting_m: 736412.318, northing_m: 1956043.772,
+    });
+    expect(r.status).toBe(422);
+    expect(r.body.message).toMatch(/name the grid/i);
+  });
+
+  it("still takes a point with no grid reference at all", async () => {
+    // A controller that only gave a geographic fix is not an error.
+    const r = await post(w.admin, `/api/v1/survey/villages/${villageB}/gcps`, {
+      point_code: "GCP-GEOONLY", latitude: 16.5061789, longitude: 80.6480113,
+    });
+    expect(r.status).toBe(201);
+    expect(r.data.easting_m).toBeNull();
+  });
+
+  it("adds a grid reference to a point that was recorded without one", async () => {
+    const list = await get(w.admin, `/api/v1/survey/villages/${villageB}/gcps`);
+    const g = list.data.find((x: any) => x.point_code === "GCP-GEOONLY");
+    const r = await patch({ ...w.admin, "if-match": String(g.version) },
+      `/api/v1/survey/gcps/${g.id}`,
+      { easting_m: 245123.5, northing_m: 1826110.25, grid_zone: "44N" });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.northing_m).toBe(1826110.25);
+  });
+
+  it("carries the grid onto the programme-wide list", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/gcps`);
+    const g = r.data.find((x: any) => x.point_code === "GCP-GRID");
+    expect(g.easting_m).toBe(736412.318);
+    expect(g.grid_zone).toBe("44N");
+  });
+});

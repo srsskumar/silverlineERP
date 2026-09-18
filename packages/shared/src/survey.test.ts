@@ -16,6 +16,7 @@ import {
   summariseStaffing, staffingNote, stageTracksStaffing, type StaffingDay,
   milestoneEarned, milestoneBlockedNote, villageFinalsSchema, certifiedDifference,
   gcpSchema, checkGcp, GCP_WARNING_NOTES, formatCoordinate,
+  extentVariancePct, extentVaries,
 } from './survey.js';
 
 const BASIS: Record<string, MeasureBasis> = Object.fromEntries(
@@ -1667,5 +1668,52 @@ describe('coordinates for a ground control point', () => {
     expect(formatCoordinate(17.6868, 'lat')).toBe('17.686800° N');
     expect(formatCoordinate(-17.6868, 'lat')).toBe('17.686800° S');
     expect(formatCoordinate(83.2185, 'lng')).toBe('83.218500° E');
+  });
+});
+
+describe('how far the surveyed extent has drifted from the record', () => {
+  it('is signed, because bigger and smaller are different conversations', () => {
+    /*
+     * A village that came in smaller is usually land assigned elsewhere; one
+     * that came in larger is usually an encroachment or a boundary the
+     * record never caught up with. Reporting the magnitude alone merges the
+     * two.
+     */
+    expect(extentVariancePct(200, 180)).toBe(-10);
+    expect(extentVariancePct(200, 220)).toBe(10);
+  });
+
+  it('is nothing when there is nothing to compare against', () => {
+    // Calling a village with no recorded extent 100% adrift would put every
+    // hole in the master data at the top of the exceptions list.
+    expect(extentVariancePct(null, 180)).toBeNull();
+    expect(extentVariancePct(0, 180)).toBeNull();
+    expect(extentVariancePct(200, null)).toBeNull();
+    expect(extentVariancePct(200, 0)).toBeNull();
+  });
+
+  it('reports to one decimal, which is finer than any extent is known to', () => {
+    expect(extentVariancePct(300, 311)).toBe(3.7);
+  });
+
+  it('catches drift in either direction against a threshold', () => {
+    expect(extentVaries(200, 180, 10)).toBe(true);
+    expect(extentVaries(200, 220, 10)).toBe(true);
+    expect(extentVaries(200, 195, 10)).toBe(false);
+  });
+
+  it('includes a village sitting exactly on the threshold', () => {
+    // "Varies by 10% or more" is what somebody means by "varies by 10%".
+    expect(extentVaries(200, 180, 10)).toBe(true);
+  });
+
+  it('never flags a village it cannot measure', () => {
+    expect(extentVaries(null, 180, 1)).toBe(false);
+    expect(extentVaries(200, null, 1)).toBe(false);
+  });
+
+  it('treats a negative threshold as the distance it is', () => {
+    // A threshold typed with a minus sign means the same thing.
+    expect(extentVaries(200, 180, -10)).toBe(true);
   });
 });
