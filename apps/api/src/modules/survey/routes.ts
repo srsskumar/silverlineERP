@@ -1949,8 +1949,16 @@ export async function registerSurveyRoutes(
     let where = 'e.org_id = $1';
     if (q.survey_project_id) { values.push(q.survey_project_id); where += ` AND e.survey_project_id = $${values.length}`; }
     if (q.survey_village_id) { values.push(q.survey_village_id); where += ` AND e.survey_village_id = $${values.length}`; }
-    if (q.from) { values.push(q.from); where += ` AND e.entry_date >= $${values.length}`; }
-    if (q.to) { values.push(q.to); where += ` AND e.entry_date <= $${values.length}`; }
+    // Validated like every other window in this module: a value that is not a
+    // date reaches Postgres as `$n::date` and comes back as a 500.
+    if (q.from) {
+      values.push(dateParam(req, q.from, 'from', today()));
+      where += ` AND e.entry_date >= $${values.length}`;
+    }
+    if (q.to) {
+      values.push(dateParam(req, q.to, 'to', today()));
+      where += ` AND e.entry_date <= $${values.length}`;
+    }
     values.push(limit + 1, offset);
 
     const rows = (await pool.query(
@@ -4140,7 +4148,11 @@ export async function registerSurveyRoutes(
        * like-for-like when the period has no calendar meaning.
        */
       const custom = q.from && q.to
-        ? { from: String(q.from), to: String(q.to) } : null;
+        ? {
+          from: dateParam(req, q.from, 'from', today()),
+          to: dateParam(req, q.to, 'to', today()),
+        }
+        : null;
       if (custom && custom.from > custom.to) {
         fail('VALIDATION_ERROR', 'The range starts after it ends. Check the dates.', 422);
       }

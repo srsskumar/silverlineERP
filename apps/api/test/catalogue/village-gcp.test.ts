@@ -329,6 +329,11 @@ describe("a date that is not a date", () => {
       `/api/v1/survey/projects/${programmeId}/employee-productivity?from=${d}`,
       `/api/v1/survey/projects/${programmeId}/unfiled?from=${d}`,
       `/api/v1/survey/projects/${programmeId}/villages?as_of=${d}`,
+      // The two that carry their own date handling rather than the shared
+      // window: a custom report range, and the entries list.
+      `/api/v1/survey/projects/${programmeId}/report?from=${d}&to=${d}`,
+      `/api/v1/survey/entries?from=${d}`,
+      `/api/v1/survey/entries?to=${d}`,
     ];
     for (const d of bad) {
       if (d === "") continue; // an empty value means "not given", and defaults
