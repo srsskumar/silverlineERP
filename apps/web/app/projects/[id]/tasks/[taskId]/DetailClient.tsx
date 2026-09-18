@@ -13,7 +13,7 @@ import { getTask, patchTask } from '@/lib/tasks';
 import { queryKeys } from '@/lib/query-keys';
 import { taskPatchSchema, type TaskPatchInput } from '@/lib/validation';
 import { listPeople, peopleIndex, personLabel } from '@/lib/people';
-import { Badge } from '@/components/ui/Badge';
+import { TaskCollaborators, type Collaborator } from '@/components/TaskCollaborators';
 import { PRIORITIES } from '@/components/projects/ProjectFields';
 import { AssignDialog } from '@/components/AssignDialog';
 import { CommentThread } from '@/components/CommentThread';
@@ -145,27 +145,20 @@ export function TaskDetailView({ projectId, taskId }: { projectId: string; taskI
                 * Everybody else on it (§note 13).
                 *
                 * The owner answers for the task; these are the people working
-                * it with them. Shown together, because "who is on this" is one
-                * question and reading half the answer is how somebody gets
-                * missed off a handover.
+                * it with them. Shown and edited together, because "who is on
+                * this" is one question and reading half the answer is how
+                * somebody gets missed off a handover.
                 */}
               <DetailRow
                 label="Also working on it"
                 value={
-                  (task.collaborators as Array<Record<string, unknown>> | undefined)?.length
-                    ? (
-                      <span className="flex flex-wrap gap-1">
-                        {(task.collaborators as Array<Record<string, unknown>>).map((c) => (
-                          <Badge key={String(c.user_id)} tone="neutral">
-                            {String(c.name)}
-                            {c.emp_no ? (
-                              <span className="ml-1 text-2xs opacity-70">{String(c.emp_no)}</span>
-                            ) : null}
-                          </Badge>
-                        ))}
-                      </span>
-                    )
-                    : <span className="text-text-subtle">Nobody else</span>
+                  <TaskCollaborators
+                    taskId={String(task.id)}
+                    ownerId={task.assignee_id ? String(task.assignee_id) : null}
+                    collaborators={(task.collaborators as Collaborator[] | undefined) ?? []}
+                    canEdit={canAssign}
+                    onChanged={refetchAll}
+                  />
                 }
               />
               <DetailRow label="Description" value={task.description ? String(task.description) : '—'} />

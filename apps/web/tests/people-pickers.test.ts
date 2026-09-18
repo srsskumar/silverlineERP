@@ -69,3 +69,20 @@ describe('every picker actually applies it', () => {
     expect(audit).not.toContain('assignablePeople');
   });
 });
+
+describe('the collaborator picker', () => {
+  const read = (p: string) => readFileSync(join(__dirname, '..', p), 'utf8');
+
+  it('does not offer the owner, who is already on it', () => {
+    // Listing them twice would make the count wrong wherever it is read.
+    expect(read('components/TaskCollaborators.tsx')).toContain('p.id !== ownerId');
+  });
+
+  it('does not offer somebody already on the task', () => {
+    expect(read('components/TaskCollaborators.tsx')).toContain('!already.has(p.id)');
+  });
+
+  it('offers only people who still work here', () => {
+    expect(read('components/TaskCollaborators.tsx')).toContain('assignablePeople(');
+  });
+});
