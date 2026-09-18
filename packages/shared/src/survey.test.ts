@@ -11,7 +11,7 @@ import {
   villageStatus, programmeVisible, SURVEY_PROJECT_STATUSES, SURVEY_PROJECT_STATUS_LABELS,
   forecast, findBottlenecks, BOTTLENECK_KINDS, BOTTLENECK_LABELS, type BottleneckInput,
   type MeasureBasis, type VillageProgress,
-  periodContaining, previousPeriod, comparePeriods,
+  periodContaining, previousPeriod, comparePeriods, surveyVillageCreateSchema,
 } from './survey.js';
 
 const BASIS: Record<string, MeasureBasis> = Object.fromEntries(
@@ -1268,5 +1268,41 @@ describe('one thing wrong per date', () => {
       expect(said).toContain('That is not a real date');
       expect(said).not.toContain('That date has not happened yet');
     }
+  });
+});
+
+describe('numbers larger than the column can hold', () => {
+  const entry = (v: number) => surveyEntrySchema.safeParse({
+    survey_village_id: '11111111-1111-4111-8111-111111111111',
+    entry_date: '2026-01-15', teams_deployed: 1,
+    values: { GOVT_LAND_EXTENT_AC: v },
+  });
+
+  it('refuses one that would overflow numeric(14,4)', () => {
+    // .finite() is not a bound. 1e308 is perfectly finite, a hundred times
+    // more acres than there are on Earth, and it reached Postgres and came
+    // back as a 500 with a stack trace.
+    expect(entry(1e308).success).toBe(false);
+    expect(entry(1e11).success).toBe(false);
+  });
+
+  it('says what to check rather than only refusing', () => {
+    const r = entry(1e308);
+    if (!r.success) {
+      expect(r.error.issues[0].message).toContain('decimal point');
+    }
+  });
+
+  it('still takes a number any real programme would produce', () => {
+    // The largest programme in production is about 405,000 acres.
+    expect(entry(405_169.53).success).toBe(true);
+    expect(entry(9_999_999_999).success).toBe(true);
+  });
+
+  it('bounds the village extent and the target the same way', () => {
+    expect(surveyVillageCreateSchema.safeParse({
+      village_name: 'Huge', village_code: 'H1',
+      mandal_id: '11111111-1111-4111-8111-111111111111', total_extent_ac: 1e308,
+    }).success).toBe(false);
   });
 });

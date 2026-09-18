@@ -562,7 +562,21 @@ const pastDate = isoDate.refine(
   s => !realDate(s) || s <= businessDay(),
   'That date has not happened yet',
 );
-const quantity = z.number().finite().min(0, 'A quantity cannot be negative');
+/**
+ * The largest number these columns can hold.
+ *
+ * Every quantity, area and target is numeric(14,4) — ten digits before the
+ * decimal point. Anything bigger reached Postgres, overflowed the column and
+ * came back as a 500 with a stack trace, where what the caller needs is a
+ * sentence about the field. .finite() is not a bound: 1e308 is perfectly
+ * finite and still a hundred times more acres than there are on Earth.
+ */
+const MAX_QUANTITY = 9_999_999_999;
+const TOO_BIG = 'That is larger than this field can hold — check the units and the decimal point';
+
+const quantity = z.number().finite()
+  .min(0, 'A quantity cannot be negative')
+  .max(MAX_QUANTITY, TOO_BIG);
 
 export const surveyProjectSchema = z.object({
   code: z.string().min(1).max(64),
@@ -604,7 +618,7 @@ export const surveyVillageCreateSchema = z.object({
   village_code: z.string().trim().min(1).max(64).optional(),
   /** The mandal it belongs to. Required when creating by name. */
   mandal_id: z.string().uuid().optional(),
-  total_extent_ac: z.number().finite().positive().nullable().optional(),
+  total_extent_ac: z.number().finite().positive().max(MAX_QUANTITY, TOO_BIG).nullable().optional(),
   dgps_base: z.number().int().min(0).optional(),
   dgps_rovers: z.number().int().min(0).optional(),
   teams: z.number().int().min(0).optional(),
@@ -617,7 +631,7 @@ export const surveyVillageCreateSchema = z.object({
 /** Editing what the programme records about a village it already has. */
 export const surveyVillageEditSchema = z.object({
   village_name: z.string().trim().min(1).max(255).optional(),
-  total_extent_ac: z.number().finite().positive().nullable().optional(),
+  total_extent_ac: z.number().finite().positive().max(MAX_QUANTITY, TOO_BIG).nullable().optional(),
   dgps_base: z.number().int().min(0).optional(),
   dgps_rovers: z.number().int().min(0).optional(),
   teams: z.number().int().min(0).optional(),
@@ -626,7 +640,7 @@ export const surveyVillageEditSchema = z.object({
 
 export const surveyVillageSchema = z.object({
   village_id: z.string().uuid(),
-  total_extent_ac: z.number().finite().positive().nullable().optional(),
+  total_extent_ac: z.number().finite().positive().max(MAX_QUANTITY, TOO_BIG).nullable().optional(),
   dgps_base: z.number().int().min(0).optional(),
   dgps_rovers: z.number().int().min(0).optional(),
   teams: z.number().int().min(0).optional(),
@@ -645,7 +659,7 @@ export const roverDaySchema = z.object({
   status: z.enum(ROVER_DAY_STATUSES),
   idle_reason: z.enum(DELAY_REASON_CODES as unknown as [string, ...string[]]).nullable().optional(),
   remarks: z.string().max(1000).nullable().optional(),
-  area_ac: z.number().finite().min(0).nullable().optional(),
+  area_ac: z.number().finite().min(0).max(MAX_QUANTITY, TOO_BIG).nullable().optional(),
   employee_id: z.string().uuid().nullable().optional(),
 });
 
@@ -687,7 +701,7 @@ export const measureSchema = z.object({
 
 export const targetSchema = z.object({
   measure_code: z.string().min(1).max(64),
-  target_quantity: z.number().finite().positive(),
+  target_quantity: z.number().finite().positive().max(MAX_QUANTITY, TOO_BIG),
 });
 
 export const stageUpdateSchema = z.object({
@@ -1145,7 +1159,7 @@ export const villageStatusSchema = z.object({
 });
 
 export const villagePlanSchema = z.object({
-  total_extent_ac: z.number().finite().positive().nullable().optional(),
+  total_extent_ac: z.number().finite().positive().max(MAX_QUANTITY, TOO_BIG).nullable().optional(),
   expected_completion_on: isoDate.nullable().optional(),
   planned_start_on: isoDate.nullable().optional(),
 });
