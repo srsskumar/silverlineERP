@@ -403,3 +403,58 @@ describe("claiming a batch of villages at once", () => {
     expect(r.status).toBe(422);
   });
 });
+
+describe("claiming out of order", () => {
+  it("flags a third claim when the second is still outstanding", async () => {
+    // "Has some earlier claim" would wave this through, and a third claim
+    // with the second missing is exactly the mistake worth catching.
+    const v = await makeVillage("GAPPY");
+    await post(w.admin, "/api/v1/survey/billing/bulk", {
+      survey_village_ids: [v], action: "SUBMIT", milestone: 1, dry_run: false,
+    });
+    const r = await post(w.admin, "/api/v1/survey/billing/bulk", {
+      survey_village_ids: [v], action: "SUBMIT", milestone: 3,
+    });
+    expect(r.data.out_of_order).toBe(1);
+  });
+
+  it("does not flag a claim whose predecessors are all standing", async () => {
+    const v = await makeVillage("ORDERLY");
+    for (const m of [1, 2]) {
+      await post(w.admin, "/api/v1/survey/billing/bulk", {
+        survey_village_ids: [v], action: "SUBMIT", milestone: m, dry_run: false,
+      });
+    }
+    const r = await post(w.admin, "/api/v1/survey/billing/bulk", {
+      survey_village_ids: [v], action: "SUBMIT", milestone: 3,
+    });
+    expect(r.data.out_of_order).toBe(0);
+  });
+
+  it("flags again once a predecessor is returned", async () => {
+    // A returned claim leaves that milestone owed, so what follows it is
+    // out of order once more.
+    const v = await makeVillage("RETURNED");
+    for (const m of [1, 2]) {
+      await post(w.admin, "/api/v1/survey/billing/bulk", {
+        survey_village_ids: [v], action: "SUBMIT", milestone: m, dry_run: false,
+      });
+    }
+    await post(w.admin, "/api/v1/survey/billing/bulk", {
+      survey_village_ids: [v], action: "DECIDE", milestone: 2, status: "REJECTED",
+      decided_on: new Date().toISOString().slice(0, 10), dry_run: false,
+    });
+    const r = await post(w.admin, "/api/v1/survey/billing/bulk", {
+      survey_village_ids: [v], action: "SUBMIT", milestone: 3,
+    });
+    expect(r.data.out_of_order).toBe(1);
+  });
+
+  it("never flags a first claim", async () => {
+    const v = await makeVillage("FIRST");
+    const r = await post(w.admin, "/api/v1/survey/billing/bulk", {
+      survey_village_ids: [v], action: "SUBMIT", milestone: 1,
+    });
+    expect(r.data.out_of_order).toBe(0);
+  });
+});

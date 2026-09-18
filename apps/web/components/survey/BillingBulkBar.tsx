@@ -216,12 +216,13 @@ export function BillingBulkBar({
 
           {Number(preview.out_of_order) > 0 ? (
             <Notice tone="warning"
-              title={`${Number(preview.out_of_order)} of these have no earlier claim recorded`}>
+              title={`${Number(preview.out_of_order)} of these have an earlier milestone outstanding`}>
               {/* Not refused — a variation can release milestones in any
                   order. But the usual cause is the wrong milestone picked,
                   and this is the last moment to notice. */}
               They would go in at {MILESTONE_LABELS[Number(milestone)]?.toLowerCase()} without{' '}
-              {Number(milestone) === 2 ? 'the first' : 'the earlier ones'} having been submitted.
+              {Number(milestone) === 2 ? 'the first' : 'every earlier one'} standing. A claim the
+              department returned leaves its milestone owed again, which counts here too.
               Check the milestone before applying.
             </Notice>
           ) : null}

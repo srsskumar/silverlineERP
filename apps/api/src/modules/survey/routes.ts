@@ -2342,11 +2342,11 @@ export async function registerSurveyRoutes(
             const rows = (await db.query(
               `SELECT sv.id, ou.name AS village_name, sv.total_extent_ac,
                       b.id AS claim_id, b.status AS claim_status, b.version AS claim_version,
-                      EXISTS (
-                        SELECT 1 FROM survey_village_billing prior
-                         WHERE prior.survey_village_id = sv.id
-                           AND prior.milestone < $3 AND prior.status <> 'REJECTED'
-                      ) AS has_prior
+                      (SELECT count(DISTINCT prior.milestone)
+                         FROM survey_village_billing prior
+                        WHERE prior.survey_village_id = sv.id
+                          AND prior.milestone < $3
+                          AND prior.status <> 'REJECTED')::int AS priors_in
                  FROM survey_villages sv
                  JOIN org_units ou ON ou.id = sv.village_id
                  LEFT JOIN survey_village_billing b
@@ -2395,7 +2395,11 @@ export async function registerSurveyRoutes(
              * letter goes out is the whole point of the preview.
              */
             const outOfOrder = input.action === 'SUBMIT' && input.milestone > 1
-              ? eligible.filter(r => !r.has_prior).length : 0;
+              // Every milestone below this one has to be standing. A third
+              // claim with the first in and the second outstanding is the
+              // mistake worth catching, and "has some earlier claim" would
+              // wave it through.
+              ? eligible.filter(r => Number(r.priors_in) < input.milestone - 1).length : 0;
 
             if (input.dry_run) {
               return {
