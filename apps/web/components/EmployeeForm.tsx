@@ -83,7 +83,7 @@ export function EmployeeForm({
   const debouncedQ = React.useMemo(() => reportsQuery.trim(), [reportsQuery]);
   const reportsSearch = useQuery({
     queryKey: ['employees', 'reports-search', debouncedQ],
-    queryFn: () => listEmployees({ q: debouncedQ, limit: 8 }),
+    queryFn: () => listEmployees({ q: debouncedQ, limit: 8, status: 'ACTIVE' }),
     enabled: reportsOpen && debouncedQ.length >= 2,
     staleTime: 30_000,
   });

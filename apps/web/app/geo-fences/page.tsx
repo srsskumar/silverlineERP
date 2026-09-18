@@ -108,7 +108,7 @@ function FencesManager() {
   const unitById = React.useMemo(() => new Map(units.map((unit) => [unit.id, unit])), [units]);
   const employeesQuery = useQuery({
     queryKey: ['employees', 'fence-assignment-labels'],
-    queryFn: () => fetchAllEmployees({ limit: 100 }),
+    queryFn: () => fetchAllEmployees({ limit: 100, status: 'ACTIVE' }),
     staleTime: 10 * 60_000,
   });
   const employeeById = React.useMemo(

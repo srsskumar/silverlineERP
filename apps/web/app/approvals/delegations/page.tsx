@@ -15,7 +15,7 @@ import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Tabl
 import { Badge } from '@/components/ui/Badge';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
-import { listPeople } from '@/lib/people';
+import { assignablePeople, listPeople } from '@/lib/people';
 import { Notice, Section } from '@/components/finance/Primitives';
 import { day, DOCUMENT_TYPE_LABELS } from '@/lib/finance';
 
@@ -110,7 +110,7 @@ export default function DelegationsPage() {
                     onChange={(e) => setToUserId(e.target.value)}
                   >
                     <option value="">Choose a person</option>
-                    {(users.data ?? [])
+                    {assignablePeople(users.data)
                       .filter((u) => String(u.id) !== session?.user?.id)
                       .map((u) => (
                         <option key={String(u.id)} value={String(u.id)}>{u.name ?? u.username}</option>

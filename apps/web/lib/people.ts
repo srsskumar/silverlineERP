@@ -57,3 +57,23 @@ export function personLabel(index: Map<string, Person>, userId: string | null | 
   if (person) return person.name;
   return `${String(userId).slice(0, 8)}…`;
 }
+
+/**
+ * The people work can actually be given to.
+ *
+ * A picker listing everybody who ever worked here offers somebody who left in
+ * March as this week's assignee, and the write is refused later with an error
+ * nobody expected. Filtered here rather than in the fetch because the same
+ * list resolves names on historical records — an audit entry or a closed
+ * task still has to show who did it, and dropping leavers from the fetch
+ * would print those rows blank.
+ *
+ * Accounts with no employee record stay: an administrator or service login is
+ * not an inactive employee, and removing them would make the people who
+ * mostly assign work unassignable themselves.
+ */
+export function assignablePeople(people: Person[] | undefined): Person[] {
+  return (people ?? []).filter(
+    (p) => p.employee_id === null || p.employee_status === 'ACTIVE',
+  );
+}

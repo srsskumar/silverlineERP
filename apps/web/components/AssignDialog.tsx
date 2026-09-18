@@ -7,7 +7,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { assignTask, type Task } from '@/lib/tasks';
 import { assignSchema, type AssignFormInput } from '@/lib/validation';
 import { applyFieldErrors } from '@/lib/form-errors';
-import { listPeople, peopleIndex, personLabel } from '@/lib/people';
+import { assignablePeople, listPeople, peopleIndex, personLabel } from '@/lib/people';
 import { Button } from './ui/Button';
 import { ErrorCard } from './ui/ErrorCard';
 import { FormField } from './ui/FormField';
@@ -100,7 +100,7 @@ export function AssignDialog({
               {...register('assignee_id')}
             >
               <option value="">{people.isLoading ? 'Loading people…' : 'Choose a person…'}</option>
-              {(people.data ?? [])
+              {assignablePeople(people.data)
                 .filter((p) => p.id !== currentAssigneeId)
                 .map((p) => (
                   <option key={p.id} value={p.id}>

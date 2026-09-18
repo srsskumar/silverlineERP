@@ -256,10 +256,10 @@ function Crew({
   });
 
   const people = useQuery({
-    queryKey: ['employees', 'for-crew'],
+    queryKey: ['employees', 'for-crew', 'active'],
     enabled: adding,
     queryFn: async () =>
-      ((await apiRequestRaw('/api/v1/employees?limit=100')).body as { data: Row[] }).data,
+      ((await apiRequestRaw('/api/v1/employees?limit=100&status=ACTIVE')).body as { data: Row[] }).data,
     staleTime: 300_000,
   });
 
