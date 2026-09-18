@@ -29,6 +29,12 @@ import { RunStatusBadge } from '@/components/RunStatusBadge';
 import { RunTimeline } from '@/components/RunTimeline';
 import { TotalsCards } from '@/components/TotalsCards';
 import { WarningsList } from '@/components/WarningsList';
+import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
+import { Notice } from '@/components/finance/Primitives';
+import { useToast } from '@/components/ui/Toast';
+import { messageOf } from '@/lib/form-errors';
+
+type Row = Record<string, unknown>;
 import { PayslipTable } from '@/components/PayslipTable';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -290,6 +296,8 @@ export function RunDetailView({ id }: { id: string }) {
             </div>
           </div>
 
+          <LabourCostPanel runId={id} />
+
           <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
             <h2 className="text-sm font-semibold text-text">Warnings ({detail.warnings.length})</h2>
             <div className="mt-3">
@@ -325,5 +333,164 @@ export function RunDetailView({ id }: { id: string }) {
         </div>
       </RequirePermission>
     </AppShell>
+  );
+}
+
+/* ------------------------------------------ labour cost onto the projects */
+
+/**
+ * Where this run's wage bill was earned (§note 10).
+ *
+ * The cost ledger only ever heard from expense claims and manual
+ * adjustments, so in a survey business — where the dominant cost is crew days
+ * in the field — every project's margin was revenue against almost nothing.
+ *
+ * Shown here because this is where somebody stands once a run is locked, and
+ * posting is the next thing that happens to it. The figures are real money
+ * apportioned by real days: attendance names the village a crew checked out
+ * of, the village belongs to a programme, and the programme to a project.
+ */
+export function LabourCostPanel({ runId }: { runId: string }) {
+  const { session } = useAuth();
+  const perms = { permissions: session?.permissions };
+  const canRead = hasPermission(perms, 'cost.read');
+  const canPost = hasPermission(perms, 'cost.adjust');
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [reason, setReason] = React.useState('');
+
+  const cost = useQuery({
+    queryKey: ['labour-cost', runId],
+    enabled: canRead,
+    queryFn: async () =>
+      (await apiRequestRaw(`/api/v1/payroll-runs/${runId}/labour-cost`)).body as Row,
+  });
+
+  const refresh = () => { void qc.invalidateQueries({ queryKey: ['labour-cost', runId] }); };
+
+  const postIt = useMutation({
+    mutationFn: async () =>
+      apiRequest(`/api/v1/payroll-runs/${runId}/labour-cost`, { method: 'POST', body: {} }),
+    onError: (e) => toast.error('Nothing was posted', messageOf(e)),
+    onSuccess: () => {
+      toast.success('Posted to the cost ledger',
+        'Each project’s budget position now includes this month’s wages.');
+      refresh();
+    },
+  });
+
+  const reverseIt = useMutation({
+    mutationFn: async () =>
+      apiRequest(`/api/v1/payroll-runs/${runId}/labour-cost/reverse`,
+        { method: 'POST', body: { reason } }),
+    onError: (e) => toast.error('Nothing was reversed', messageOf(e)),
+    onSuccess: () => {
+      toast.success('Reversed',
+        'Both the posting and the reversal stay on the ledger, and the run can be posted again.');
+      setReason('');
+      refresh();
+    },
+  });
+
+  if (!canRead) return null;
+
+  const d = cost.data?.data as Row | undefined;
+  const lines: Row[] = (d?.lines as Row[]) ?? [];
+  const money = (n: unknown) =>
+    `₹${Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+
+  return (
+    <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+      <h2 className="text-sm font-semibold text-text">Labour cost by project</h2>
+
+      {cost.isLoading ? <Skeleton className="mt-3 h-32" /> : null}
+      {cost.isError ? (
+        <ErrorCard className="mt-3" error={cost.error} onRetry={() => cost.refetch()} />
+      ) : null}
+
+      {d ? (
+        <>
+          <p className="mt-2 text-xs text-text-muted">
+            Apportioned across projects by the days each person actually worked on them.
+            Attendance names the village a crew checked out of, and the village is what ties
+            a day to a project.
+          </p>
+
+          {lines.length > 0 ? (
+            <ul className="mt-3 divide-y divide-border">
+              {lines.map((l) => (
+                <li key={String(l.projectId)} className="flex items-baseline gap-3 py-2 text-sm">
+                  <span className="min-w-0 flex-1 truncate text-text">
+                    {(l.project as Row)?.name
+                      ? `${String((l.project as Row).code)} — ${String((l.project as Row).name)}`
+                      : String(l.projectId)}
+                  </span>
+                  <span className="text-2xs text-text-subtle">
+                    {String(l.days)} day(s) · {String(l.employees)} person(s)
+                  </span>
+                  <span className="tabular-nums text-text">{money(l.amount)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-3 text-sm text-text-muted">
+              No day in this period was recorded against a project.
+            </p>
+          )}
+
+          {Number(d.unattributed_amount) > 0 ? (
+            <div className="mt-3">
+              <Notice tone="warning" title="Some of this month landed nowhere">
+              {money(d.unattributed_amount)} across {String(d.unattributed_days)} day(s) is not
+              charged to any project — office days, training, or a check-out that never named a
+              village. It is left unattributed rather than spread across whichever projects
+              happen to be listed, because charging a project for a day nobody worked on it is
+              worse than admitting the day is unaccounted for.
+              </Notice>
+            </div>
+          ) : null}
+
+          {d.already_posted ? (
+            <div className="mt-4 space-y-2">
+              <Notice tone="info" title="Already on the cost ledger">
+                {money(d.posted_total)} was posted from this run. Reverse it if the run has been
+                reopened and the numbers have changed — both entries stay on the ledger.
+              </Notice>
+              {canPost ? (
+                <div className="flex flex-wrap items-end gap-2">
+                  <label className="flex flex-1 flex-col gap-1 text-2xs text-text-muted">
+                    Why it is being reversed
+                    <input
+                      value={reason}
+                      onChange={(e) => setReason(e.target.value)}
+                      placeholder="Attendance corrected, run reopened…"
+                      className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+                    />
+                  </label>
+                  <Button type="button" variant="secondary"
+                    disabled={!reason.trim() || reverseIt.isPending}
+                    onClick={() => reverseIt.mutate()}>
+                    Reverse
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          ) : !d.postable ? (
+            <div className="mt-3">
+              <Notice tone="info" title="Not ready to post">
+              Only a locked run can be posted. Anything earlier can still be recalculated, and
+              the cost would have to be chased with reversals when it moved.
+              </Notice>
+            </div>
+          ) : canPost && lines.length > 0 ? (
+            <Button type="button" className="mt-4"
+              disabled={postIt.isPending}
+              onClick={() => postIt.mutate()}>
+              Post {money(lines.reduce((t, l) => t + Number(l.amount), 0))} to the cost ledger
+            </Button>
+          ) : null}
+        </>
+      ) : null}
+    </div>
   );
 }

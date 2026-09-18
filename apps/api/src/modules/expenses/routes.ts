@@ -7,6 +7,7 @@ import {
   canTransition, reimbursementPosition, EXPENSE_CLAIM_TRANSITIONS,
   type ExpenseClaimStatus, type ExpensePolicy, type ExpenseCategory, type ExpenseLineInput,
   businessDay,
+  apportionRun, payrollCostPostSchema, payrollCostReverseSchema,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail, projectAccess } from '../../common/domain.js';
@@ -856,4 +857,244 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
       },
     };
   });
+
+  /* -------------------------------------------- labour cost from payroll */
+
+  /**
+   * Where a payroll run's wage bill was actually earned (§note 10).
+   *
+   * The cost ledger only ever heard from expense claims and manual
+   * adjustments, so in a survey business — where the dominant cost is crew
+   * days in the field — every project's margin was revenue against almost
+   * nothing.
+   *
+   * The days come from attendance, which records the village a crew checked
+   * out of; the village belongs to a survey programme, and the programme to
+   * a project. Real money apportioned by real days, rather than a daily rate
+   * derived from salary_basic that would agree with nothing in the accounts.
+   */
+  async function labourCostOf(db: Pool | PoolClient, orgId: string, runId: string) {
+    const run = await inOrg(db, 'payroll_runs', runId, orgId);
+
+    /*
+     * A day counts once, for the project it was worked on.
+     *
+     * The check-out names the village (§53); the check-in is the fallback for
+     * a day somebody forgot to close properly. DISTINCT on the day, because
+     * two events on one day are still one day of wage — otherwise a crew
+     * member who moved between villages costs twice what they were paid.
+     */
+    const days = (await db.query(
+      `SELECT ar.employee_id,
+              sp.project_id,
+              count(DISTINCT ar.work_date) AS days
+         FROM attendance_records ar
+         JOIN attendance_events ev
+           ON ev.id = COALESCE(ar.check_out_event_id, ar.check_in_event_id)
+         JOIN survey_villages sv ON sv.id = ev.survey_village_id
+         JOIN survey_projects sp ON sp.id = sv.survey_project_id
+        WHERE ar.work_date BETWEEN $1::date AND $2::date
+          AND sp.org_id = $3
+          AND sp.project_id IS NOT NULL
+        GROUP BY ar.employee_id, sp.project_id`,
+      [run.period_start, run.period_end, orgId])).rows;
+
+    const present = (await db.query(
+      `SELECT ar.employee_id, count(DISTINCT ar.work_date) AS days
+         FROM attendance_records ar
+         JOIN employees e ON e.id = ar.employee_id AND e.org_id = $3
+        WHERE ar.work_date BETWEEN $1::date AND $2::date
+        GROUP BY ar.employee_id`,
+      [run.period_start, run.period_end, orgId])).rows;
+    const presentBy = new Map(present.map(r => [String(r.employee_id), Number(r.days)]));
+
+    const slips = (await db.query(
+      `SELECT ps.employee_id, ps.gross
+         FROM payslips ps
+        WHERE ps.payroll_run_id = $1 AND ps.org_id = $2 AND ps.is_current`,
+      [runId, orgId])).rows;
+
+    const byEmployee = new Map<string, { projectId: string; days: number }[]>();
+    for (const d of days) {
+      const key = String(d.employee_id);
+      if (!byEmployee.has(key)) byEmployee.set(key, []);
+      byEmployee.get(key)!.push({ projectId: String(d.project_id), days: Number(d.days) });
+    }
+
+    const apportioned = apportionRun(slips.map(s => ({
+      employeeId: String(s.employee_id),
+      gross: Number(s.gross),
+      totalDays: presentBy.get(String(s.employee_id)) ?? 0,
+      byProject: byEmployee.get(String(s.employee_id)) ?? [],
+    })));
+
+    return { run, apportioned, payslipCount: slips.length };
+  }
+
+  /**
+   * What is already on the ledger for this run, and not since reversed.
+   *
+   * reversed_at rather than "is anything pointing at this": the same question
+   * has to be asked by the unique index that stops a double posting, and a
+   * partial index cannot ask it as a subquery.
+   */
+  async function postedFor(db: Pool | PoolClient, orgId: string, runId: string) {
+    return (await db.query(
+      `SELECT e.* FROM project_cost_entries e
+        WHERE e.org_id = $1 AND e.source_type = 'PAYROLL' AND e.source_id = $2
+          AND e.reversal_of IS NULL AND e.reversed_at IS NULL`,
+      [orgId, runId])).rows;
+  }
+
+  app.get('/api/v1/payroll-runs/:id/labour-cost',
+    { preHandler: guard('cost.read') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const { run, apportioned, payslipCount } = await labourCostOf(pool, u.orgId, id);
+      const posted = await postedFor(pool, u.orgId, id);
+
+      const names = new Map((await pool.query(
+        'SELECT id, code, name FROM projects WHERE org_id = $1', [u.orgId]))
+        .rows.map(r => [String(r.id), r]));
+
+      return {
+        data: {
+          payroll_run: {
+            id: run.id, status: run.status,
+            period_start: run.period_start, period_end: run.period_end,
+            total_gross: Number(run.total_gross),
+          },
+          payslips: payslipCount,
+          /*
+           * Only a locked run. A run that can still be recalculated is not a
+           * cost yet, and posting one means chasing it with reversals when
+           * the numbers move.
+           */
+          postable: run.status === 'LOCKED',
+          already_posted: posted.length > 0,
+          posted_total: posted.reduce((t, p) => t + Number(p.amount), 0),
+          lines: apportioned.byProject.map(p => ({
+            ...p,
+            project: names.get(p.projectId) ?? null,
+          })),
+          unattributed_amount: apportioned.unattributedAmount,
+          unattributed_days: apportioned.unattributedDays,
+          employees_with_no_attributable_days: apportioned.employeesWithNoAttributableDays,
+        },
+      };
+    });
+
+  app.post('/api/v1/payroll-runs/:id/labour-cost',
+    { preHandler: guard('cost.adjust') }, async (req, reply) => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(payrollCostPostSchema, req.body);
+
+      const out = await mutate(pool, req, 'cost.payroll.post', 'payroll_run', async db => {
+        // Locks the run for the length of the transaction, so two posts of
+        // the same run serialise rather than both passing the check below.
+        const run = await inOrg(db, 'payroll_runs', id, u.orgId, true);
+        if (run.status !== 'LOCKED') {
+          fail('RUN_NOT_LOCKED',
+            `This run is ${String(run.status).toLowerCase()}. Only a locked run can be posted `
+            + 'to the cost ledger — anything earlier can still be recalculated, and the cost '
+            + 'would have to be chased with reversals when it moved.', 422);
+        }
+
+        const existing = await postedFor(db, u.orgId, id);
+        if (existing.length > 0) {
+          fail('ALREADY_POSTED',
+            `This run's labour cost is already on the ledger (${existing.length} `
+            + 'project(s)). Reverse it first if the run has been reopened and changed.', 409);
+        }
+
+        const { apportioned } = await labourCostOf(db, u.orgId, id);
+        if (apportioned.byProject.length === 0) {
+          fail('NOTHING_TO_POST',
+            'No day in this period was recorded against a project, so there is nothing to '
+            + 'apportion. Crews record the village on their check-out, and the village is '
+            + 'what ties a day to a project.', 422);
+        }
+
+        const headId = input.cost_head_id
+          ? String((await inOrg(db, 'cost_heads', input.cost_head_id, u.orgId)).id)
+          : await labourCostHead(db, u);
+
+        const written = [];
+        for (const line of apportioned.byProject) {
+          written.push((await db.query(
+            `INSERT INTO project_cost_entries(org_id, created_by, project_id, cost_head_id,
+               nature, source_type, source_id, entry_date, amount, narration)
+             VALUES($1,$2,$3,$4,'ACTUAL','PAYROLL',$5,$6,$7,$8) RETURNING *`,
+            [u.orgId, u.id, line.projectId, headId, id, run.period_end, line.amount,
+             input.narration
+               ?? `Payroll ${String(run.period_start).slice(0, 10)} to `
+                  + `${String(run.period_end).slice(0, 10)}: ${line.days} day(s) `
+                  + `worked by ${line.employees} person(s)`])).rows[0]);
+        }
+
+        return {
+          posted: written.length,
+          total: written.reduce((t, w) => t + Number(w.amount), 0),
+          unattributed_amount: apportioned.unattributedAmount,
+          unattributed_days: apportioned.unattributedDays,
+        };
+      });
+
+      return reply.code(201).send({ data: out });
+    });
+
+  app.post('/api/v1/payroll-runs/:id/labour-cost/reverse',
+    { preHandler: guard('cost.adjust') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(payrollCostReverseSchema, req.body);
+
+      return {
+        data: await mutate(pool, req, 'cost.payroll.reverse', 'payroll_run', async db => {
+          await inOrg(db, 'payroll_runs', id, u.orgId, true);
+          const existing = await postedFor(db, u.orgId, id);
+          if (existing.length === 0) {
+            fail('NOT_POSTED',
+              'Nothing from this run is on the ledger to reverse.', 422);
+          }
+          /*
+           * Reversed rather than deleted. What was posted and then taken back
+           * is exactly what somebody querying the cost of a month needs to
+           * see; a ledger that can be tidied up is worth nothing at the
+           * moment it matters.
+           */
+          for (const e of existing) {
+            // Marked before the reversal is written, so the unique index sees
+            // the slot freed and the run can be posted again afterwards.
+            await db.query(
+              'UPDATE project_cost_entries SET reversed_at = now() WHERE id = $1', [e.id]);
+            await db.query(
+              `INSERT INTO project_cost_entries(org_id, created_by, project_id, cost_head_id,
+                 nature, source_type, source_id, entry_date, amount, narration, reversal_of)
+               VALUES($1,$2,$3,$4,$5,'PAYROLL',$6,$7,$8,$9,$10)`,
+              [u.orgId, u.id, e.project_id, e.cost_head_id, e.nature, id,
+               businessDay(), -Number(e.amount),
+               `Reversal: ${input.reason}`, e.id]);
+          }
+          return { reversed: existing.length };
+        }),
+      };
+    });
+
+  /**
+   * The head wages go under.
+   *
+   * LABOUR if the organisation has one, created if not. An organisation that
+   * has not set its cost heads up should still get its wage bill onto the
+   * projects rather than losing it for want of configuration.
+   */
+  async function labourCostHead(db: PoolClient, u: ReturnType<typeof actor>): Promise<string> {
+    const existing = (await db.query(
+      "SELECT id FROM cost_heads WHERE org_id = $1 AND kind = 'LABOUR' AND active ORDER BY code LIMIT 1",
+      [u.orgId])).rows[0];
+    if (existing) return String(existing.id);
+    return String((await db.query(
+      `INSERT INTO cost_heads(org_id, created_by, code, name, kind, description)
+       VALUES($1,$2,'LABOUR','Field labour','LABOUR',
+              'Created automatically to hold wages apportioned from payroll')
+       RETURNING id`, [u.orgId, u.id])).rows[0].id);
+  }
 }

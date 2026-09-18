@@ -86,6 +86,9 @@ export async function inOrg(db:Pool|PoolClient,table:string,id:string,orgId:stri
   'rfqs','vendor_quotes','vendor_returns',
   // Expenses and project cost control (§15.6, §16).
   'cost_heads','expense_policies','expense_claims',
+  // A locked payroll run, read when its wage bill is apportioned onto the
+  // projects the days were worked on (§note 10).
+  'payroll_runs',
   // Financial control (§45).
   'financial_periods','payments','bank_transactions',
   // Inventory control (§44).
