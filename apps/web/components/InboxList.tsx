@@ -3,7 +3,6 @@
 import * as React from 'react';
 import Link from '@/components/AppLink';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getTask } from '@/lib/tasks';
 import {
   inboxEntityHref,
   isUnread,
@@ -33,46 +32,39 @@ function typeGlyph(type: string): string {
   return '•';
 }
 
-function EntityLink({ item }: { item: InboxItem }) {
-  const direct = inboxEntityHref(item);
-  if (direct) {
-    return (
-      <Link href={direct} className="text-primary hover:underline">
-        Open {String(item.entity_type).toLowerCase()} →
-      </Link>
-    );
-  }
-  const type = String(item.entity_type ?? '').toUpperCase();
-  if ((type === 'TASK' || type === 'TASKS') && item.entity_id) {
-    return <TaskEntityLink taskId={String(item.entity_id)} />;
-  }
-  if (!item.entity_id) return null;
-  return <span className="font-mono text-xs text-text-muted">{String(item.entity_id)}</span>;
-}
+/**
+ * The whole notification is the thing you click (§note 14).
+ *
+ * It used to be a small "Open task →" link beside the text, and only for
+ * tasks and leave. Everything else — a ready report, a paused schedule, a
+ * village where nothing has been recorded — printed a bare UUID next to an
+ * instruction to go and deal with it, which is an instruction and a riddle.
+ *
+ * Opening it marks it read on the way, because an alert you have acted on
+ * and still have to tick off is an alert people stop ticking off.
+ */
+function RowShell({
+  item, href, onOpen, children,
+}: {
+  item: InboxItem;
+  href: string | null;
+  onOpen: () => void;
+  children: React.ReactNode;
+}) {
+  const unread = isUnread(item);
+  const className = `flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-start sm:justify-between ${
+    unread ? 'border-primary/30 bg-primary-subtle' : 'border-border bg-surface'
+  } ${href ? 'transition-colors hover:border-primary/60' : ''}`;
 
-/** Resolve a task notification to /projects/:projectId/tasks/:taskId via getTask. */
-function TaskEntityLink({ taskId }: { taskId: string }) {
-  const taskQuery = useQuery({
-    queryKey: queryKeys.tasks.detail(taskId),
-    queryFn: () => getTask(taskId),
-    staleTime: 60_000,
-    retry: false,
-  });
-  if (taskQuery.isLoading) {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs text-text-muted">
-        <Spinner size="sm" /> Resolving task…
-      </span>
-    );
-  }
-  if (taskQuery.isError || !taskQuery.data) {
-    return <span className="font-mono text-xs text-text-muted" title={taskId}>task:{taskId.slice(0, 8)}…</span>;
-  }
-  const projectId = String(taskQuery.data.task.project_id);
+  if (!href) return <li className={className}>{children}</li>;
   return (
-    <Link href={`/projects/${projectId}/tasks/${taskId}`} className="text-primary hover:underline">
-      Open task →
-    </Link>
+    <li className={className}>
+      {/* The link wraps the content, not the row, so the Mark-read button
+          beside it stays its own control rather than a nested one. */}
+      <Link href={href} onClick={onOpen} className="flex min-w-0 flex-1 gap-3 text-left">
+        {children}
+      </Link>
+    </li>
   );
 }
 
@@ -86,6 +78,7 @@ function InboxRow({
   const queryClient = useQueryClient();
   const [error, setError] = React.useState<unknown>(null);
   const unread = isUnread(item);
+  const href = inboxEntityHref(item);
 
   const markMutation = useMutation({
     mutationFn: () => markInboxRead(item.id),
@@ -97,50 +90,69 @@ function InboxRow({
     onError: (err) => setError(err),
   });
 
-  return (
-    <li
-      className={`flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-start sm:justify-between ${
-        unread ? 'border-primary/30 bg-primary-subtle' : 'border-border bg-surface'
-      }`}
-    >
-      <div className="flex min-w-0 flex-1 gap-3">
-        <span
-          aria-hidden="true"
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-border text-sm font-bold text-text-muted"
-        >
-          {typeGlyph(String(item.type ?? ''))}
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge tone={unread ? 'info' : 'neutral'}>{String(item.type)}</Badge>
-            {unread ? <span aria-label="unread" className="text-sm font-bold text-primary">•</span> : null}
-            {item.created_at ? (
-              <span className="text-xs text-text-muted">{String(item.created_at)}</span>
-            ) : null}
-          </div>
-          <p className="mt-1 text-sm font-medium text-text">{item.title}</p>
-          {item.body ? <p className="mt-1 text-sm text-text-muted">{String(item.body)}</p> : null}
-          <div className="mt-2 text-sm">
-            <EntityLink item={item} />
-          </div>
-          {error ? (
-            <div className="mt-2">
-              <ErrorCard title="Could not mark as read" error={error} />
-            </div>
+  const contents = (
+    <>
+      <span
+        aria-hidden="true"
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-border text-sm font-bold text-text-muted"
+      >
+        {typeGlyph(String(item.type ?? ''))}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex flex-wrap items-center gap-2">
+          <Badge tone={unread ? 'info' : 'neutral'}>{String(item.type)}</Badge>
+          {unread ? <span aria-label="unread" className="text-sm font-bold text-primary">•</span> : null}
+          {item.created_at ? (
+            <span className="text-xs text-text-muted">{when(item.created_at)}</span>
           ) : null}
+        </span>
+        <span className="mt-1 block text-sm font-medium text-text">{item.title}</span>
+        {item.body ? (
+          <span className="mt-1 block text-sm text-text-muted">{String(item.body)}</span>
+        ) : null}
+        {href ? (
+          <span className="mt-1 block text-xs text-primary">Open to deal with it →</span>
+        ) : null}
+      </span>
+    </>
+  );
+
+  return (
+    <RowShell
+      item={item}
+      href={href}
+      onOpen={() => { if (unread) markMutation.mutate(); }}
+    >
+      {href ? contents : <div className="flex min-w-0 flex-1 gap-3">{contents}</div>}
+      {error ? (
+        <div className="mt-2">
+          <ErrorCard title="Could not mark as read" error={error} />
         </div>
-      </div>
-      <div className="flex shrink-0 gap-2">
+      ) : null}
+      <span className="flex shrink-0 gap-2">
         {unread ? (
-          <Button variant="secondary" loading={markMutation.isPending} onClick={() => markMutation.mutate()}>
+          <Button
+            variant="secondary"
+            loading={markMutation.isPending}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); markMutation.mutate(); }}
+          >
             Mark read
           </Button>
         ) : (
           <span className="px-2 py-2 text-xs text-text-subtle">Read</span>
         )}
-      </div>
-    </li>
+      </span>
+    </RowShell>
   );
+}
+
+/** A timestamp in the reader's own clock, which is the one they compare against. */
+function when(value: unknown): string {
+  const d = new Date(String(value));
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
 }
 
 /**

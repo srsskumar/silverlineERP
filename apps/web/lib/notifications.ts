@@ -14,6 +14,8 @@ import { apiRequest, apiRequestRaw } from './apiClient';
  */
 
 export interface InboxItem {
+  /** Where clicking it should take you, resolved by the server. */
+  href?: string | null;
   id: string;
   type: string;
   title: string;
@@ -139,9 +141,23 @@ export function hasUnreadDot(page: Pick<InboxPage, 'items' | 'has_more'>): boole
  * Task rows return null — the caller resolves the project via getTask and
  * links to /projects/:projectId/tasks/:taskId (see InboxList).
  */
+/**
+ * Where a notification leads (§note 14).
+ *
+ * The server works this out now, in the query that already has the row: it
+ * knows which project a task belongs to without the inbox fetching each task
+ * one at a time to find out, and it knows the types the client never handled
+ * — a ready report, a paused schedule, a village with nothing recorded — all
+ * of which used to render as a bare UUID beside an instruction to go and do
+ * something about it.
+ *
+ * The local fallback stays for anything the server has not been taught yet,
+ * so an older API still links what it can.
+ */
 export function inboxEntityHref(
-  item: Pick<InboxItem, 'entity_type' | 'entity_id'>,
+  item: Pick<InboxItem, 'entity_type' | 'entity_id'> & { href?: string | null },
 ): string | null {
+  if (item.href) return item.href;
   const type = String(item.entity_type ?? '').toUpperCase();
   if (!item.entity_id) return null;
   if (type === 'LEAVE' || type === 'LEAVE_REQUEST' || type === 'LEAVE_REQUESTS') {

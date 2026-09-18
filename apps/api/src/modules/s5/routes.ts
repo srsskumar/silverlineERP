@@ -205,10 +205,40 @@ interface NotificationRow {
   entity_id: string | null;
   read_at: Date | string | null;
   created_at: Date | string;
+  /** Where the inbox should send somebody who clicks it. */
+  href?: string | null;
 }
 
-const NOTIF_COLS = `id, type, title, body, entity_type, entity_id,
-  read_at, created_at`;
+/*
+ * Where each notification leads (§note 14).
+ *
+ * An alert that names a problem and gives you a UUID is an alert nobody can
+ * act on: "Your report is ready — open Reports to download it" followed by
+ * 51ca94f6-… is a instruction and a riddle. The destination is worked out
+ * here, in the query that already has the row, rather than by the inbox
+ * fetching each task one at a time to find out which project it belongs to.
+ */
+const NOTIF_COLS = `n.id, n.type, n.title, n.body, n.entity_type, n.entity_id,
+  n.read_at, n.created_at,
+  CASE lower(n.entity_type)
+    WHEN 'task' THEN
+      (SELECT '/projects/' || t.project_id || '/tasks/' || t.id
+         FROM tasks t WHERE t.id = n.entity_id)
+    WHEN 'survey_village' THEN
+      (SELECT '/survey?tab=villages&project=' || sv.survey_project_id
+              || '&village=' || sv.id
+         FROM survey_villages sv WHERE sv.id = n.entity_id)
+    WHEN 'report' THEN '/reports'
+    WHEN 'report_schedule' THEN '/reports'
+    WHEN 'leave' THEN '/leave/' || n.entity_id
+    WHEN 'leave_request' THEN '/leave/' || n.entity_id
+    WHEN 'expense_claim' THEN '/expenses'
+    WHEN 'purchase_order' THEN '/procurement'
+    WHEN 'ra_bill' THEN '/billing'
+    WHEN 'asset' THEN '/assets'
+    WHEN 'employee' THEN '/employees/' || n.entity_id
+    ELSE NULL
+  END AS href`;
 
 function toNotificationShape(row: NotificationRow) {
   return {
@@ -218,6 +248,12 @@ function toNotificationShape(row: NotificationRow) {
     body: row.body,
     entity_type: row.entity_type,
     entity_id: row.entity_id,
+    /*
+     * Null when the thing it refers to has been deleted, or when the type has
+     * nowhere sensible to go. The inbox shows those as plain text rather than
+     * a link that leads to a 404.
+     */
+    href: row.href ?? null,
     read_at: row.read_at ? iso(row.read_at) : null,
     created_at: iso(row.created_at),
   };
@@ -1299,9 +1335,9 @@ export async function registerS5Routes(
       }
       const { limit, cursor, unread } = parsed.data;
       const values: unknown[] = [user.orgId, user.id];
-      const clauses = ["org_id = $1", "recipient_id = $2::uuid"];
+      const clauses = ["n.org_id = $1", "n.recipient_id = $2::uuid"];
       if (isTrueFlag(unread)) {
-        clauses.push("read_at IS NULL");
+        clauses.push("n.read_at IS NULL");
       }
       if (cursor) {
         const decoded = decodeCursor<NotificationCursor>(cursor);
@@ -1317,13 +1353,13 @@ export async function registerS5Routes(
         }
         values.push(decoded.created_at, decoded.id);
         clauses.push(
-          `(created_at, id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`,
+          `(n.created_at, n.id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`,
         );
       }
       values.push(limit + 1);
       const res = await opts.pool.query(
-        `SELECT ${NOTIF_COLS} FROM notifications WHERE ${clauses.join(" AND ")}
-         ORDER BY created_at DESC, id DESC LIMIT $${values.length}`,
+        `SELECT ${NOTIF_COLS} FROM notifications n WHERE ${clauses.join(" AND ")}
+         ORDER BY n.created_at DESC, n.id DESC LIMIT $${values.length}`,
         values as string[],
       );
       const rows = res.rows as NotificationRow[];
