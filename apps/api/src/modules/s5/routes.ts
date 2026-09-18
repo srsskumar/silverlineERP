@@ -237,6 +237,7 @@ const NOTIF_COLS = `n.id, n.type, n.title, n.body, n.entity_type, n.entity_id,
     WHEN 'ra_bill' THEN '/billing'
     WHEN 'asset' THEN '/assets'
     WHEN 'employee' THEN '/employees/' || n.entity_id
+    WHEN 'password_reset_request' THEN '/admin?reset=' || n.entity_id
     ELSE NULL
   END AS href`;
 

@@ -17,6 +17,7 @@
  * seeded reference data the suites are built on.
  */
 export const VOLATILE_TABLES = `
+  password_reset_requests,
   task_collaborators,
   survey_boq_links,
   survey_entry_rovers, survey_entry_values, survey_stage_history,

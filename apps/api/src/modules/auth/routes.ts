@@ -388,4 +388,132 @@ export async function registerAuthRoutes(
       });
     },
   );
+
+  /**
+   * "I have forgotten my password" (§note 16).
+   *
+   * There was no way to ask. Changing a password needs you to be signed in,
+   * which is exactly what somebody who has forgotten it cannot do, and a
+   * crew member in a mandal three hours from the office had no route back
+   * except telephoning whoever happened to know where the admin screen was.
+   *
+   * It raises a request and tells the people who can act on it: the person
+   * they report to, the managers on their programmes, and the
+   * administrators. No link is emailed and no password is generated — an
+   * administrator sets one and hands it over, which in a field organisation
+   * is how it actually happens.
+   *
+   * The answer is the same whether the account exists or not. Anything else
+   * turns this into a way to find out who works here.
+   */
+  app.post(
+    "/api/v1/auth/password-reset-request",
+    { preHandler: loginRateLimit },
+    async (req, reply) => {
+      const body = (req.body ?? {}) as { username?: string };
+      const typed = String(body.username ?? "").trim();
+      const said = {
+        message:
+          "If that account exists, the people who can reset it have been told. "
+          + "Ask your team lead or supervisor — they will set a new password for you.",
+      };
+      if (!typed || typed.length > 255) return reply.status(202).send(said);
+
+      // By sign-in name or by mobile number, because half the field staff
+      // sign in with their phone and would not know their username.
+      const digits = typed.replace(/\D/g, "").slice(-10);
+      const found = (await opts.pool.query(
+        `SELECT u.id, u.org_id, u.employee_id
+           FROM users u
+          WHERE u.auth_status = 'ACTIVE'
+            AND (lower(u.username) = lower($1)
+                 OR ($2 <> '' AND u.mobile_digits = $2))
+          LIMIT 1`,
+        [typed, digits],
+      )).rows[0];
+      if (!found) return reply.status(202).send(said);
+
+      /*
+       * One request per person per ten minutes.
+       *
+       * Without it, typing one username repeatedly is a way to fill every
+       * manager's inbox, and the alert stops meaning anything the first time
+       * it arrives twenty times.
+       */
+      const recent = (await opts.pool.query(
+        `SELECT 1 FROM password_reset_requests
+          WHERE user_id = $1 AND requested_at > now() - interval '10 minutes'
+          LIMIT 1`,
+        [found.id],
+      )).rowCount;
+      if (recent) return reply.status(202).send(said);
+
+      const request = (await opts.pool.query(
+        `INSERT INTO password_reset_requests(org_id, user_id, requested_as, requested_ip)
+         VALUES($1,$2,$3,$4) RETURNING id`,
+        [found.org_id, found.id, typed, metaOf(req).ip ?? null],
+      )).rows[0];
+
+      const who = (await opts.pool.query(
+        `SELECT COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), u.username)
+                  AS name,
+                e.emp_no
+           FROM users u LEFT JOIN employees e ON e.id = u.employee_id
+          WHERE u.id = $1`, [found.id])).rows[0];
+      const label = who?.emp_no ? `${who.name} (${who.emp_no})` : (who?.name ?? typed);
+
+      /*
+       * Everybody who could actually do something about it.
+       *
+       * The person they report to first, because they are nearest and most
+       * likely to know whether the request is genuine; then the managers of
+       * the programmes they are on; then the administrators, who can always
+       * act. Distinct, so somebody who is two of those gets told once.
+       */
+      const recipients = (await opts.pool.query(
+        `SELECT DISTINCT m.id
+           FROM users m
+           LEFT JOIN employees me ON me.id = m.employee_id
+           LEFT JOIN user_roles ur ON ur.user_id = m.id
+           LEFT JOIN roles r ON r.id = ur.role_id
+          WHERE m.org_id = $1 AND m.auth_status = 'ACTIVE' AND m.id <> $2
+            AND (
+              me.id = (SELECT e.reports_to FROM employees e WHERE e.id = $3)
+              OR r.code IN ('SUPER_ADMIN','ADMIN','PROJECT_MANAGER','HR_MANAGER')
+              OR (r.code = 'TEAM_LEAD' AND EXISTS (
+                    SELECT 1 FROM survey_project_employees a
+                    JOIN survey_project_employees b
+                      ON b.survey_project_id = a.survey_project_id
+                   WHERE a.employee_id = $3 AND a.released_on IS NULL
+                     AND b.employee_id = me.id AND b.released_on IS NULL))
+            )`,
+        [found.org_id, found.id, found.employee_id],
+      )).rows;
+
+      for (const r of recipients) {
+        await opts.pool.query(
+          `INSERT INTO notifications(org_id, recipient_id, type, title, body,
+             entity_type, entity_id)
+           VALUES($1,$2,'PASSWORD_RESET_REQUEST',$3,$4,'password_reset_request',$5)`,
+          [found.org_id, r.id,
+           `${label} cannot sign in`,
+           "They have asked for their password to be reset. Set a new one under "
+             + "Administration, then tell them what it is.",
+           request.id],
+        );
+      }
+
+      await writeAudit(opts.pool, {
+        orgId: found.org_id,
+        actorId: found.id,
+        action: "auth.password_reset.requested",
+        entityType: "user",
+        entityId: found.id,
+        afterState: { requested_as: typed, told: recipients.length },
+        requestId: req.requestId,
+      });
+
+      return reply.status(202).send(said);
+    },
+  );
 }

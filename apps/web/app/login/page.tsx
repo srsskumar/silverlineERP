@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useAuth } from '@/components/AuthProvider';
-import { ApiClientError } from '@/lib/apiClient';
+import { ApiClientError, apiRequestRaw } from '@/lib/apiClient';
 import { loginSchema, type LoginFormValues } from '@/lib/validation';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
@@ -30,6 +30,7 @@ export default function LoginPage() {
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<LoginFormValues>({ resolver: zodResolver(loginSchema) });
 
@@ -100,7 +101,96 @@ export default function LoginPage() {
             Sign in
           </Button>
         </form>
+
+        {/*
+          * A way back in (§note 16).
+          *
+          * Changing a password needs you to be signed in, which is exactly
+          * what somebody who has forgotten it cannot do. A crew member three
+          * hours from the office had no route except telephoning whoever
+          * happened to know where the admin screen was.
+          */}
+        <ForgotPassword defaultUsername={watch('username')} />
       </div>
+    </div>
+  );
+}
+
+/**
+ * Ask the people who can let you back in.
+ *
+ * No link is emailed and no password is generated: an administrator sets one
+ * and hands it over, which in a field organisation with no reliable email is
+ * how it actually happens. The reply is the same whether the account exists
+ * or not — anything else turns this into a way to find out who works here.
+ */
+function ForgotPassword({ defaultUsername }: { defaultUsername?: string }) {
+  const [open, setOpen] = React.useState(false);
+  const [who, setWho] = React.useState('');
+  const [said, setSaid] = React.useState<string | null>(null);
+  const [busy, setBusy] = React.useState(false);
+
+  React.useEffect(() => { if (open && defaultUsername) setWho(defaultUsername); }, [open, defaultUsername]);
+
+  async function ask() {
+    setBusy(true);
+    try {
+      const res = await apiRequestRaw('/api/v1/auth/password-reset-request', {
+        method: 'POST', body: { username: who }, skipAuthRetry: true,
+      });
+      const body = res.body as { message?: string } | null;
+      setSaid(body?.message
+        ?? 'If that account exists, the people who can reset it have been told.');
+    } catch {
+      // Even a failure says the same thing: whether the account exists is
+      // not something this screen should reveal, and a person who cannot
+      // sign in cannot act on a technical error either.
+      setSaid('If that account exists, the people who can reset it have been told. '
+        + 'Ask your team lead or supervisor.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="mt-4 text-sm text-primary hover:underline focus:outline-none focus:ring-2 focus:ring-ring"
+      >
+        Forgotten your password?
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-4 space-y-2 rounded-lg border border-border bg-surface-sunken p-3">
+      {said ? (
+        <p role="status" className="text-sm text-text">{said}</p>
+      ) : (
+        <>
+          <p className="text-xs text-text-muted">
+            Tell us who you are and we will let your team lead, your project manager and the
+            administrators know. One of them will set a new password and give it to you.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Input
+              aria-label="Your username or mobile number"
+              placeholder="Username or mobile number"
+              value={who}
+              onChange={(e) => setWho(e.target.value)}
+            />
+            <Button type="button" variant="secondary" loading={busy}
+              disabled={!who.trim()} onClick={() => void ask()}>
+              Ask for a reset
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

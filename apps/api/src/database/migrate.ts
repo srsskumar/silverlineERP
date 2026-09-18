@@ -71,6 +71,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "061_cost_entry_reversal", file: "061_cost_entry_reversal.sql" },
   { version: "062_kit_follows_crew", file: "062_kit_follows_crew.sql" },
   { version: "063_task_collaborators", file: "063_task_collaborators.sql" },
+  { version: "064_password_reset_requests", file: "064_password_reset_requests.sql" },
 ];
 
 /**
