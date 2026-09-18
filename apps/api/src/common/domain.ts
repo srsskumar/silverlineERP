@@ -104,6 +104,8 @@ export async function inOrg(db:Pool|PoolClient,table:string,id:string,orgId:stri
   'survey_rover_allocations','survey_crew',
   // Amending a billing claim by id (§066).
   'survey_village_billing',
+  // Correcting one control point by id (§069).
+  'survey_village_gcps',
   // Correcting one allocation by id (§note 6).
   'asset_assignments'];
  // The allow-list is the injection guard for the interpolated table name

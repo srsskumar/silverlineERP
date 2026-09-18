@@ -15,6 +15,7 @@ import {
   villageBillingBulkSchema, BILLING_SKIP_LABELS,
   summariseStaffing, staffingNote, stageTracksStaffing, type StaffingDay,
   milestoneEarned, milestoneBlockedNote, villageFinalsSchema, certifiedDifference,
+  gcpSchema, checkGcp, GCP_WARNING_NOTES, formatCoordinate,
 } from './survey.js';
 
 const BASIS: Record<string, MeasureBasis> = Object.fromEntries(
@@ -1594,5 +1595,77 @@ describe('certifying a finished village', () => {
     expect(certifiedDifference({
       code: 'X', recorded: 120, certified: null, reason: null,
     })).toBeNull();
+  });
+});
+
+describe('coordinates for a ground control point', () => {
+  it('takes a point in Andhra Pradesh without complaint', () => {
+    expect(checkGcp(17.6868, 83.2185)).toEqual([]);
+  });
+
+  it('spots the classic swap', () => {
+    /*
+     * Latitude and longitude typed into each other's boxes is the mistake
+     * people actually make copying a fix off a controller, and in India the
+     * two ranges do not overlap — so it is detectable rather than merely
+     * suspicious.
+     */
+    expect(checkGcp(83.2185, 17.6868)).toEqual(['SWAPPED']);
+  });
+
+  it('says a point is outside India rather than calling it swapped', () => {
+    // Swapping these would not put them in India either, so the honest
+    // warning is the plainer one.
+    expect(checkGcp(48.8584, 2.2945)).toEqual(['OUTSIDE_INDIA']);
+  });
+
+  it('warns when the figures are too coarse to locate anything', () => {
+    // A degree is about 110 km. Two round numbers locate a district.
+    expect(checkGcp(17, 83)).toContain('LOW_PRECISION');
+    expect(checkGcp(17.68, 83.21)).toContain('LOW_PRECISION');
+  });
+
+  it('does not call a precise point coarse', () => {
+    expect(checkGcp(17.686801, 83.218500)).not.toContain('LOW_PRECISION');
+  });
+
+  it('warns rather than refuses, always', () => {
+    // Every one of these is also something a legitimate programme could
+    // produce, so the answer is to say what looks odd and let a person
+    // decide — not to refuse a number somebody is looking straight at.
+    for (const w of checkGcp(83.2185, 17.6868)) {
+      expect(GCP_WARNING_NOTES[w], w).toBeTruthy();
+    }
+  });
+
+  it('refuses a latitude that is not a latitude', () => {
+    expect(gcpSchema.safeParse({
+      point_code: 'GCP-1', latitude: 120, longitude: 83,
+    }).success).toBe(false);
+  });
+
+  it('refuses a point with no name, because a village may have three', () => {
+    expect(gcpSchema.safeParse({
+      point_code: '  ', latitude: 17.6, longitude: 83.2,
+    }).success).toBe(false);
+  });
+
+  it('refuses an elevation below any land on earth', () => {
+    expect(gcpSchema.safeParse({
+      point_code: 'GCP-1', latitude: 17.6, longitude: 83.2, elevation_m: -9000,
+    }).success).toBe(false);
+  });
+
+  it('takes a point with nothing but a name and a fix', () => {
+    // A horizontal control point is still a control point.
+    expect(gcpSchema.safeParse({
+      point_code: 'GCP-1', latitude: 17.6868, longitude: 83.2185,
+    }).success).toBe(true);
+  });
+
+  it('writes a coordinate the way a survey record does', () => {
+    expect(formatCoordinate(17.6868, 'lat')).toBe('17.686800° N');
+    expect(formatCoordinate(-17.6868, 'lat')).toBe('17.686800° S');
+    expect(formatCoordinate(83.2185, 'lng')).toBe('83.218500° E');
   });
 });

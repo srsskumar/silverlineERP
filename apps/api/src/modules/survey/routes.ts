@@ -20,6 +20,7 @@ import {
   villageBillingBulkSchema,
   summariseStaffing, stageTracksStaffing, priorRange, type StaffingDay,
   milestoneEarned, MILESTONE_REQUIRES, villageFinalsSchema,
+  gcpSchema, gcpPatchSchema, checkGcp,
   type MeasureBasis, type PeriodGrain, type ReportLevel, type StageState, type VillageProgress,
   businessDay,
 } from '@silverline/shared';
@@ -2385,6 +2386,161 @@ export async function registerSurveyRoutes(
             }))),
           },
         },
+      };
+    });
+
+  /* ----------------------------------------- ground control points (§069) */
+
+  /**
+   * The control points a village was surveyed from.
+   *
+   * A GCP is the fixed, known point the DGPS base sits over, and every
+   * measurement in the village is relative to it. Establishing one is a
+   * one-time job done before ground truthing starts; there is usually
+   * exactly one, and a large or awkward village needs two or three.
+   *
+   * The coordinates lived in the surveyor's notebook and, with luck, a
+   * WhatsApp message. Re-establishing a control point because nobody wrote
+   * it down is a day's work with a base station.
+   */
+  app.get('/api/v1/survey/villages/:id/gcps', { preHandler: guard('survey.read') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      await villageOr404(pool, u.orgId, id, u);
+      const rows = (await pool.query(
+        `SELECT g.*,
+                COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), usr.username)
+                  AS recorded_by_name
+           FROM survey_village_gcps g
+           LEFT JOIN users usr ON usr.id = g.created_by
+           LEFT JOIN employees e ON e.id = usr.employee_id
+          WHERE g.org_id = $1 AND g.survey_village_id = $2
+          ORDER BY g.point_code`,
+        [u.orgId, id])).rows;
+      return {
+        data: rows.map(r => ({
+          ...r,
+          latitude: Number(r.latitude),
+          longitude: Number(r.longitude),
+          elevation_m: num(r.elevation_m),
+          established_on: iso(r.established_on),
+          // Recomputed on read rather than stored: the bounds are a judgement
+          // that may be improved, and a stored warning would go stale.
+          warnings: checkGcp(Number(r.latitude), Number(r.longitude)),
+        })),
+      };
+    });
+
+  app.post('/api/v1/survey/villages/:id/gcps', { preHandler: guard('survey.manage') },
+    async (req, reply) => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(gcpSchema, req.body);
+      const data = await mutate(pool, req, 'survey.gcp.create', 'survey_village_gcp',
+        async db => {
+          await villageOr404(db, u.orgId, id, u);
+          const clash = await db.query(
+            'SELECT 1 FROM survey_village_gcps WHERE survey_village_id = $1 AND point_code = $2',
+            [id, input.point_code]);
+          if (clash.rowCount) {
+            fail('POINT_ALREADY_RECORDED',
+              `This village already has a point called ${input.point_code}. `
+              + 'Open it to correct the coordinates, or give the new point another name.', 409);
+          }
+          const row = (await db.query(
+            `INSERT INTO survey_village_gcps(org_id, survey_village_id, point_code,
+               latitude, longitude, elevation_m, remarks, established_on, created_by, updated_by)
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9) RETURNING *`,
+            [u.orgId, id, input.point_code, input.latitude, input.longitude,
+              input.elevation_m ?? null, input.remarks ?? null,
+              input.established_on ?? null, u.id])).rows[0];
+          return {
+            ...row,
+            latitude: Number(row.latitude), longitude: Number(row.longitude),
+            elevation_m: num(row.elevation_m),
+            // Returned so the caller can show what looks odd without asking
+            // again. Never a refusal: every one of these is also something a
+            // legitimate programme produces.
+            warnings: checkGcp(input.latitude, input.longitude),
+          };
+        });
+      reply.code(201);
+      return { data };
+    });
+
+  app.patch('/api/v1/survey/gcps/:id', { preHandler: guard('survey.manage') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(gcpPatchSchema, req.body);
+      return {
+        data: await mutate(pool, req, 'survey.gcp.update', 'survey_village_gcp', async db => {
+          const row = await inOrg(db, 'survey_village_gcps', id, u.orgId, true);
+          if (!row) fail('NOT_FOUND', 'That control point no longer exists.', 404);
+          await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+          version(req, row as { version: number });
+
+          const sets: string[] = [], values: unknown[] = [id];
+          for (const key of ['point_code', 'latitude', 'longitude', 'elevation_m',
+            'remarks', 'established_on'] as const) {
+            if (input[key] !== undefined) { values.push(input[key]); sets.push(`${key} = $${values.length}`); }
+          }
+          if (!sets.length) return row;
+          values.push(u.id);
+          const updated = (await db.query(
+            `UPDATE survey_village_gcps SET ${sets.join(', ')}, version = version + 1,
+               updated_at = now(), updated_by = $${values.length}
+             WHERE id = $1 RETURNING *`, values)).rows[0];
+          return {
+            ...updated,
+            latitude: Number(updated.latitude), longitude: Number(updated.longitude),
+            elevation_m: num(updated.elevation_m),
+            warnings: checkGcp(Number(updated.latitude), Number(updated.longitude)),
+          };
+        }),
+      };
+    });
+
+  app.delete('/api/v1/survey/gcps/:id', { preHandler: guard('survey.manage') },
+    async req => ({
+      data: await mutate(pool, req, 'survey.gcp.delete', 'survey_village_gcp', async db => {
+        const u = actor(req), id = (req.params as { id: string }).id;
+        const row = await inOrg(db, 'survey_village_gcps', id, u.orgId, true);
+        if (!row) fail('NOT_FOUND', 'That control point no longer exists.', 404);
+        await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+        await db.query('DELETE FROM survey_village_gcps WHERE id = $1', [id]);
+        return { id, deleted: true };
+      }),
+    }));
+
+  /**
+   * Every control point on a programme, for the sheet that goes with the
+   * deliverables.
+   *
+   * The department asks for the control list with the final submission, and
+   * building it village by village off a thousand screens is a day nobody
+   * has.
+   */
+  app.get('/api/v1/survey/projects/:id/gcps', { preHandler: guard('survey.read') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      await projectOr404(pool, u.orgId, id, u);
+      const rows = (await pool.query(
+        `SELECT g.*, ou.name AS village_name, ou.code AS village_code,
+                m.name AS mandal_name
+           FROM survey_village_gcps g
+           JOIN survey_villages sv ON sv.id = g.survey_village_id
+           JOIN org_units ou ON ou.id = sv.village_id
+           LEFT JOIN org_units m ON m.id = ou.parent_id
+          WHERE g.org_id = $1 AND sv.survey_project_id = $2
+          ORDER BY m.name, ou.name, g.point_code`,
+        [u.orgId, id])).rows;
+      return {
+        data: rows.map(r => ({
+          ...r,
+          latitude: Number(r.latitude), longitude: Number(r.longitude),
+          elevation_m: num(r.elevation_m),
+          established_on: iso(r.established_on),
+          warnings: checkGcp(Number(r.latitude), Number(r.longitude)),
+        })),
       };
     });
 

@@ -17,7 +17,8 @@ import { STAGE_STATE_LABELS, stageLabel, stateTone } from '@/lib/survey';
 import {
   MILESTONE_PERCENT, MILESTONE_LABELS, BILLING_STATUS_LABELS,
   billingDecisionRequired, stageTracksStaffing, milestoneEarned, milestoneBlockedNote,
-  staffingNote, type BillingStatus,
+  staffingNote, checkGcp, GCP_WARNING_NOTES, formatCoordinate,
+  type BillingStatus, type GcpWarning,
 } from '@silverline/shared';
 import { ExportMenu } from '@/components/ui/ExportMenu';
 
@@ -98,6 +99,7 @@ export function VillageDetail({
           <Billing village={village} pipeline={pipeline} canManage={canManage} />
         </div>
         <CertifiedTotals village={village} canCertify={canCertify} />
+        <ControlPoints village={village} canManage={canManage} />
       </div>
       <DailySheet village={village} />
     </div>
@@ -1717,6 +1719,236 @@ function DailySheet({ village }: { village: Row }) {
             {staffingNote(t as any)}
           </p>
         </>
+      ) : null}
+    </section>
+  );
+}
+
+
+/* ----------------------------------------- ground control points (§069) */
+
+/**
+ * The control points this village was surveyed from.
+ *
+ * A GCP is the fixed, known point the DGPS base sits over, and every
+ * measurement in the village is relative to it. Establishing one is a
+ * one-time job done before ground truthing starts — usually one point, and
+ * two or three on a large or awkward village.
+ *
+ * The coordinates lived in the surveyor's notebook and, with luck, a
+ * WhatsApp message. Re-establishing a control point because nobody wrote it
+ * down is a day's work with a base station.
+ */
+function ControlPoints({ village, canManage }: { village: Row; canManage: boolean }) {
+  const villageId = String(village.id);
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [adding, setAdding] = React.useState(false);
+  const blank = {
+    point_code: '', latitude: '', longitude: '', elevation_m: '',
+    established_on: '', remarks: '',
+  };
+  const [form, setForm] = React.useState(blank);
+
+  const points = useQuery({
+    queryKey: ['survey-gcps', villageId],
+    queryFn: async () => ((await apiRequestRaw(
+      `/api/v1/survey/villages/${villageId}/gcps`)).body as { data: Row[] }).data,
+  });
+
+  const refresh = () => qc.invalidateQueries({ queryKey: ['survey-gcps', villageId] });
+
+  const save = useMutation({
+    mutationFn: async () => apiRequest(`/api/v1/survey/villages/${villageId}/gcps`, {
+      method: 'POST',
+      body: {
+        point_code: form.point_code.trim(),
+        latitude: Number(form.latitude),
+        longitude: Number(form.longitude),
+        elevation_m: form.elevation_m === '' ? undefined : Number(form.elevation_m),
+        established_on: form.established_on || undefined,
+        remarks: form.remarks.trim() || undefined,
+      },
+    }),
+    onError: (e) => toast.error('The control point was not recorded', messageOf(e)),
+    onSuccess: () => {
+      toast.success('Control point recorded',
+        'It travels with the village and goes out with the deliverables.');
+      setForm(blank); setAdding(false); refresh();
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: async (id: string) =>
+      apiRequest(`/api/v1/survey/gcps/${id}`, { method: 'DELETE' }),
+    onError: (e) => toast.error('It was not removed', messageOf(e)),
+    onSuccess: () => { toast.success('Control point removed'); refresh(); },
+  });
+
+  const rows: Row[] = points.data ?? [];
+
+  /*
+   * What looks wrong about what is being typed, before it is saved.
+   *
+   * The same check the server runs. Warned rather than blocked: every one of
+   * these is also something a legitimate programme produces, and refusing a
+   * number somebody is looking straight at is worse than saying what looks
+   * odd.
+   */
+  const typedLat = Number(form.latitude);
+  const typedLng = Number(form.longitude);
+  const liveWarnings: GcpWarning[] =
+    form.latitude !== '' && form.longitude !== ''
+      && Number.isFinite(typedLat) && Number.isFinite(typedLng)
+      ? checkGcp(typedLat, typedLng) : [];
+
+  return (
+    <section className="rounded-lg border border-border bg-surface-sunken p-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-text-subtle">
+          Ground control points
+        </h4>
+        {canManage ? (
+          <Button type="button" variant="ghost" onClick={() => setAdding((a) => !a)}>
+            {adding ? 'Cancel' : 'Record a point'}
+          </Button>
+        ) : null}
+      </div>
+
+      <p className="mt-1 text-2xs text-text-subtle">
+        The fixed point the base was set over. Recorded once, before ground truthing —
+        usually one, sometimes more on a large village.
+      </p>
+
+      {points.isLoading ? <Skeleton className="mt-2 h-16" /> : null}
+      {points.isError ? (
+        <ErrorCard error={points.error} onRetry={() => points.refetch()} />
+      ) : null}
+
+      {adding ? (
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <label className="text-2xs text-text-subtle">
+            Point name
+            <input className={field} value={form.point_code} placeholder="GCP-1"
+              onChange={(e) => setForm({ ...form, point_code: e.target.value })} />
+          </label>
+          <label className="text-2xs text-text-subtle">
+            Established on
+            <input type="date" className={field} value={form.established_on}
+              max={businessToday()}
+              onChange={(e) => setForm({ ...form, established_on: e.target.value })} />
+          </label>
+          <label className="text-2xs text-text-subtle">
+            Latitude (degrees)
+            <input className={field} inputMode="decimal" value={form.latitude}
+              placeholder="17.6868231"
+              onChange={(e) => setForm({ ...form, latitude: e.target.value })} />
+          </label>
+          <label className="text-2xs text-text-subtle">
+            Longitude (degrees)
+            <input className={field} inputMode="decimal" value={form.longitude}
+              placeholder="83.2184815"
+              onChange={(e) => setForm({ ...form, longitude: e.target.value })} />
+          </label>
+          <label className="text-2xs text-text-subtle">
+            Elevation (m)
+            <input className={field} inputMode="decimal" value={form.elevation_m}
+              placeholder="45.212"
+              onChange={(e) => setForm({ ...form, elevation_m: e.target.value })} />
+            <span className="mt-0.5 block">Optional — a horizontal point is still a point.</span>
+          </label>
+          <label className="text-2xs text-text-subtle">
+            Remarks
+            <input className={field} value={form.remarks}
+              placeholder="Tied to BM 42; 45 min base observation, PDOP 1.4"
+              onChange={(e) => setForm({ ...form, remarks: e.target.value })} />
+            <span className="mt-0.5 block">
+              How it was fixed. This is the part somebody needs two years later.
+            </span>
+          </label>
+
+          {liveWarnings.length > 0 ? (
+            <div className="sm:col-span-2">
+              <Notice tone="warning" title="Check these coordinates">
+                <ul className="space-y-0.5">
+                  {liveWarnings.map((wn) => <li key={wn}>{GCP_WARNING_NOTES[wn]}</li>)}
+                </ul>
+                <p className="mt-1">You can still save them — this is a check, not a refusal.</p>
+              </Notice>
+            </div>
+          ) : null}
+
+          <div className="sm:col-span-2">
+            <Button type="button" variant="primary" loading={save.isPending}
+              disabled={!form.point_code.trim() || form.latitude === '' || form.longitude === ''}
+              onClick={() => save.mutate()}>
+              Record point
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {rows.length === 0 && !points.isLoading ? (
+        <p className="mt-2 text-xs text-text-muted">
+          No control point recorded for this village yet.
+        </p>
+      ) : null}
+
+      {rows.length > 0 ? (
+        <TableWrap className="mt-2">
+          <Table>
+            <THead>
+              <TR>
+                <TH>Point</TH>
+                <TH className="text-right">Latitude</TH>
+                <TH className="text-right">Longitude</TH>
+                <TH className="text-right">Elevation</TH>
+                <TH>How it was fixed</TH>
+                {canManage ? <TH /> : null}
+              </TR>
+            </THead>
+            <TBody>
+              {rows.map((g) => (
+                <TR key={String(g.id)}>
+                  <TD>
+                    <div className="font-medium text-text">{String(g.point_code)}</div>
+                    {g.established_on ? (
+                      <div className="text-2xs text-text-subtle">
+                        {day(String(g.established_on))}
+                      </div>
+                    ) : null}
+                  </TD>
+                  <TD className="text-right font-mono text-2xs tabular-nums">
+                    {formatCoordinate(Number(g.latitude), 'lat')}
+                  </TD>
+                  <TD className="text-right font-mono text-2xs tabular-nums">
+                    {formatCoordinate(Number(g.longitude), 'lng')}
+                  </TD>
+                  <TD className="text-right tabular-nums">
+                    {g.elevation_m === null || g.elevation_m === undefined
+                      ? <span className="text-text-subtle">—</span>
+                      : `${Number(g.elevation_m)} m`}
+                  </TD>
+                  <TD className="text-2xs text-text-muted">
+                    {g.remarks ? String(g.remarks) : '—'}
+                    {((g.warnings as GcpWarning[]) ?? []).map((wn) => (
+                      <div key={wn} className="text-warning">{GCP_WARNING_NOTES[wn]}</div>
+                    ))}
+                    {g.recorded_by_name ? (
+                      <div className="text-text-subtle">by {String(g.recorded_by_name)}</div>
+                    ) : null}
+                  </TD>
+                  {canManage ? (
+                    <TD className="text-right">
+                      <Button type="button" variant="ghost"
+                        onClick={() => remove.mutate(String(g.id))}>Remove</Button>
+                    </TD>
+                  ) : null}
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </TableWrap>
       ) : null}
     </section>
   );

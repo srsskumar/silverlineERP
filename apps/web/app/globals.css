@@ -218,3 +218,133 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* ---------------------------------------------------------------- printing */
+
+/*
+ * Printing a report, not the page it is on.
+ *
+ * "Print / PDF" used to call window.print() on the whole application — the
+ * navigation, the filters, the tab strip, the buttons — and the PDF that came
+ * out was a screenshot of software rather than a report anybody could send to
+ * a district office.
+ *
+ * So a report renders itself into #silverline-print-root, and print hides
+ * everything else on the page. What reaches the paper is the masthead and the
+ * table, and nothing at all of the app.
+ */
+#silverline-print-root {
+  display: none;
+}
+
+@media print {
+  /* The app, gone. Only the report is left standing. */
+  body > *:not(#silverline-print-root) {
+    display: none !important;
+  }
+
+  #silverline-print-root {
+    display: block !important;
+    /* Black on white, whatever the viewer's theme is. A dark-mode PDF is a
+       cartridge nobody thanks you for. */
+    color: #000;
+    background: #fff;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 9pt;
+    line-height: 1.35;
+  }
+
+  html, body {
+    background: #fff !important;
+    margin: 0;
+    padding: 0;
+  }
+
+  /*
+   * The logo, in the top right of every sheet.
+   *
+   * A fixed-position element is painted on each printed page, which is the
+   * standard way to get a running header without paged-media support. The
+   * page margin below leaves room for it.
+   */
+  #silverline-print-logo {
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 12mm;
+    width: auto;
+  }
+
+  #silverline-print-root table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  /* Repeated on every page by the browser: a table continuing onto page four
+     with no column headings is a table nobody can read. */
+  #silverline-print-root thead {
+    display: table-header-group;
+  }
+
+  #silverline-print-root th,
+  #silverline-print-root td {
+    border: 0.4pt solid #999;
+    padding: 1.4mm 1.8mm;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  #silverline-print-root th {
+    background: #eee;
+    font-weight: 600;
+    /* Printers drop backgrounds by default; a header row that looks like a
+       data row defeats the point of having one. */
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  #silverline-print-root td.num,
+  #silverline-print-root th.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* A row split across a page break is read as two half-rows. */
+  #silverline-print-root tr {
+    break-inside: avoid;
+  }
+
+  #silverline-print-root .masthead {
+    border-bottom: 1pt solid #000;
+    padding-bottom: 2mm;
+    margin-bottom: 3mm;
+  }
+
+  #silverline-print-root .masthead h1 {
+    font-size: 13pt;
+    font-weight: 700;
+    margin: 0 0 1mm;
+  }
+
+  #silverline-print-root .masthead dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0 3mm;
+    margin: 0;
+    font-size: 8pt;
+  }
+
+  #silverline-print-root .masthead dt {
+    font-weight: 600;
+  }
+
+  #silverline-print-root .masthead dd {
+    margin: 0;
+  }
+
+  #silverline-print-root .footnote {
+    margin-top: 3mm;
+    font-size: 7.5pt;
+    color: #444;
+  }
+}

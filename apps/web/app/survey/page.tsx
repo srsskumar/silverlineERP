@@ -20,7 +20,7 @@ import { hasPermission } from '@/lib/permissions';
 import { Notice, Section, Stat } from '@/components/finance/Primitives';
 import { GLOSSARY } from '@/components/ui/InfoHint';
 import { day, businessToday } from '@/lib/finance';
-import { staffingNote } from '@silverline/shared';
+import { staffingNote, formatCoordinate, GCP_WARNING_NOTES } from '@silverline/shared';
 import {
   GRAINS, LEVEL_LABELS, REPORT_LEVELS, STAGE_STATE_LABELS, TALLY_LABELS, TALLY_ORDER,
   VILLAGE_STATE_LABELS, acres, barWidth, count, financialYearToDate, groupMeasures,
@@ -37,7 +37,7 @@ type Row = Record<string, any>;
 
 /** One decimal, which is as fine as an acre figure is ever read on a chart. */
 const round1 = (n: number) => Math.round(n * 10) / 10;
-type Tab = 'progress' | 'report' | 'villages' | 'people' | 'deployment' | 'bottlenecks' | 'timeline' | 'summary';
+type Tab = 'progress' | 'report' | 'villages' | 'people' | 'deployment' | 'bottlenecks' | 'timeline' | 'summary' | 'control';
 
 /**
  * Land survey progress (§59).
@@ -175,7 +175,7 @@ export default function SurveyPage() {
             * instead.
             */}
           <div className="-mx-1 flex max-w-full gap-1 overflow-x-auto px-1 pb-1">
-            {(['progress', 'report', 'villages', 'people', 'deployment', 'bottlenecks', 'timeline', 'summary'] as const).map((t) => (
+            {(['progress', 'report', 'villages', 'people', 'deployment', 'bottlenecks', 'timeline', 'summary', 'control'] as const).map((t) => (
               <Button key={t} type="button" variant={tab === t ? 'secondary' : 'ghost'}
                 onClick={() => setTab(t)}>
                 {t === 'progress' ? 'Progress'
@@ -184,7 +184,8 @@ export default function SurveyPage() {
                       : t === 'people' ? 'Crew & rovers'
                         : t === 'deployment' ? 'Deployment'
                         : t === 'bottlenecks' ? 'Bottlenecks'
-                          : t === 'timeline' ? 'Trend' : 'Summary'}
+                          : t === 'timeline' ? 'Trend'
+                            : t === 'control' ? 'Control points' : 'Summary'}
               </Button>
             ))}
           </div>
@@ -283,6 +284,12 @@ export default function SurveyPage() {
           <Timeline projectId={projectId} range={range} grain={grain} setGrain={setGrain}
             projectName={String((projects.data ?? []).find(
               (p) => String(p.id) === projectId)?.name ?? '')} />
+        ) : null}
+        {projectId && tab === 'control' ? (
+          <ControlList projectId={projectId}
+            projectName={String((projects.data ?? []).find(
+              (p) => String(p.id) === projectId)?.name ?? '')}
+            onOpenVillage={(id) => { setOpenVillage(id); setTab('villages'); }} />
         ) : null}
         {projectId && tab === 'summary' ? (
           <Summary projectId={projectId}
@@ -2872,6 +2879,177 @@ function Timeline({
           </TableWrap>
         </>
       )}
+    </div>
+  );
+}
+
+/* ----------------------------------------- ground control points (§069) */
+
+/**
+ * Every control point on the programme, in one list.
+ *
+ * The department asks for this with the final submission, and building it
+ * village by village off a thousand screens is a day nobody has. It is also
+ * the first thing anybody wants when a boundary is disputed two years later.
+ */
+function ControlList({
+  projectId, projectName, onOpenVillage,
+}: {
+  projectId: string; projectName: string;
+  onOpenVillage?: (villageId: string) => void;
+}) {
+  const [find, setFind] = React.useState('');
+  const [onlyOdd, setOnlyOdd] = React.useState(false);
+
+  const q = useQuery({
+    queryKey: ['survey-gcps', 'project', projectId],
+    queryFn: async () => ((await apiRequestRaw(
+      `/api/v1/survey/projects/${projectId}/gcps`)).body as { data: Row[] }).data,
+  });
+
+  if (q.isLoading) return <Skeleton className="h-64" />;
+  if (q.isError) return <ErrorCard error={q.error} onRetry={() => q.refetch()} />;
+
+  const all: Row[] = q.data ?? [];
+  const needle = find.trim().toLowerCase();
+  const rows = all.filter((g) => {
+    if (onlyOdd && ((g.warnings as string[]) ?? []).length === 0) return false;
+    if (!needle) return true;
+    return [g.point_code, g.village_name, g.mandal_name, g.remarks]
+      .some((f) => String(f ?? '').toLowerCase().includes(needle));
+  });
+  const flagged = all.filter((g) => ((g.warnings as string[]) ?? []).length > 0).length;
+
+  const sheet = {
+    name: 'Control points',
+    title: {
+      heading: 'Ground control points',
+      project: projectName,
+      period: 'As recorded',
+      filters: [
+        onlyOdd ? 'only points with a warning' : null,
+        needle ? `matching \u201c${find.trim()}\u201d` : null,
+      ].filter(Boolean).join(' \u00b7 '),
+      extra: [['Points listed', `${rows.length} of ${all.length}`]] as Array<[string, string]>,
+    },
+    columns: [
+      { header: 'Mandal', width: 20 },
+      { header: 'Village', width: 26 },
+      { header: 'Village code', width: 16 },
+      { header: 'Point', width: 14 },
+      { header: 'Latitude', width: 16 },
+      { header: 'Longitude', width: 16 },
+      { header: 'Elevation (m)', width: 14 },
+      { header: 'Established on', width: 16 },
+      { header: 'How it was fixed', width: 50 },
+    ],
+    rows: rows.map((g) => [
+      cellText(g.mandal_name), cellText(g.village_name), cellText(g.village_code),
+      cellText(g.point_code),
+      // Written in full, not rounded: a control point that loses its last
+      // decimals is not a control point.
+      String(Number(g.latitude).toFixed(7)),
+      String(Number(g.longitude).toFixed(7)),
+      cellNum(g.elevation_m), cellText(g.established_on), cellText(g.remarks),
+    ]),
+  };
+
+  if (all.length === 0) {
+    return (
+      <EmptyState
+        title="No control points recorded yet"
+        description="Open a village and record the point the base was set over. It is a one-time job, done before ground truthing starts."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <Toolbar>
+        <input value={find} onChange={(e) => setFind(e.target.value)}
+          placeholder="Find a point, village or mandal…"
+          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text" />
+        {flagged > 0 ? (
+          <label className="flex items-center gap-1.5 text-2xs text-text-muted">
+            <input type="checkbox" checked={onlyOdd}
+              onChange={(e) => setOnlyOdd(e.target.checked)} />
+            Only the {flagged} that look wrong
+          </label>
+        ) : null}
+        {(find || onlyOdd) ? (
+          <Button type="button" variant="ghost"
+            onClick={() => { setFind(''); setOnlyOdd(false); }}>Clear</Button>
+        ) : null}
+        <span className="ml-auto text-2xs text-text-subtle">
+          {rows.length} of {all.length} points
+        </span>
+        <ExportMenu sheet={sheet} fileName="survey-control-points" />
+      </Toolbar>
+
+      {flagged > 0 && !onlyOdd ? (
+        <Notice tone="warning"
+          title={`${flagged} point${flagged === 1 ? '' : 's'} with coordinates that look wrong`}>
+          {/* Warned, never refused: every one of these is also something a
+              legitimate programme produces. */}
+          Swapped latitude and longitude is the usual cause. Tick the box above to see
+          only those, and open the village to correct them.
+        </Notice>
+      ) : null}
+
+      <TableWrap>
+        <Table>
+          <THead>
+            <TR>
+              <TH>Mandal</TH>
+              <TH>Village</TH>
+              <TH>Point</TH>
+              <TH className="text-right">Latitude</TH>
+              <TH className="text-right">Longitude</TH>
+              <TH className="text-right">Elevation</TH>
+              <TH>How it was fixed</TH>
+            </TR>
+          </THead>
+          <TBody>
+            {rows.map((g) => (
+              <TR key={String(g.id)}>
+                <TD className="text-xs text-text-muted">{g.mandal_name ?? '—'}</TD>
+                <TD>
+                  {onOpenVillage ? (
+                    <button type="button"
+                      onClick={() => onOpenVillage(String(g.survey_village_id))}
+                      className="text-left font-medium text-text underline-offset-2 hover:text-primary hover:underline"
+                      title="Open this village">
+                      {String(g.village_name)}
+                    </button>
+                  ) : (
+                    <span className="font-medium text-text">{String(g.village_name)}</span>
+                  )}
+                </TD>
+                <TD className="text-text">{String(g.point_code)}</TD>
+                <TD className="text-right font-mono text-2xs tabular-nums">
+                  {formatCoordinate(Number(g.latitude), 'lat')}
+                </TD>
+                <TD className="text-right font-mono text-2xs tabular-nums">
+                  {formatCoordinate(Number(g.longitude), 'lng')}
+                </TD>
+                <TD className="text-right tabular-nums">
+                  {g.elevation_m === null || g.elevation_m === undefined
+                    ? <span className="text-text-subtle">—</span>
+                    : `${Number(g.elevation_m)} m`}
+                </TD>
+                <TD className="text-2xs text-text-muted">
+                  {g.remarks ? String(g.remarks) : '—'}
+                  {((g.warnings as string[]) ?? []).map((wn) => (
+                    <div key={wn} className="text-warning">
+                      {GCP_WARNING_NOTES[wn as keyof typeof GCP_WARNING_NOTES]}
+                    </div>
+                  ))}
+                </TD>
+              </TR>
+            ))}
+          </TBody>
+        </Table>
+      </TableWrap>
     </div>
   );
 }

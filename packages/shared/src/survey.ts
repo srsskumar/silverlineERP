@@ -1994,3 +1994,89 @@ export function certifiedDifference(f: CertifiedFigure): number | null {
   if (f.certified === null) return null;
   return Math.round((f.certified - f.recorded) * 10000) / 10000;
 }
+
+/* ------------------------------------------- ground control points (§069) */
+
+export const gcpSchema = z.object({
+  point_code: z.string().trim().min(1, 'Give the point a name, such as GCP-1').max(64),
+  latitude: z.number().finite()
+    .min(-90, 'A latitude runs from -90 to 90')
+    .max(90, 'A latitude runs from -90 to 90'),
+  longitude: z.number().finite()
+    .min(-180, 'A longitude runs from -180 to 180')
+    .max(180, 'A longitude runs from -180 to 180'),
+  elevation_m: z.number().finite()
+    // Below the Dead Sea or above Everest is a typed decimal point, not a
+    // control point.
+    .min(-500, 'That is below any land on earth — check the figure')
+    .max(9000, 'That is above Everest — check the figure')
+    .nullable().optional(),
+  remarks: z.string().max(2000).nullable().optional(),
+  established_on: pastDate.nullable().optional(),
+}).strict();
+
+export const gcpPatchSchema = gcpSchema.partial().strict()
+  .refine(v => Object.keys(v).length > 0, 'Change at least one field');
+
+/**
+ * Roughly where India is, in degrees.
+ *
+ * Used only to warn, never to refuse: the bounds are approximate and a
+ * programme run elsewhere is not this software's business to prevent.
+ */
+const INDIA = { latMin: 6, latMax: 38, lngMin: 68, lngMax: 98 };
+
+export type GcpWarning = 'SWAPPED' | 'OUTSIDE_INDIA' | 'LOW_PRECISION';
+
+export const GCP_WARNING_NOTES: Record<GcpWarning, string> = {
+  SWAPPED:
+    'Those look swapped — the latitude is in the range longitudes take in India, and '
+    + 'the longitude is in the range latitudes take. Check which column is which.',
+  OUTSIDE_INDIA:
+    'That point is outside India. Check the signs and the decimal point.',
+  LOW_PRECISION:
+    'Only whole or near-whole degrees were entered. A degree is about 110 km, so this '
+    + 'point is not fixed to anything useful — check the figures were copied in full.',
+};
+
+/**
+ * What looks wrong about a pair of coordinates.
+ *
+ * Warnings rather than refusals. Every one of these is a real mistake people
+ * make copying a fix off a controller, and every one of them is also
+ * something a legitimate programme could produce — so the answer is to say
+ * what looks odd and let a person decide, not to refuse a number somebody is
+ * looking straight at.
+ *
+ * Swapped first, because it is the common one and the other two are what it
+ * looks like from the outside: a swapped Indian point is also outside India.
+ */
+export function checkGcp(lat: number, lng: number): GcpWarning[] {
+  const out: GcpWarning[] = [];
+  const inIndia = (la: number, ln: number) =>
+    la >= INDIA.latMin && la <= INDIA.latMax && ln >= INDIA.lngMin && ln <= INDIA.lngMax;
+
+  if (!inIndia(lat, lng) && inIndia(lng, lat)) {
+    out.push('SWAPPED');
+  } else if (!inIndia(lat, lng)) {
+    out.push('OUTSIDE_INDIA');
+  }
+
+  // A degree is about 110 km. A pair given to fewer than three decimals does
+  // not locate a pillar, it locates a district.
+  const decimals = (n: number) => {
+    const i = String(n).indexOf('.');
+    return i === -1 ? 0 : String(n).length - i - 1;
+  };
+  if (decimals(lat) < 3 && decimals(lng) < 3) out.push('LOW_PRECISION');
+
+  return out;
+}
+
+/** A coordinate as it is written on a survey record. */
+export function formatCoordinate(value: number, axis: 'lat' | 'lng'): string {
+  const hemisphere = axis === 'lat'
+    ? (value >= 0 ? 'N' : 'S')
+    : (value >= 0 ? 'E' : 'W');
+  return `${Math.abs(value).toFixed(6)}° ${hemisphere}`;
+}
