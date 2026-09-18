@@ -2069,11 +2069,44 @@ export const gcpPatchSchema = z.object({
   established_on: pastDate.nullable().optional(),
 }).strict()
   .refine(v => Object.keys(v).length > 0, 'Change at least one field')
-  .refine(
-    v => (v.easting_m === undefined) === (v.northing_m === undefined)
-      || v.easting_m === null || v.northing_m === null,
-    { message: 'A grid reference needs both a northing and an easting', path: ['northing_m'] },
-  );
+  .superRefine((v, ctx) => {
+    /*
+     * The same both-or-neither rule the create path enforces.
+     *
+     * It was missing here, so a patch that set a northing and an easting
+     * without a zone got past the schema, reached the database, and came
+     * back as "A referenced record or value is invalid" — a check constraint
+     * talking to a person. The rule has to live where the message is worth
+     * reading.
+     */
+    const setsE = v.easting_m !== undefined && v.easting_m !== null;
+    const setsN = v.northing_m !== undefined && v.northing_m !== null;
+    const clearsE = v.easting_m === null;
+    const clearsN = v.northing_m === null;
+
+    if (setsE !== setsN && !(clearsE && clearsN)) {
+      ctx.addIssue({
+        code: 'custom', path: [setsE ? 'northing_m' : 'easting_m'],
+        message: 'A grid reference needs both a northing and an easting',
+      });
+    }
+    // Setting a grid reference needs a zone, unless the row already carries
+    // one — which the route checks, because only it can see the row.
+    if ((setsE || setsN) && v.grid_zone !== undefined && !v.grid_zone?.trim()) {
+      ctx.addIssue({
+        code: 'custom', path: ['grid_zone'],
+        message: 'Name the grid, such as 44N — without it these are two numbers, not a position',
+      });
+    }
+    // Clearing the zone while leaving a reference standing would do the same
+    // damage from the other direction.
+    if (v.grid_zone === null && !(clearsE && clearsN)) {
+      ctx.addIssue({
+        code: 'custom', path: ['grid_zone'],
+        message: 'Clear the northing and easting too, or keep a grid zone against them',
+      });
+    }
+  });
 
 /**
  * Roughly where India is, in degrees.

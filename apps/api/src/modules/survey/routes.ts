@@ -52,6 +52,37 @@ export async function registerSurveyRoutes(
   const iso = (v: unknown) =>
     v instanceof Date ? businessDay(v) : v ? String(v).slice(0, 10) : null;
   const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+
+  /**
+   * A date out of the query string, or a refusal somebody can act on.
+   *
+   * Every report here takes `from`, `to` or `as_of` and hands it straight to
+   * Postgres as `$n::date`. A value that is not a date — a typo, a stale
+   * bookmark, a spreadsheet pasting "N/A" — reaches the database, which
+   * refuses it with an error nobody upstream is expecting, and the caller
+   * gets a 500 and a stack trace where what they need is one sentence about
+   * one field.
+   *
+   * Thirteen endpoints did this. The shape of the mistake was identical in
+   * all of them, so the fix is one helper rather than thirteen guards.
+   */
+  function dateParam(
+    req: FastifyRequest, value: unknown, name: string, fallback: string,
+  ): string {
+    if (value === undefined || value === null || value === '') return fallback;
+    const raw = String(value);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      fail('VALIDATION_ERROR',
+        `${name} must be a date written as YYYY-MM-DD. "${raw.slice(0, 40)}" is not one.`, 422);
+    }
+    // The shape is not the same thing as a date: 2026-13-01 and 2026-02-30
+    // both match the pattern and both are refused by Postgres.
+    const d = new Date(`${raw}T00:00:00Z`);
+    if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== raw) {
+      fail('VALIDATION_ERROR', `${name} is not a real date: "${raw.slice(0, 40)}".`, 422);
+    }
+    return raw;
+  }
   const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
   /**
@@ -804,7 +835,7 @@ export async function registerSurveyRoutes(
     await projectOr404(pool, u.orgId, id, u);
     const [m, codes, pos] = await Promise.all([
       measures(pool, u.orgId), stageCodes(pool, u.orgId),
-      positions(pool, u.orgId, id, { asOf: String(q.as_of ?? today()) }),
+      positions(pool, u.orgId, id, { asOf: dateParam(req, q.as_of, 'as_of', today()) }),
     ]);
 
     return {
@@ -1976,8 +2007,8 @@ export async function registerSurveyRoutes(
       const { q } = page(req);
       await projectOr404(pool, u.orgId, id, u);
 
-      const to = String(q.to ?? today());
-      const from = String(q.from ?? to);
+      const to = dateParam(req, q.to, 'to', today());
+      const from = dateParam(req, q.from, 'from', to);
       if (from > to) fail('VALIDATION_ERROR', 'The window starts after it ends', 422);
       const span = Math.round(
         (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
@@ -2304,8 +2335,8 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       const village = await villageOr404(pool, u.orgId, id, u);
-      const to = String(q.to ?? today());
-      const from = String(q.from ?? '1900-01-01');
+      const to = dateParam(req, q.to, 'to', today());
+      const from = dateParam(req, q.from, 'from', '1900-01-01');
 
       const rows = (await pool.query(
         `SELECT e.id, e.entry_date, e.teams_deployed,
@@ -2484,6 +2515,25 @@ export async function registerSurveyRoutes(
           if (!row) fail('NOT_FOUND', 'That control point no longer exists.', 404);
           await villageOr404(db, u.orgId, String(row.survey_village_id), u);
           version(req, row as { version: number });
+
+          /*
+           * A grid reference needs a zone, counting the one already on the row.
+           *
+           * The schema can only see the patch; only here can we tell whether
+           * setting a northing and easting leaves the point with a zone or
+           * without one. Checked before the write so the caller gets a
+           * sentence about a field rather than the database's opinion of a
+           * check constraint.
+           */
+          const nextEasting = input.easting_m !== undefined ? input.easting_m : row.easting_m;
+          const nextZone = input.grid_zone !== undefined
+            ? input.grid_zone : row.grid_zone;
+          if (nextEasting !== null && nextEasting !== undefined
+            && !String(nextZone ?? '').trim()) {
+            fail('VALIDATION_ERROR',
+              'Name the grid these are on, such as 44N — without it a northing and '
+              + 'easting are two numbers, not a position.', 422);
+          }
 
           const sets: string[] = [], values: unknown[] = [id];
           for (const key of ['point_code', 'latitude', 'longitude', 'elevation_m',
@@ -3286,8 +3336,8 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       await projectOr404(pool, u.orgId, id, u);
-      const to = String(q.to ?? today());
-      const from = String(q.from ?? '1900-01-01');
+      const to = dateParam(req, q.to, 'to', today());
+      const from = dateParam(req, q.from, 'from', '1900-01-01');
 
       const rows = (await pool.query(
         `SELECT e.id AS employee_id, e.emp_no,
@@ -3341,8 +3391,8 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       await projectOr404(pool, u.orgId, id, u);
-      const to = String(q.to ?? today());
-      const from = String(q.from ?? '1900-01-01');
+      const to = dateParam(req, q.to, 'to', today());
+      const from = dateParam(req, q.from, 'from', '1900-01-01');
 
       const rows = (await pool.query(
         `SELECT a.id AS asset_id, a.asset_code, a.name AS asset_name, a.serial_number,
@@ -3413,8 +3463,8 @@ export async function registerSurveyRoutes(
       const { id, assetId } = req.params as { id: string; assetId: string };
       const { q } = page(req);
       await projectOr404(pool, u.orgId, id, u);
-      const to = String(q.to ?? today());
-      const from = String(q.from ?? '1900-01-01');
+      const to = dateParam(req, q.to, 'to', today());
+      const from = dateParam(req, q.from, 'from', '1900-01-01');
 
       const rows = (await pool.query(
         `SELECT se.entry_date, se.survey_village_id, ou.name AS village_name,
@@ -3603,8 +3653,8 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       await projectOr404(pool, u.orgId, id, u);
-      const from = String(q.from ?? today());
-      const to = String(q.to ?? from);
+      const from = dateParam(req, q.from, 'from', today());
+      const to = dateParam(req, q.to, 'to', from);
 
       const rows = (await pool.query(
         `WITH punches AS (
@@ -3665,7 +3715,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       const programme = await projectOr404(pool, u.orgId, id, u);
-      const asOf = String(q.as_of ?? today());
+      const asOf = dateParam(req, q.as_of, 'as_of', today());
 
       const [pipeline, pos] = await Promise.all([
         stagePipeline(pool, u.orgId), positions(pool, u.orgId, id, { asOf }),
@@ -3740,7 +3790,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       const programme = await projectOr404(pool, u.orgId, id, u);
-      const asOf = String(q.as_of ?? today());
+      const asOf = dateParam(req, q.as_of, 'as_of', today());
 
       const [m, codes, pos] = await Promise.all([
         measures(pool, u.orgId), stageCodes(pool, u.orgId),
@@ -3827,8 +3877,8 @@ export async function registerSurveyRoutes(
 
       const level = (REPORT_LEVELS as readonly string[]).includes(String(q.level))
         ? String(q.level) as ReportLevel : 'mandal';
-      const asOf = String(q.to ?? q.as_of ?? today());
-      const from = q.from ? String(q.from) : undefined;
+      const asOf = dateParam(req, q.to ?? q.as_of, q.to ? 'to' : 'as_of', today());
+      const from = q.from ? dateParam(req, q.from, 'from', today()) : undefined;
 
       const [m, codes, all, pipeline] = await Promise.all([
         measures(pool, u.orgId), stageCodes(pool, u.orgId),
@@ -4078,7 +4128,7 @@ export async function registerSurveyRoutes(
 
       const grain = (PERIOD_GRAINS as readonly string[]).includes(String(q.grain))
         ? String(q.grain) as PeriodGrain : 'DAY';
-      const asOf = String(q.as_of ?? today());
+      const asOf = dateParam(req, q.as_of, 'as_of', today());
 
       /*
        * A range somebody chose, rather than a calendar period.
@@ -4263,8 +4313,8 @@ export async function registerSurveyRoutes(
       const grain = (['DAY', 'WEEK', 'MONTH', 'YEAR'] as const).includes(String(q.grain) as PeriodGrain)
         ? String(q.grain) as PeriodGrain : 'MONTH';
       const fy = financialYearRange(today());
-      const from = String(q.from ?? fy.from);
-      const to = String(q.to ?? today());
+      const from = dateParam(req, q.from, 'from', fy.from);
+      const to = dateParam(req, q.to, 'to', today());
 
       const buckets = periodBuckets(from, to, grain);
       if (buckets.length > 400) {

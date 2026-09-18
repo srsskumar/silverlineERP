@@ -24,6 +24,8 @@
     "catalogue:json": "node scripts/catalogue-coverage.mjs --json"
   },
   "devDependencies": {
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
     "turbo": "^2.5.4",
     "typescript": "^5.6.3"
   },

@@ -267,3 +267,94 @@ describe("grid coordinates beside the geographic ones (§070)", () => {
     expect(g.grid_zone).toBe("44N");
   });
 });
+
+describe("correcting a grid reference says what is wrong with it", () => {
+  it("refuses a grid pair with no zone, in words rather than as a constraint", async () => {
+    /*
+     * The rule lived only on the create path, so a patch got past the schema,
+     * reached the database, and came back as "A referenced record or value is
+     * invalid" — a check constraint talking to a person.
+     */
+    const made = await post(w.admin, `/api/v1/survey/villages/${villageB}/gcps`, {
+      point_code: "GCP-ZONELESS", latitude: 16.5, longitude: 80.6,
+    });
+    const r = await patch({ ...w.admin, "if-match": String(made.data.version) },
+      `/api/v1/survey/gcps/${made.data.id}`,
+      { easting_m: 736412.3, northing_m: 1956043.7 });
+    expect(r.status).toBe(422);
+    expect(r.body.message).toMatch(/name the grid/i);
+    expect(r.body.message).not.toMatch(/referenced record/i);
+  });
+
+  it("accepts a grid pair when the point already carries a zone", async () => {
+    // The schema cannot see the row; only the route can tell whether the
+    // point ends up with a zone against it.
+    const made = await post(w.admin, `/api/v1/survey/villages/${villageB}/gcps`, {
+      point_code: "GCP-HASZONE", latitude: 16.5, longitude: 80.6,
+      easting_m: 1000, northing_m: 2000, grid_zone: "44N",
+    });
+    const r = await patch({ ...w.admin, "if-match": String(made.data.version) },
+      `/api/v1/survey/gcps/${made.data.id}`,
+      { easting_m: 736412.3, northing_m: 1956043.7 });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+  });
+
+  it("refuses clearing the zone while a reference still stands", async () => {
+    const list = await get(w.admin, `/api/v1/survey/villages/${villageB}/gcps`);
+    const g = list.data.find((x: any) => x.point_code === "GCP-HASZONE");
+    const r = await patch({ ...w.admin, "if-match": String(g.version) },
+      `/api/v1/survey/gcps/${g.id}`, { grid_zone: null });
+    expect(r.status).toBe(422);
+  });
+});
+
+describe("a date that is not a date", () => {
+  /*
+   * Thirteen report endpoints handed the query string straight to Postgres as
+   * `$n::date`. A typo, a stale bookmark or a spreadsheet pasting "N/A"
+   * reached the database and the caller got a 500 and a stack trace where
+   * what they needed was one sentence about one field.
+   */
+  const bad = ["rubbish", "2026-13-01", "2026-02-30", "01/02/2026", "N/A", ""];
+
+  it("is refused by every window the survey module reports over", async () => {
+    const urls = (d: string) => [
+      `/api/v1/survey/villages/${villageA}/daily?from=${d}`,
+      `/api/v1/survey/villages/${villageA}/daily?to=${d}`,
+      `/api/v1/survey/projects/${programmeId}/progress?from=${d}`,
+      `/api/v1/survey/projects/${programmeId}/progress?to=${d}`,
+      `/api/v1/survey/projects/${programmeId}/report?as_of=${d}`,
+      `/api/v1/survey/projects/${programmeId}/timeline?from=${d}`,
+      `/api/v1/survey/projects/${programmeId}/rover-productivity?from=${d}`,
+      `/api/v1/survey/projects/${programmeId}/employee-productivity?from=${d}`,
+      `/api/v1/survey/projects/${programmeId}/unfiled?from=${d}`,
+      `/api/v1/survey/projects/${programmeId}/villages?as_of=${d}`,
+    ];
+    for (const d of bad) {
+      if (d === "") continue; // an empty value means "not given", and defaults
+      for (const url of urls(d)) {
+        const r = await get(w.admin, url);
+        expect(r.status, `${url} -> ${r.status}`).toBe(422);
+        expect(String(r.body.message), url).toMatch(/date|YYYY-MM-DD/i);
+      }
+    }
+  }, 60_000);
+
+  it("treats an absent value as absent rather than as a bad one", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/progress?from=`);
+    expect(r.status).toBe(200);
+  });
+
+  it("says which field it is complaining about", async () => {
+    // "A date is invalid" sends somebody hunting through four date pickers.
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/progress?to=rubbish`);
+    expect(r.body.message).toMatch(/\bto\b/);
+  });
+
+  it("still accepts a real date", async () => {
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/progress?from=2026-01-01&to=2026-12-31`);
+    expect(r.status).toBe(200);
+  });
+});

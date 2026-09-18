@@ -2226,9 +2226,18 @@ function Villages({
     staleTime: 300_000,
   });
 
-  if (villages.isLoading) return <Skeleton className="h-64" />;
-  if (villages.isError) return <ErrorCard error={villages.error} onRetry={() => villages.refetch()} />;
-
+  /*
+   * Everything below is derived unconditionally, and the early returns come
+   * after it.
+   *
+   * React counts hooks per render and a component that returns before one of
+   * them has rendered a different number each time — which is exactly what
+   * happened here: the export memo sat below these returns, so the first
+   * render (loading) ran one hook fewer than the second, and the whole tab
+   * died with "rendered more hooks than during the previous render". Reading
+   * from `?? []` while the query is in flight costs nothing and keeps the
+   * hook count fixed.
+   */
   const pipeline: Row[] = progress.data?.pipeline ?? [];
   // The measure list, so the surveyed column knows which measures are acres.
   const measures: Row[] = progress.data?.measures ?? [];
@@ -2271,15 +2280,6 @@ function Villages({
     return [v.village_name, v.mandal_name, v.district_name, v.village_code]
       .some((f) => String(f ?? '').toLowerCase().includes(needle));
   });
-
-  if (all.length === 0) {
-    return (
-      <EmptyState
-        title="No villages in this programme"
-        description="Load the village list from Setup before recording anything against it."
-      />
-    );
-  }
 
   /*
    * A selection is only ever of rows the filter is showing.
@@ -2359,6 +2359,20 @@ function Villages({
             }),
   }), [rows, measures, pipeline, projectName, district, mandal, stage, stageState, billing, filter]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+
+  // Every hook above has now run. These are safe.
+  if (villages.isLoading) return <Skeleton className="h-64" />;
+  if (villages.isError) {
+    return <ErrorCard error={villages.error} onRetry={() => villages.refetch()} />;
+  }
+  if (all.length === 0) {
+    return (
+      <EmptyState
+        title="No villages in this programme"
+        description="Load the village list from Setup before recording anything against it."
+      />
+    );
+  }
 
   return (
     <div className="space-y-3">
