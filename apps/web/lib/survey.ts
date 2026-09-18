@@ -390,3 +390,132 @@ export function periodNote(d: {
     ? `${head} Nothing was recorded in the previous period to compare against.`
     : `${head} That is ${Math.abs(area.changePct)}% ${word} than the previous period.`;
 }
+
+/**
+ * The acres a village has actually been surveyed for, as against its extent.
+ *
+ * The extent is what the revenue record says the village is; the surveyed
+ * figure is what the crews have walked and measured. They differ, sometimes
+ * a lot — that difference is the work remaining, and showing only one of the
+ * two numbers hides it.
+ */
+export function surveyedExtent(
+  village: { done?: Record<string, unknown> | null },
+  measures: Array<{ code: string; basis?: string | null }>,
+): number {
+  const done = village.done ?? {};
+  return measures
+    .filter((m) => String(m.basis) === 'EXTENT')
+    .reduce((total, m) => total + Number(done[m.code] ?? 0), 0);
+}
+
+/**
+ * What a village's stage is, read the way the rest of the module reads it.
+ *
+ * A stage nobody has recorded anything against has not started, which is a
+ * state rather than an absence — the village list filters on it and the
+ * roll-up counts it.
+ */
+export function stageStateOf(
+  village: { stages?: Record<string, string> | null }, code: string,
+): string {
+  return String(village.stages?.[code] ?? 'NOT_STARTED');
+}
+
+/**
+ * The stage state each tally column counts.
+ *
+ * The roll-up names them for a reader — "To start", "Done" — and the village
+ * list filters on the states the records actually hold. One map, so a count
+ * and the list it opens can never disagree about what was counted.
+ */
+export const TALLY_STATES: Record<string, string> = {
+  notStarted: 'NOT_STARTED',
+  inProgress: 'IN_PROGRESS',
+  onHold: 'ON_HOLD',
+  completed: 'COMPLETED',
+};
+
+/* ------------------------------------------------- stepping through periods */
+
+/**
+ * The day that lands you in the period before or after this one.
+ *
+ * The report is fetched for whatever period contains an "as at" date, which
+ * is exact but makes moving to last week a date-picker exercise. Stepping by
+ * a period is what people actually want, and the step has to be big enough to
+ * clear the current period whatever its length: a week back from any day in
+ * a week is in the week before, and 31 days back from any day in a month is
+ * in the month before — but 30 is not, for a 31-day month.
+ */
+export function stepPeriod(
+  asOf: string, grain: 'DAY' | 'WEEK' | 'MONTH', direction: -1 | 1,
+): string {
+  const d = new Date(`${asOf}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return asOf;
+  if (grain === 'DAY') d.setUTCDate(d.getUTCDate() + direction);
+  else if (grain === 'WEEK') d.setUTCDate(d.getUTCDate() + 7 * direction);
+  else {
+    // Stepping by a calendar month, not by 30 days: the 31st going back a
+    // month would otherwise skip February entirely.
+    const day = d.getUTCDate();
+    d.setUTCDate(1);
+    d.setUTCMonth(d.getUTCMonth() + direction);
+    // Clamp to the last day this month has — 31 January back a month is 28
+    // or 29 February, not 2 or 3 March.
+    const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+    d.setUTCDate(Math.min(day, lastDay));
+  }
+  return d.toISOString().slice(0, 10);
+}
+
+/** What each grain's period is called when stepping through them. */
+export const PERIOD_NOUNS: Record<string, string> = {
+  DAY: 'day', WEEK: 'week', MONTH: 'month', YEAR: 'year',
+};
+
+/* ------------------------------------------------ billing milestones (§066) */
+
+/** What each answer in the billing picker is asking for. */
+export const BILLING_FILTERS = [
+  { value: '', label: 'Any billing state' },
+  { value: 'NONE', label: 'Nothing submitted' },
+  { value: 'ANY', label: 'Something submitted' },
+  { value: 'DUE_1', label: 'First milestone due' },
+  { value: 'HAS_1', label: 'First milestone submitted' },
+  { value: 'DUE_2', label: 'Second milestone due' },
+  { value: 'HAS_2', label: 'Second milestone submitted' },
+  { value: 'DUE_3', label: 'Third milestone due' },
+  { value: 'HAS_3', label: 'Third milestone submitted' },
+  { value: 'ALL', label: 'Fully claimed' },
+] as const;
+
+/**
+ * Whether a village answers a billing question.
+ *
+ * "Due" is the subtle one: the second milestone is due when the first has
+ * gone in and the second has not. A village where nothing has been claimed is
+ * not owed a second claim — it is owed a first — and a list that said
+ * otherwise would put villages into a claim out of order, which the
+ * department returns.
+ *
+ * `claimed` holds only the milestones standing: a returned claim is off it,
+ * because the milestone is owed again.
+ */
+export function matchesBillingFilter(claimed: number[], filter: string): boolean {
+  if (!filter) return true;
+  if (filter === 'NONE') return claimed.length === 0;
+  if (filter === 'ANY') return claimed.length > 0;
+  if (filter === 'ALL') return [1, 2, 3].every((m) => claimed.includes(m));
+  const m = Number(filter.slice(4));
+  if (!Number.isFinite(m) || m < 1) return true;
+  if (filter.startsWith('HAS_')) return claimed.includes(m);
+  if (filter.startsWith('DUE_')) {
+    if (claimed.includes(m)) return false;
+    for (let prior = 1; prior < m; prior += 1) {
+      if (!claimed.includes(prior)) return false;
+    }
+    return true;
+  }
+  return true;
+}

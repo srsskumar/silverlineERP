@@ -142,7 +142,7 @@ export function normalizeSavedFiltersPage(body: unknown): SavedFilter[] {
 export function applySavedFilter(filter: SavedFilter): ListTasksParams {
   const q = filter.query ?? {};
   const params: ListTasksParams = {};
-  for(const key of ['cycle_id','due_from','due_to','priority','mentioned_me','assignee_id','sort'] as const)if(typeof q[key]==='string'&&q[key])params[key]=q[key] as string;
+  for(const key of ['cycle_id','due_from','due_to','started_from','started_to','finished_from','finished_to','priority','mentioned_me','assignee_id','sort'] as const)if(typeof q[key]==='string'&&q[key])params[key]=q[key] as string;
   if(isRecord(q.custom_fields))params.custom_fields=q.custom_fields;
   if (typeof q.status === 'string' && q.status) params.status = q.status;
   if (typeof q.q === 'string' && q.q) params.q = q.q;

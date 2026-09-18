@@ -98,7 +98,7 @@ export async function buildApp(
   app.addHook('preSerialization',async(req,_reply,payload)=>{
     const user=req.authUser,path=req.routeOptions.url??'';
     if(!user?.roles.length||!user.roles.every(r=>r==='CLIENT_VIEWER')||!/^\/api\/v1\/(tasks|projects)(?:\/:id)?$/.test(path))return payload;
-    const allowed=new Set(['id','code','name','title','project_id','workspace_id','status','priority','version','planned_start_date','planned_end_date','actual_start_at','actual_end_at','sla_status','progress','task_count','completed_task_count','allowed_next','created_at','updated_at']);
+    const allowed=new Set(['id','code','name','title','project_id','workspace_id','status','priority','version','planned_start_date','planned_end_date','actual_start_at','actual_end_at','actual_start_on','actual_end_on','sla_status','progress','task_count','completed_task_count','allowed_next','created_at','updated_at']);
     const safe=(row:Record<string,unknown>)=>Object.fromEntries(Object.entries(row).filter(([key])=>allowed.has(key)));
     const body=payload as Record<string,any>;return Array.isArray(body?.data)?{...body,data:body.data.map(safe)}:body&&typeof body==='object'?safe(body):body;
   });

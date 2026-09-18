@@ -161,6 +161,29 @@ export function TaskDetailView({ projectId, taskId }: { projectId: string; taskI
                   />
                 }
               />
+              {/*
+                * When it was promised, and when it actually happened.
+                *
+                * The actual pair was stamped by the status trigger from the
+                * beginning and shown nowhere, so every question about what a
+                * month produced was answered off the plan. A plan is not a
+                * record, and on a government contract the difference between
+                * them is what a delay notice is argued over.
+                */}
+              <DetailRow
+                label="Planned"
+                value={task.planned_start_date || task.planned_end_date
+                  ? `${task.planned_start_date ? String(task.planned_start_date) : '—'} to ${
+                    task.planned_end_date ? String(task.planned_end_date) : '—'}`
+                  : <span className="text-text-subtle">No dates set</span>}
+              />
+              <DetailRow
+                label="Actually"
+                value={task.actual_start_on
+                  ? `${String(task.actual_start_on)} to ${
+                    task.actual_end_on ? String(task.actual_end_on) : 'still running'}`
+                  : <span className="text-text-subtle">Not started yet</span>}
+              />
               <DetailRow label="Description" value={task.description ? String(task.description) : '—'} />
             </dl>
             <div className="mt-4 border-t border-border pt-4">

@@ -215,6 +215,15 @@ export interface ListTasksParams {
   cycle_id?:string;
   due_from?:string;
   due_to?:string;
+  /*
+   * When the work actually began and ended, as opposed to when it was planned
+   * to. "What did we finish in August" is a question about these, and
+   * answering it off planned dates reports a plan as a record.
+   */
+  started_from?:string;
+  started_to?:string;
+  finished_from?:string;
+  finished_to?:string;
   priority?:string;
   mentioned_me?:string;
   custom_fields?:Record<string,unknown>;
@@ -266,7 +275,7 @@ export function normalizeTasksCursorPage(body: unknown): TasksCursorPage {
 
 export function buildTasksQuery(params: ListTasksParams = {}): string {
   const search = new URLSearchParams();
-  for(const key of ['cycle_id','due_from','due_to','priority','mentioned_me','sort'] as const)if(params[key])search.set(key,params[key]!);
+  for(const key of ['cycle_id','due_from','due_to','started_from','started_to','finished_from','finished_to','priority','mentioned_me','sort'] as const)if(params[key])search.set(key,params[key]!);
   if(params.custom_fields&&Object.keys(params.custom_fields).length)search.set('custom_fields',JSON.stringify(params.custom_fields));
   if (params.project_id) search.set('project_id', params.project_id);
   if (params.assignee_id) search.set('assignee_id', params.assignee_id);

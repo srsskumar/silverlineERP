@@ -8,6 +8,7 @@ import { AppShell } from '@/components/AppShell';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { ExportMenu, cellNum, cellText } from '@/components/ui/ExportMenu';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
@@ -22,7 +23,8 @@ import {
   GRAINS, LEVEL_LABELS, REPORT_LEVELS, STAGE_STATE_LABELS, TALLY_LABELS, TALLY_ORDER,
   VILLAGE_STATE_LABELS, acres, barWidth, count, financialYearToDate, groupMeasures,
   hasPct, paceNote, pct, pctTone, progressHeadline, roverNote, sqKm, stageLabel,
-  stateTone, tallyTone, type ReportLevel,
+  stateTone, tallyTone, stageStateOf, surveyedExtent, TALLY_STATES,
+  stepPeriod, PERIOD_NOUNS, matchesBillingFilter, BILLING_FILTERS, type ReportLevel,
   BOTTLENECK_LABELS, VILLAGE_STATUS_LABELS, forecastNote, villageStatusTone,
   reasonLabel, changeHint, periodNote,
 } from '@/lib/survey';
@@ -65,6 +67,17 @@ export default function SurveyPage() {
    * the server and client disagree about what to draw.
    */
   const [openVillage, setOpenVillage] = React.useState<string | null>(null);
+  /*
+   * A filter handed over from somewhere else on this screen.
+   *
+   * A count in the roll-up and a row in the summary are both questions whose
+   * answer is a list of villages. Carrying the filter across means the reader
+   * does not rebuild it by hand and get a different list.
+   */
+  const [stageDrill, setStageDrill] =
+    React.useState<{ stage: string; state: string } | null>(null);
+  const [geoDrill, setGeoDrill] =
+    React.useState<{ level: ReportLevel; name: string } | null>(null);
   React.useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const wanted = q.get('tab');
@@ -149,7 +162,7 @@ export default function SurveyPage() {
                       : t === 'people' ? 'Crew & rovers'
                         : t === 'deployment' ? 'Deployment'
                         : t === 'bottlenecks' ? 'Bottlenecks'
-                          : t === 'timeline' ? 'Over time' : 'Summary'}
+                          : t === 'timeline' ? 'Trend' : 'Summary'}
               </Button>
             ))}
           </div>
@@ -194,14 +207,28 @@ export default function SurveyPage() {
         ) : null}
 
         {projectId && tab === 'progress' ? (
-          <Progress query={progress} level={level} setLevel={setLevel} range={range} />
+          <Progress
+            query={progress} level={level} setLevel={setLevel} range={range}
+            onDrillDown={(stageCode, state) => {
+              setStageDrill({ stage: stageCode, state });
+              setTab('villages');
+            }}
+            onOpenRow={(lvl, id, name) => {
+              if (lvl === 'village') { setOpenVillage(id); setTab('villages'); return; }
+              // A mandal or district opens the villages inside it.
+              setGeoDrill({ level: lvl, name });
+              setTab('villages');
+            }}
+          />
         ) : null}
         {projectId && tab === 'report' ? (
           <PeriodReport projectId={projectId} level={level} setLevel={setLevel} />
         ) : null}
         {projectId && tab === 'villages' ? (
           <Villages projectId={projectId} canManage={canManage} canEnter={canEnter}
-            openVillage={openVillage} />
+            openVillage={openVillage}
+            stageDrill={stageDrill} geoDrill={geoDrill}
+            onDrillConsumed={() => { setStageDrill(null); setGeoDrill(null); }} />
         ) : null}
         {projectId && tab === 'people' ? (
           <CrewAndRovers projectId={projectId} range={range} />
@@ -224,10 +251,14 @@ export default function SurveyPage() {
 /* --------------------------------------------------------------- progress */
 
 function Progress({
-  query, level, setLevel, range,
+  query, level, setLevel, range, onDrillDown, onOpenRow,
 }: {
   query: any; level: ReportLevel; setLevel: (l: ReportLevel) => void;
   range: { from: string; to: string };
+  /** A stage tally was clicked: show those villages. */
+  onDrillDown?: (stageCode: string, state: string) => void;
+  /** A roll-up row was clicked: open the village, or the mandal's villages. */
+  onOpenRow?: (level: ReportLevel, id: string, name: string) => void;
 }) {
   if (query.isLoading) return <Skeleton className="h-64" />;
   if (query.isError) return <ErrorCard error={query.error} onRetry={() => query.refetch()} />;
@@ -303,16 +334,33 @@ function Progress({
                         <span className="ml-1 text-2xs text-text-subtle">daily</span>
                       ) : null}
                     </TD>
+                    {/*
+                      * Every count opens the villages behind it.
+                      *
+                      * "Eleven villages on hold at vectorisation" is the start
+                      * of a question, not the end of one, and the only way to
+                      * answer it was to go to another tab and rebuild the
+                      * filter by hand.
+                      */}
                     {TALLY_ORDER.map((k) => (
                       <TD key={k} className="text-right tabular-nums">
-                        <span className={
-                          t[k] === 0 ? 'text-text-subtle'
-                            : tallyTone(k) === 'danger' ? 'font-semibold text-danger'
-                              : tallyTone(k) === 'success' ? 'text-success'
-                                : tallyTone(k) === 'warning' ? 'text-warning' : 'text-text'
-                        }>
-                          {t[k]}
-                        </span>
+                        {t[k] === 0 ? (
+                          <span className="text-text-subtle">0</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => onDrillDown?.(String(stage.code), TALLY_STATES[k])}
+                            title={`Show the ${t[k]} village(s) ${
+                              TALLY_LABELS[k].toLowerCase()} at ${String(stage.label).toLowerCase()}`}
+                            className={`rounded underline-offset-2 hover:underline ${
+                              tallyTone(k) === 'danger' ? 'font-semibold text-danger'
+                                : tallyTone(k) === 'success' ? 'text-success'
+                                  : tallyTone(k) === 'warning' ? 'text-warning' : 'text-text'
+                            }`}
+                          >
+                            {t[k]}
+                          </button>
+                        )}
                       </TD>
                     ))}
                   </TR>
@@ -395,7 +443,28 @@ function Progress({
                 {rows.map((r) => (
                   <TR key={r.id ?? r.name}>
                     <TD>
-                      <span className="font-medium text-text">{r.name}</span>
+                      {/*
+                        * The name opens what it names.
+                        *
+                        * A row in a roll-up is a question — which villages are
+                        * these, what is holding this mandal up — and answering
+                        * it meant going to another tab and rebuilding the
+                        * filter by hand.
+                        */}
+                      {r.id !== null && onOpenRow ? (
+                        <button
+                          type="button"
+                          onClick={() => onOpenRow(level, String(r.id), String(r.name))}
+                          className="text-left font-medium text-text underline-offset-2 hover:text-primary hover:underline"
+                          title={level === 'village'
+                            ? 'Open this village'
+                            : `Show the villages in ${String(r.name)}`}
+                        >
+                          {r.name}
+                        </button>
+                      ) : (
+                        <span className="font-medium text-text">{r.name}</span>
+                      )}
                       {r.id === null ? (
                         // A hole in the master data, shown rather than filed
                         // somewhere plausible.
@@ -500,36 +569,112 @@ function PeriodReport({
   const d = report.data as Row;
   const units: Row[] = d?.units ?? [];
 
+  const noun = PERIOD_NOUNS[grain] ?? 'period';
+  // Stepping forward past today would report on a period nobody has worked.
+  const atLatest = stepPeriod(asOf, grain, 1) > businessToday();
+
+  /*
+   * The table on screen, as a file.
+   *
+   * Built from the same rows the table renders rather than re-fetched, so a
+   * download can never contain more than what was checked on screen.
+   */
+  const sheet = {
+    name: `${LEVEL_LABELS[level]} ${String(d?.period?.label ?? '')}`.slice(0, 31),
+    columns: [
+      { header: LEVEL_LABELS[level], width: 28 },
+      { header: 'Villages', width: 10 },
+      { header: `This ${noun} (Ac)`, width: 16 },
+      { header: `Previous ${noun} (Ac)`, width: 18 },
+      { header: 'Cumulative (Ac)', width: 16 },
+      { header: 'Complete (%)', width: 14 },
+    ],
+    rows: units.map((u) => [
+      cellText(u.name),
+      cellNum(u.villages),
+      cellNum(periodTotal(u.period)),
+      cellNum(periodTotal(u.previous)),
+      cellNum(u.cumulative?.doneAc),
+      cellNum(u.cumulative?.pct),
+    ]),
+  };
+
   return (
     <div className="space-y-4">
-      <Toolbar>
-        <div className="flex gap-1">
-          {([['DAY', 'Daily'], ['WEEK', 'Weekly'], ['MONTH', 'Monthly']] as const).map(
-            ([g, label]) => (
-              <Button key={g} type="button" variant={grain === g ? 'secondary' : 'ghost'}
-                onClick={() => setGrain(g)}>{label}</Button>
-            ))}
-        </div>
-        <label className="flex items-center gap-1.5 text-xs text-text-muted">
-          Covering
-          <input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)}
-            className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text" />
-        </label>
-        <select value={level} onChange={(e) => setLevel(e.target.value as ReportLevel)}
-          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
-          {REPORT_LEVELS.map((l) => (
-            <option key={l} value={l}>{LEVEL_LABELS[l]}</option>
-          ))}
-        </select>
-      </Toolbar>
-
+      {/*
+        * What you are looking at, said once, at the top.
+        *
+        * The controls used to be three unlabelled boxes — a grain, a bare
+        * date field marked "Covering", and a level — and between them they
+        * decide what the whole page means. Reading the page meant inferring
+        * it. Now the sentence states the report and the controls sit under
+        * it, each with a label saying what it changes.
+        */}
       <Card className="space-y-3 p-4">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h3 className="text-sm font-semibold text-text">{d?.period?.label}</h3>
-          <span className="text-xs text-text-muted">
-            {day(d?.period?.from)} to {day(d?.period?.to)}, against {d?.previous_period?.label}
-          </span>
+          <div>
+            <h3 className="text-base font-semibold text-text">
+              {grain === 'DAY' ? 'Daily' : grain === 'WEEK' ? 'Weekly' : 'Monthly'} report
+              {' — '}{d?.period?.label}
+            </h3>
+            <p className="text-xs text-text-muted">
+              {day(d?.period?.from)} to {day(d?.period?.to)}, broken down by{' '}
+              {LEVEL_LABELS[level].toLowerCase()}, compared against{' '}
+              {d?.previous_period?.label ?? `the previous ${noun}`}.
+            </p>
+          </div>
+          <ExportMenu
+            sheet={sheet}
+            fileName={`survey-report-${grain.toLowerCase()}-${String(d?.period?.from ?? asOf)}`}
+            note={`${units.length} ${LEVEL_LABELS[level].toLowerCase()}${units.length === 1 ? '' : 's'}`}
+          />
         </div>
+
+        <div className="flex flex-wrap items-end gap-4 border-t border-border pt-3">
+          <label className="text-2xs text-text-subtle">
+            <span className="mb-1 block">Report on</span>
+            <div className="flex gap-1">
+              {([['DAY', 'A day'], ['WEEK', 'A week'], ['MONTH', 'A month']] as const).map(
+                ([g, label]) => (
+                  <Button key={g} type="button" variant={grain === g ? 'secondary' : 'ghost'}
+                    onClick={() => setGrain(g)}>{label}</Button>
+                ))}
+            </div>
+          </label>
+
+          <div className="text-2xs text-text-subtle">
+            <span className="mb-1 block">Which {noun}</span>
+            <div className="flex items-center gap-1">
+              <Button type="button" variant="ghost"
+                title={`The ${noun} before this one`}
+                onClick={() => setAsOf(stepPeriod(asOf, grain, -1))}>← Previous</Button>
+              <input type="date" value={asOf} max={businessToday()}
+                onChange={(e) => setAsOf(e.target.value)}
+                title="Any day inside the period you want reported"
+                className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text" />
+              <Button type="button" variant="ghost" disabled={atLatest}
+                title={atLatest ? 'This is the current period' : `The ${noun} after this one`}
+                onClick={() => setAsOf(stepPeriod(asOf, grain, 1))}>Next →</Button>
+              {asOf !== businessToday() ? (
+                <Button type="button" variant="ghost"
+                  onClick={() => setAsOf(businessToday())}>Today</Button>
+              ) : null}
+            </div>
+          </div>
+
+          <label className="text-2xs text-text-subtle">
+            <span className="mb-1 block">Break down by</span>
+            <select value={level} onChange={(e) => setLevel(e.target.value as ReportLevel)}
+              className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+              {REPORT_LEVELS.map((l) => (
+                <option key={l} value={l}>{LEVEL_LABELS[l]}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </Card>
+
+      <Card className="space-y-3 p-4">
         <p className="text-sm text-text">{periodNote(d)}</p>
         <div className="grid gap-2 sm:grid-cols-4">
           <Stat label="Surveyed this period" value={`${acres(d?.area?.current)}`}
@@ -602,14 +747,23 @@ function PeriodReport({
         <EmptyState title="Nothing recorded in this period"
           description="No day's return falls inside these dates." />
       ) : (
-        <Card className="overflow-x-auto p-0">
+        <Card className="p-0">
+          <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border px-4 py-2">
+            <h3 className="text-sm font-semibold text-text">
+              Every {LEVEL_LABELS[level].toLowerCase()}, in full
+            </h3>
+            <span className="text-2xs text-text-subtle">
+              Alphabetical, so a place can be looked up. The chart above ranks them.
+            </span>
+          </div>
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs text-text-muted">
                 <th className="px-4 py-2">{LEVEL_LABELS[level]}</th>
                 <th className="px-4 py-2 text-right">Villages</th>
-                <th className="px-4 py-2 text-right">This period</th>
-                <th className="px-4 py-2 text-right">Previous</th>
+                <th className="px-4 py-2 text-right">This {noun}</th>
+                <th className="px-4 py-2 text-right">Previous {noun}</th>
                 <th className="px-4 py-2 text-right">Cumulative</th>
                 <th className="px-4 py-2 text-right">Complete</th>
               </tr>
@@ -638,6 +792,12 @@ function PeriodReport({
               })}
             </tbody>
           </table>
+          </div>
+          <p className="border-t border-border px-4 py-2 text-2xs text-text-subtle">
+            “This {noun}” and “previous {noun}” are extents surveyed inside those dates.
+            Cumulative is everything recorded since the programme began, and complete is
+            that against the extent to survey.
+          </p>
         </Card>
       )}
     </div>
@@ -757,20 +917,93 @@ function Deployment({
   const units: Row[] = d?.units ?? [];
   const staff: Row[] = d?.programme_staff ?? [];
 
+  const uncrewed = Number(d?.totals?.villages_uncrewed ?? 0);
+  const unequipped = Number(d?.totals?.villages_unequipped ?? 0);
+
+  const sheet = {
+    name: `Deployment by ${LEVEL_LABELS[level]}`.slice(0, 31),
+    columns: [
+      { header: LEVEL_LABELS[level], width: 28 },
+      { header: 'Villages', width: 10 },
+      { header: 'Nobody on them', width: 16 },
+      { header: 'No instrument', width: 14 },
+      { header: 'People', width: 10 },
+      { header: 'Instruments', width: 12 },
+      { header: 'Who', width: 60 },
+      { header: 'What', width: 40 },
+    ],
+    rows: units.map((u) => [
+      cellText(u.name), cellNum(u.villages),
+      cellNum(u.villages_uncrewed), cellNum(u.villages_unequipped),
+      cellNum(u.crew), cellNum(u.rovers_out),
+      (u.people as Row[]).map((p) => String(p.name)).join('; '),
+      (u.assets as Row[]).map((a) => String(a.asset_code)).join('; '),
+    ]),
+  };
+
   return (
     <div className="space-y-4">
-      <Toolbar>
-        <select value={level} onChange={(e) => setLevel(e.target.value as ReportLevel)}
-          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
-          {REPORT_LEVELS.map((l) => (
-            <option key={l} value={l}>{LEVEL_LABELS[l]}</option>
-          ))}
-        </select>
-        <span className="ml-auto text-2xs text-text-subtle">
-          {count(d?.totals?.crew)} crew and {count(d?.totals?.assets)} instruments across{' '}
-          {count(d?.totals?.villages)} villages
-        </span>
-      </Toolbar>
+      {/*
+        * What this screen answers, said before the table.
+        *
+        * It used to open on a level picker and a grid of counts headed
+        * "Crew / Instruments / Who / What", which is a description of the
+        * data rather than of the question. The question is always the same:
+        * is everything covered, and where is it not.
+        */}
+      <Card className="space-y-3 p-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div>
+            <h3 className="text-base font-semibold text-text">Who and what is out right now</h3>
+            <p className="text-xs text-text-muted">
+              People assigned to villages and instruments allocated against them, as they stand
+              today — not a history. Grouped by {LEVEL_LABELS[level].toLowerCase()}.
+            </p>
+          </div>
+          <ExportMenu sheet={sheet} fileName={`survey-deployment-${level}`}
+            note={`${units.length} ${LEVEL_LABELS[level].toLowerCase()}${units.length === 1 ? '' : 's'}`} />
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-4">
+          <Stat label="Villages covered"
+            value={`${count(Number(d?.totals?.villages ?? 0) - uncrewed)} of ${count(d?.totals?.villages)}`}
+            hint="Villages with at least one person assigned"
+            tone={uncrewed > 0 ? 'warning' : 'success'} />
+          <Stat label="People deployed" value={count(d?.totals?.crew)}
+            hint={(d?.totals?.programme_staff ?? 0) > 0
+              ? `plus ${count(d?.totals?.programme_staff)} on the programme itself`
+              : 'Counted once, however many villages they are on'} />
+          <Stat label="Instruments out" value={count(d?.totals?.assets)}
+            hint="Allocated and not yet returned" />
+          <Stat label="Crewed with no instrument" value={count(unequipped)}
+            tone={unequipped > 0 ? 'warning' : 'success'}
+            hint="People on the ground with nothing to survey with" />
+        </div>
+
+        <div className="flex flex-wrap items-end gap-3 border-t border-border pt-3">
+          <label className="text-2xs text-text-subtle">
+            <span className="mb-1 block">Group by</span>
+            <select value={level} onChange={(e) => setLevel(e.target.value as ReportLevel)}
+              className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+              {REPORT_LEVELS.map((l) => (
+                <option key={l} value={l}>{LEVEL_LABELS[l]}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </Card>
+
+      {uncrewed > 0 ? (
+        <Notice tone="warning"
+          title={`${uncrewed} village${uncrewed === 1 ? ' has' : 's have'} nobody assigned`}>
+          {/* A count of crew says how many are deployed, never where nobody
+              is. Four people in a mandal of eleven villages reads as coverage
+              until you notice they are all on one village. */}
+          They will record no progress until somebody is put on them. The list below shows which{' '}
+          {LEVEL_LABELS[level].toLowerCase()}s they sit in; open a village from the Villages tab
+          to assign crew.
+        </Notice>
+      ) : null}
 
       {staff.length > 0 ? (
         <Card className="space-y-2 p-4">
@@ -802,10 +1035,13 @@ function Deployment({
               <tr className="border-b border-border text-left text-xs text-text-muted">
                 <th className="px-4 py-2">{LEVEL_LABELS[level]}</th>
                 <th className="px-4 py-2 text-right">Villages</th>
-                <th className="px-4 py-2 text-right">Crew</th>
+                {/* The gap, beside the coverage, rather than left to be
+                    worked out from two counts that do not subtract. */}
+                <th className="px-4 py-2 text-right">Nobody on them</th>
+                <th className="px-4 py-2 text-right">People</th>
                 <th className="px-4 py-2 text-right">Instruments</th>
-                <th className="px-4 py-2">Who</th>
-                <th className="px-4 py-2">What</th>
+                <th className="px-4 py-2">Who is there</th>
+                <th className="px-4 py-2">What they have</th>
               </tr>
             </thead>
             <tbody>
@@ -813,19 +1049,28 @@ function Deployment({
                 <tr key={String(u.id ?? u.name)} className="border-b border-border last:border-0 align-top">
                   <td className="px-4 py-2 text-text">{String(u.name)}</td>
                   <td className="px-4 py-2 text-right tabular-nums">{count(u.villages)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">
+                    <span className={Number(u.villages_uncrewed ?? 0) > 0
+                      ? 'font-semibold text-warning' : 'text-text-subtle'}>
+                      {count(u.villages_uncrewed)}
+                    </span>
+                    {Number(u.villages_unequipped ?? 0) > 0 ? (
+                      <div className="text-2xs text-text-subtle">
+                        {count(u.villages_unequipped)} without an instrument
+                      </div>
+                    ) : null}
+                  </td>
                   <td className="px-4 py-2 text-right tabular-nums">{count(u.crew)}</td>
                   <td className="px-4 py-2 text-right tabular-nums">{count(u.rovers_out)}</td>
                   <td className="px-4 py-2">
                     {/* Names, not a count: knowing which four is what the
-                        question is actually for. */}
-                    <span className="text-2xs text-text-muted">
-                      {(u.people as Row[]).map((p) => String(p.name)).join(', ') || '—'}
-                    </span>
+                        question is actually for. Long lists are trimmed with
+                        the remainder stated, because a cell holding forty
+                        names is unreadable and hides the row beside it. */}
+                    <NameList items={(u.people as Row[]).map((p) => String(p.name))} />
                   </td>
                   <td className="px-4 py-2">
-                    <span className="text-2xs text-text-muted">
-                      {(u.assets as Row[]).map((a) => String(a.asset_code)).join(', ') || '—'}
-                    </span>
+                    <NameList items={(u.assets as Row[]).map((a) => String(a.asset_code))} mono />
                   </td>
                 </tr>
               ))}
@@ -838,6 +1083,11 @@ function Deployment({
               <tr className="border-t-2 border-border font-medium">
                 <td className="px-4 py-2 text-text">Total</td>
                 <td className="px-4 py-2 text-right tabular-nums">{count(d?.totals?.villages)}</td>
+                <td className="px-4 py-2 text-right tabular-nums">
+                  <span className={uncrewed > 0 ? 'text-warning' : 'text-text-subtle'}>
+                    {count(uncrewed)}
+                  </span>
+                </td>
                 <td className="px-4 py-2 text-right tabular-nums">{count(d?.totals?.crew)}</td>
                 <td className="px-4 py-2 text-right tabular-nums">{count(d?.totals?.assets)}</td>
                 <td className="px-4 py-2 text-2xs font-normal text-text-subtle" colSpan={2}>
@@ -854,6 +1104,28 @@ function Deployment({
         </Card>
       )}
     </div>
+  );
+}
+
+/**
+ * A list of names in a table cell, trimmed before it swamps the row.
+ *
+ * Forty names comma-joined in a cell is not a list anybody reads, and it
+ * pushes every other column off the screen. Ten, then the count of the rest,
+ * with the whole list on hover for the times somebody does need it.
+ */
+function NameList({ items, mono }: { items: string[]; mono?: boolean }) {
+  if (items.length === 0) return <span className="text-2xs text-text-subtle">—</span>;
+  const shown = items.slice(0, 10);
+  const rest = items.length - shown.length;
+  return (
+    <span className={`text-2xs text-text-muted ${mono ? 'font-mono' : ''}`}
+      title={items.join(', ')}>
+      {shown.join(', ')}
+      {rest > 0 ? (
+        <span className="text-text-subtle"> and {rest} more</span>
+      ) : null}
+    </span>
   );
 }
 
@@ -1266,18 +1538,54 @@ function Bottlenecks({ projectId, canForecast }: { projectId: string; canForecas
  * the stage remarks.
  */
 function Villages({
-  projectId, canManage, canEnter, openVillage,
+  projectId, canManage, canEnter, openVillage, stageDrill, geoDrill, onDrillConsumed,
 }: {
   projectId: string; canManage: boolean; canEnter: boolean;
   /** A village another screen linked to, opened on arrival. */
   openVillage?: string | null;
+  /** A stage and state handed over from the roll-up's tally. */
+  stageDrill?: { stage: string; state: string } | null;
+  /** A mandal or district handed over from a roll-up row. */
+  geoDrill?: { level: ReportLevel; name: string } | null;
+  onDrillConsumed?: () => void;
 }) {
   const [open, setOpen] = React.useState<string | null>(null);
   const [filter, setFilter] = React.useState('');
   const [district, setDistrict] = React.useState('');
   const [mandal, setMandal] = React.useState('');
   const [stage, setStage] = React.useState('');
-  const [unstarted, setUnstarted] = React.useState(false);
+  // Which state of that stage: outstanding covers everything not finished.
+  const [stageState, setStageState] = React.useState('OUTSTANDING');
+  /*
+   * Which villages to pull by what has been claimed on them (§066).
+   *
+   * "Everything where the first claim has gone in and the second has not" is
+   * the list the office builds before every review, and it is a question
+   * about two milestones at once — which is why it is one picker with named
+   * answers rather than a milestone box and a claimed/unclaimed tick.
+   */
+  const [billing, setBilling] = React.useState('');
+
+  /*
+   * Take up a filter another part of the screen handed over.
+   *
+   * Consumed once, so going back to this tab later does not silently
+   * reapply a filter the reader has already cleared.
+   */
+  React.useEffect(() => {
+    if (stageDrill) {
+      setStage(stageDrill.stage);
+      setStageState(stageDrill.state);
+      setDistrict(''); setMandal(''); setFilter('');
+      onDrillConsumed?.();
+    } else if (geoDrill) {
+      if (geoDrill.level === 'mandal') { setMandal(geoDrill.name); setDistrict(''); }
+      else if (geoDrill.level === 'district') { setDistrict(geoDrill.name); setMandal(''); }
+      setStage(''); setFilter('');
+      onDrillConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stageDrill, geoDrill]);
 
   // Somebody arriving from the progress form to allocate the rovers it told
   // them were missing lands on that village, not on a list to search again.
@@ -1304,6 +1612,8 @@ function Villages({
   if (villages.isError) return <ErrorCard error={villages.error} onRetry={() => villages.refetch()} />;
 
   const pipeline: Row[] = progress.data?.pipeline ?? [];
+  // The measure list, so the surveyed column knows which measures are acres.
+  const measures: Row[] = progress.data?.measures ?? [];
   const all: Row[] = villages.data ?? [];
   const needle = filter.trim().toLowerCase();
 
@@ -1318,11 +1628,27 @@ function Villages({
     .filter((v) => !district || String(v.district_name ?? '') === district)
     .map((v) => String(v.mandal_name ?? '')).filter(Boolean))].sort();
 
+  /*
+   * One question about stages, not two overlapping ones.
+   *
+   * It used to offer "<stage> outstanding" beside a "Not started" tick, which
+   * are different ideas about different things: outstanding meant "not
+   * finished" — not started, in progress and on hold all at once — while the
+   * tick meant "nothing anywhere has begun". Selecting both was a correct AND
+   * that read as a broken count, because 69 villages with vectorisation
+   * unfinished became the 38 where nothing had started at all, and nothing on
+   * screen explained why.
+   *
+   * Now one stage, one state. The count moves for a reason the reader chose.
+   */
   const rows = all.filter((v) => {
     if (district && String(v.district_name ?? '') !== district) return false;
     if (mandal && String(v.mandal_name ?? '') !== mandal) return false;
-    if (stage && String(v.stages?.[stage] ?? 'NOT_STARTED') === 'COMPLETED') return false;
-    if (unstarted && Object.values(v.stages ?? {}).some((x) => x !== 'NOT_STARTED')) return false;
+    if (stage) {
+      const at = stageStateOf(v, stage);
+      if (stageState === 'OUTSTANDING' ? at === 'COMPLETED' : at !== stageState) return false;
+    }
+    if (!matchesBillingFilter(v.claimed_milestones ?? [], billing)) return false;
     if (!needle) return true;
     return [v.village_name, v.mandal_name, v.district_name, v.village_code]
       .some((f) => String(f ?? '').toLowerCase().includes(needle));
@@ -1361,16 +1687,26 @@ function Villages({
           className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
           <option value="">Any stage</option>
           {pipeline.map((p) => (
-            <option key={String(p.code)} value={String(p.code)}>
-              {String(p.label)} outstanding
-            </option>
+            <option key={String(p.code)} value={String(p.code)}>{String(p.label)}</option>
           ))}
         </select>
-        <label className="flex items-center gap-1.5 text-xs text-text-muted">
-          <input type="checkbox" checked={unstarted}
-            onChange={(e) => setUnstarted(e.target.checked)} />
-          Not started
-        </label>
+        <select value={billing} onChange={(e) => setBilling(e.target.value)}
+          title="Pull villages by what has been submitted for billing"
+          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+          {BILLING_FILTERS.map((b) => (
+            <option key={b.value} value={b.value}>{b.label}</option>
+          ))}
+        </select>
+        {stage ? (
+          <select value={stageState} onChange={(e) => setStageState(e.target.value)}
+            className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+            <option value="OUTSTANDING">not finished</option>
+            <option value="NOT_STARTED">still to start</option>
+            <option value="IN_PROGRESS">in progress</option>
+            <option value="ON_HOLD">on hold</option>
+            <option value="COMPLETED">finished</option>
+          </select>
+        ) : null}
         {/*
           * Moving what the filter is showing.
           *
@@ -1383,14 +1719,58 @@ function Villages({
         {canManage && rows.length > 0 && rows.length < all.length ? (
           <MoveVillages projectId={projectId} villages={rows} />
         ) : null}
-        {(district || mandal || stage || unstarted || filter) ? (
+        {(district || mandal || stage || filter || billing) ? (
           <Button type="button" variant="ghost" onClick={() => {
-            setDistrict(''); setMandal(''); setStage(''); setUnstarted(false); setFilter('');
+            setDistrict(''); setMandal(''); setStage('');
+            setStageState('OUTSTANDING'); setFilter(''); setBilling('');
           }}>Clear</Button>
         ) : null}
         <span className="ml-auto text-2xs text-text-subtle">
           {rows.length} of {all.length} villages
+          {stage ? ` · ${stageLabel(stage, pipeline as any)} ${
+            stageState === 'OUTSTANDING' ? 'not finished'
+              : (STAGE_STATE_LABELS[stageState] ?? stageState).toLowerCase()}` : ''}
         </span>
+        {/* The filtered list, in a file. This is the table that goes out with
+            a claim or a review note, and it was being retyped. */}
+        <ExportMenu
+          sheet={{
+            name: 'Villages',
+            columns: [
+              { header: '#', width: 6 },
+              { header: 'Village', width: 28 },
+              { header: 'Code', width: 14 },
+              { header: 'District', width: 20 },
+              { header: 'Mandal', width: 20 },
+              { header: 'Extent (Ac)', width: 14 },
+              { header: 'Surveyed (Ac)', width: 14 },
+              { header: 'Surveyed (%)', width: 14 },
+              { header: 'Where it has got to', width: 24 },
+              { header: 'Claimed (%)', width: 12 },
+              { header: 'Milestones claimed', width: 20 },
+              { header: 'Assigned to', width: 24 },
+            ],
+            rows: rows.map((v, i) => {
+              const walked = surveyedExtent(v, measures as any);
+              const planned = Number(v.total_extent_ac ?? 0);
+              const at = pipeline.find(
+                (st) => (v.stages?.[String(st.code)] ?? 'NOT_STARTED') !== 'COMPLETED');
+              return [
+                String(i + 1), cellText(v.village_name), cellText(v.village_code),
+                cellText(v.district_name), cellText(v.mandal_name),
+                cellNum(v.total_extent_ac), cellNum(walked),
+                planned > 0 ? cellNum((walked / planned) * 100) : '',
+                at ? `${stageLabel(String(at.code), pipeline as any)} — ${
+                  (STAGE_STATE_LABELS[String(v.stages?.[String(at.code)] ?? 'NOT_STARTED')]
+                    ?? '').toLowerCase()}`.trim() : 'Finished',
+                cellNum(v.claimed_percent),
+                (v.claimed_milestones ?? []).join(', '),
+                cellText(v.assignee_name),
+              ];
+            }),
+          }}
+          fileName="survey-villages"
+        />
       </Toolbar>
 
       <TableWrap>
@@ -1405,8 +1785,21 @@ function Villages({
               <TH>Village and code</TH>
               <TH>District</TH>
               <TH>Mandal</TH>
+              {/*
+                * Two numbers, not one.
+                *
+                * The extent is what the revenue record says the village is;
+                * the surveyed figure is what the crews have actually walked.
+                * They differ, sometimes a lot, and that difference is the work
+                * remaining — showing only one of them hides it.
+                */}
               <TH className="text-right">Extent</TH>
+              <TH className="text-right">Surveyed</TH>
               <TH>Where it has got to</TH>
+              {/* What has been claimed, beside where the work has got to:
+                  they move apart, and the gap between them is money sitting
+                  unbilled on finished villages. */}
+              <TH>Billed</TH>
               <TH>Assigned to</TH>
               <TH />
             </TR>
@@ -1425,7 +1818,16 @@ function Villages({
                       {index + 1}
                     </TD>
                     <TD>
-                      <span className="font-medium text-text">{v.village_name}</span>
+                      {/* The name opens the village, because that is what
+                          somebody reading a list of a thousand is trying to
+                          do. */}
+                      <button
+                        type="button"
+                        className="text-left font-medium text-text hover:text-primary hover:underline"
+                        onClick={() => setOpen(isOpen ? null : String(v.id))}
+                      >
+                        {v.village_name}
+                      </button>
                       {/*
                         * The revenue department's code, said to be one.
                         *
@@ -1447,6 +1849,24 @@ function Villages({
                     <TD className="text-xs text-text-muted">{v.district_name ?? '—'}</TD>
                     <TD className="text-xs text-text-muted">{v.mandal_name ?? '—'}</TD>
                     <TD className="text-right tabular-nums">{acres(v.total_extent_ac)}</TD>
+                    <TD className="text-right tabular-nums">
+                      {(() => {
+                        const walked = surveyedExtent(v, measures as any);
+                        const planned = Number(v.total_extent_ac ?? 0);
+                        return (
+                          <>
+                            <span className={walked > 0 ? 'text-text' : 'text-text-subtle'}>
+                              {acres(walked)}
+                            </span>
+                            {planned > 0 && walked > 0 ? (
+                              <span className="ml-1 text-2xs text-text-subtle">
+                                {pct((walked / planned) * 100)}
+                              </span>
+                            ) : null}
+                          </>
+                        );
+                      })()}
+                    </TD>
                     <TD>
                       <Badge tone={stateTone(atState)}>
                         {at ? stageLabel(String(at.code), pipeline as any) : 'Finished'}
@@ -1456,6 +1876,23 @@ function Villages({
                           {STAGE_STATE_LABELS[atState]?.toLowerCase()}
                         </span>
                       ) : null}
+                    </TD>
+                    <TD>
+                      {(() => {
+                        const claimed: number[] = v.claimed_milestones ?? [];
+                        const share = Number(v.claimed_percent ?? 0);
+                        if (claimed.length === 0) {
+                          return <span className="text-2xs text-text-subtle">—</span>;
+                        }
+                        return (
+                          <Badge tone={share >= 100 ? 'success' : 'neutral'}>
+                            {share}%
+                            <span className="ml-1 text-2xs opacity-70">
+                              M{claimed.join(', M')}
+                            </span>
+                          </Badge>
+                        );
+                      })()}
                     </TD>
                     <TD className="text-xs text-text-muted">{v.assignee_name ?? '—'}</TD>
                     <TD className="text-right">
@@ -1467,7 +1904,7 @@ function Villages({
                   </TR>
                   {isOpen ? (
                     <TR>
-                      <TD colSpan={8} className="bg-surface-sunken p-0">
+                      <TD colSpan={10} className="bg-surface-sunken p-0">
                         <VillageDetail
                           village={v}
                           pipeline={pipeline}
@@ -1505,10 +1942,25 @@ function Timeline({
     },
   });
 
+  // Only for the measure names. A column headed "govt land extent ac" is the
+  // database's word for it, not the office's.
+  const meta = useQuery({
+    queryKey: ['survey-progress', projectId, 'pipeline'],
+    queryFn: async () =>
+      ((await apiRequestRaw(
+        `/api/v1/survey/projects/${projectId}/progress`)).body as { data: Row }).data,
+    staleTime: 300_000,
+  });
+
   if (q.isLoading) return <Skeleton className="h-64" />;
   if (q.isError) return <ErrorCard error={q.error} onRetry={() => q.refetch()} />;
   const data = q.data;
   if (!data) return null;
+
+  const labels = new Map<string, string>(
+    ((meta.data?.measures ?? []) as Row[]).map((m) => [String(m.code), String(m.label)]));
+  const nameOf = (code: string) =>
+    labels.get(code) ?? code.replaceAll('_', ' ').toLowerCase();
 
   const periods: Row[] = data.periods ?? [];
   // Only measures that anybody actually recorded in the window, so a wide
@@ -1521,27 +1973,101 @@ function Timeline({
   // acres.
   const extentCodes = active.filter((c) => /_AC$|EXTENT/.test(c));
 
+  /*
+   * Is the programme speeding up or slowing down?
+   *
+   * That is the only question a run of periods answers that a single figure
+   * cannot, and the tab used to leave the reader to work it out off a line
+   * chart. The last period against the average of the ones before it says it
+   * in a sentence.
+   */
+  const extentOf = (p: Row) => extentCodes.reduce((t, c) => t + (p.measures[c] ?? 0), 0);
+  const worked = periods.filter((p) => extentOf(p) > 0);
+  const latest = worked.length ? worked[worked.length - 1] : null;
+  const earlier = worked.slice(0, -1);
+  const average = earlier.length
+    ? earlier.reduce((t, p) => t + extentOf(p), 0) / earlier.length : null;
+  const trend = latest && average !== null && average > 0
+    ? (extentOf(latest) - average) / average : null;
+  const nounPlural = `${PERIOD_NOUNS[grain] ?? 'period'}s`;
+
+  const sheet = {
+    name: `Trend by ${nounPlural}`.slice(0, 31),
+    columns: [
+      { header: 'Period', width: 22 },
+      { header: 'From', width: 12 },
+      { header: 'To', width: 12 },
+      { header: 'Villages worked', width: 16 },
+      ...active.map((c) => ({ header: nameOf(c), width: 18 })),
+    ],
+    rows: periods.map((p) => [
+      cellText(p.label), cellText(p.from), cellText(p.to), cellNum(p.villages),
+      ...active.map((c) => cellNum(p.measures[c])),
+    ]),
+  };
+
   return (
     <div className="space-y-4">
-      <Toolbar>
-        <span className="text-xs text-text-muted">Grouped</span>
-        <div className="flex gap-1">
-          {GRAINS.map((g) => (
-            <Button key={g.value} type="button" variant={grain === g.value ? 'secondary' : 'ghost'}
-              onClick={() => setGrain(g.value)}>
-              {g.label}
-            </Button>
-          ))}
+      <Card className="space-y-3 p-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div>
+            <h3 className="text-base font-semibold text-text">
+              Is the pace holding up?
+            </h3>
+            <p className="text-xs text-text-muted">
+              {/* The tab was called "Over time", which names the axis rather
+                  than the question, and showed a chart with no reading of it
+                  anywhere on screen. */}
+              Everything recorded between {day(range.from)} and {day(range.to)}, grouped into{' '}
+              {nounPlural}. Change the dates in the bar at the top of the page.
+            </p>
+          </div>
+          <ExportMenu sheet={sheet} fileName={`survey-trend-${grain.toLowerCase()}`}
+            note={`${periods.length} ${nounPlural}`} />
         </div>
-        <span className="ml-auto text-2xs text-text-subtle">
-          Financial year {data.financial_year?.label}
-        </span>
-      </Toolbar>
+
+        {latest ? (
+          <p className="text-sm text-text">
+            {trend === null
+              ? `${acres(extentOf(latest))} surveyed in ${latest.label} — the first ${
+                PERIOD_NOUNS[grain] ?? 'period'} with anything recorded, so there is nothing yet to compare it against.`
+              : trend > 0.1
+                ? `Picking up: ${acres(extentOf(latest))} in ${latest.label}, ${
+                  Math.round(trend * 100)}% above the ${acres(average)} averaged over the ${
+                  earlier.length} earlier ${earlier.length === 1 ? (PERIOD_NOUNS[grain] ?? 'period') : nounPlural}.`
+                : trend < -0.1
+                  ? `Slowing: ${acres(extentOf(latest))} in ${latest.label}, ${
+                    Math.round(Math.abs(trend) * 100)}% below the ${acres(average)} averaged over the ${
+                    earlier.length} earlier ${earlier.length === 1 ? (PERIOD_NOUNS[grain] ?? 'period') : nounPlural}.`
+                  : `Holding steady: ${acres(extentOf(latest))} in ${latest.label}, against ${
+                    acres(average)} averaged over the ${earlier.length} earlier ${
+                    earlier.length === 1 ? (PERIOD_NOUNS[grain] ?? 'period') : nounPlural}.`}
+          </p>
+        ) : null}
+
+        <div className="flex flex-wrap items-end gap-3 border-t border-border pt-3">
+          <label className="text-2xs text-text-subtle">
+            <span className="mb-1 block">Group into</span>
+            <div className="flex gap-1">
+              {GRAINS.map((g) => (
+                <Button key={g.value} type="button"
+                  variant={grain === g.value ? 'secondary' : 'ghost'}
+                  onClick={() => setGrain(g.value)}>
+                  {g.label}
+                </Button>
+              ))}
+            </div>
+          </label>
+          <span className="ml-auto text-2xs text-text-subtle">
+            Financial year {data.financial_year?.label}
+          </span>
+        </div>
+      </Card>
 
       {periods.length === 0 || active.length === 0 ? (
         <EmptyState
           title="Nothing recorded in this window"
-          description="No daily progress falls between these dates."
+          description="No daily progress falls between these dates. Widen the dates in the bar at the top of the page, or record a day’s progress first."
         />
       ) : (
         <>
@@ -1568,7 +2094,7 @@ function Timeline({
               <TR>
                 <TH>Period</TH>
                 <TH className="text-right">Villages worked</TH>
-                {active.map((c) => <TH key={c} className="text-right">{c.replaceAll('_', ' ').toLowerCase()}</TH>)}
+                {active.map((c) => <TH key={c} className="text-right">{nameOf(c)}</TH>)}
               </TR>
             </THead>
             <TBody>

@@ -4,6 +4,8 @@ import {
   acres, barWidth, count, financialYearToDate, groupMeasures, hasPct, pct,
   pctTone, progressHeadline, sqKm, stateTone,
   TALLY_ORDER, TALLY_LABELS, tallyTone, stageLabel, roverNote, paceNote,
+  surveyedExtent, stageStateOf, TALLY_STATES, stepPeriod,
+  matchesBillingFilter, BILLING_FILTERS,
   DELAY_REASON_OPTIONS, reasonLabel, villageStatusTone, BOTTLENECK_LABELS, forecastNote,
   changeHint, periodNote,
 } from '../lib/survey';
@@ -488,5 +490,140 @@ describe('pace before anybody has worked', () => {
     });
     expect(note).toBe('Not enough recorded progress yet to measure a pace.');
     expect(note).not.toContain('0 days');
+  });
+});
+
+describe('surveyed extent against planned extent', () => {
+  const measures = [
+    { code: 'GOVT_LAND_EXTENT_AC', basis: 'EXTENT' },
+    { code: 'PRIVATE_LAND_EXTENT_AC', basis: 'EXTENT' },
+    { code: 'VILLAGE_BOUNDARY_POINTS', basis: 'COUNT' },
+  ];
+
+  it('adds the acres actually walked, across every extent measure', () => {
+    // The extent is what the revenue record says the village is; this is what
+    // the crews have measured. The difference is the work remaining.
+    expect(surveyedExtent(
+      { done: { GOVT_LAND_EXTENT_AC: 120.5, PRIVATE_LAND_EXTENT_AC: 30 } },
+      measures,
+    )).toBe(150.5);
+  });
+
+  it('ignores anything counted rather than measured in acres', () => {
+    expect(surveyedExtent(
+      { done: { GOVT_LAND_EXTENT_AC: 10, VILLAGE_BOUNDARY_POINTS: 4000 } },
+      measures,
+    )).toBe(10);
+  });
+
+  it('is nothing for a village nobody has been to', () => {
+    expect(surveyedExtent({ done: {} }, measures)).toBe(0);
+    expect(surveyedExtent({ done: null }, measures)).toBe(0);
+  });
+});
+
+describe('the state a stage is in', () => {
+  it('reads a stage nobody has touched as not started', () => {
+    // An absence is a state here: the list filters on it and the roll-up
+    // counts it.
+    expect(stageStateOf({ stages: {} }, 'VECTORIZATION')).toBe('NOT_STARTED');
+    expect(stageStateOf({ stages: null }, 'VECTORIZATION')).toBe('NOT_STARTED');
+  });
+
+  it('reads what was recorded', () => {
+    expect(stageStateOf({ stages: { VECTORIZATION: 'ON_HOLD' } }, 'VECTORIZATION'))
+      .toBe('ON_HOLD');
+  });
+});
+
+describe('the tally columns and the states they count', () => {
+  it('maps every column a reader sees to a state a record holds', () => {
+    /*
+     * The roll-up names them for a reader — "To start", "Done" — and the
+     * village list filters on the states the records hold. One map, so a
+     * count and the list it opens can never disagree about what was counted.
+     */
+    for (const key of TALLY_ORDER) {
+      expect(TALLY_STATES[key], key).toBeTruthy();
+      expect(STAGE_STATE_LABELS[TALLY_STATES[key]], key).toBeTruthy();
+    }
+  });
+
+  it('counts "to start" as the state an untouched stage reports', () => {
+    expect(TALLY_STATES.notStarted).toBe(stageStateOf({ stages: {} }, 'ANY'));
+  });
+});
+
+describe('stepping from one report period to the next', () => {
+  it('moves a week at a time', () => {
+    expect(stepPeriod('2026-09-18', 'WEEK', -1)).toBe('2026-09-11');
+    expect(stepPeriod('2026-09-18', 'WEEK', 1)).toBe('2026-09-25');
+  });
+
+  it('moves a calendar month, not thirty days', () => {
+    // 31 days back from 31 March is 28 February; 30 days back is 1 March,
+    // which is the same month and leaves the button doing nothing.
+    expect(stepPeriod('2026-03-31', 'MONTH', -1)).toBe('2026-02-28');
+    expect(stepPeriod('2026-01-31', 'MONTH', 1)).toBe('2026-02-28');
+  });
+
+  it('crosses a year boundary', () => {
+    expect(stepPeriod('2026-01-05', 'MONTH', -1)).toBe('2025-12-05');
+    expect(stepPeriod('2026-12-31', 'DAY', 1)).toBe('2027-01-01');
+  });
+
+  it('leaves a value it cannot read alone rather than guessing', () => {
+    expect(stepPeriod('not-a-date', 'WEEK', -1)).toBe('not-a-date');
+  });
+});
+
+describe('pulling villages by what has been claimed', () => {
+  it('finds villages nothing has been claimed on', () => {
+    expect(matchesBillingFilter([], 'NONE')).toBe(true);
+    expect(matchesBillingFilter([1], 'NONE')).toBe(false);
+  });
+
+  it('finds villages owed their first claim', () => {
+    expect(matchesBillingFilter([], 'DUE_1')).toBe(true);
+    expect(matchesBillingFilter([1], 'DUE_1')).toBe(false);
+  });
+
+  it('does not call a second claim due before the first has gone in', () => {
+    // Claiming out of order is returned by the department, so a list that
+    // said this village was owed a second claim would create the rework.
+    expect(matchesBillingFilter([], 'DUE_2')).toBe(false);
+    expect(matchesBillingFilter([1], 'DUE_2')).toBe(true);
+    expect(matchesBillingFilter([1, 2], 'DUE_2')).toBe(false);
+  });
+
+  it('calls the third due only once the first two are in', () => {
+    expect(matchesBillingFilter([1], 'DUE_3')).toBe(false);
+    expect(matchesBillingFilter([1, 2], 'DUE_3')).toBe(true);
+    expect(matchesBillingFilter([1, 2, 3], 'DUE_3')).toBe(false);
+  });
+
+  it('finds a village by a claim it has made, whatever else it has', () => {
+    expect(matchesBillingFilter([1, 3], 'HAS_3')).toBe(true);
+    expect(matchesBillingFilter([1, 2], 'HAS_3')).toBe(false);
+  });
+
+  it('calls a village fully claimed only with all three standing', () => {
+    expect(matchesBillingFilter([1, 2, 3], 'ALL')).toBe(true);
+    // Three claims where one was returned is not three standing.
+    expect(matchesBillingFilter([1, 2], 'ALL')).toBe(false);
+  });
+
+  it('lets everything through when nothing is asked', () => {
+    expect(matchesBillingFilter([], '')).toBe(true);
+    expect(matchesBillingFilter([2], '')).toBe(true);
+  });
+
+  it('offers a label for every answer it can be given', () => {
+    for (const b of BILLING_FILTERS) {
+      expect(b.label, b.value).toBeTruthy();
+      // Every option has to be one the filter understands, or the picker
+      // silently shows the unfiltered list.
+      expect(() => matchesBillingFilter([1], b.value)).not.toThrow();
+    }
   });
 });

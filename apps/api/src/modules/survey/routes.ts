@@ -15,6 +15,8 @@ import {
   checkRoverDay, checkLowProgress, villageStatus, projectEmployeeSchema,
   forecast, findBottlenecks, delayReasonLabel as reasonLabel,
   villageStatusSchema, villagePlanSchema, delayReasonLabel, DELAY_REASONS,
+  villageBillingSchema, villageBillingPatchSchema, MILESTONE_PERCENT,
+  billingDecisionRequired, claimedPercent, type BillingStatus,
   type MeasureBasis, type PeriodGrain, type ReportLevel, type StageState, type VillageProgress,
   businessDay,
 } from '@silverline/shared';
@@ -123,7 +125,24 @@ export async function registerSurveyRoutes(
               v.name AS village_name, v.code AS village_code, v.source_code AS village_source_code,
               m.id AS mandal_id, m.name AS mandal_name, m.code AS mandal_code,
               p.id AS parent_id, p.type AS parent_type, p.name AS parent_name,
-              gp.id AS grandparent_id, gp.type AS grandparent_type, gp.name AS grandparent_name
+              gp.id AS grandparent_id, gp.type AS grandparent_type, gp.name AS grandparent_name,
+              /*
+               * What has been claimed against the village (§066).
+               *
+               * Carried on the village row rather than fetched per village:
+               * the list is filtered on it — "show me everything where the
+               * second claim is due" — and a thousand villages is a thousand
+               * round trips otherwise. A returned claim counts for nothing,
+               * because the milestone is owed again.
+               */
+              (SELECT COALESCE(json_agg(b.milestone ORDER BY b.milestone), '[]')
+                 FROM survey_village_billing b
+                WHERE b.survey_village_id = sv.id AND b.status <> 'REJECTED')
+                AS claimed_milestones,
+              (SELECT COALESCE(sum(b.percent), 0)
+                 FROM survey_village_billing b
+                WHERE b.survey_village_id = sv.id AND b.status <> 'REJECTED')
+                AS claimed_percent
        FROM survey_villages sv
        LEFT JOIN tasks vt ON vt.id = sv.task_id
        LEFT JOIN users au ON au.id = vt.assignee_id
@@ -741,6 +760,8 @@ export async function registerSurveyRoutes(
         // different units disagree the moment either is edited.
         total_extent_sq_km: p.extentAc === null ? null : acresToSqKm(p.extentAc),
         dgps_base: p.row.dgps_base, dgps_rovers: p.row.dgps_rovers, teams: p.row.teams,
+        claimed_milestones: (p.row.claimed_milestones ?? []).map(Number),
+        claimed_percent: Number(p.row.claimed_percent ?? 0),
         vill_code_old: p.row.vill_code_old,
         // The task this village stands on the board as, and what it carries
         // that a survey row has nowhere else: who is doing it and when.
@@ -2087,6 +2108,200 @@ export async function registerSurveyRoutes(
       };
     });
 
+  /* ----------------------------------------- submitted for billing (§066) */
+
+  /**
+   * What has been claimed against a village.
+   *
+   * A resurvey contract releases a village's value in stages — half at ground
+   * truthing, thirty per cent at records, the rest on final submission. The
+   * office needs to pull "villages where the first claim went in and the
+   * second has not", and that list lived in a spreadsheet until now.
+   */
+  app.get('/api/v1/survey/villages/:id/billing', { preHandler: guard('survey.read') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      await villageOr404(pool, u.orgId, id, u);
+      const rows = (await pool.query(
+        `SELECT b.*,
+                NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), '')
+                  AS submitted_by_name
+           FROM survey_village_billing b
+           LEFT JOIN users usr ON usr.id = b.created_by
+           LEFT JOIN employees e ON e.id = usr.employee_id
+          WHERE b.org_id = $1 AND b.survey_village_id = $2
+          ORDER BY b.milestone`,
+        [u.orgId, id])).rows;
+      const claims = rows.map(r => ({
+        ...r,
+        percent: num(r.percent),
+        extent_ac: num(r.extent_ac),
+        submitted_on: iso(r.submitted_on),
+        decided_on: iso(r.decided_on),
+      }));
+      return {
+        data: claims,
+        // The share released so far, so the screen does not have to know the
+        // contract's split to say "80% claimed".
+        meta: { claimed_percent: claimedPercent(claims) },
+      };
+    });
+
+  app.post('/api/v1/survey/villages/:id/billing', { preHandler: guard('survey.manage') },
+    async (req, reply) => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(villageBillingSchema, req.body);
+      const status = (input.status ?? 'SUBMITTED') as BillingStatus;
+      if (billingDecisionRequired(status) && !input.decided_on) {
+        fail('DECISION_DATE_REQUIRED',
+          'A claim recorded as ' + status.toLowerCase() +
+          ' needs the date the department decided it. Enter that date, or record it as submitted for now.', 422);
+      }
+      const data = await mutate(pool, req, 'survey.village.billing', 'survey_village_billing',
+        async db => {
+          await villageOr404(db, u.orgId, id, u);
+          const existing = await db.query(
+            'SELECT milestone FROM survey_village_billing WHERE survey_village_id = $1 AND milestone = $2',
+            [id, input.milestone]);
+          if (existing.rowCount) {
+            fail('MILESTONE_ALREADY_CLAIMED',
+              'Milestone ' + input.milestone + ' has already been submitted for this village. ' +
+              'Open the claim to change its status or reference number.', 409);
+          }
+          const row = (await db.query(
+            `INSERT INTO survey_village_billing(org_id, survey_village_id, milestone,
+               percent, status, submitted_on, decided_on, reference_no, extent_ac,
+               remarks, created_by, updated_by)
+             VALUES($1,$2,$3,$4,$5,COALESCE($6::date, CURRENT_DATE),$7,$8,$9,$10,$11,$11)
+             RETURNING *`,
+            [u.orgId, id, input.milestone,
+              // Defaulted from the milestone so the usual case needs no
+              // decision; stored, so a different contract keeps its own split.
+              input.percent ?? MILESTONE_PERCENT[input.milestone] ?? 0,
+              status, input.submitted_on ?? null, input.decided_on ?? null,
+              input.reference_no ?? null, input.extent_ac ?? null,
+              input.remarks ?? null, u.id])).rows[0];
+          return { ...row, percent: num(row.percent), extent_ac: num(row.extent_ac) };
+        });
+      reply.code(201);
+      return { data };
+    });
+
+  app.patch('/api/v1/survey/billing/:id', { preHandler: guard('survey.manage') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(villageBillingPatchSchema, req.body);
+      return {
+        data: await mutate(pool, req, 'survey.village.billing.update', 'survey_village_billing', async db => {
+          const row = await inOrg(db, 'survey_village_billing', id, u.orgId, true);
+          if (!row) fail('NOT_FOUND', 'That billing claim no longer exists.', 404);
+          await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+          version(req, row as { version: number });
+          const status = (input.status ?? row.status) as BillingStatus;
+          const decided = input.decided_on !== undefined ? input.decided_on : row.decided_on;
+          if (billingDecisionRequired(status) && !decided) {
+            fail('DECISION_DATE_REQUIRED',
+              'A claim recorded as ' + status.toLowerCase() +
+              ' needs the date the department decided it.', 422);
+          }
+          const sets: string[] = [], values: unknown[] = [id];
+          for (const key of ['percent', 'status', 'submitted_on', 'decided_on',
+            'reference_no', 'extent_ac', 'remarks'] as const) {
+            if (input[key] !== undefined) { values.push(input[key]); sets.push(`${key} = $${values.length}`); }
+          }
+          if (!sets.length) return row;
+          values.push(u.id);
+          const updated = (await db.query(
+            `UPDATE survey_village_billing SET ${sets.join(', ')}, version = version + 1,
+               updated_at = now(), updated_by = $${values.length}
+             WHERE id = $1 RETURNING *`, values)).rows[0];
+          return { ...updated, percent: num(updated.percent), extent_ac: num(updated.extent_ac) };
+        }),
+      };
+    });
+
+  app.delete('/api/v1/survey/billing/:id', { preHandler: guard('survey.manage') },
+    async req => ({
+      data: await mutate(pool, req, 'survey.village.billing.delete', 'survey_village_billing', async db => {
+        const u = actor(req), id = (req.params as { id: string }).id;
+        const row = await inOrg(db, 'survey_village_billing', id, u.orgId, true);
+        if (!row) fail('NOT_FOUND', 'That billing claim no longer exists.', 404);
+        await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+        await db.query('DELETE FROM survey_village_billing WHERE id = $1', [id]);
+        return { id, deleted: true };
+      }),
+    }));
+
+  /**
+   * Villages by what has been claimed on them.
+   *
+   * The list the office pulls before a review: who is due a second claim, what
+   * went in last month, what the department has sat on. Filters are ANDed,
+   * and a village appears once per claim that matches.
+   */
+  app.get('/api/v1/survey/billing', { preHandler: guard('survey.read') },
+    async req => {
+      const u = actor(req);
+      const q = parse(z.object({
+        project_id: z.string().uuid().optional(),
+        milestone: z.coerce.number().int().min(1).max(9).optional(),
+        status: z.enum(['SUBMITTED', 'APPROVED', 'REJECTED', 'PAID']).optional(),
+        from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        /** Villages with nothing claimed at this milestone yet. */
+        outstanding: z.coerce.number().int().min(1).max(9).optional(),
+      }).strict(), req.query ?? {});
+
+      if (q.outstanding !== undefined) {
+        const rows = (await pool.query(
+          `SELECT v.id, v.survey_project_id, ou.name AS village_name,
+                  v.total_extent_ac,
+                  (SELECT string_agg(b2.milestone::text, ',' ORDER BY b2.milestone)
+                     FROM survey_village_billing b2
+                    WHERE b2.survey_village_id = v.id AND b2.status <> 'REJECTED') AS claimed
+             FROM survey_villages v
+             JOIN org_units ou ON ou.id = v.village_id
+            WHERE v.org_id = $1
+              AND ($2::uuid IS NULL OR v.survey_project_id = $2)
+              AND NOT EXISTS (
+                SELECT 1 FROM survey_village_billing b
+                 WHERE b.survey_village_id = v.id AND b.milestone = $3
+                   AND b.status <> 'REJECTED')
+            ORDER BY ou.name`,
+          [u.orgId, q.project_id ?? null, q.outstanding])).rows;
+        return {
+          data: rows.map(r => ({
+            ...r, total_extent_ac: num(r.total_extent_ac),
+            claimed_milestones: r.claimed ? String(r.claimed).split(',').map(Number) : [],
+          })),
+        };
+      }
+
+      const rows = (await pool.query(
+        `SELECT b.*, v.survey_project_id, ou.name AS village_name,
+                v.total_extent_ac
+           FROM survey_village_billing b
+           JOIN survey_villages v ON v.id = b.survey_village_id
+           JOIN org_units ou ON ou.id = v.village_id
+          WHERE b.org_id = $1
+            AND ($2::uuid IS NULL OR v.survey_project_id = $2)
+            AND ($3::int IS NULL OR b.milestone = $3)
+            AND ($4::text IS NULL OR b.status = $4)
+            AND ($5::date IS NULL OR b.submitted_on >= $5)
+            AND ($6::date IS NULL OR b.submitted_on <= $6)
+          ORDER BY b.submitted_on DESC, ou.name`,
+        [u.orgId, q.project_id ?? null, q.milestone ?? null, q.status ?? null,
+          q.from ?? null, q.to ?? null])).rows;
+      return {
+        data: rows.map(r => ({
+          ...r, percent: num(r.percent), extent_ac: num(r.extent_ac),
+          total_extent_ac: num(r.total_extent_ac),
+          submitted_on: iso(r.submitted_on),
+          decided_on: iso(r.decided_on),
+        })),
+      };
+    });
+
   /* ------------------------------------------- who is on the programme */
 
   app.get('/api/v1/survey/projects/:id/employees', { preHandler: guard('survey.read') },
@@ -2310,6 +2525,29 @@ export async function registerSurveyRoutes(
            count(DISTINCT c.employee_id) FILTER (WHERE c.released_on IS NULL)::int AS crew,
            -- Equipment currently out against those villages.
            count(DISTINCT r.asset_id) FILTER (WHERE r.released_on IS NULL)::int AS rovers_out,
+           /*
+            * Villages inside this unit with nobody on them, and villages with
+            * people but no instrument.
+            *
+            * A count of crew says how many are deployed; it does not say
+            * where nobody is. "Eleven villages in this mandal and four people"
+            * reads as coverage until you notice the four are all on one
+            * village. These two are the gap, which is what the screen is for.
+            */
+           count(DISTINCT s.survey_village_id) FILTER (
+             WHERE NOT EXISTS (
+               SELECT 1 FROM survey_crew c2
+                WHERE c2.survey_village_id = s.survey_village_id
+                  AND c2.released_on IS NULL))::int AS villages_uncrewed,
+           count(DISTINCT s.survey_village_id) FILTER (
+             WHERE EXISTS (
+               SELECT 1 FROM survey_crew c3
+                WHERE c3.survey_village_id = s.survey_village_id
+                  AND c3.released_on IS NULL)
+               AND NOT EXISTS (
+               SELECT 1 FROM survey_rover_allocations r2
+                WHERE r2.survey_village_id = s.survey_village_id
+                  AND r2.released_on IS NULL))::int AS villages_unequipped,
            COALESCE(json_agg(DISTINCT jsonb_build_object(
              'employee_id', c.employee_id,
              'name', COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)),''), e.emp_no),
@@ -2353,6 +2591,9 @@ export async function registerSurveyRoutes(
             assets: new Set(rows.flatMap(r =>
               (r.assets as Array<{ asset_id: string }>).map(a => a.asset_id))).size,
             programme_staff: programmeStaff.length,
+            // The gaps, added across units: a village is in exactly one.
+            villages_uncrewed: rows.reduce((t, r) => t + Number(r.villages_uncrewed), 0),
+            villages_unequipped: rows.reduce((t, r) => t + Number(r.villages_unequipped), 0),
           },
         },
       };

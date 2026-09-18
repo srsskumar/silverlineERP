@@ -14,6 +14,10 @@ import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Tabl
 import { Notice } from '@/components/finance/Primitives';
 import { day, businessToday } from '@/lib/finance';
 import { STAGE_STATE_LABELS, stageLabel, stateTone } from '@/lib/survey';
+import {
+  MILESTONE_PERCENT, MILESTONE_LABELS, BILLING_STATUS_LABELS,
+  billingDecisionRequired, type BillingStatus,
+} from '@silverline/shared';
 
 type Row = Record<string, any>;
 
@@ -57,6 +61,7 @@ export function VillageDetail({
         <Crew villageId={String(village.id)} pipeline={pipeline} canManage={canManage} />
         <Rovers villageId={String(village.id)} canManage={canManage} />
         <CrewAssets villageId={String(village.id)} />
+        <Billing village={village} canManage={canManage} />
       </div>
     </div>
   );
@@ -685,6 +690,264 @@ function Rovers({ villageId, canManage }: { villageId: string; canManage: boolea
                   ) : null}
                 </TR>
               ))}
+            </TBody>
+          </Table>
+        </TableWrap>
+      ) : null}
+    </section>
+  );
+}
+
+
+/* ---------------------------------------------------------------- billing */
+
+/**
+ * What has been claimed against this village (§066).
+ *
+ * The contract releases a village's value in three claims — half at ground
+ * truthing, thirty per cent at records, the rest on final submission — and
+ * which villages sit at which claim is the question the office asks before
+ * every review. It was answered out of a spreadsheet kept beside the system.
+ *
+ * A claim is a record of something somebody did: a covering letter that went
+ * to the department on a date under a file number. It is not inferred from
+ * the stages, because a village can be finished for weeks before anybody
+ * raises the claim, and pretending otherwise would bill work that has not
+ * been submitted.
+ */
+function Billing({ village, canManage }: { village: Row; canManage: boolean }) {
+  const villageId = String(village.id);
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [adding, setAdding] = React.useState(false);
+  const blank = {
+    milestone: '1', submitted_on: businessToday(), reference_no: '', extent_ac: '', remarks: '',
+  };
+  const [form, setForm] = React.useState(blank);
+
+  const claims = useQuery({
+    queryKey: ['survey-billing', villageId],
+    queryFn: async () => (await apiRequestRaw(
+      `/api/v1/survey/villages/${villageId}/billing`)).body as { data: Row[]; meta?: Row },
+  });
+
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['survey-billing', villageId] });
+    // The village list carries the claimed share, so it goes stale too.
+    qc.invalidateQueries({ queryKey: ['survey-villages'] });
+  };
+
+  const submit = useMutation({
+    mutationFn: async () => apiRequest(`/api/v1/survey/villages/${villageId}/billing`, {
+      method: 'POST',
+      body: {
+        milestone: Number(form.milestone),
+        submitted_on: form.submitted_on || undefined,
+        reference_no: form.reference_no.trim() || undefined,
+        extent_ac: form.extent_ac === '' ? undefined : Number(form.extent_ac),
+        remarks: form.remarks.trim() || undefined,
+      },
+    }),
+    onError: (e) => toast.error('The claim was not recorded', messageOf(e)),
+    onSuccess: () => {
+      toast.success('Recorded as submitted for billing',
+        'It now appears in the billing list for this programme.');
+      setForm(blank); setAdding(false); refresh();
+    },
+  });
+
+  const decide = useMutation({
+    mutationFn: async (v: { id: string; version: number; status: BillingStatus }) =>
+      apiRequest(`/api/v1/survey/billing/${v.id}`, {
+        method: 'PATCH',
+        headers: { 'If-Match': String(v.version) },
+        body: {
+          status: v.status,
+          // A decided claim carries the day it was decided, or it cannot be
+          // aged — and ageing them is why they are tracked.
+          ...(billingDecisionRequired(v.status) ? { decided_on: businessToday() } : {}),
+        },
+      }),
+    onError: (e) => toast.error('The claim was not updated', messageOf(e)),
+    onSuccess: () => { toast.success('Claim updated'); refresh(); },
+  });
+
+  const remove = useMutation({
+    mutationFn: async (id: string) =>
+      apiRequest(`/api/v1/survey/billing/${id}`, { method: 'DELETE' }),
+    onError: (e) => toast.error('The claim was not removed', messageOf(e)),
+    onSuccess: () => {
+      toast.success('Claim removed', 'Nothing else about the village changed.');
+      refresh();
+    },
+  });
+
+  const rows: Row[] = claims.data?.data ?? [];
+  const claimed = Number(claims.data?.meta?.claimed_percent ?? 0);
+  // The milestones left to claim, so the picker does not offer one twice.
+  const taken = new Set(rows.filter((r) => r.status !== 'REJECTED').map((r) => Number(r.milestone)));
+  const open = [1, 2, 3].filter((m) => !taken.has(m));
+
+  React.useEffect(() => {
+    // Default to the next claim due rather than to the first.
+    if (open.length && !open.includes(Number(form.milestone))) {
+      setForm((f) => ({ ...f, milestone: String(open[0]) }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows.length]);
+
+  return (
+    <section className="rounded-lg border border-border bg-surface-sunken p-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-text-subtle">
+          Submitted for billing
+        </h4>
+        {canManage && open.length > 0 ? (
+          <Button type="button" variant="ghost" onClick={() => setAdding((a) => !a)}>
+            {adding ? 'Cancel' : 'Record a submission'}
+          </Button>
+        ) : null}
+      </div>
+
+      <p className="mt-1 text-2xs text-text-subtle">
+        {claimed >= 100
+          ? 'The whole value of this village has been claimed.'
+          : `${claimed}% of this village\u2019s value claimed so far\u00a0\u00b7 ${
+            open.length === 0
+              ? 'nothing left to claim'
+              : `next due: ${MILESTONE_LABELS[open[0]]} (${MILESTONE_PERCENT[open[0]]}%)`}`}
+      </p>
+
+      {claims.isLoading ? <Skeleton className="mt-2 h-16" /> : null}
+      {claims.isError ? (
+        <ErrorCard error={claims.error} onRetry={() => claims.refetch()} />
+      ) : null}
+
+      {adding ? (
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <label className="text-2xs text-text-subtle">
+            Milestone
+            <select className={field} value={form.milestone}
+              onChange={(e) => setForm({ ...form, milestone: e.target.value })}>
+              {open.map((m) => (
+                <option key={m} value={m}>
+                  {MILESTONE_LABELS[m]} — {MILESTONE_PERCENT[m]}%
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-2xs text-text-subtle">
+            Submitted on
+            <input type="date" className={field} value={form.submitted_on}
+              max={businessToday()}
+              onChange={(e) => setForm({ ...form, submitted_on: e.target.value })} />
+          </label>
+          <label className="text-2xs text-text-subtle">
+            Department reference
+            <input className={field} value={form.reference_no} placeholder="RC/2026/114"
+              onChange={(e) => setForm({ ...form, reference_no: e.target.value })} />
+          </label>
+          <label className="text-2xs text-text-subtle">
+            Extent claimed (Ac)
+            <input className={field} inputMode="decimal" value={form.extent_ac}
+              placeholder={village.total_extent_ac ? String(village.total_extent_ac) : ''}
+              onChange={(e) => setForm({ ...form, extent_ac: e.target.value })} />
+            <span className="mt-0.5 block text-2xs text-text-subtle">
+              What was surveyed, which need not equal the revenue record.
+            </span>
+          </label>
+          <label className="text-2xs text-text-subtle sm:col-span-2">
+            Remarks
+            <input className={field} value={form.remarks}
+              onChange={(e) => setForm({ ...form, remarks: e.target.value })} />
+          </label>
+          <div className="sm:col-span-2">
+            <Button type="button" variant="primary" disabled={submit.isPending}
+              onClick={() => submit.mutate()}>
+              {submit.isPending ? 'Recording…' : 'Record submission'}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {rows.length === 0 && !claims.isLoading ? (
+        <p className="mt-2 text-xs text-text-muted">
+          Nothing has been submitted for billing on this village yet.
+        </p>
+      ) : null}
+
+      {rows.length > 0 ? (
+        <TableWrap className="mt-2">
+          <Table>
+            <THead>
+              <TR>
+                <TH>Milestone</TH>
+                <TH className="text-right">Share</TH>
+                <TH>Submitted</TH>
+                <TH>Reference</TH>
+                <TH>Status</TH>
+                <TH />
+              </TR>
+            </THead>
+            <TBody>
+              {rows.map((c) => {
+                const status = String(c.status) as BillingStatus;
+                return (
+                  <TR key={String(c.id)}>
+                    <TD className="text-text">
+                      {MILESTONE_LABELS[Number(c.milestone)] ?? `Milestone ${c.milestone}`}
+                    </TD>
+                    <TD className="text-right tabular-nums">{Number(c.percent)}%</TD>
+                    <TD className="text-xs text-text-muted">
+                      {day(c.submitted_on)}
+                      {c.extent_ac ? (
+                        <span className="ml-1 text-2xs text-text-subtle">
+                          {Number(c.extent_ac)} Ac
+                        </span>
+                      ) : null}
+                    </TD>
+                    <TD className="font-mono text-2xs text-text-muted">
+                      {c.reference_no || '—'}
+                    </TD>
+                    <TD>
+                      <Badge tone={status === 'PAID' ? 'success'
+                        : status === 'APPROVED' ? 'success'
+                          : status === 'REJECTED' ? 'danger' : 'neutral'}>
+                        {BILLING_STATUS_LABELS[status] ?? status}
+                      </Badge>
+                      {c.decided_on ? (
+                        <span className="ml-1 text-2xs text-text-subtle">{day(c.decided_on)}</span>
+                      ) : null}
+                    </TD>
+                    <TD className="text-right">
+                      {canManage ? (
+                        <div className="flex justify-end gap-1">
+                          {status === 'SUBMITTED' ? (
+                            <>
+                              <Button type="button" variant="ghost"
+                                onClick={() => decide.mutate({
+                                  id: String(c.id), version: Number(c.version), status: 'APPROVED',
+                                })}>Approved</Button>
+                              <Button type="button" variant="ghost"
+                                onClick={() => decide.mutate({
+                                  id: String(c.id), version: Number(c.version), status: 'REJECTED',
+                                })}>Returned</Button>
+                            </>
+                          ) : null}
+                          {status === 'APPROVED' ? (
+                            <Button type="button" variant="ghost"
+                              onClick={() => decide.mutate({
+                                id: String(c.id), version: Number(c.version), status: 'PAID',
+                              })}>Paid</Button>
+                          ) : null}
+                          <Button type="button" variant="ghost"
+                            onClick={() => remove.mutate(String(c.id))}>Remove</Button>
+                        </div>
+                      ) : null}
+                    </TD>
+                  </TR>
+                );
+              })}
             </TBody>
           </Table>
         </TableWrap>

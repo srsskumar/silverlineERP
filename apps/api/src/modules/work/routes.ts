@@ -1,4 +1,4 @@
-import {dateStringSchema} from "@silverline/shared";
+import {dateStringSchema, businessDay} from "@silverline/shared";
 import {validateCustomFields} from "../../common/customFields.js";
 import {encodeBlob, readBlob} from "../../common/blobStore.js";
 import {scanUpload} from "../../common/fileSafety.js";
@@ -88,6 +88,24 @@ function dateOnly(v: Date | string | null): string | null {
 
 function iso(v: Date | string): string {
   return v instanceof Date ? v.toISOString() : new Date(v).toISOString();
+}
+
+/**
+ * The Indian calendar day an instant fell on.
+ *
+ * The trigger stamps actual start and end in UTC. A crew that closed a task
+ * at 01:00 IST closed it that day, not the day before, and the filter that
+ * pulls "finished in August" has to agree with them.
+ */
+function istDay(v: Date | string | null): string | null {
+  if (v === null || v === undefined) {
+    return null;
+  }
+  return businessDay(v instanceof Date ? v : new Date(v));
+}
+
+function isoOrNull(v: Date | string | null): string | null {
+  return v === null || v === undefined ? null : iso(v);
 }
 
 
@@ -293,6 +311,8 @@ interface TaskRow {
   village_id: string | null;
   planned_start_date: Date | string | null;
   planned_end_date: Date | string | null;
+  actual_start_at: Date | string | null;
+  actual_end_at: Date | string | null;
   priority: string;
   estimated_hours: string | number | null;
   board_position: number;
@@ -303,7 +323,8 @@ interface TaskRow {
 
 const TASK_COLS = `id, org_id, project_id, title, description, status,
   assignee_id, parent_task_id, village_id, planned_start_date,
-  planned_end_date, priority, estimated_hours, board_position, version,
+  planned_end_date, actual_start_at, actual_end_at,
+  priority, estimated_hours, board_position, version,
   created_at, updated_at,task_sla(status,planned_end_date,project_id) AS sla_status`;
 
 function toTaskShape(row: TaskRow, labels: LabelShape[] = []) {
@@ -318,6 +339,12 @@ function toTaskShape(row: TaskRow, labels: LabelShape[] = []) {
     village_id: row.village_id,
     planned_start_date: dateOnly(row.planned_start_date),
     planned_end_date: dateOnly(row.planned_end_date),
+    // Stamped by the status trigger, never entered. Read as the Indian
+    // calendar day the work started and ended on.
+    actual_start_on: istDay(row.actual_start_at),
+    actual_end_on: istDay(row.actual_end_at),
+    actual_start_at: isoOrNull(row.actual_start_at),
+    actual_end_at: isoOrNull(row.actual_end_at),
     priority: row.priority,
     estimated_hours:
       row.estimated_hours === null || row.estimated_hours === undefined
@@ -469,6 +496,13 @@ const taskListQuerySchema = cursorPageQuerySchema.extend({
   sla: z.enum(["overdue", "at_risk", "on_schedule"]).optional(),
   cycle_id:z.string().uuid().optional(),
   due_from:dateStringSchema.optional(),due_to:dateStringSchema.optional(),
+  /*
+   * When work actually began and ended, as opposed to when it was planned to.
+   * A programme is billed and reviewed on what happened, so the dates that
+   * answer "what did we finish in August" are these, not the planned pair.
+   */
+  started_from:dateStringSchema.optional(),started_to:dateStringSchema.optional(),
+  finished_from:dateStringSchema.optional(),finished_to:dateStringSchema.optional(),
   priority:z.enum(['LOW','MEDIUM','HIGH','URGENT']).optional(),
   mentioned_me:z.enum(['true','false']).optional(),
   custom_fields:z.string().max(5000).transform((value,ctx)=>{try{return JSON.parse(value);}catch{ctx.addIssue({code:'custom',message:'Use valid JSON for custom fields'});return z.NEVER;}}).pipe(z.record(z.union([z.string().max(5000),z.number().finite(),z.boolean(),z.array(z.string()).max(100)]))).optional(),
@@ -1673,6 +1707,15 @@ export async function registerWorkRoutes(
     for(const key of ['cycle_id','priority'] as const){if(parsed.data[key]){values.push(parsed.data[key]);clauses.push(`${key}=$${values.length}`);}}
     if(parsed.data.due_from){values.push(parsed.data.due_from);clauses.push(`planned_end_date >= $${values.length}::date`);}
     if(parsed.data.due_to){values.push(parsed.data.due_to);clauses.push(`planned_end_date <= $${values.length}::date`);}
+    /*
+     * Actual dates are stamped in UTC by the status trigger; the filter is a
+     * calendar day in India. Convert before comparing or a task finished at
+     * 02:00 IST lands on the previous day for the person who finished it.
+     */
+    if(parsed.data.started_from){values.push(parsed.data.started_from);clauses.push(`(actual_start_at AT TIME ZONE 'Asia/Kolkata')::date >= $${values.length}::date`);}
+    if(parsed.data.started_to){values.push(parsed.data.started_to);clauses.push(`(actual_start_at AT TIME ZONE 'Asia/Kolkata')::date <= $${values.length}::date`);}
+    if(parsed.data.finished_from){values.push(parsed.data.finished_from);clauses.push(`(actual_end_at AT TIME ZONE 'Asia/Kolkata')::date >= $${values.length}::date`);}
+    if(parsed.data.finished_to){values.push(parsed.data.finished_to);clauses.push(`(actual_end_at AT TIME ZONE 'Asia/Kolkata')::date <= $${values.length}::date`);}
     if(parsed.data.custom_fields){values.push(JSON.stringify(parsed.data.custom_fields));clauses.push(`custom_fields @> $${values.length}::jsonb`);}
     if(parsed.data.mentioned_me==='true'){values.push(user.id);clauses.push(`EXISTS(SELECT 1 FROM mentions m JOIN comments c ON c.id=m.comment_id WHERE c.task_id=tasks.id AND m.mentioned_user_id=$${values.length})`);}
     const sort=parsed.data.sort,sortExpression=sort==='due_asc'?"COALESCE(planned_end_date::text,'9999-12-31')":sort==='priority_desc'?"CASE priority WHEN 'URGENT' THEN '0' WHEN 'HIGH' THEN '1' WHEN 'MEDIUM' THEN '2' ELSE '3' END":"lower(title)";

@@ -1536,3 +1536,85 @@ export function findBottlenecks(
   }
   return out.sort((a, b) => b.severityDays - a.severityDays);
 }
+
+/* ------------------------------------------- billing milestones (§066) */
+
+/**
+ * What each milestone releases, by default.
+ *
+ * The AP resurvey contract pays a village in three claims: half once ground
+ * truthing is signed off, thirty per cent at records preparation, the last
+ * fifth on final submission. Defaults, not rules — the percentage is stored
+ * on the claim, so a programme written under different terms keeps its own.
+ */
+export const MILESTONE_PERCENT: Record<number, number> = { 1: 50, 2: 30, 3: 20 };
+
+/** What each milestone is called on the covering letter. */
+export const MILESTONE_LABELS: Record<number, string> = {
+  1: 'First milestone',
+  2: 'Second milestone',
+  3: 'Third milestone',
+};
+
+export const BILLING_STATUSES = ['SUBMITTED', 'APPROVED', 'REJECTED', 'PAID'] as const;
+export type BillingStatus = (typeof BILLING_STATUSES)[number];
+
+export const BILLING_STATUS_LABELS: Record<BillingStatus, string> = {
+  SUBMITTED: 'Submitted',
+  APPROVED: 'Approved',
+  REJECTED: 'Returned',
+  PAID: 'Paid',
+};
+
+export const villageBillingSchema = z.object({
+  milestone: z.number().int()
+    .min(1, 'Milestones are numbered from 1')
+    .max(9, 'A contract with more than nine claims is not one this handles'),
+  // Defaulted from the milestone at the route, so the common case needs no
+  // decision from the person filing it.
+  percent: z.number().finite()
+    .gt(0, 'A claim releases some share of the value')
+    .max(100, 'A claim cannot release more than the whole village')
+    .optional(),
+  // Backdating a claim is normal: the covering letter went out last week and
+  // somebody is recording it now. Forward-dating is not.
+  submitted_on: pastDate.optional(),
+  status: z.enum(BILLING_STATUSES).optional(),
+  decided_on: pastDate.nullable().optional(),
+  reference_no: z.string().max(64).nullable().optional(),
+  extent_ac: quantity.nullable().optional(),
+  remarks: z.string().max(2000).nullable().optional(),
+}).strict();
+
+export const villageBillingPatchSchema = villageBillingSchema
+  .partial()
+  .omit({ milestone: true })
+  .strict()
+  .refine(v => Object.keys(v).length > 0, 'Change at least one field');
+
+/**
+ * Whether a decision date makes sense for a status.
+ *
+ * A claim still sitting with the department has not been decided, and a date
+ * against it is somebody's guess hardening into a record. A decided claim
+ * without a date cannot be aged, which is the whole reason to track them.
+ */
+export function billingDecisionRequired(status: BillingStatus): boolean {
+  return status === 'APPROVED' || status === 'REJECTED' || status === 'PAID';
+}
+
+/**
+ * The share of a village's value that has been claimed.
+ *
+ * Returned claims release nothing: the work comes back and is claimed again
+ * under the same milestone once it is corrected.
+ */
+export function claimedPercent(
+  claims: { percent: number; status: string }[],
+): number {
+  return Math.round(
+    claims
+      .filter(c => c.status !== 'REJECTED')
+      .reduce((sum, c) => sum + Number(c.percent || 0), 0) * 100,
+  ) / 100;
+}
