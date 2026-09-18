@@ -8,7 +8,10 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildWorld, idem, uniq, workDate, type CatalogueWorld, type Headers } from "./fixture.js";
+import {
+  buildWorld, idem, uniq, uniquePhone, workDate,
+  type CatalogueWorld, type Headers,
+} from "./fixture.js";
 import { runSurveyAlerts } from "../../src/modules/jobs/surveyAlerts.js";
 
 let w: CatalogueWorld;
@@ -1697,5 +1700,276 @@ describe("moving villages, asked for impossible things", () => {
     const still = await w.pool.query(
       "SELECT survey_project_id FROM survey_villages WHERE id = $1", [v.data.id]);
     expect(String(still.rows[0].survey_project_id)).toBe(programmeId);
+  });
+});
+
+describe("a crew member reports the rover in their own hands", () => {
+  /*
+   * The rover is issued to a person in the asset register, and the day's
+   * figures for it are that person's account of their own work. Letting
+   * anybody file against any rover means one crew member's output can be
+   * written by another with nothing to say it happened.
+   */
+  let scopedVillage = "";
+  let theirRover = "";
+  let crewUser: Headers;
+  let crewEmployee = "";
+
+  beforeAll(async () => {
+    const mandal = String((await w.pool.query(
+      "SELECT id FROM org_units WHERE org_id=$1 AND type='mandal' LIMIT 1",
+      [w.orgId])).rows[0].id);
+    const v = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Rover scope village", village_code: uniq("RS"),
+      mandal_id: mandal, total_extent_ac: 90,
+    });
+    scopedVillage = String(v.data.id);
+
+    // A rover, allocated to the village and issued to somebody else.
+    theirRover = String((await w.pool.query(
+      `INSERT INTO assets(org_id, asset_code, name, category, status, condition)
+       VALUES($1,$2,'Someone elses rover','SURVEY','AVAILABLE','GOOD') RETURNING id`,
+      [w.orgId, uniq("AST")])).rows[0].id);
+    await post(w.admin, `/api/v1/survey/villages/${scopedVillage}/rovers`,
+      { asset_id: theirRover, allocated_on: day(-1) });
+
+    const otherEmployee = String((await w.pool.query(
+      `INSERT INTO employees(org_id, emp_no, first_name, phone, date_of_joining, status)
+       VALUES($1,$2,'Other','+919100088001','2024-01-01','ACTIVE') RETURNING id`,
+      [w.orgId, uniq("E")])).rows[0].id);
+    await w.pool.query(
+      `INSERT INTO asset_assignments(org_id, asset_id, employee_id, condition, reason)
+       VALUES($1,$2,$3,'GOOD','Field work')`,
+      [w.orgId, theirRover, otherEmployee]);
+
+    // Our crew member: an EMPLOYEE account, on the programme, carrying nothing.
+    crewEmployee = String((await w.pool.query(
+      `INSERT INTO employees(org_id, emp_no, first_name, phone, date_of_joining, status)
+       VALUES($1,$2,'Scoped','+919100088002','2024-01-01','ACTIVE') RETURNING id`,
+      [w.orgId, uniq("E")])).rows[0].id);
+    crewUser = w.role.EMPLOYEE;
+    await w.pool.query("UPDATE users SET employee_id = $1 WHERE id = $2",
+      [crewEmployee, w.roleUserId.EMPLOYEE]);
+    await w.pool.query(
+      `INSERT INTO survey_project_employees(org_id, survey_project_id, employee_id, project_role)
+       VALUES($1,$2,$3,'GT_USER') ON CONFLICT DO NOTHING`,
+      [w.orgId, programmeId, crewEmployee]);
+  });
+
+  it("refuses a rover issued to somebody else", async () => {
+    const r = await post(crewUser, "/api/v1/survey/entries", {
+      survey_village_id: scopedVillage, entry_date: day(0), teams_deployed: 1,
+      values: {},
+      rovers: [{ asset_id: theirRover, status: "UTILIZED", area_ac: 5 }],
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(403);
+    expect(JSON.stringify(r.body)).toContain("not issued to you");
+  });
+
+  it("accepts the rover they are carrying", async () => {
+    const mine = String((await w.pool.query(
+      `INSERT INTO assets(org_id, asset_code, name, category, status, condition)
+       VALUES($1,$2,'My rover','SURVEY','AVAILABLE','GOOD') RETURNING id`,
+      [w.orgId, uniq("AST")])).rows[0].id);
+    await post(w.admin, `/api/v1/survey/villages/${scopedVillage}/rovers`,
+      { asset_id: mine, allocated_on: day(-1) });
+    await w.pool.query(
+      `INSERT INTO asset_assignments(org_id, asset_id, employee_id, condition, reason)
+       VALUES($1,$2,$3,'GOOD','Field work')`,
+      [w.orgId, mine, crewEmployee]);
+
+    const r = await post(crewUser, "/api/v1/survey/entries", {
+      survey_village_id: scopedVillage, entry_date: day(-2), teams_deployed: 1,
+      values: { GOVT_LAND_EXTENT_AC: 7 },
+      rovers: [{ asset_id: mine, status: "UTILIZED", area_ac: 7 }],
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+
+  it("accepts a rover carried by somebody who reports to them", async () => {
+    // A supervisor files for the person whose phone is flat.
+    const juniorRover = String((await w.pool.query(
+      `INSERT INTO assets(org_id, asset_code, name, category, status, condition)
+       VALUES($1,$2,'Junior rover','SURVEY','AVAILABLE','GOOD') RETURNING id`,
+      [w.orgId, uniq("AST")])).rows[0].id);
+    await post(w.admin, `/api/v1/survey/villages/${scopedVillage}/rovers`,
+      { asset_id: juniorRover, allocated_on: day(-1) });
+    const junior = String((await w.pool.query(
+      `INSERT INTO employees(org_id, emp_no, first_name, phone, date_of_joining, status, reports_to)
+       VALUES($1,$2,'Junior','+919100088003','2024-01-01','ACTIVE',$3) RETURNING id`,
+      [w.orgId, uniq("E"), crewEmployee])).rows[0].id);
+    await w.pool.query(
+      `INSERT INTO asset_assignments(org_id, asset_id, employee_id, condition, reason)
+       VALUES($1,$2,$3,'GOOD','Field work')`,
+      [w.orgId, juniorRover, junior]);
+
+    const r = await post(crewUser, "/api/v1/survey/entries", {
+      survey_village_id: scopedVillage, entry_date: day(-3), teams_deployed: 1,
+      values: { GOVT_LAND_EXTENT_AC: 8 },
+      rovers: [{ asset_id: juniorRover, status: "UTILIZED", area_ac: 8 }],
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+
+  it("lets a team lead file on behalf of anybody", async () => {
+    // Supervision is the exception, and a real one: somebody is still in the
+    // field and the day has to be filed.
+    const r = await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: scopedVillage, entry_date: day(-4), teams_deployed: 1,
+      values: { GOVT_LAND_EXTENT_AC: 9 },
+      rovers: [{ asset_id: theirRover, status: "UTILIZED", area_ac: 9 }],
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+
+  it("leaves a day with no rover rows alone", async () => {
+    // The rule is about instruments, not about filing a return at all.
+    const r = await post(crewUser, "/api/v1/survey/entries", {
+      survey_village_id: scopedVillage, entry_date: day(-5), teams_deployed: 1,
+      values: { GOVT_LAND_EXTENT_AC: 6 },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+});
+
+describe("kit follows the crew", () => {
+  /*
+   * A rover is issued to somebody in the asset register and it goes where
+   * they go. Allocating the crew and then allocating each of their
+   * instruments to the same village was the same job twice, every few days,
+   * as crews move to the next village once ground truthing finishes.
+   */
+  async function kittedEmployee(label: string) {
+    const employee = String((await w.pool.query(
+      `INSERT INTO employees(org_id, emp_no, first_name, phone, date_of_joining, status)
+       VALUES($1,$2,$3,$4,'2024-01-01','ACTIVE') RETURNING id`,
+      [w.orgId, uniq("E"), label, uniquePhone()])).rows[0].id);
+    const asset = String((await w.pool.query(
+      `INSERT INTO assets(org_id, asset_code, name, category, status, condition)
+       VALUES($1,$2,$3,'SURVEY','AVAILABLE','GOOD') RETURNING id`,
+      [w.orgId, uniq("AST"), `${label} rover`])).rows[0].id);
+    await w.pool.query(
+      `INSERT INTO asset_assignments(org_id, asset_id, employee_id, condition, reason)
+       VALUES($1,$2,$3,'GOOD','Field work')`, [w.orgId, asset, employee]);
+    return { employee, asset };
+  }
+
+  async function newVillage(name: string) {
+    const mandal = String((await w.pool.query(
+      "SELECT id FROM org_units WHERE org_id=$1 AND type='mandal' LIMIT 1",
+      [w.orgId])).rows[0].id);
+    const v = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: name, village_code: uniq("KV"), mandal_id: mandal, total_extent_ac: 50,
+    });
+    expect(v.status, JSON.stringify(v.body)).toBe(201);
+    return String(v.data.id);
+  }
+
+  const allocated = async (villageId: string, assetId: string) => Number((await w.pool.query(
+    `SELECT count(*)::int AS n FROM survey_rover_allocations
+      WHERE survey_village_id = $1 AND asset_id = $2 AND released_on IS NULL`,
+    [villageId, assetId])).rows[0].n);
+
+  it("brings their instruments to the village when they are posted to it", async () => {
+    const { employee, asset } = await kittedEmployee("Carrier");
+    const village = await newVillage("Kit village");
+    const r = await post(w.admin, `/api/v1/survey/villages/${village}/crew`,
+      { employee_id: employee, stage_code: "GROUND_TRUTHING" });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.data.rovers_brought).toHaveLength(1);
+    expect(await allocated(village, asset)).toBe(1);
+  });
+
+  it("takes them away again when the posting ends", async () => {
+    const { employee, asset } = await kittedEmployee("Leaver");
+    const village = await newVillage("Kit leaves village");
+    const crew = await post(w.admin, `/api/v1/survey/villages/${village}/crew`,
+      { employee_id: employee, stage_code: "GROUND_TRUTHING" });
+    expect(await allocated(village, asset)).toBe(1);
+
+    const rel = await post(w.admin, `/api/v1/survey/crew/${crew.data.id}/release`, {});
+    expect(rel.status, JSON.stringify(rel.body)).toBe(200);
+    expect(rel.data.rovers_released).toBe(1);
+    expect(await allocated(village, asset)).toBe(0);
+  });
+
+  it("carries the kit on to the next village, which is the whole cycle", async () => {
+    // Ground truthing finishes, the crew moves on, and nobody re-allocates
+    // anything by hand.
+    const { employee, asset } = await kittedEmployee("Mover");
+    const first = await newVillage("First of the cycle");
+    const next = await newVillage("Next of the cycle");
+
+    const crew = await post(w.admin, `/api/v1/survey/villages/${first}/crew`,
+      { employee_id: employee, stage_code: "GROUND_TRUTHING" });
+    expect(await allocated(first, asset)).toBe(1);
+
+    await post(w.admin, `/api/v1/survey/crew/${crew.data.id}/release`, {});
+    const moved = await post(w.admin, `/api/v1/survey/villages/${next}/crew`,
+      { employee_id: employee, stage_code: "GROUND_TRUTHING" });
+    expect(moved.status, JSON.stringify(moved.body)).toBe(201);
+
+    expect(await allocated(first, asset)).toBe(0);
+    expect(await allocated(next, asset)).toBe(1);
+    // A rover is accounted to one village per day, so a same-day move gives
+    // the day it was last out to the village it worked and starts the new
+    // posting the next morning.
+    const started = await w.pool.query(
+      `SELECT allocated_on FROM survey_rover_allocations
+        WHERE survey_village_id = $1 AND asset_id = $2 AND released_on IS NULL`,
+      [next, asset]);
+    expect(String(started.rows[0].allocated_on).slice(0, 10) > day(0)).toBe(true);
+  });
+
+  it("leaves an instrument where it is if it is already out on another village", async () => {
+    /*
+     * Two villages holding the same rover is a worse record than one village
+     * missing it, and the register says where it really is.
+     *
+     * One person on two villages at once is how this arises — an asset has
+     * exactly one holder, which asset_one_assignment enforces, so it cannot
+     * arise from two people carrying it.
+     */
+    const { employee, asset } = await kittedEmployee("Doubled");
+    const held = await newVillage("Holding village");
+    const wanted = await newVillage("Wanting village");
+    await post(w.admin, `/api/v1/survey/villages/${held}/crew`,
+      { employee_id: employee, stage_code: "GROUND_TRUTHING" });
+
+    const r = await post(w.admin, `/api/v1/survey/villages/${wanted}/crew`,
+      { employee_id: employee, stage_code: "GT_QC" });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.data.rovers_left_elsewhere.length).toBeGreaterThan(0);
+    expect(await allocated(held, asset)).toBe(1);
+    expect(await allocated(wanted, asset)).toBe(0);
+  });
+
+  it("does not take away an instrument the village was given in its own right", async () => {
+    // That was a decision about the village, not about the person.
+    const { employee } = await kittedEmployee("Passer by");
+    const village = await newVillage("Village with its own rover");
+    const own = String((await w.pool.query(
+      `INSERT INTO assets(org_id, asset_code, name, category, status, condition)
+       VALUES($1,$2,'Village rover','SURVEY','AVAILABLE','GOOD') RETURNING id`,
+      [w.orgId, uniq("AST")])).rows[0].id);
+    await post(w.admin, `/api/v1/survey/villages/${village}/rovers`,
+      { asset_id: own, allocated_on: day(-1) });
+
+    const crew = await post(w.admin, `/api/v1/survey/villages/${village}/crew`,
+      { employee_id: employee, stage_code: "GROUND_TRUTHING" });
+    await post(w.admin, `/api/v1/survey/crew/${crew.data.id}/release`, {});
+    expect(await allocated(village, own)).toBe(1);
+  });
+
+  it("brings the whole crew's kit when they are posted together", async () => {
+    const a = await kittedEmployee("Bulk one");
+    const b = await kittedEmployee("Bulk two");
+    const village = await newVillage("Bulk kit village");
+    const r = await post(w.admin, `/api/v1/survey/villages/${village}/crew/bulk`,
+      { employee_ids: [a.employee, b.employee], stage_code: "GROUND_TRUTHING" });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.data.rovers_brought).toHaveLength(2);
+    expect(await allocated(village, a.asset)).toBe(1);
+    expect(await allocated(village, b.asset)).toBe(1);
   });
 });

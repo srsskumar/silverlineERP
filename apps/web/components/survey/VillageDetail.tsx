@@ -287,6 +287,14 @@ function Crew({
         d.assigned ? `${d.assigned} assigned` : '',
         d.already_assigned ? `${d.already_assigned} already on this stage` : '',
         d.refused ? `${d.refused} not active` : '',
+        // Said out loud: somebody who expected to allocate the rovers needs
+        // to know it has already happened.
+        d.rovers_brought?.length
+          ? `${d.rovers_brought.length} instrument(s) came with them`
+          : '',
+        d.rovers_left_elsewhere?.length
+          ? `${d.rovers_left_elsewhere.length} left where they are, still out on another village`
+          : '',
       ].filter(Boolean).join(', ') || 'Nothing to do');
       setBasket([]);
       setForm({ employee_id: '', stage_code: form.stage_code });

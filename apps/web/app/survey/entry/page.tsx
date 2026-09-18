@@ -112,6 +112,67 @@ export default function SurveyEntryPage() {
   const measures: Row[] = catalogue.data?.measures ?? [];
   const groups = groupMeasures(measures as Array<{ code: string; group_label?: string | null; label: string }>);
 
+  /**
+   * What the total becomes once today is filed.
+   *
+   * The form used to show only what was already recorded, so somebody typing
+   * today's figure had to add it up in their head to know where the village
+   * would stand — which is exactly the sum the workbook asked them to do and
+   * the reason it was so often wrong. Still derived, still not typed: the
+   * number moves as they type and is never sent.
+   */
+  const cumulativeOf = React.useCallback((code: string): number => {
+    const before = Number(village?.done?.[code] ?? 0);
+    const today = Number(values[code]);
+    return before + (Number.isFinite(today) ? today : 0);
+  }, [village, values]);
+
+  /**
+   * Every extent measure added together, cumulative.
+   *
+   * The village's own headline: acres surveyed across government land,
+   * private land and the rest. Each measure answers for its own category and
+   * nobody could see the one figure the programme is actually reported on.
+   */
+  const extentSurveyed = React.useMemo(() => {
+    return measures
+      .filter((m) => String(m.basis) === 'EXTENT')
+      .reduce((total, m) => total + cumulativeOf(String(m.code)), 0);
+  }, [measures, cumulativeOf]);
+
+  const extentTarget = Number(village?.total_extent_ac ?? 0);
+
+  /**
+   * Today's acres, counted two ways.
+   *
+   * Each rover reports its own acres and the extent measures are typed
+   * separately, so the same day's work is entered twice by two different
+   * routes. They should agree. Showing both means a crew notices the day they
+   * do not, instead of a report doing it a month later.
+   */
+  const roverAcresToday = React.useMemo(
+    () => Object.values(roverDays).reduce((total, r) => {
+      const n = Number(r.area_ac);
+      return total + (r.status === 'UTILIZED' && Number.isFinite(n) ? n : 0);
+    }, 0),
+    [roverDays],
+  );
+
+  const extentTypedToday = React.useMemo(
+    () => measures
+      .filter((m) => String(m.basis) === 'EXTENT')
+      .reduce((total, m) => {
+        const n = Number(values[String(m.code)]);
+        return total + (Number.isFinite(n) ? n : 0);
+      }, 0),
+    [measures, values],
+  );
+
+  // A tolerance, because acres carry decimals and nobody should be chased
+  // over a rounding difference.
+  const acresDisagree = roverAcresToday > 0 && extentTypedToday > 0
+    && Math.abs(roverAcresToday - extentTypedToday) > 0.01;
+
   // Prefill the crew and instruments from the village's allotment: the same
   // numbers most days, and retyping them is how they end up wrong.
   React.useEffect(() => {
@@ -311,6 +372,10 @@ export default function SurveyEntryPage() {
                     <span className="text-2xs text-text-subtle">
                       An idle rover has to say why — that is what makes the idle count useful.
                     </span>
+                    {/* Each rover answers for itself; this is the day. */}
+                    <span className="w-full text-2xs text-text-muted">
+                      {acres(roverAcresToday)} across {outToday.length} rover(s) today
+                    </span>
                   </div>
                   <div className="mt-2 space-y-2">
                     {outToday.map((r) => {
@@ -389,6 +454,36 @@ export default function SurveyEntryPage() {
                 </p>
               )}
 
+              {/*
+                * Where the village stands once today is filed.
+                *
+                * Every extent measure added together against the extent the
+                * village has to cover. Each measure answers for its own
+                * category; this is the one figure the programme is actually
+                * reported on, and nobody could see it while entering.
+                */}
+              <div className="flex flex-wrap items-baseline justify-between gap-2 rounded-lg border border-border bg-surface px-3 py-2.5">
+                <span className="text-2xs uppercase tracking-wide text-text-subtle">
+                  Extent surveyed
+                </span>
+                <span className="text-lg font-semibold tabular-nums text-text">
+                  {acres(extentSurveyed)}
+                  {extentTarget > 0 ? (
+                    <span className="ml-1 text-2xs font-normal text-text-subtle">
+                      of {acres(extentTarget)} · {pct((extentSurveyed / extentTarget) * 100)}
+                    </span>
+                  ) : null}
+                </span>
+              </div>
+
+              {acresDisagree ? (
+                <p className="text-2xs text-warning">
+                  The rovers account for {acres(roverAcresToday)} today and the extents above
+                  add up to {acres(extentTypedToday)}. Both are saved as entered — worth a look
+                  before you file, because they are the same acres counted twice.
+                </p>
+              ) : null}
+
               {groups.map((g) => (
                 <section key={g.group} className="rounded-lg border border-border bg-surface-sunken p-3">
                   <h3 className="text-xs font-semibold text-text">{g.group}</h3>
@@ -404,9 +499,15 @@ export default function SurveyEntryPage() {
                             </span>
                             {/* The cumulative, read-only. It is the column the
                                 workbook asks somebody to type, and the one
-                                thing nobody should be typing. */}
-                            <span className="text-2xs text-text-subtle" title="Worked out from the days already recorded">
-                              so far {count(done)}{position && position.pct !== null ? ` · ${pct(position.pct)}` : ''}
+                                thing nobody should be typing. Includes what
+                                is in the box, so the figure on screen is where
+                                the village stands once today is filed. */}
+                            <span
+                              className="text-2xs text-text-subtle"
+                              title={`${count(done)} recorded before today, plus what you enter here`}
+                            >
+                              cumulative {count(cumulativeOf(m.code))}
+                              {position && position.pct !== null ? ` · ${pct(position.pct)}` : ''}
                             </span>
                           </span>
                           <input

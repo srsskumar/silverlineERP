@@ -1042,12 +1042,18 @@ export async function registerSurveyRoutes(
         if (clash.rowCount) {
           fail('ALREADY_ASSIGNED', 'That employee is already on this stage here', 409);
         }
-        return (await db.query(
+        // Their instruments come with them (§note 11).
+        const kit = await carryKitToVillage(
+          db, u.orgId, id, input.employee_id, u.id, input.assigned_on ?? null);
+        const crewRow = (await db.query(
           `INSERT INTO survey_crew(org_id, survey_village_id, stage_id, employee_id,
              assigned_on, released_on, created_by)
            VALUES($1,$2,$3,$4,COALESCE($5::date, CURRENT_DATE),$6,$7) RETURNING *`,
           [u.orgId, id, stage.id, input.employee_id,
             input.assigned_on ?? null, input.released_on ?? null, u.id])).rows[0];
+        // Said rather than done silently: somebody who expected to allocate
+        // the rovers needs to know it has already happened.
+        return { ...crewRow, rovers_brought: kit.brought, rovers_left_elsewhere: kit.elsewhere };
       });
       reply.code(201);
       return { data: row };
@@ -1073,6 +1079,7 @@ export async function registerSurveyRoutes(
         if (!stage) fail('UNKNOWN_STAGE', `There is no stage ${input.stage_code}`, 422);
 
         const assigned: string[] = [], already: string[] = [], refused: string[] = [];
+        const brought: string[] = [], elsewhere: string[] = [];
         for (const employeeId of input.employee_ids) {
           const e = (await db.query(
             'SELECT id, status FROM employees WHERE id = $1 AND org_id = $2',
@@ -1089,10 +1096,19 @@ export async function registerSurveyRoutes(
                  AND released_on IS NULL)
              RETURNING id`,
             [u.orgId, id, stage.id, employeeId, input.assigned_on ?? null, u.id]);
-          if (done.rowCount) assigned.push(employeeId); else already.push(employeeId);
+          if (done.rowCount) {
+            assigned.push(employeeId);
+            // Their instruments come with them, so nobody allocates the same
+            // rovers to the next village by hand every few days.
+            const kit = await carryKitToVillage(
+              db, u.orgId, id, employeeId, u.id, input.assigned_on ?? null);
+            brought.push(...kit.brought);
+            elsewhere.push(...kit.elsewhere);
+          } else already.push(employeeId);
         }
         return { assigned: assigned.length, already_assigned: already.length,
-          refused: refused.length, refused_ids: refused };
+          refused: refused.length, refused_ids: refused,
+          rovers_brought: brought, rovers_left_elsewhere: elsewhere };
       });
       reply.code(201);
       return { data: out };
@@ -1253,11 +1269,21 @@ export async function registerSurveyRoutes(
           const row = (await db.query(
             'SELECT * FROM survey_crew WHERE id = $1 AND org_id = $2', [id, u.orgId])).rows[0];
           if (!row) fail('NOT_FOUND', 'Not found', 404);
+          /*
+           * What their posting brought goes back with them.
+           *
+           * Only that. An instrument allocated to this village in its own
+           * right stays: it was a decision about the village, not the person.
+           */
+          const returned = await releaseKitFromVillage(
+            db, u.orgId, String(row.survey_village_id), String(row.employee_id),
+            input.released_on ?? null);
           // Released rather than deleted, so who surveyed a village last
           // season is still answerable.
-          return (await db.query(
+          const released = (await db.query(
             `UPDATE survey_crew SET released_on = COALESCE($2::date, CURRENT_DATE)
              WHERE id = $1 RETURNING *`, [id, input.released_on ?? null])).rows[0];
+          return { ...released, rovers_released: returned };
         }),
       };
     });
@@ -1334,6 +1360,92 @@ export async function registerSurveyRoutes(
         data: rows.map(r => ({ ...r, issued_at: iso(r.issued_at), due_date: iso(r.due_date) })),
       };
     });
+
+  /**
+   * Bring a crew member's kit with them (§note 11).
+   *
+   * A rover is issued to somebody in the asset register and it goes where
+   * they go. Allocating the crew and then allocating each of their
+   * instruments to the same village was the same job twice, every few days,
+   * as crews move on to the next village — and the day somebody forgot, the
+   * village reported instruments it did not have.
+   *
+   * An instrument already out on another village is left where it is rather
+   * than moved: two villages holding the same rover is a worse record than
+   * one village missing it, and the register says where it really is.
+   *
+   * Returns what was brought, so the caller can say so rather than doing it
+   * silently.
+   */
+  async function carryKitToVillage(
+    db: PoolClient, orgId: string, villageId: string, employeeId: string, userId: string,
+    on?: string | null,
+  ): Promise<{ brought: string[]; elsewhere: string[]; startedOn: Record<string, string> }> {
+    const kit = (await db.query(
+      `SELECT DISTINCT aa.asset_id,
+              COALESCE(a.name, a.asset_code) AS label,
+              EXISTS (SELECT 1 FROM survey_rover_allocations r
+                       WHERE r.asset_id = aa.asset_id AND r.released_on IS NULL
+                         AND r.survey_village_id <> $3) AS out_elsewhere,
+              EXISTS (SELECT 1 FROM survey_rover_allocations r
+                       WHERE r.asset_id = aa.asset_id AND r.released_on IS NULL
+                         AND r.survey_village_id = $3) AS already_here
+         FROM asset_assignments aa
+         JOIN assets a ON a.id = aa.asset_id
+        WHERE aa.org_id = $1 AND aa.employee_id = $2 AND aa.returned_at IS NULL`,
+      [orgId, employeeId, villageId])).rows;
+
+    const brought: string[] = [], elsewhere: string[] = [];
+    const startedOn = new Map<string, string>();
+    for (const k of kit) {
+      if (k.already_here) continue;
+      if (k.out_elsewhere) { elsewhere.push(String(k.label)); continue; }
+      /*
+       * The day after it left the last village, at the earliest.
+       *
+       * A rover is accounted to one village per day — the database says so
+       * with an exclusion constraint, and the daily return assumes it too.
+       * A crew that finishes in the morning and moves that afternoon would
+       * otherwise put one instrument on two villages for the same day, and
+       * the insert would simply fail. The day it was last out stays with the
+       * village it worked; the new posting starts the next day.
+       */
+      const started = (await db.query(
+        `INSERT INTO survey_rover_allocations(org_id, survey_village_id, asset_id,
+           allocated_on, created_by, assigned_via_employee_id)
+         VALUES($1,$2,$3,
+           GREATEST(
+             COALESCE($4::date, CURRENT_DATE),
+             COALESCE((SELECT max(r.released_on) + 1 FROM survey_rover_allocations r
+                        WHERE r.asset_id = $3), '-infinity'::date)
+           ),
+           $5,$6)
+         RETURNING allocated_on`,
+        [orgId, villageId, k.asset_id, on ?? null, userId, employeeId])).rows[0];
+      brought.push(String(k.label));
+      startedOn.set(String(k.label), String(started.allocated_on).slice(0, 10));
+    }
+    return { brought, elsewhere, startedOn: Object.fromEntries(startedOn) };
+  }
+
+  /**
+   * And take it away again when they leave.
+   *
+   * Only what their posting brought. An instrument somebody allocated to this
+   * village in its own right stays: it was a decision about the village, not
+   * about the person.
+   */
+  async function releaseKitFromVillage(
+    db: PoolClient, orgId: string, villageId: string, employeeId: string,
+    on?: string | null,
+  ): Promise<number> {
+    return (await db.query(
+      `UPDATE survey_rover_allocations
+          SET released_on = COALESCE($4::date, CURRENT_DATE)
+        WHERE org_id = $1 AND survey_village_id = $2
+          AND assigned_via_employee_id = $3 AND released_on IS NULL`,
+      [orgId, villageId, employeeId, on ?? null])).rowCount ?? 0;
+  }
 
   app.post('/api/v1/survey/villages/:id/rovers', { preHandler: guard('survey.manage') },
     async (req, reply) => {
@@ -1439,6 +1551,45 @@ export async function registerSurveyRoutes(
         })));
         if (problems.length) fail('ROVER_DAY_INVALID', problems.join(' '), 422);
         for (const r of roverRows) await inOrg(db, 'assets', r.asset_id, u.orgId);
+
+        /*
+         * A crew member reports the instrument in their own hands.
+         *
+         * The rover is issued to a person in the asset register, and the day's
+         * figures for it are that person's account of their own work. Letting
+         * anybody file against any rover means one crew member's output can be
+         * written by another with nothing to say it happened.
+         *
+         * Supervision is the exception, and a real one: a team lead, a project
+         * manager or an administrator files on behalf of somebody whose phone
+         * is flat or who is still in the field, and so does the person they
+         * report to. Everyone else is limited to what they are carrying.
+         */
+        const supervises = u.permissions.includes('survey.manage')
+          || u.permissions.includes('survey.assign');
+        if (!supervises) {
+          const mine = (await db.query(
+            `SELECT a.asset_id,
+                    (holder.reports_to = me.id) AS reports_to_me,
+                    (a.employee_id = me.id)     AS is_mine
+               FROM asset_assignments a
+               JOIN employees holder ON holder.id = a.employee_id
+               JOIN users caller ON caller.id = $1
+               JOIN employees me ON me.id = caller.employee_id
+              WHERE a.org_id = $2 AND a.returned_at IS NULL
+                AND a.asset_id = ANY($3::uuid[])`,
+            [u.id, u.orgId, roverRows.map(r => r.asset_id)])).rows;
+          const allowed = new Map(mine.map(r => [String(r.asset_id), r]));
+          for (const r of roverRows) {
+            const held = allowed.get(String(r.asset_id));
+            if (!held || !(held.is_mine || held.reports_to_me)) {
+              fail('ROVER_NOT_YOURS',
+                'That instrument is not issued to you. You can record the day for a rover you '
+                + 'are carrying, or for somebody who reports to you — anything else has to be '
+                + 'filed by their team lead or project manager.', 403);
+            }
+          }
+        }
       }
 
       // Low progress wants a reason, and what counts as low is the
