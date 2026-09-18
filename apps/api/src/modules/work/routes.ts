@@ -1753,8 +1753,28 @@ export async function registerWorkRoutes(
       [row.id],
     );
     const labelsByTask = await taskLabelsFor(opts.pool, [row.id]);
+    /*
+     * Everybody else working this task (§note 13).
+     *
+     * The owner stays on the task row and answers for it; these are the
+     * people helping. Named here rather than as ids, because a list of
+     * UUIDs is not an answer to "who is on this".
+     */
+    const collaborators = await opts.pool.query(
+      `SELECT c.user_id, u.username,
+              COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), u.username)
+                AS name,
+              e.emp_no, c.added_at
+         FROM task_collaborators c
+         JOIN users u ON u.id = c.user_id
+         LEFT JOIN employees e ON e.id = u.employee_id
+        WHERE c.task_id = $1::uuid
+        ORDER BY name`,
+      [row.id],
+    );
     return {
       ...toTaskShape(row, labelsByTask.get(row.id) ?? []),
+      collaborators: collaborators.rows,
       subtasks: (subs.rows as TaskRef[]).map((s) => ({
         id: s.id,
         title: s.title,
@@ -1777,6 +1797,101 @@ export async function registerWorkRoutes(
       allowed_next: allowedNext(workflow, row.status),
     };
   }
+
+  /* ------------------------------------------ collaborators (§note 13) */
+
+  /**
+   * Put somebody else on a task.
+   *
+   * The owner stays the owner — the person the task is on, who answers for
+   * it — and this is everybody else working it. Behind the same permission as
+   * assigning, because deciding who works what is one decision whichever end
+   * of it you are at.
+   */
+  app.post("/api/v1/tasks/:id/collaborators", { preHandler: canAssignTask },
+    async (req, reply) => {
+      const user = req.authUser;
+      if (!user) {
+        return sendError(reply, req.requestId, {
+          status: 401, code: "UNAUTHENTICATED", message: "Authentication required",
+        });
+      }
+      const { id } = req.params as { id: string };
+      const body = req.body as { user_id?: string };
+      if (!body?.user_id || !/^[0-9a-f-]{36}$/i.test(body.user_id)) {
+        return sendError(reply, req.requestId, {
+          status: 422, code: "VALIDATION_ERROR", message: "Validation failed",
+          fieldErrors: [{ field: "user_id", message: "Choose somebody to add" }],
+        });
+      }
+      const task = await findTask(user.orgId, id);
+      if (!task) {
+        return sendError(reply, req.requestId, {
+          status: 404, code: "NOT_FOUND", message: "Task not found",
+        });
+      }
+      if (String(task.assignee_id ?? "") === body.user_id) {
+        return sendError(reply, req.requestId, {
+          status: 409, code: "ALREADY_OWNER",
+          message: "That person already owns this task, so they are already on it.",
+        });
+      }
+      const person = (await opts.pool.query(
+        "SELECT id FROM users WHERE id = $1::uuid AND org_id = $2 AND auth_status = 'ACTIVE'",
+        [body.user_id, user.orgId],
+      )).rows[0];
+      if (!person) {
+        return sendError(reply, req.requestId, {
+          status: 422, code: "UNKNOWN_USER",
+          message: "That account is not active in this organisation.",
+        });
+      }
+      const added = await opts.pool.query(
+        `INSERT INTO task_collaborators(org_id, task_id, user_id, added_by)
+         VALUES($1,$2::uuid,$3::uuid,$4)
+         ON CONFLICT (task_id, user_id) DO NOTHING
+         RETURNING *`,
+        [user.orgId, id, body.user_id, user.id],
+      );
+      if (!added.rowCount) {
+        // Pressing the button twice is not a second kind of involvement.
+        return reply.status(200).send({ data: { already: true } });
+      }
+      await writeAudit(opts.pool, {
+        orgId: user.orgId, actorId: user.id,
+        action: "task.collaborator.add", entityType: "task", entityId: id,
+        afterState: { user_id: body.user_id }, requestId: req.requestId,
+      });
+      return reply.status(201).send({ data: added.rows[0] });
+    });
+
+  app.delete("/api/v1/tasks/:id/collaborators/:userId", { preHandler: canAssignTask },
+    async (req, reply) => {
+      const user = req.authUser;
+      if (!user) {
+        return sendError(reply, req.requestId, {
+          status: 401, code: "UNAUTHENTICATED", message: "Authentication required",
+        });
+      }
+      const { id, userId } = req.params as { id: string; userId: string };
+      const gone = await opts.pool.query(
+        `DELETE FROM task_collaborators
+          WHERE org_id = $1 AND task_id = $2::uuid AND user_id = $3::uuid RETURNING *`,
+        [user.orgId, id, userId],
+      );
+      if (!gone.rowCount) {
+        return sendError(reply, req.requestId, {
+          status: 404, code: "NOT_FOUND",
+          message: "They are not on this task. Reload to see who is.",
+        });
+      }
+      await writeAudit(opts.pool, {
+        orgId: user.orgId, actorId: user.id,
+        action: "task.collaborator.remove", entityType: "task", entityId: id,
+        beforeState: gone.rows[0], requestId: req.requestId,
+      });
+      return reply.status(200).send({ data: { removed: true } });
+    });
 
   // ------------------------------------------------ GET /tasks/:id
   app.get("/api/v1/tasks/:id", { preHandler: canReadTask }, async (req, reply) => {
@@ -1853,12 +1968,24 @@ export async function registerWorkRoutes(
     // EMPLOYEE self-service (PRD §4): holders of task.update WITHOUT
     // task.assign (i.e. pure EMPLOYEEs, not TL/PM/ADMINs) may only update
     // tasks assigned to themselves.
-    if (!user.permissions.includes(T_ASSIGN) && cur.assignee_id !== user.id) {
+    /*
+     * The owner, or somebody put on it to help (§note 13).
+     *
+     * Being a collaborator has to mean being able to work the task, or it
+     * means nothing at all — the whole point of adding somebody is that they
+     * do some of it.
+     */
+    const isCollaborator = cur.assignee_id === user.id ? false : Boolean((await opts.pool.query(
+      "SELECT 1 FROM task_collaborators WHERE task_id = $1::uuid AND user_id = $2::uuid",
+      [cur.id, user.id],
+    )).rowCount);
+    if (!user.permissions.includes(T_ASSIGN)
+      && cur.assignee_id !== user.id && !isCollaborator) {
       return sendError(reply, req.requestId, {
         status: 403,
         code: "FORBIDDEN",
         message:
-          `That task is assigned to somebody else. You can update tasks assigned to you; changing anybody else's needs the "task.assign" permission.`,
+          `That task belongs to somebody else. You can update a task assigned to you or one you have been added to; anything else needs the "task.assign" permission.`,
       });
     }
     if (cur.version !== expectedVersion) {

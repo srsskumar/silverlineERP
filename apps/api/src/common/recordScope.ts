@@ -6,14 +6,41 @@ import {resolveScopes,employeeScopeClause,taskScopeClause} from './scopes.js';
 /** Check record access after the endpoint permission, including child routes. */
 export async function enforceRecordScope(req:FastifyRequest,permission:string):Promise<void>{
  const u=req.authUser;if(!u)return;const pool=req.server.db,scopes=resolveScopes(u.scopes),path=req.routeOptions.url??req.url,params=req.params as {id?:string;taskId?:string},body=(req.body??{}) as Record<string,unknown>;
- const deny=()=>{throw new ApiError({status:403,code:'FORBIDDEN',message:'Record is outside your permitted scope'});};
- async function employee(id:string){if(scopes.global)return;const values:unknown[]=[id,u!.orgId],clause=await employeeScopeClause(pool,u!.orgId,scopes,values);if(!(await pool.query(`SELECT 1 FROM employees WHERE id=$1 AND org_id=$2 AND ${clause}`,values)).rowCount)deny();}
+ // The message is the whole of what somebody gets, so each resource says the
+ // thing that is actually true of it rather than one sentence about "records".
+ const deny=(message='That record is outside what your roles let you see.')=>{
+  throw new ApiError({status:403,code:'FORBIDDEN',message});};
+ async function employee(id:string){if(scopes.global)return;const values:unknown[]=[id,u!.orgId],clause=await employeeScopeClause(pool,u!.orgId,scopes,values);if(!(await pool.query(`SELECT 1 FROM employees WHERE id=$1 AND org_id=$2 AND ${clause}`,values)).rowCount)deny(
+  'That employee record is outside the part of the directory your roles cover.');}
  async function task(id:string){
-  if(!scopes.global){const values:unknown[]=[id,u!.orgId],clause=await taskScopeClause(pool,u!.orgId,scopes,values);if(!(await pool.query(`SELECT 1 FROM tasks WHERE id=$1 AND org_id=$2 AND (${clause} OR assignee_id=$${values.push(u!.id)}::uuid)`,values)).rowCount)deny();}
+  if(!scopes.global){const values:unknown[]=[id,u!.orgId],clause=await taskScopeClause(pool,u!.orgId,scopes,values);/*
+   * Their own task, or one they were put on to help (§note 13).
+   *
+   * The scope check runs before the handler does, so a collaborator was
+   * refused here and never reached the rule that was meant to admit them —
+   * which made being added to a task mean nothing at all.
+   */
+  const self=values.push(u!.id);
+  if(!(await pool.query(`SELECT 1 FROM tasks WHERE id=$1 AND org_id=$2 AND (${clause} OR assignee_id=$${self}::uuid OR EXISTS(SELECT 1 FROM task_collaborators c WHERE c.task_id=tasks.id AND c.user_id=$${self}::uuid))`,values)).rowCount)deny(
+   'That task belongs to somebody else. You can work a task assigned to you or one you have '
+   +'been added to; anything else needs the "task.assign" permission.');}
   if(['task.update','task.transition','task.reorder'].includes(permission)){
    const r=await pool.query('SELECT assignee_id FROM tasks WHERE id=$1 AND org_id=$2',[id,u!.orgId]);
-   if(r.rowCount&&r.rows[0].assignee_id!==u!.id){
-    if(!u!.permissions.includes('task.assign'))deny();
+   /*
+    * Somebody put on the task to help counts as being on it (§note 13).
+    *
+    * This check runs before the handler, so without it a collaborator was
+    * refused here and never reached the rule meant to admit them — which
+    * made being added to a task mean nothing at all.
+    */
+   const helping=r.rowCount?Boolean((await pool.query(
+    'SELECT 1 FROM task_collaborators WHERE task_id=$1 AND user_id=$2',[id,u!.id])).rowCount):false;
+   if(r.rowCount&&r.rows[0].assignee_id!==u!.id&&!helping){
+    // Said in the words the module uses, because this is the message people
+    // actually see: the handler's own check never runs once this denies.
+    if(!u!.permissions.includes('task.assign'))throw new ApiError({status:403,code:'FORBIDDEN',
+     message:'That task belongs to somebody else. You can update a task assigned to you or one '
+      +'you have been added to; anything else needs the "task.assign" permission.'});
     const assignmentScope=resolveScopes(await scopesForPermission(req,'task.assign'));
     if(!assignmentScope.global){const values:unknown[]=[id,u!.orgId],clause=await taskScopeClause(pool,u!.orgId,assignmentScope,values);if(!(await pool.query(`SELECT 1 FROM tasks WHERE id=$1 AND org_id=$2 AND ${clause}`,values)).rowCount)deny();}
    }
