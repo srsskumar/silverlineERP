@@ -179,4 +179,72 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
    return {...row,reason:i.reason??null};
   })};
  });
+
+ /**
+  * Which roles see the whole organisation, and which see their own work
+  * (§note 17).
+  *
+  * Configurable because the answer differs between organisations: a
+  * contractor running one district wants its project managers to see
+  * everything, one running six does not. It used to be a default nobody
+  * chose — a role row with no scope meant global — plus one role hardcoded
+  * to the opposite.
+  */
+ app.get('/api/v1/admin/role-visibility',{preHandler:guard('admin.configure')},async req=>{
+  const u=actor(req);
+  return {data:(await pool.query(
+   `SELECT r.code, r.name,
+           COALESCE(p.default_scope,
+                    CASE WHEN r.code IN ('EMPLOYEE','TEAM_LEAD','PROJECT_MANAGER')
+                         THEN 'ASSIGNED' ELSE 'GLOBAL' END) AS default_scope,
+           p.updated_at,
+           (SELECT count(*)::int FROM user_roles ur JOIN users us ON us.id=ur.user_id
+             WHERE ur.role_id=r.id AND us.org_id=$1 AND us.auth_status='ACTIVE') AS accounts,
+           (SELECT count(*)::int FROM user_roles ur JOIN users us ON us.id=ur.user_id
+             WHERE ur.role_id=r.id AND us.org_id=$1 AND us.auth_status='ACTIVE'
+               AND ur.scope_type IS NOT NULL) AS individually_scoped
+      FROM roles r
+      LEFT JOIN role_scope_policies p ON p.role_code=r.code AND p.org_id=$1
+     WHERE r.org_id IS NULL OR r.org_id=$1
+     ORDER BY r.code`,[u.orgId])).rows};
+ });
+
+ app.put('/api/v1/admin/role-visibility/:code',{preHandler:guard('admin.configure')},async req=>{
+  const u=actor(req),code=(req.params as {code:string}).code;
+  const i=parse(z.object({default_scope:z.enum(['GLOBAL','ASSIGNED'])}),req.body);
+  return {data:await mutate(pool,req,'admin.role_visibility','role',async db=>{
+   const role=(await db.query('SELECT code FROM roles WHERE code=$1',[code])).rows[0];
+   if(!role)fail('NOT_FOUND','There is no such role. Reload the list to see the roles as they stand.',404);
+   /*
+    * A super administrator cannot be narrowed.
+    *
+    * The role exists to be able to put things right when every other
+    * visibility rule has been set wrong, and a scoped one could lock the
+    * organisation out of its own configuration.
+    */
+   if(mfaFloorRole(code)&&i.default_scope==='ASSIGNED'){
+    fail('ROLE_MUST_SEE_ALL',
+     'A super administrator has to be able to see the whole organisation — it is the role '
+     +'that puts the others right when a visibility rule is set wrong.',422);
+   }
+   await db.query(
+    `INSERT INTO role_scope_policies(org_id,role_code,default_scope,updated_by)
+     VALUES($1,$2,$3,$4)
+     ON CONFLICT (org_id,role_code)
+     DO UPDATE SET default_scope=EXCLUDED.default_scope, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+    [u.orgId,code,i.default_scope,u.id]);
+   /*
+    * Their sessions carry the scopes resolved when they signed in, so a
+    * change that does not reach them until tomorrow is a change nobody can
+    * verify today.
+    */
+   await db.query(
+    `UPDATE sessions SET revoked=true, revoked_at=now()
+      WHERE revoked=false AND user_id IN (
+        SELECT ur.user_id FROM user_roles ur JOIN roles r ON r.id=ur.role_id
+         JOIN users us ON us.id=ur.user_id
+        WHERE r.code=$1 AND us.org_id=$2)`,[code,u.orgId]);
+   return {code,default_scope:i.default_scope};
+  })};
+ });
 }

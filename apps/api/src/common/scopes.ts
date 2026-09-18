@@ -316,7 +316,27 @@ export async function taskScopeClause(
   values: unknown[],
 ): Promise<string> {
   const ors: string[] = [];
-  if(scopes.selfUsers?.length){values.push(scopes.selfUsers);ors.push(`assignee_id=ANY($${values.length}::uuid[])`);}
+  if(scopes.selfUsers?.length){
+  /*
+   * What "their own work" actually covers (§note 17).
+   *
+   * The task assigned to them, a task they were put on to help with, and
+   * every task on a project they manage. Read as the assignee alone, a
+   * project manager restricted to their own work would see the one task
+   * somebody happened to assign them and none of the project they run —
+   * which is not a rule anybody meant.
+   */
+  values.push(scopes.selfUsers);
+  const self=values.length;
+  ors.push(`assignee_id=ANY($${self}::uuid[])`);
+  ors.push(`id IN (SELECT c.task_id FROM task_collaborators c WHERE c.user_id=ANY($${self}::uuid[]))`);
+  // Being mentioned is being involved. Without this, naming somebody in a
+  // comment tells them about a task they are then refused sight of, which
+  // makes the mention worse than saying nothing.
+  ors.push(`id IN (SELECT cm.task_id FROM mentions m JOIN comments cm ON cm.id=m.comment_id`
+   + ` WHERE m.mentioned_user_id=ANY($${self}::uuid[]))`);
+  ors.push(`project_id IN (SELECT p.id FROM projects p WHERE p.project_manager_id=ANY($${self}::uuid[]))`);
+ }
   if (scopes.projects.length > 0) {
     values.push(scopes.projects);
     ors.push(`project_id = ANY($${values.length}::uuid[])`);

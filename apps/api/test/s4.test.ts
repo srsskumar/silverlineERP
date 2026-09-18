@@ -905,7 +905,7 @@ describe("task status machine", () => {
   it("allows override with project.update + reason (audit OVERRIDE)", async () => {
     const h = await adminHeaders();
     const pm = await mkUser(["PROJECT_MANAGER"], "pm");
-    const p = await mkProject(h);
+    const p = await mkProject(h, { project_manager_id: pm.id });
     const a = await mkTask(h, p.id, { title: "A" });
     const b = await mkTask(h, p.id, { title: "B" });
     await app.inject({
@@ -932,7 +932,7 @@ describe("task status machine", () => {
   it("rejects override without project.update (403 TEAM_LEAD)", async () => {
     const h = await adminHeaders();
     const tl = await mkUser(["TEAM_LEAD"], "tl");
-    const p = await mkProject(h);
+    const p = await mkProject(h, { project_manager_id: tl.id });
     const a = await mkTask(h, p.id, { title: "A" });
     const b = await mkTask(h, p.id, { title: "B" });
     await app.inject({
@@ -951,7 +951,7 @@ describe("task status machine", () => {
   it("rejects override without a reason (422)", async () => {
     const h = await adminHeaders();
     const pm = await mkUser(["PROJECT_MANAGER"], "pm2");
-    const p = await mkProject(h);
+    const p = await mkProject(h, { project_manager_id: pm.id });
     const a = await mkTask(h, p.id, { title: "A" });
     const b = await mkTask(h, p.id, { title: "B" });
     await app.inject({
@@ -982,7 +982,7 @@ describe("task assign", () => {
   it("requires a reason (422) then assigns with audit", async () => {
     const h = await adminHeaders();
     const tl = await mkUser(["TEAM_LEAD"], "tl");
-    const p = await mkProject(h);
+    const p = await mkProject(h, { project_manager_id: tl.id });
     const t = await mkTask(h, p.id);
     const worker = await mkUser(["EMPLOYEE"], "worker");
     const bare = await app.inject({
@@ -1014,7 +1014,7 @@ describe("task assign", () => {
   it("rejects assigning to an inactive linked employee (422 ASSIGNEE_INACTIVE)", async () => {
     const h = await adminHeaders();
     const tl = await mkUser(["TEAM_LEAD"], "tl2");
-    const p = await mkProject(h);
+    const p = await mkProject(h, { project_manager_id: tl.id });
     const t = await mkTask(h, p.id);
     const empUser = await mkUser(["EMPLOYEE"], "linked2");
     const empId = await mkEmployee(h);
@@ -1119,7 +1119,7 @@ describe("task comments", () => {
     const h = await adminHeaders();
     const author = await mkUser(["TEAM_LEAD"], "author");
     const target = await mkUser(["EMPLOYEE"], "target");
-    const p = await mkProject(h);
+    const p = await mkProject(h, { project_manager_id: author.id });
     const t = await mkTask(h, p.id);
     const res = await app.inject({
       method: "POST",
@@ -1147,7 +1147,7 @@ describe("task comments", () => {
   it("lists comments oldest-first with author names", async () => {
     const h = await adminHeaders();
     const author = await mkUser(["TEAM_LEAD"], "author2");
-    const p = await mkProject(h);
+    const p = await mkProject(h, { project_manager_id: author.id });
     const t = await mkTask(h, p.id);
     await app.inject({
       method: "POST",

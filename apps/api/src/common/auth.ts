@@ -225,8 +225,74 @@ export function requirePermission(
 }
 
 /** A global low-privilege role must not widen a different role's permission. */
+/**
+ * The permissions the visibility policy governs.
+ *
+ * Reading, and only reading: which projects and tasks somebody sees in a
+ * list. What they may then do to one is decided by the permissions they
+ * hold and by the record-scope rules, which already say a person may work a
+ * task assigned to them or one they were added to.
+ *
+ * Narrowing the acting permissions here as well answers a question nobody
+ * asked. It took a project manager's ability to close a project, a team
+ * lead's ability to assign work, and — because every scoped read shares this
+ * resolver — a manager's ability to approve their own team's leave.
+ */
+const SCOPED_TO_OWN_WORK=(permission:string):boolean=>
+ permission==='task.read'||permission==='project.read'||permission==='cycle.read';
+
+/**
+ * What a role lets somebody see, and how much of it (§note 17).
+ *
+ * A role row with no scope used to mean the whole organisation, so the safe
+ * setting was the one an administrator had to remember to apply — and mostly
+ * did not. EMPLOYEE was the one exception, forced to self-scope in code
+ * whatever the row said: the right behaviour arrived at the wrong way,
+ * invisible and unconfigurable.
+ *
+ * Now the default comes from role_scope_policies, per organisation, because
+ * the answer differs: a contractor running one district wants its project
+ * managers to see everything, one running six does not. An explicit scope on
+ * the role row still wins — it is narrower than any default and somebody set
+ * it on purpose.
+ */
 export async function scopesForPermission(req:FastifyRequest,permission:string){
- const rows=(await req.server.db.query('SELECT ur.scope_type,ur.scope_id,r.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id JOIN role_permissions rp ON rp.role_id=r.id WHERE ur.user_id=$1 AND rp.permission_code=$2',[req.authUser!.id,permission])).rows;
- const scoped=rows.filter(r=>r.code!=='CLIENT_VIEWER'||r.scope_type==='project').map(r=>r.code==='EMPLOYEE'?{scope_type:'self',scope_id:req.authUser!.id}:({scope_type:r.scope_type as string|null,scope_id:r.scope_id as string|null}));
+ const rows=(await req.server.db.query(
+  `SELECT ur.scope_type, ur.scope_id, r.code,
+          /*
+           * Safe by default, including for an organisation created after
+           * this was introduced: a policy row records a deviation, and its
+           * absence must not mean "sees everything".
+           */
+          COALESCE(p.default_scope,
+                   CASE WHEN r.code IN ('EMPLOYEE','TEAM_LEAD','PROJECT_MANAGER')
+                        THEN 'ASSIGNED' ELSE 'GLOBAL' END) AS default_scope
+     FROM user_roles ur
+     JOIN roles r ON r.id = ur.role_id
+     JOIN role_permissions rp ON rp.role_id = r.id
+     LEFT JOIN role_scope_policies p
+       ON p.role_code = r.code AND p.org_id = $3
+    WHERE ur.user_id = $1 AND rp.permission_code = $2`,
+  [req.authUser!.id,permission,req.authUser!.orgId])).rows;
+ const scoped=rows
+  .filter(r=>r.code!=='CLIENT_VIEWER'||r.scope_type==='project')
+  .map(r=>{
+   // An explicit scope was chosen for this person; a default never overrides it.
+   if(r.scope_type&&r.scope_id)return {scope_type:r.scope_type as string,scope_id:r.scope_id as string};
+   /*
+    * The policy narrows the work, not the person (§note 17).
+    *
+    * It answers "which projects and tasks are mine", and applying it to
+    * every scoped read answers a question nobody asked: a project manager
+    * restricted to their own projects could no longer approve their team's
+    * leave, and a team lead could not see the attendance they supervise.
+    * Those are decided by the permissions they hold, which is where they
+    * belong.
+    */
+   if(r.default_scope==='ASSIGNED'&&SCOPED_TO_OWN_WORK(permission)){
+    return {scope_type:'self',scope_id:req.authUser!.id};
+   }
+   return {scope_type:null,scope_id:null};
+  });
  return scoped.length?scoped:[{scope_type:'restricted',scope_id:req.authUser!.id}];
 }

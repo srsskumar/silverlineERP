@@ -1526,6 +1526,9 @@ describe("E2E-20 PM drags card through allowed then disallowed board transition"
       project_type_id: w.projectTypeId,
       code: `B${uniq().toUpperCase().slice(-8)}`,
       name: "Board project",
+      // The manager runs this board. A manager is scoped to their own work,
+      // so a project nobody put them on is one they cannot see to drag.
+      project_manager_id: w.roleUserId.PROJECT_MANAGER,
     });
     await w.app.inject({
       method: "PATCH",

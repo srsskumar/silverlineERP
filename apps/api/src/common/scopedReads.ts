@@ -27,5 +27,7 @@ export async function employeeRestriction(pool:Pool,user:ScopedUser,values:unkno
 export async function projectRestriction(pool:Pool,user:ScopedUser,values:unknown[]):Promise<string>{
  const scope=resolveScopes(user.scopes??[]);if(scope.global)return 'TRUE';
  const clause=await taskScopeClause(pool,user.orgId,scope,values),projects=`$${values.push(scope.projects)}`;
- return `(id=ANY(${projects}::uuid[]) OR id IN(SELECT project_id FROM tasks WHERE ${clause}))`;
+ // A project they manage is theirs even before anybody has put a task on it.
+ const managed=scope.selfUsers?.length?` OR project_manager_id=ANY($${values.push(scope.selfUsers)}::uuid[])`:'';
+ return `(id=ANY(${projects}::uuid[])${managed} OR id IN(SELECT project_id FROM tasks WHERE ${clause}))`;
 }

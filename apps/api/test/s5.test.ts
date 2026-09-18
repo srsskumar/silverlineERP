@@ -90,6 +90,7 @@ async function mkWorkspace(
 
 async function mkProject(
   headers: Record<string, string>,
+  over: Record<string, unknown> = {},
 ): Promise<{ id: string; version: number }> {
   const ws = await mkWorkspace(await adminHeaders());
   seq += 1;
@@ -101,6 +102,7 @@ async function mkProject(
       workspace_id: ws.id,
       code: `S5P${String(seq).padStart(5, "0")}`,
       name: `S5 Project ${seq}`,
+      ...over,
     },
   });
   expect(res.statusCode).toBe(201);
@@ -750,8 +752,8 @@ describe("labels", () => {
   it("attaches labels and rejects cross-project scope (422 LABEL_SCOPE)", async () => {
     const h = await adminHeaders();
     const tl = await mkUser(["TEAM_LEAD"], "tl");
-    const pa = await mkProject(h);
-    const pb = await mkProject(h);
+    const pa = await mkProject(h, { project_manager_id: tl.id });
+    const pb = await mkProject(h, { project_manager_id: tl.id });
     const scoped = (
       await app.inject({
         method: "POST",
@@ -790,7 +792,7 @@ describe("labels", () => {
   it("roundtrips attach/detach and surfaces labels[] on task shapes", async () => {
     const h = await adminHeaders();
     const tl = await mkUser(["TEAM_LEAD"], "tl2");
-    const p = await mkProject(h);
+    const p = await mkProject(h, { project_manager_id: tl.id });
     const label = (
       await app.inject({
         method: "POST",
@@ -886,7 +888,7 @@ describe("notifications inbox", () => {
     const h = await adminHeaders();
     const tl = await mkUser(["TEAM_LEAD"], "assigner");
     const worker = await mkUser(["EMPLOYEE"], "assignee");
-    const p = await mkProject(h);
+    const p = await mkProject(h, { project_manager_id: tl.id });
     const t = await mkTask(h, p.id, { title: "Inbox task alpha" });
     const res = await app.inject({
       method: "POST",
@@ -909,7 +911,7 @@ describe("notifications inbox", () => {
     const h = await adminHeaders();
     const author = await mkUser(["TEAM_LEAD"], "commenter");
     const target = await mkUser(["EMPLOYEE"], "mentioned");
-    const p = await mkProject(h);
+    const p = await mkProject(h, { project_manager_id: author.id });
     const t = await mkTask(h, p.id, { title: "Inbox task beta" });
     const res = await app.inject({
       method: "POST",
