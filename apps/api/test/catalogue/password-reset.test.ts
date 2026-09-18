@@ -149,3 +149,96 @@ describe("not a way to flood an inbox", () => {
     expect(second.body.message).toBe(first.body.message);
   });
 });
+
+describe("the queue an administrator works from", () => {
+  /*
+   * The requests were recorded, notified, and then lived nowhere anybody
+   * could look. An alert scrolls out of an inbox; a queue does not.
+   */
+  async function lockedOut(label: string) {
+    const phone = uniquePhone();
+    const emp = (await w.pool.query(
+      `INSERT INTO employees(org_id, emp_no, first_name, phone, date_of_joining, status)
+       VALUES($1,$2,$3,$4,'2024-01-01','ACTIVE') RETURNING id`,
+      [w.orgId, uniq("E"), label, phone])).rows[0].id;
+    const name = uniq(label.toLowerCase().replace(/[^a-z]/g, "")).toLowerCase();
+    const u = (await w.pool.query(
+      `INSERT INTO users(org_id, username, password_hash, auth_status, employee_id, phone)
+       VALUES($1,$2,'x','ACTIVE',$3,$4) RETURNING id`,
+      [w.orgId, name, emp, phone])).rows[0].id;
+    await ask(name);
+    return { userId: String(u), username: name };
+  }
+
+  const queue = async () => {
+    const res = await w.app.inject({
+      method: "GET", url: "/api/v1/admin/password-reset-requests", headers: w.admin });
+    return res.json().data as any[];
+  };
+
+  it("lists whoever is waiting, by name rather than by id", async () => {
+    const who = await lockedOut("Queued");
+    const rows = await queue();
+    const mine = rows.find((r) => r.user_id === who.userId);
+    expect(mine, JSON.stringify(rows.slice(0, 2))).toBeTruthy();
+    expect(mine.name).toContain("Queued");
+    expect(mine.username).toBe(who.username);
+  });
+
+  it("empties itself when the password is actually set", async () => {
+    // The thing they asked for has happened, and a queue that never empties
+    // stops being believed.
+    const who = await lockedOut("Reset");
+    const res = await w.app.inject({
+      method: "PATCH", url: `/api/v1/admin/users/${who.userId}`,
+      headers: { ...w.admin, ...idem() },
+      payload: { password: "a-brand-new-password-2026", must_change_password: true },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await queue()).some((r) => r.user_id === who.userId)).toBe(false);
+
+    const row = await w.pool.query(
+      "SELECT resolution FROM password_reset_requests WHERE user_id = $1", [who.userId]);
+    expect(row.rows[0].resolution).toBe("RESET");
+  });
+
+  const resolve = (id: string, resolution: string, headers = w.admin) =>
+    w.app.inject({
+      method: "POST", url: `/api/v1/admin/password-reset-requests/${id}/resolve`,
+      headers: { ...headers, ...idem() }, payload: { resolution },
+    });
+
+  it("can be closed without pretending a reset happened", async () => {
+    // The person rang up and was helped, or it was never them asking.
+    const who = await lockedOut("Sorted");
+    const row = (await queue()).find((r) => r.user_id === who.userId);
+    const res = await resolve(String(row.id), "STALE");
+    expect(res.statusCode, res.body).toBe(200);
+    const after = await w.pool.query(
+      "SELECT resolution FROM password_reset_requests WHERE id = $1", [row.id]);
+    expect(after.rows[0].resolution).toBe("STALE");
+  });
+
+  it("says so plainly when somebody else has already dealt with it", async () => {
+    const who = await lockedOut("Raced");
+    const row = (await queue()).find((r) => r.user_id === who.userId);
+    expect((await resolve(String(row.id), "DECLINED")).statusCode).toBe(200);
+    const again = await resolve(String(row.id), "DECLINED");
+    expect(again.statusCode).toBe(404);
+    expect(again.body).toContain("already been dealt with");
+  });
+
+  it("refuses a resolution nobody defined", async () => {
+    const who = await lockedOut("Bogus");
+    const row = (await queue()).find((r) => r.user_id === who.userId);
+    expect((await resolve(String(row.id), "MAGICKED")).statusCode).toBe(422);
+  });
+
+  it("is not a queue everybody can read", async () => {
+    // It names people who cannot get in, which is exactly what somebody
+    // trying to get in as them would like to know.
+    const res = await w.app.inject({
+      method: "GET", url: "/api/v1/admin/password-reset-requests", headers: w.role.EMPLOYEE });
+    expect([401, 403]).toContain(res.statusCode);
+  });
+});

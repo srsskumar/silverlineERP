@@ -54,7 +54,22 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
     const held=(await db.query("SELECT r.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=$1",[id])).rows as Array<{code:string}>;
     if(held.some(r=>mfaFloorRole(r.code)))fail('MFA_REQUIRED','A super administrator cannot be exempted from two-factor authentication',422);
    }
-   await db.query('UPDATE users SET auth_status=COALESCE($2,auth_status),password_hash=COALESCE($3,password_hash),phone=CASE WHEN $5::boolean THEN $4 ELSE phone END,must_change_password=COALESCE($7,must_change_password),password_set_at=CASE WHEN $3::text IS NULL THEN password_set_at ELSE now() END,mfa_policy=COALESCE($6,mfa_policy),updated_at=now() WHERE id=$1',[id,i.auth_status??null,hash,phone??null,phone!==undefined,i.mfa_policy??null,i.must_change_password??null]);await keepAdministrator(db,u.orgId);await db.query('UPDATE sessions SET revoked=true,revoked_at=now() WHERE user_id=$1',[id]);return {id,updated:true};});
+   await db.query('UPDATE users SET auth_status=COALESCE($2,auth_status),password_hash=COALESCE($3,password_hash),phone=CASE WHEN $5::boolean THEN $4 ELSE phone END,must_change_password=COALESCE($7,must_change_password),password_set_at=CASE WHEN $3::text IS NULL THEN password_set_at ELSE now() END,mfa_policy=COALESCE($6,mfa_policy),updated_at=now() WHERE id=$1',[id,i.auth_status??null,hash,phone??null,phone!==undefined,i.mfa_policy??null,i.must_change_password??null]);await keepAdministrator(db,u.orgId);await db.query('UPDATE sessions SET revoked=true,revoked_at=now() WHERE user_id=$1',[id]);
+   /*
+    * Setting a password closes whatever they were waiting on (§note 16).
+    *
+    * Otherwise the queue of people locked out never empties: the thing they
+    * asked for has happened and the request sits there looking unanswered,
+    * which is how a queue stops being believed.
+    */
+   if(i.password){
+    await db.query(
+     `UPDATE password_reset_requests
+         SET resolved_at=now(), resolved_by=$2, resolution='RESET'
+       WHERE user_id=$1 AND org_id=$3 AND resolved_at IS NULL`,
+     [id,u.id,u.orgId]);
+   }
+   return {id,updated:true};});
  });
  app.get('/api/v1/admin/roles',{preHandler:guard('users.read')},async req=>({data:(await pool.query("SELECT r.*,COALESCE((SELECT json_agg(permission_code) FROM role_permissions WHERE role_id=r.id),'[]') AS permissions FROM roles r WHERE org_id IS NULL OR org_id=$1 ORDER BY name",[actor(req).orgId])).rows}));
  /**
@@ -115,5 +130,53 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
  app.get('/api/v1/admin/devices',{preHandler:guard('users.manage')},async req=>({data:(await pool.query('SELECT id,user_id,device_id,revoked_at,wipe_requested_at,last_seen_at FROM device_registrations WHERE org_id=$1 ORDER BY last_seen_at DESC LIMIT 100',[actor(req).orgId])).rows}));
  app.post('/api/v1/admin/devices/:id/revoke',{preHandler:guard('users.manage')},async req=>{
   const id=(req.params as {id:string}).id,u=actor(req);return mutate(pool,req,'device.revoke','device',async db=>{const row=(await db.query('UPDATE device_registrations SET revoked_at=now(),wipe_requested_at=now() WHERE org_id=$1 AND id=$2 RETURNING id,user_id,device_id',[u.orgId,id])).rows[0];if(!row)fail('NOT_FOUND','Device not found',404);await db.query('UPDATE sessions SET revoked=true,revoked_at=now() WHERE user_id=$1 AND device_id=$2',[row.user_id,row.device_id]);return row;});
+ });
+
+ /**
+  * Who is locked out and waiting (§note 16).
+  *
+  * The requests were recorded and notified and then lived nowhere anybody
+  * could look. An alert scrolls out of an inbox; a queue does not, and "I
+  * raised it on Tuesday" needs somewhere to check.
+  */
+ app.get('/api/v1/admin/password-reset-requests',{preHandler:guard('users.manage')},async req=>{
+  const u=actor(req);
+  return {data:(await pool.query(
+   `SELECT r.id, r.requested_as, r.requested_at, r.resolved_at, r.resolution,
+           r.user_id, tu.username,
+           COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), tu.username)
+             AS name,
+           e.emp_no, e.phone,
+           COALESCE(NULLIF(trim(concat_ws(' ', m.first_name, m.last_name)), ''), '')
+             AS reports_to_name
+      FROM password_reset_requests r
+      JOIN users tu ON tu.id = r.user_id
+      LEFT JOIN employees e ON e.id = tu.employee_id
+      LEFT JOIN employees m ON m.id = e.reports_to
+     WHERE r.org_id = $1 AND r.resolved_at IS NULL
+     ORDER BY r.requested_at DESC
+     LIMIT 50`,[u.orgId])).rows};
+ });
+
+ /**
+  * Close one without setting a password.
+  *
+  * Not every request is genuine, and not every one still matters by the time
+  * somebody reads it — the person rang up and was helped, or it was never
+  * them asking. Saying so is better than leaving it open for ever or
+  * pretending a reset happened.
+  */
+ app.post('/api/v1/admin/password-reset-requests/:id/resolve',{preHandler:guard('users.manage')},async req=>{
+  const u=actor(req),id=(req.params as {id:string}).id;
+  const i=parse(z.object({resolution:z.enum(['DECLINED','STALE']),reason:z.string().trim().max(500).optional()}),req.body);
+  return {data:await mutate(pool,req,'auth.password_reset.resolved','password_reset_request',async db=>{
+   const row=(await db.query(
+    `UPDATE password_reset_requests
+        SET resolved_at=now(), resolved_by=$2, resolution=$3
+      WHERE id=$1 AND org_id=$4 AND resolved_at IS NULL
+      RETURNING *`,[id,u.id,i.resolution,u.orgId])).rows[0];
+   if(!row)fail('NOT_FOUND','That request has already been dealt with. Reload to see the queue as it stands.',404);
+   return {...row,reason:i.reason??null};
+  })};
  });
 }
