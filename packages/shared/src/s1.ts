@@ -529,3 +529,64 @@ export function designationCode(label: string): string {
   return label.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "").slice(0, 64);
 }
+
+/**
+ * Changing the same thing about several people at once (§note 12).
+ *
+ * Deliberately a narrow set of fields. What belongs here is what a group
+ * genuinely has in common — where they are posted, who they report to, what
+ * they are called, which department they sit in — and it is edited in bulk
+ * because a crew of thirty moving to a new mandal is one decision, not thirty.
+ *
+ * What is left out is left out on purpose. Names, phone numbers, Aadhaar, PAN
+ * and bank details identify one person and can never be right for a group.
+ * Salary is per-person and a bulk change to it is a payroll incident waiting
+ * to happen. Status has its own routes — exit, suspend, reactivate — each
+ * asking for a reason and writing its own trail, and a bulk status change
+ * would walk straight past all of it.
+ */
+export const employeeBulkUpdateSchema = z.object({
+  employee_ids: z.array(z.string().uuid())
+    .min(1, 'Choose at least one person')
+    .max(500, 'That is more than 500 people at once'),
+  changes: z.object({
+    designation_id: z.string().uuid().nullable().optional(),
+    designation: z.string().max(100).nullable().optional(),
+    department: z.string().max(100).nullable().optional(),
+    reports_to: z.string().uuid().nullable().optional(),
+    district_id: z.string().uuid().nullable().optional(),
+    mandal_id: z.string().uuid().nullable().optional(),
+    village_id: z.string().uuid().nullable().optional(),
+    site_id: z.string().uuid().nullable().optional(),
+  }),
+  /**
+   * Show what would change, and write nothing.
+   *
+   * A bulk edit is the one screen where somebody discovers they had the wrong
+   * filter applied after it has already touched two hundred records.
+   */
+  dry_run: z.boolean().default(true),
+});
+
+export type EmployeeBulkUpdateInput = z.infer<typeof employeeBulkUpdateSchema>;
+
+/** The fields a bulk edit may touch, for a UI that should not guess. */
+export const BULK_EDITABLE_FIELDS = [
+  'designation_id', 'department', 'reports_to',
+  'district_id', 'mandal_id', 'village_id', 'site_id',
+] as const;
+
+/**
+ * Whether a change would actually change anything.
+ *
+ * A bulk edit that reports "200 updated" when 180 of them already held the
+ * value teaches people to ignore the number.
+ */
+export function bulkChangeAffects(
+  current: Record<string, unknown>, changes: Record<string, unknown>,
+): string[] {
+  return Object.entries(changes)
+    .filter(([field, value]) => value !== undefined
+      && String(current[field] ?? '') !== String(value ?? ''))
+    .map(([field]) => field);
+}

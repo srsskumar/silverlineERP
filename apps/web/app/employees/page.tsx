@@ -12,6 +12,7 @@ import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Input } from '@/components/ui/Input';
 import { FormField } from '@/components/ui/FormField';
 import { Spinner } from '@/components/ui/Spinner';
+import { BulkEditBar } from '@/components/BulkEditBar';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { PERMISSIONS } from '@/lib/permissions';
 import { listEmployees } from '@/lib/employees';
@@ -71,6 +72,22 @@ function EmployeesTable() {
 
   const rows = (listQuery.data?.pages ?? []).flatMap((p) => p.data);
 
+  /*
+   * Who the bulk edit will act on.
+   *
+   * Held as ids rather than as rows, so a selection survives the list
+   * reloading underneath it — which it does on every filter change and every
+   * page of an infinite scroll.
+   */
+  const [selected, setSelected] = React.useState<Set<string>>(new Set());
+  const toggle = (id: string) => setSelected((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const visibleIds = rows.map((e) => String(e.id));
+  const allVisibleChosen = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-3 sm:flex-row sm:items-end">
@@ -120,10 +137,32 @@ function EmployeesTable() {
         <EmptyState title="No employees found" description="Adjust filters or create the first employee." />
       ) : (
         <>
+          <BulkEditBar
+            selected={selected}
+            onDone={() => { setSelected(new Set()); void listQuery.refetch(); }}
+            onClear={() => setSelected(new Set())}
+          />
+
           <div className="overflow-x-auto rounded-lg border border-border">
             <table className="min-w-full divide-y divide-border bg-surface text-sm">
               <thead className="bg-surface-sunken">
                 <tr>
+                  <th className="w-8 px-3 py-2">
+                    <input
+                      type="checkbox"
+                      aria-label={allVisibleChosen ? 'Clear selection' : 'Select everybody listed'}
+                      checked={allVisibleChosen}
+                      onChange={() => setSelected((prev) => {
+                        const next = new Set(prev);
+                        // Only what is on screen: "select all" across an
+                        // unloaded infinite list would be a promise the
+                        // screen cannot keep.
+                        if (allVisibleChosen) visibleIds.forEach((id) => next.delete(id));
+                        else visibleIds.forEach((id) => next.add(id));
+                        return next;
+                      })}
+                    />
+                  </th>
                   <th className="px-3 py-2 text-left font-medium text-text-muted">Emp No</th>
                   <th className="px-3 py-2 text-left font-medium text-text-muted">Name</th>
                   <th className="px-3 py-2 text-left font-medium text-text-muted">Phone</th>
@@ -139,7 +178,15 @@ function EmployeesTable() {
               </thead>
               <tbody className="divide-y divide-border">
                 {rows.map((e) => (
-                  <tr key={e.id}>
+                  <tr key={e.id} className={selected.has(String(e.id)) ? 'bg-surface-sunken' : undefined}>
+                    <td className="px-3 py-2">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${displayEmployeeName(e)}`}
+                        checked={selected.has(String(e.id))}
+                        onChange={() => toggle(String(e.id))}
+                      />
+                    </td>
                     <td className="px-3 py-2 font-mono text-xs text-text">{e.emp_no}</td>
                     <td className="px-3 py-2 text-text">{displayEmployeeName(e)}</td>
                     <td className="px-3 py-2 text-text-muted">

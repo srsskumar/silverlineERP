@@ -23,6 +23,8 @@ import {
   employeeSuspendSchema,
   designationCreateSchema,
   designationCode,
+  employeeBulkUpdateSchema,
+  bulkChangeAffects,
   encodeCursor,
   toFieldErrors,
 } from "@silverline/shared";
@@ -306,7 +308,7 @@ async function resolveDesignation(
 
 /** Validates unit refs (existence + org + expected type per field). */
 async function validateUnitRefs(
-  pool: Pool,
+  pool: Pool | PoolClient,
   orgId: string,
   refs: { district_id?: string; mandal_id?: string; village_id?: string; site_id?: string },
 ): Promise<Array<{ field: string; message: string }>> {
@@ -343,7 +345,7 @@ async function validateUnitRefs(
  * create a reporting cycle (walk the chain up; `selfId` is forbidden).
  */
 async function validateReportsTo(
-  pool: Pool,
+  pool: Pool | PoolClient,
   orgId: string,
   reportsTo: string | undefined,
   selfId: string | null,
@@ -1904,6 +1906,161 @@ export async function registerEmployeeRoutes(
         entityType: "designation", entityId: String(row.id), afterState: row,
       });
       return reply.status(201).send({ data: row });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  });
+
+  /* ------------------------------------------------- bulk edit (§note 12) */
+
+  /**
+   * Change the same thing about several people at once.
+   *
+   * A crew of thirty moving to a new mandal is one decision, not thirty, and
+   * doing it one record at a time is how twenty-eight get moved and two are
+   * forgotten until somebody's attendance stops matching their site.
+   *
+   * Dry run by default. A bulk edit is the one screen where somebody
+   * discovers they had the wrong filter applied after it has already touched
+   * two hundred records, so it shows the work before it does it.
+   */
+  app.patch("/api/v1/employees/bulk", { preHandler: canCreate }, async (req, reply) => {
+    const user = req.authUser;
+    if (!user) {
+      return sendError(reply, req.requestId, {
+        status: 401, code: "UNAUTHENTICATED", message: "Sign in first",
+      });
+    }
+    const parsed = employeeBulkUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendError(reply, req.requestId, {
+        status: 422, code: "VALIDATION_ERROR", message: "Validation failed",
+        fieldErrors: toFieldErrors(parsed.error),
+      });
+    }
+    const input = parsed.data;
+    const changes = Object.fromEntries(
+      Object.entries(input.changes).filter(([, v]) => v !== undefined),
+    ) as Record<string, unknown>;
+    if (Object.keys(changes).length === 0) {
+      return sendError(reply, req.requestId, {
+        status: 422, code: "NOTHING_TO_CHANGE",
+        message: "Choose at least one field to change. Nothing was sent to apply.",
+      });
+    }
+
+    const client = await opts.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const rows = (await client.query(
+        `SELECT ${SELECT_COLS} FROM employees
+          WHERE org_id = $1 AND id = ANY($2::uuid[]) FOR UPDATE`,
+        [user.orgId, input.employee_ids],
+      )).rows as EmployeeRow[];
+
+      const found = new Set(rows.map((r) => String(r.id)));
+      const missing = input.employee_ids.filter((id) => !found.has(id));
+
+      /*
+       * Validated once, against the change rather than per row.
+       *
+       * The reporting line is the exception: a cycle depends on which record
+       * is being moved, so it has to be asked for each of them.
+       */
+      const fieldErrors = await validateUnitRefs(client, user.orgId, changes);
+      if (changes.designation_id) {
+        const d = (await client.query(
+          "SELECT id FROM designations WHERE id = $1 AND org_id = $2",
+          [changes.designation_id, user.orgId])).rows[0];
+        if (!d) {
+          fieldErrors.push({ field: "designation_id",
+            message: "That designation is not on the list" });
+        }
+      }
+      if (fieldErrors.length > 0) {
+        await client.query("ROLLBACK");
+        return sendError(reply, req.requestId, {
+          status: 422, code: "VALIDATION_ERROR", message: "Validation failed", fieldErrors,
+        });
+      }
+
+      const resolved = await resolveDesignation(client, user.orgId, changes);
+      if (resolved.id || resolved.label) {
+        changes.designation_id = resolved.id;
+        changes.designation = resolved.label;
+      }
+
+      const planned: Array<{ id: string; emp_no: string; fields: string[] }> = [];
+      const refused: Array<{ id: string; emp_no: string; reason: string }> = [];
+
+      for (const row of rows) {
+        const cycle = changes.reports_to === undefined
+          ? []
+          : await validateReportsTo(
+              client, user.orgId,
+              (changes.reports_to as string | null) ?? undefined, String(row.id));
+        if (cycle.length > 0) {
+          refused.push({ id: String(row.id), emp_no: String(row.emp_no),
+            reason: cycle[0].message });
+          continue;
+        }
+        const fields = bulkChangeAffects(
+          row as unknown as Record<string, unknown>, changes);
+        if (fields.length === 0) continue;
+        planned.push({ id: String(row.id), emp_no: String(row.emp_no), fields });
+      }
+
+      if (input.dry_run) {
+        await client.query("ROLLBACK");
+        return reply.send({
+          data: {
+            dry_run: true,
+            would_change: planned.length,
+            unchanged: rows.length - planned.length - refused.length,
+            not_found: missing,
+            refused,
+            changes,
+            sample: planned.slice(0, 20),
+          },
+        });
+      }
+
+      const sets = Object.keys(changes).map((f, i) => `${f} = $${i + 3}`).join(", ");
+      const values = Object.values(changes);
+      for (const p of planned) {
+        await client.query(
+          `UPDATE employees SET ${sets}, updated_by = $2, updated_at = NOW(),
+             version = version + 1
+           WHERE id = $1 AND org_id = $${values.length + 3}`,
+          [p.id, user.id, ...values, user.orgId],
+        );
+      }
+      await client.query("COMMIT");
+
+      const meta = metaOf(req);
+      for (const p of planned) {
+        await writeAudit(opts.pool, {
+          orgId: user.orgId, actorId: user.id,
+          actorIp: meta.ip, actorUserAgent: meta.userAgent,
+          action: "employee.bulk_update", entityType: "employee", entityId: p.id,
+          afterState: changes, requestId: req.requestId,
+          reason: `Bulk edit of ${input.employee_ids.length} record(s)`,
+        });
+      }
+
+      return reply.send({
+        data: {
+          dry_run: false,
+          updated: planned.length,
+          unchanged: rows.length - planned.length - refused.length,
+          not_found: missing,
+          refused,
+        },
+      });
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
