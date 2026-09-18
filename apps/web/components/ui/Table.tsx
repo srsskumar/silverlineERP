@@ -21,9 +21,17 @@ export function TableWrap({
     <div
       className={cn(
         'w-full overflow-x-auto',
-        // Tall enough to read, short enough that the scrollbar is reachable
-        // without leaving the rows behind.
-        tall && 'max-h-[70vh] overflow-y-auto',
+        /*
+         * Sized to the space actually left below it, not to a fraction of
+         * the window. 70vh still overshot: the app header, the page header
+         * and a wrapped filter bar take about 22rem before the table starts,
+         * so the scrollbar landed just under the fold and the problem —
+         * having to scroll to reach it — survived in miniature.
+         *
+         * The floor stops it collapsing to a slit on a short laptop screen;
+         * there it is a normal scroll again, which is the honest trade.
+         */
+        tall && 'max-h-[calc(100vh-22rem)] min-h-[18rem] overflow-y-auto',
         className,
       )}
       {...rest}
