@@ -1402,7 +1402,7 @@ function Villages({
                   rather than the underlying record, which is what somebody
                   reading the screen is counting. */}
               <TH className="text-right">#</TH>
-              <TH>Village</TH>
+              <TH>Village and code</TH>
               <TH>District</TH>
               <TH>Mandal</TH>
               <TH className="text-right">Extent</TH>
@@ -1426,8 +1426,22 @@ function Villages({
                     </TD>
                     <TD>
                       <span className="font-medium text-text">{v.village_name}</span>
+                      {/*
+                        * The revenue department's code, said to be one.
+                        *
+                        * It rendered as a bare grey string beside the name and
+                        * read as noise — nobody could tell 1501041 from a row
+                        * number or an internal id. Thirty-four village names in
+                        * the Krishna programme belong to more than one village,
+                        * and this is the only thing that tells them apart.
+                        */}
                       {v.village_code ? (
-                        <span className="ml-1 text-2xs text-text-subtle">{v.village_code}</span>
+                        <span
+                          className="ml-1.5 whitespace-nowrap rounded bg-surface-sunken px-1 py-0.5 font-mono text-2xs text-text-subtle"
+                          title="The revenue department's village code. Reconciliation is done on codes, not names — two villages with the same name in one district is ordinary."
+                        >
+                          {v.village_code}
+                        </span>
                       ) : null}
                     </TD>
                     <TD className="text-xs text-text-muted">{v.district_name ?? '—'}</TD>
