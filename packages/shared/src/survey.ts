@@ -578,6 +578,17 @@ const quantity = z.number().finite()
   .min(0, 'A quantity cannot be negative')
   .max(MAX_QUANTITY, TOO_BIG);
 
+/**
+ * A number of people.
+ *
+ * Bounded well below the quantity ceiling because a headcount is not a
+ * measurement: a thousand people on one village is a typo every time, and
+ * catching it here is kinder than letting it distort a month of attendance.
+ */
+const headcount = z.number().int('Enter a whole number of people')
+  .min(0, 'A number of people cannot be negative')
+  .max(1000, 'That is more people than any village is staffed with — check the figure');
+
 export const surveyProjectSchema = z.object({
   code: z.string().min(1).max(64),
   name: z.string().min(1).max(255),
@@ -683,6 +694,20 @@ export const surveyEntrySchema = z.object({
   punch_in_lng: z.number().min(-180).max(180).nullable().optional(),
   punch_out_lat: z.number().min(-90).max(90).nullable().optional(),
   punch_out_lng: z.number().min(-180).max(180).nullable().optional(),
+  /*
+   * Who was actually in the village (§067).
+   *
+   * Ground truthing is walked by our crew alongside government staff, and
+   * the contract is staffed on both sides turning up. When the department's
+   * people do not, the crew stands in the village at our cost, and until
+   * these two numbers existed that was something a supervisor knew and
+   * nothing could show.
+   *
+   * Zero is a real answer and not the same as leaving it blank: nobody came
+   * is the fact worth counting, while blank means nobody was asked.
+   */
+  govt_staff_present: headcount.nullable().optional(),
+  crew_present: headcount.nullable().optional(),
 });
 
 export const surveyEntryPatchSchema = surveyEntrySchema
@@ -720,6 +745,16 @@ export const stageUpdateSchema = z.object({
   state: z.enum(STAGE_STATES),
   started_on: isoDate.nullable().optional(),
   completed_on: isoDate.nullable().optional(),
+  /*
+   * How the village is staffed for ground truthing (§067).
+   *
+   * Asked when it starts, because that is the one moment somebody knows the
+   * answer: the mandal has just told us how many of their people we get.
+   * Recorded on the village, not the stage row, since it governs every day's
+   * return afterwards.
+   */
+  gt_govt_staff_allocated: headcount.nullable().optional(),
+  gt_crew_allocated: headcount.nullable().optional(),
 }).refine(v => v.state !== 'COMPLETED' || v.completed_on, {
   message: 'A completed stage needs the date it was completed',
   path: ['completed_on'],
@@ -1173,6 +1208,10 @@ export const villagePlanSchema = z.object({
   total_extent_ac: z.number().finite().positive().max(MAX_QUANTITY, TOO_BIG).nullable().optional(),
   expected_completion_on: isoDate.nullable().optional(),
   planned_start_on: isoDate.nullable().optional(),
+  // Correctable afterwards: the mandal reassigns people, and an allocation
+  // that cannot be changed is one everybody stops believing.
+  gt_govt_staff_allocated: headcount.nullable().optional(),
+  gt_crew_allocated: headcount.nullable().optional(),
 });
 
 export const stageRemarkSchema = z.object({
@@ -1181,6 +1220,16 @@ export const stageRemarkSchema = z.object({
   started_on: isoDate.nullable().optional(),
   completed_on: isoDate.nullable().optional(),
   remarks: z.string().max(2000).nullable().optional(),
+  /*
+   * How the village is staffed for ground truthing (§067).
+   *
+   * Asked when it starts, because that is the moment somebody knows: the
+   * mandal has just said how many of their people we get. Held on the
+   * village rather than the stage row, since it governs every day's return
+   * from then on.
+   */
+  gt_govt_staff_allocated: headcount.nullable().optional(),
+  gt_crew_allocated: headcount.nullable().optional(),
 });
 
 /* ------------------------------------------------ rover-days over a window */
@@ -1706,3 +1755,146 @@ export const BILLING_SKIP_LABELS: Record<BillingSkipReason, string> = {
   NOTHING_TO_DECIDE: 'nothing submitted at this milestone to decide',
   ALREADY_IN_THAT_STATE: 'already recorded that way',
 };
+
+/* ----------------------------------------------- ground-truthing staffing */
+
+/** A day's attendance against what the village was allotted. */
+export interface StaffingDay {
+  /** Null where the question was never asked — an older return, or not GT. */
+  govtStaffPresent: number | null;
+  crewPresent: number | null;
+  govtStaffAllocated: number | null;
+  crewAllocated: number | null;
+}
+
+export interface StaffingSummary {
+  /** Days where somebody recorded an attendance at all. */
+  daysRecorded: number;
+  /** Person-days actually in the village, each side. */
+  govtStaffDays: number;
+  crewDays: number;
+  /** Person-days the allocation implies over those same days. */
+  govtStaffExpected: number;
+  crewExpected: number;
+  /** Turnout as a percentage of the allocation, null with nothing to divide. */
+  govtStaffPct: number | null;
+  crewPct: number | null;
+  /** Days the department fielded nobody at all. */
+  daysWithNoGovtStaff: number;
+  /** Days somebody was short, either side. */
+  daysShort: number;
+}
+
+/**
+ * Attendance against allocation, over a set of days.
+ *
+ * Expected person-days are counted only over days that *have* a return and a
+ * known allocation. Multiplying the allocation by the calendar would charge
+ * the department for Sundays and for days the crew was somewhere else, and
+ * the resulting percentage would be an accusation rather than a measurement.
+ *
+ * A day with no attendance recorded is left out of both sides rather than
+ * counted as zero. Zero attendance is a real and serious fact; a return
+ * filed before anybody was asked the question is not, and conflating them
+ * would manufacture absences out of the day this was built.
+ */
+export function summariseStaffing(days: StaffingDay[]): StaffingSummary {
+  let daysRecorded = 0;
+  let govtStaffDays = 0, crewDays = 0;
+  let govtStaffExpected = 0, crewExpected = 0;
+  let daysWithNoGovtStaff = 0, daysShort = 0;
+
+  for (const d of days) {
+    const hasGovt = d.govtStaffPresent !== null && d.govtStaffPresent !== undefined;
+    const hasCrew = d.crewPresent !== null && d.crewPresent !== undefined;
+    if (!hasGovt && !hasCrew) continue;
+    daysRecorded += 1;
+
+    if (hasGovt) {
+      govtStaffDays += d.govtStaffPresent as number;
+      if ((d.govtStaffPresent as number) === 0) daysWithNoGovtStaff += 1;
+      if (d.govtStaffAllocated !== null && d.govtStaffAllocated !== undefined) {
+        govtStaffExpected += d.govtStaffAllocated;
+      }
+    }
+    if (hasCrew) {
+      crewDays += d.crewPresent as number;
+      if (d.crewAllocated !== null && d.crewAllocated !== undefined) {
+        crewExpected += d.crewAllocated;
+      }
+    }
+
+    const govtShort = hasGovt && d.govtStaffAllocated != null
+      && (d.govtStaffPresent as number) < d.govtStaffAllocated;
+    const crewShort = hasCrew && d.crewAllocated != null
+      && (d.crewPresent as number) < d.crewAllocated;
+    if (govtShort || crewShort) daysShort += 1;
+  }
+
+  const pct = (got: number, want: number) =>
+    want > 0 ? Math.round((got / want) * 1000) / 10 : null;
+
+  return {
+    daysRecorded, govtStaffDays, crewDays, govtStaffExpected, crewExpected,
+    govtStaffPct: pct(govtStaffDays, govtStaffExpected),
+    crewPct: pct(crewDays, crewExpected),
+    daysWithNoGovtStaff, daysShort,
+  };
+}
+
+/**
+ * What to say about a day's attendance, in one line.
+ *
+ * The number on its own reads as neutral. "Four of six — two short" is what
+ * somebody escalates, and it should not need working out from two columns.
+ */
+export function staffingNote(s: StaffingSummary): string {
+  if (s.daysRecorded === 0) {
+    return 'Nobody has recorded attendance on these days.';
+  }
+  const parts: string[] = [];
+  if (s.govtStaffPct !== null) {
+    parts.push(`Government staff turned out at ${s.govtStaffPct}% of the agreed strength`);
+  } else if (s.govtStaffDays > 0) {
+    parts.push(`${s.govtStaffDays} government staff-days recorded, with no allocation to compare`);
+  }
+  if (s.crewPct !== null) {
+    parts.push(`our crew at ${s.crewPct}%`);
+  }
+  let note = parts.length ? `${parts.join(', ')}.` : '';
+  if (s.daysWithNoGovtStaff > 0) {
+    note += ` The department fielded nobody on ${s.daysWithNoGovtStaff} day${
+      s.daysWithNoGovtStaff === 1 ? '' : 's'}.`;
+  } else if (s.daysShort > 0) {
+    note += ` ${s.daysShort} day${s.daysShort === 1 ? ' was' : 's were'} short of the agreed strength.`;
+  }
+  return note.trim() || 'Attendance matched the allocation.';
+}
+
+/** Whether a stage is the one that is jointly staffed, and so asks these. */
+export function stageTracksStaffing(stageCode: string | null | undefined): boolean {
+  // Ground truthing alone. No other stage is walked with the department, and
+  // asking on the rest would collect figures that mean nothing.
+  return stageCode === 'GROUND_TRUTHING';
+}
+
+/**
+ * The window immediately before a chosen range, of the same length.
+ *
+ * A range somebody picked has no calendar predecessor — there is no "last
+ * fortnight-that-the-minister-visited". The only honest comparison is the
+ * same number of days ending the day before it started, and stating that is
+ * better than quietly comparing eleven days against thirty.
+ */
+export function priorRange(r: { from: string; to: string }): Period {
+  const from = Date.parse(`${r.from}T00:00:00Z`);
+  const to = Date.parse(`${r.to}T00:00:00Z`);
+  const days = Math.max(0, Math.round((to - from) / 86_400_000));
+  const end = new Date(from - 86_400_000);
+  const start = new Date(end.getTime() - days * 86_400_000);
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  return {
+    from: iso(start), to: iso(end),
+    label: `${iso(start)} to ${iso(end)}`,
+  };
+}

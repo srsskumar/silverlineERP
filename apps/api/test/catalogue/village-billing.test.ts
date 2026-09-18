@@ -13,7 +13,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
+import { buildWorld, idem, uniq, workDate, type CatalogueWorld, type Headers } from "./fixture.js";
 
 let w: CatalogueWorld;
 let programmeId = "";
@@ -109,14 +109,14 @@ describe("recording a claim", () => {
   });
 
   it("refuses a submission dated in the future", async () => {
-    const soon = new Date(Date.now() + 5 * 86400_000).toISOString().slice(0, 10);
+    const soon = workDate(new Date(Date.now() + 5 * 86400_000));
     const r = await post(w.admin, `/api/v1/survey/villages/${villageA}/billing`,
       { milestone: 3, submitted_on: soon });
     expect(r.status).toBe(422);
   });
 
   it("accepts a backdated one, because the letter went out last week", async () => {
-    const past = new Date(Date.now() - 7 * 86400_000).toISOString().slice(0, 10);
+    const past = workDate(new Date(Date.now() - 7 * 86400_000));
     const r = await post(w.admin, `/api/v1/survey/villages/${villageA}/billing`,
       { milestone: 3, submitted_on: past, extent_ac: 411.5 });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
@@ -140,7 +140,7 @@ describe("what has been claimed on a village", () => {
   it("stops counting a claim the department returned", async () => {
     const list = await get(w.admin, `/api/v1/survey/villages/${villageA}/billing`);
     const third = list.data.find((c: any) => c.milestone === 3);
-    const today = new Date().toISOString().slice(0, 10);
+    const today = workDate();
     const r = await patch({ ...w.admin, ...(await ver(third.id)) },
       `/api/v1/survey/billing/${third.id}`,
       { status: "REJECTED", decided_on: today, remarks: "LPM sheets short" });
@@ -162,7 +162,7 @@ describe("what has been claimed on a village", () => {
 
 describe("pulling the list the office needs", () => {
   it("finds every claim in a window", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = workDate();
     const r = await get(w.admin,
       `/api/v1/survey/billing?project_id=${programmeId}&from=2000-01-01&to=${today}`);
     expect(r.status).toBe(200);
@@ -313,7 +313,7 @@ describe("claiming a batch of villages at once", () => {
   });
 
   it("records the department's answer across the batch", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = workDate();
     const r = await bulk({
       survey_village_ids: batch, action: "DECIDE", milestone: 1,
       status: "APPROVED", decided_on: today, dry_run: false,
@@ -338,7 +338,7 @@ describe("claiming a batch of villages at once", () => {
   it("will not record a decision without saying what was decided", async () => {
     const r = await bulk({
       survey_village_ids: batch, action: "DECIDE", milestone: 1,
-      decided_on: new Date().toISOString().slice(0, 10),
+      decided_on: workDate(),
     });
     expect(r.status).toBe(422);
   });
@@ -346,14 +346,14 @@ describe("claiming a batch of villages at once", () => {
   it("says when there is nothing at that milestone to decide", async () => {
     const r = await bulk({
       survey_village_ids: batch, action: "DECIDE", milestone: 7,
-      status: "PAID", decided_on: new Date().toISOString().slice(0, 10),
+      status: "PAID", decided_on: workDate(),
     });
     expect(r.data.would_change).toBe(0);
     expect(r.data.skipped.every((s: any) => s.reason === "NOTHING_TO_DECIDE")).toBe(true);
   });
 
   it("leaves alone a claim already recorded that way", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = workDate();
     const r = await bulk({
       survey_village_ids: batch, action: "DECIDE", milestone: 1,
       status: "APPROVED", decided_on: today,
@@ -365,7 +365,7 @@ describe("claiming a batch of villages at once", () => {
   it("re-claims a milestone the department returned, under one row", async () => {
     // A returned claim leaves the milestone owed again. A second row would
     // count the percentage twice.
-    const today = new Date().toISOString().slice(0, 10);
+    const today = workDate();
     await bulk({
       survey_village_ids: [batch[3]], action: "DECIDE", milestone: 2,
       status: "REJECTED", decided_on: today, dry_run: false,
@@ -442,7 +442,7 @@ describe("claiming out of order", () => {
     }
     await post(w.admin, "/api/v1/survey/billing/bulk", {
       survey_village_ids: [v], action: "DECIDE", milestone: 2, status: "REJECTED",
-      decided_on: new Date().toISOString().slice(0, 10), dry_run: false,
+      decided_on: workDate(), dry_run: false,
     });
     const r = await post(w.admin, "/api/v1/survey/billing/bulk", {
       survey_village_ids: [v], action: "SUBMIT", milestone: 3,

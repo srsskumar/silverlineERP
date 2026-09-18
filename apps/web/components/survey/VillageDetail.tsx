@@ -16,7 +16,7 @@ import { day, businessToday } from '@/lib/finance';
 import { STAGE_STATE_LABELS, stageLabel, stateTone } from '@/lib/survey';
 import {
   MILESTONE_PERCENT, MILESTONE_LABELS, BILLING_STATUS_LABELS,
-  billingDecisionRequired, type BillingStatus,
+  billingDecisionRequired, stageTracksStaffing, type BillingStatus,
 } from '@silverline/shared';
 
 type Row = Record<string, any>;
@@ -47,21 +47,52 @@ async function fetchAllAssets(): Promise<Row[]> {
  * stuck", and answering it means keeping the others on screen.
  */
 export function VillageDetail({
-  village, pipeline, canManage, canEnter,
+  village, pipeline, canManage, canEnter, openSection,
 }: {
   village: Row;
   pipeline: Row[];
   canManage: boolean;
   canEnter: boolean;
+  /**
+   * Which part to bring into view on arrival.
+   *
+   * Somebody who picked "Assign crew" from the list has already said what
+   * they came to do; making them find it again in an expanded panel is a
+   * step that exists only because the software could not be bothered.
+   */
+  openSection?: 'stages' | 'crew' | 'rovers' | 'billing' | null;
 }) {
+  const focus = React.useRef<HTMLDivElement | null>(null);
+  React.useEffect(() => {
+    if (!openSection) return;
+    // Waits a frame: the panel is being expanded in the same render, and
+    // scrolling to an element that has not been laid out lands nowhere.
+    const t = setTimeout(() => {
+      focus.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 60);
+    return () => clearTimeout(t);
+  }, [openSection]);
+
+  const mark = (name: string) => (openSection === name
+    ? { ref: focus, className: 'rounded-lg ring-2 ring-primary ring-offset-2 ring-offset-surface-sunken' }
+    : {});
+
   return (
     <div className="space-y-4 p-3">
-      <StagePipeline village={village} pipeline={pipeline} canEnter={canEnter} />
+      <div {...mark('stages')}>
+        <StagePipeline village={village} pipeline={pipeline} canEnter={canEnter} />
+      </div>
       <div className="grid gap-4 lg:grid-cols-2">
-        <Crew villageId={String(village.id)} pipeline={pipeline} canManage={canManage} />
-        <Rovers villageId={String(village.id)} canManage={canManage} />
+        <div {...mark('crew')}>
+          <Crew villageId={String(village.id)} pipeline={pipeline} canManage={canManage} />
+        </div>
+        <div {...mark('rovers')}>
+          <Rovers villageId={String(village.id)} canManage={canManage} />
+        </div>
         <CrewAssets villageId={String(village.id)} />
-        <Billing village={village} canManage={canManage} />
+        <div {...mark('billing')}>
+          <Billing village={village} canManage={canManage} />
+        </div>
       </div>
     </div>
   );
@@ -163,6 +194,7 @@ function StagePipeline({
                   stage={stage}
                   state={state}
                   dates={d}
+                  village={village}
                   onSubmit={(v) => move.mutate({ stage_code: code, ...v })}
                   pending={move.isPending}
                 />
@@ -178,9 +210,9 @@ function StagePipeline({
 }
 
 function StageForm({
-  stage, state, dates, onSubmit, pending,
+  stage, state, dates, village, onSubmit, pending,
 }: {
-  stage: Row; state: string; dates: Row;
+  stage: Row; state: string; dates: Row; village: Row;
   onSubmit: (v: Row) => void; pending: boolean;
 }) {
   const [form, setForm] = React.useState({
@@ -188,7 +220,28 @@ function StageForm({
     started_on: dates.started ?? '',
     completed_on: dates.completed ?? '',
     remarks: dates.remarks ?? '',
+    gt_govt_staff_allocated: village.gt_govt_staff_allocated != null
+      ? String(village.gt_govt_staff_allocated) : '',
+    gt_crew_allocated: village.gt_crew_allocated != null
+      ? String(village.gt_crew_allocated) : '',
   });
+
+  /*
+   * Starting ground truthing means saying how it is staffed (§067).
+   *
+   * The one moment anybody knows the answer is now — the mandal has just
+   * said how many of their people we get. Every day's attendance is measured
+   * against these two numbers, and a village that started without them can
+   * never show the days the department sent nobody.
+   *
+   * Asked only when starting, and only while the village has no figures: a
+   * stage corrected six weeks later should not re-open a settled question.
+   */
+  const asksStaffing = stageTracksStaffing(String(stage.code))
+    && form.state === 'IN_PROGRESS'
+    && (village.gt_govt_staff_allocated == null || village.gt_crew_allocated == null);
+  const staffingMissing = asksStaffing
+    && (form.gt_govt_staff_allocated === '' || form.gt_crew_allocated === '');
 
   return (
     <div className="mt-2 grid gap-2 border-t border-border pt-2 sm:grid-cols-4">
@@ -220,17 +273,54 @@ function StageForm({
         <input className={field} value={form.remarks} placeholder="Two parcels disputed"
           onChange={(e) => setForm({ ...form, remarks: e.target.value })} />
       </label>
+      {asksStaffing ? (
+        <>
+          <div className="sm:col-span-4">
+            <Notice tone="info" title="How is this village staffed?">
+              Ground truthing is walked with the department’s people. Recording what was
+              agreed now is what lets every day’s attendance be measured against it — and
+              what shows the days nobody from the mandal turned up.
+            </Notice>
+          </div>
+          <label className="space-y-1 sm:col-span-2">
+            <span className="text-2xs uppercase tracking-wide text-text-subtle">
+              Government staff allotted <span className="text-danger">*</span>
+            </span>
+            <input type="number" min={0} className={field}
+              value={form.gt_govt_staff_allocated} placeholder="2"
+              onChange={(e) => setForm({ ...form, gt_govt_staff_allocated: e.target.value })} />
+          </label>
+          <label className="space-y-1 sm:col-span-2">
+            <span className="text-2xs uppercase tracking-wide text-text-subtle">
+              Our crew allotted <span className="text-danger">*</span>
+            </span>
+            <input type="number" min={0} className={field}
+              value={form.gt_crew_allocated} placeholder="4"
+              onChange={(e) => setForm({ ...form, gt_crew_allocated: e.target.value })} />
+          </label>
+        </>
+      ) : null}
+
       <div className="sm:col-span-4">
         <Button type="button" variant="primary" loading={pending}
-          disabled={form.state === 'COMPLETED' && !form.completed_on}
+          disabled={(form.state === 'COMPLETED' && !form.completed_on) || staffingMissing}
           onClick={() => onSubmit({
             state: form.state,
             started_on: form.started_on || undefined,
             completed_on: form.completed_on || undefined,
             remarks: form.remarks || undefined,
+            ...(asksStaffing ? {
+              gt_govt_staff_allocated: Number(form.gt_govt_staff_allocated),
+              gt_crew_allocated: Number(form.gt_crew_allocated),
+            } : {}),
           })}>
           Save {stage.label}
         </Button>
+        {staffingMissing ? (
+          <span className="ml-2 text-2xs text-text-subtle">
+            Both staffing figures are needed to start ground truthing.
+          </span>
+        ) : null}
       </div>
     </div>
   );

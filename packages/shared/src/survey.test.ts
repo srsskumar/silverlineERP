@@ -13,6 +13,7 @@ import {
   type MeasureBasis, type VillageProgress,
   periodContaining, previousPeriod, comparePeriods, surveyVillageCreateSchema,
   villageBillingBulkSchema, BILLING_SKIP_LABELS,
+  summariseStaffing, staffingNote, stageTracksStaffing, type StaffingDay,
 } from './survey.js';
 
 const BASIS: Record<string, MeasureBasis> = Object.fromEntries(
@@ -1383,5 +1384,115 @@ describe('claiming a batch of villages', () => {
     for (const reason of ['ALREADY_CLAIMED', 'NOTHING_TO_DECIDE', 'ALREADY_IN_THAT_STATE'] as const) {
       expect(BILLING_SKIP_LABELS[reason], reason).toBeTruthy();
     }
+  });
+});
+
+describe('attendance against allocation', () => {
+  const day = (over: Partial<StaffingDay> = {}): StaffingDay => ({
+    govtStaffPresent: 2, crewPresent: 4,
+    govtStaffAllocated: 2, crewAllocated: 4, ...over,
+  });
+
+  it('counts person-days on each side', () => {
+    const s = summariseStaffing([day(), day()]);
+    expect(s.daysRecorded).toBe(2);
+    expect(s.govtStaffDays).toBe(4);
+    expect(s.crewDays).toBe(8);
+    expect(s.govtStaffPct).toBe(100);
+  });
+
+  it('expects the allocation only on days that have a return', () => {
+    /*
+     * Multiplying the allocation by the calendar would charge the department
+     * for Sundays and for days the crew was elsewhere, and the percentage
+     * that came out would be an accusation rather than a measurement.
+     */
+    const s = summariseStaffing([day(), day({ govtStaffPresent: 1 })]);
+    expect(s.govtStaffExpected).toBe(4);
+    expect(s.govtStaffDays).toBe(3);
+    expect(s.govtStaffPct).toBe(75);
+  });
+
+  it('leaves out a day nobody was asked about, rather than calling it zero', () => {
+    // A return filed before this existed is not an absence, and counting it
+    // as one would manufacture absences out of the day the field was added.
+    const s = summariseStaffing([
+      day(),
+      { govtStaffPresent: null, crewPresent: null, govtStaffAllocated: 2, crewAllocated: 4 },
+    ]);
+    expect(s.daysRecorded).toBe(1);
+    expect(s.govtStaffExpected).toBe(2);
+  });
+
+  it('counts a day nobody came as a real absence', () => {
+    // Zero is the fact worth having, and it is not the same as blank.
+    const s = summariseStaffing([day({ govtStaffPresent: 0 })]);
+    expect(s.daysRecorded).toBe(1);
+    expect(s.daysWithNoGovtStaff).toBe(1);
+    expect(s.govtStaffPct).toBe(0);
+  });
+
+  it('counts a day short once, however many sides were short', () => {
+    const s = summariseStaffing([day({ govtStaffPresent: 1, crewPresent: 2 })]);
+    expect(s.daysShort).toBe(1);
+  });
+
+  it('does not call a day short when more turned up than agreed', () => {
+    const s = summariseStaffing([day({ govtStaffPresent: 5 })]);
+    expect(s.daysShort).toBe(0);
+    expect(s.govtStaffPct).toBe(250);
+  });
+
+  it('has no percentage to report with no allocation recorded', () => {
+    const s = summariseStaffing([day({ govtStaffAllocated: null, crewAllocated: null })]);
+    expect(s.govtStaffPct).toBeNull();
+    expect(s.crewPct).toBeNull();
+    expect(s.govtStaffDays).toBe(2);
+  });
+
+  it('says nothing was recorded rather than reporting a hollow zero', () => {
+    const s = summariseStaffing([]);
+    expect(s.daysRecorded).toBe(0);
+    expect(staffingNote(s)).toMatch(/nobody has recorded/i);
+  });
+});
+
+describe('what to say about attendance', () => {
+  it('leads with the shortfall the office escalates', () => {
+    const s = summariseStaffing([
+      { govtStaffPresent: 0, crewPresent: 4, govtStaffAllocated: 2, crewAllocated: 4 },
+      { govtStaffPresent: 0, crewPresent: 4, govtStaffAllocated: 2, crewAllocated: 4 },
+    ]);
+    const note = staffingNote(s);
+    expect(note).toMatch(/0%/);
+    expect(note).toMatch(/fielded nobody on 2 days/i);
+  });
+
+  it('reports a short day without calling it an absence', () => {
+    const s = summariseStaffing([
+      { govtStaffPresent: 1, crewPresent: 4, govtStaffAllocated: 2, crewAllocated: 4 },
+    ]);
+    expect(staffingNote(s)).toMatch(/1 day was short/i);
+    expect(staffingNote(s)).not.toMatch(/fielded nobody/i);
+  });
+
+  it('says so plainly when everybody turned up', () => {
+    const s = summariseStaffing([
+      { govtStaffPresent: 2, crewPresent: 4, govtStaffAllocated: 2, crewAllocated: 4 },
+    ]);
+    expect(staffingNote(s)).toMatch(/100%/);
+    expect(staffingNote(s)).not.toMatch(/short|nobody/i);
+  });
+});
+
+describe('which stage asks about attendance', () => {
+  it('is ground truthing, and only ground truthing', () => {
+    // No other stage is walked with the department, and asking on the rest
+    // would collect figures that mean nothing.
+    expect(stageTracksStaffing('GROUND_TRUTHING')).toBe(true);
+    for (const code of ['GT_QC', 'VECTORIZATION', 'RECORDS_PREPARATION', 'SUBMISSION']) {
+      expect(stageTracksStaffing(code), code).toBe(false);
+    }
+    expect(stageTracksStaffing(null)).toBe(false);
   });
 });

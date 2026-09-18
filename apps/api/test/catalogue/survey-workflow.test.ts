@@ -105,7 +105,8 @@ describe("the stage pipeline", () => {
 
   it("lets the next stage start once its predecessor is complete", async () => {
     expect((await stage(villageA, "GROUND_TRUTHING", "IN_PROGRESS",
-      { started_on: "2026-09-01" })).status).toBe(200);
+      { started_on: "2026-09-01", gt_govt_staff_allocated: 2, gt_crew_allocated: 4 })).status)
+      .toBe(200);
     expect((await stage(villageA, "GROUND_TRUTHING", "COMPLETED",
       { started_on: "2026-09-01", completed_on: "2026-09-10" })).status).toBe(200);
     expect((await stage(villageA, "GT_QC", "IN_PROGRESS")).status).toBe(200);
@@ -296,7 +297,8 @@ describe("controls", () => {
 
   it("lets a crew move a stage, which is their own work", async () => {
     const r = await post(w.role.TEAM_LEAD, `/api/v1/survey/villages/${villageB}/stage`,
-      { stage_code: "GROUND_TRUTHING", state: "IN_PROGRESS", remarks: "Started today" });
+      { stage_code: "GROUND_TRUTHING", state: "IN_PROGRESS", remarks: "Started today",
+        gt_govt_staff_allocated: 2, gt_crew_allocated: 4 });
     expect(r.status).toBe(200);
   });
 

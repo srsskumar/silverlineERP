@@ -18,6 +18,7 @@ import {
   villageBillingSchema, villageBillingPatchSchema, MILESTONE_PERCENT,
   billingDecisionRequired, claimedPercent, type BillingStatus,
   villageBillingBulkSchema,
+  summariseStaffing, stageTracksStaffing, priorRange, type StaffingDay,
   type MeasureBasis, type PeriodGrain, type ReportLevel, type StageState, type VillageProgress,
   businessDay,
 } from '@silverline/shared';
@@ -50,6 +51,38 @@ export async function registerSurveyRoutes(
     v instanceof Date ? businessDay(v) : v ? String(v).slice(0, 10) : null;
   const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
   const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+  /**
+   * Who turned up against who was allotted, over a window (§067).
+   *
+   * One query and one shared summariser, so the report, the progress screen
+   * and the village sheet cannot drift apart on what "82% attendance" means.
+   * The allocation travels with each day rather than being applied
+   * afterwards, because a village restaffed halfway through a month was
+   * measured against one number then and another now.
+   */
+  async function staffingOver(
+    db: Pool | PoolClient, orgId: string, projectId: string,
+    from: string, to: string, villageIds?: string[],
+  ) {
+    const args: unknown[] = [orgId, projectId, from, to];
+    let scope = '';
+    if (villageIds) { args.push(villageIds); scope = ` AND e.survey_village_id = ANY($${args.length}::uuid[])`; }
+    const rows = (await db.query(
+      `SELECT e.govt_staff_present, e.crew_present,
+              sv.gt_govt_staff_allocated, sv.gt_crew_allocated
+         FROM survey_entries e
+         JOIN survey_villages sv ON sv.id = e.survey_village_id
+        WHERE e.org_id = $1 AND e.survey_project_id = $2
+          AND e.entry_date BETWEEN $3::date AND $4::date${scope}`, args)).rows;
+    return summariseStaffing(rows.map((r): StaffingDay => ({
+      govtStaffPresent: r.govt_staff_present === null ? null : Number(r.govt_staff_present),
+      crewPresent: r.crew_present === null ? null : Number(r.crew_present),
+      govtStaffAllocated: r.gt_govt_staff_allocated === null
+        ? null : Number(r.gt_govt_staff_allocated),
+      crewAllocated: r.gt_crew_allocated === null ? null : Number(r.gt_crew_allocated),
+    })));
+  }
 
   /** The organisation's measures, by id and by code. */
   async function measures(db: Pool | PoolClient, orgId: string) {
@@ -909,6 +942,43 @@ export async function registerSurveyRoutes(
           fail('VALIDATION_ERROR', 'A completed stage needs the date it was completed', 422);
         }
 
+        /*
+         * Starting ground truthing means saying how it is staffed (§067).
+         *
+         * The one moment anybody knows the answer is now — the mandal has
+         * just told us how many of their people we get. Asked once; every
+         * day's return afterwards is measured against it, and a programme
+         * that started without it can never show the days the department
+         * fielded nobody.
+         *
+         * Only demanded when the village does not already carry the figures,
+         * so correcting a stage later does not re-ask a settled question.
+         */
+        if (stageTracksStaffing(input.stage_code) && input.state === 'IN_PROGRESS') {
+          const held = (await db.query(
+            `SELECT gt_govt_staff_allocated AS govt, gt_crew_allocated AS crew
+               FROM survey_villages WHERE id = $1`, [id])).rows[0];
+          const govt = input.gt_govt_staff_allocated ?? held?.govt;
+          const crew = input.gt_crew_allocated ?? held?.crew;
+          if (govt === null || govt === undefined || crew === null || crew === undefined) {
+            fail('STAFFING_REQUIRED',
+              'Starting ground truthing needs the staffing agreed with the mandal: '
+              + 'how many government staff and how many of our crew. '
+              + 'Every day’s attendance is measured against these.', 422);
+          }
+        }
+        if (input.gt_govt_staff_allocated !== undefined
+          || input.gt_crew_allocated !== undefined) {
+          await db.query(
+            `UPDATE survey_villages
+                SET gt_govt_staff_allocated = COALESCE($2, gt_govt_staff_allocated),
+                    gt_crew_allocated = COALESCE($3, gt_crew_allocated),
+                    version = version + 1, updated_at = now(), updated_by = $4
+              WHERE id = $1`,
+            [id, input.gt_govt_staff_allocated ?? null,
+              input.gt_crew_allocated ?? null, u.id]);
+        }
+
         if (input.state !== 'NOT_STARTED') {
           const pipeline = await stagePipeline(db, u.orgId);
           const current = (await db.query(
@@ -1070,9 +1140,9 @@ export async function registerSurveyRoutes(
         const crewRow = (await db.query(
           `INSERT INTO survey_crew(org_id, survey_village_id, stage_id, employee_id,
              assigned_on, released_on, created_by)
-           VALUES($1,$2,$3,$4,COALESCE($5::date, CURRENT_DATE),$6,$7) RETURNING *`,
+           VALUES($1,$2,$3,$4,$5::date,$6,$7) RETURNING *`,
           [u.orgId, id, stage.id, input.employee_id,
-            input.assigned_on ?? null, input.released_on ?? null, u.id])).rows[0];
+            input.assigned_on ?? today(), input.released_on ?? null, u.id])).rows[0];
         // Said rather than done silently: somebody who expected to allocate
         // the rovers needs to know it has already happened.
         return { ...crewRow, rovers_brought: kit.brought, rovers_left_elsewhere: kit.elsewhere };
@@ -1111,13 +1181,13 @@ export async function registerSurveyRoutes(
           const done = await db.query(
             `INSERT INTO survey_crew(org_id, survey_village_id, stage_id, employee_id,
                assigned_on, created_by)
-             SELECT $1,$2,$3,$4,COALESCE($5::date, CURRENT_DATE),$6
+             SELECT $1,$2,$3,$4,$5::date,$6
              WHERE NOT EXISTS (
                SELECT 1 FROM survey_crew
                WHERE survey_village_id = $2 AND stage_id = $3 AND employee_id = $4
                  AND released_on IS NULL)
              RETURNING id`,
-            [u.orgId, id, stage.id, employeeId, input.assigned_on ?? null, u.id]);
+            [u.orgId, id, stage.id, employeeId, input.assigned_on ?? today(), u.id]);
           if (done.rowCount) {
             assigned.push(employeeId);
             // Their instruments come with them, so nobody allocates the same
@@ -1303,8 +1373,8 @@ export async function registerSurveyRoutes(
           // Released rather than deleted, so who surveyed a village last
           // season is still answerable.
           const released = (await db.query(
-            `UPDATE survey_crew SET released_on = COALESCE($2::date, CURRENT_DATE)
-             WHERE id = $1 RETURNING *`, [id, input.released_on ?? null])).rows[0];
+            `UPDATE survey_crew SET released_on = $2::date
+             WHERE id = $1 RETURNING *`, [id, input.released_on ?? today()])).rows[0];
           return { ...released, rovers_released: returned };
         }),
       };
@@ -1437,13 +1507,13 @@ export async function registerSurveyRoutes(
            allocated_on, created_by, assigned_via_employee_id)
          VALUES($1,$2,$3,
            GREATEST(
-             COALESCE($4::date, CURRENT_DATE),
+             $4::date,
              COALESCE((SELECT max(r.released_on) + 1 FROM survey_rover_allocations r
                         WHERE r.asset_id = $3), '-infinity'::date)
            ),
            $5,$6)
          RETURNING allocated_on`,
-        [orgId, villageId, k.asset_id, on ?? null, userId, employeeId])).rows[0];
+        [orgId, villageId, k.asset_id, on ?? today(), userId, employeeId])).rows[0];
       brought.push(String(k.label));
       startedOn.set(String(k.label), String(started.allocated_on).slice(0, 10));
     }
@@ -1463,10 +1533,10 @@ export async function registerSurveyRoutes(
   ): Promise<number> {
     return (await db.query(
       `UPDATE survey_rover_allocations
-          SET released_on = COALESCE($4::date, CURRENT_DATE)
+          SET released_on = $4::date
         WHERE org_id = $1 AND survey_village_id = $2
           AND assigned_via_employee_id = $3 AND released_on IS NULL`,
-      [orgId, villageId, employeeId, on ?? null])).rowCount ?? 0;
+      [orgId, villageId, employeeId, on ?? today()])).rowCount ?? 0;
   }
 
   app.post('/api/v1/survey/villages/:id/rovers', { preHandler: guard('survey.manage') },
@@ -1522,8 +1592,8 @@ export async function registerSurveyRoutes(
             }
             return (await db.query(
               `UPDATE survey_rover_allocations
-               SET released_on = COALESCE($2::date, CURRENT_DATE)
-               WHERE id = $1 RETURNING *`, [id, input.released_on ?? null])).rows[0];
+               SET released_on = $2::date
+               WHERE id = $1 RETURNING *`, [id, input.released_on ?? today()])).rows[0];
           }),
       };
     });
@@ -1647,15 +1717,21 @@ export async function registerSurveyRoutes(
            teams_deployed, dgps_base, dgps_rovers, notes,
            low_progress_reason, low_progress_remarks,
            punch_in_at, punch_out_at, punch_in_lat, punch_in_lng,
-           punch_out_lat, punch_out_lng, created_by, updated_by)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17) RETURNING *`,
+           punch_out_lat, punch_out_lng, govt_staff_present, crew_present,
+           created_by, updated_by)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$19)
+         RETURNING *`,
         [u.orgId, village.survey_project_id, input.survey_village_id, input.entry_date,
           input.teams_deployed ?? 0, input.dgps_base ?? 0, roversUsed,
           input.notes ?? null,
           input.low_progress_reason ?? null, input.low_progress_remarks ?? null,
           input.punch_in_at ?? null, input.punch_out_at ?? null,
           input.punch_in_lat ?? null, input.punch_in_lng ?? null,
-          input.punch_out_lat ?? null, input.punch_out_lng ?? null, u.id])).rows[0];
+          input.punch_out_lat ?? null, input.punch_out_lng ?? null,
+          // Null and zero are different answers (§067): null is "nobody was
+          // asked", zero is "nobody came", and only one of them is a finding.
+          input.govt_staff_present ?? null, input.crew_present ?? null,
+          u.id])).rows[0];
 
       for (const r of roverRows) {
         await db.query(
@@ -1725,6 +1801,11 @@ export async function registerSurveyRoutes(
           dgps_base: row.dgps_base,
           dgps_rovers: row.dgps_rovers,
           notes: row.notes,
+          // Attendance is amended like any other figure, and "who changed
+          // four government staff to nought" is exactly the question the
+          // trail exists for.
+          govt_staff_present: row.govt_staff_present,
+          crew_present: row.crew_present,
           values: Object.fromEntries((await db.query(
             `SELECT mm.code, ev.quantity FROM survey_entry_values ev
                JOIN survey_measures mm ON mm.id = ev.measure_id
@@ -1732,7 +1813,8 @@ export async function registerSurveyRoutes(
         };
 
         const sets: string[] = [], values: unknown[] = [id];
-        for (const key of ['teams_deployed', 'dgps_base', 'dgps_rovers', 'notes'] as const) {
+        for (const key of ['teams_deployed', 'dgps_base', 'dgps_rovers', 'notes',
+          'govt_staff_present', 'crew_present'] as const) {
           if (input[key] !== undefined) { values.push(input[key]); sets.push(`${key} = $${values.length}`); }
         }
         if (sets.length) {
@@ -1815,6 +1897,9 @@ export async function registerSurveyRoutes(
               (SELECT count(*)::int FROM survey_entry_rovers r
                 WHERE r.entry_id = e.id AND r.status = 'IDLE') AS rovers_idle,
               COALESCE(NULLIF(trim(concat_ws(' ', emp.first_name, emp.last_name)), ''), u.username) AS recorded_by_name,
+              -- What the village was staffed for (§067), so the row can read
+              -- "4 of 6" rather than a bare 4 that means nothing on its own.
+              sv.gt_govt_staff_allocated, sv.gt_crew_allocated,
               (SELECT json_object_agg(mm.code, ev.quantity)
                  FROM survey_entry_values ev JOIN survey_measures mm ON mm.id = ev.measure_id
                 WHERE ev.entry_id = e.id) AS values
@@ -2096,7 +2181,8 @@ export async function registerSurveyRoutes(
           const row = await villageOr404(db, u.orgId, id, u, true);
           version(req, row as { version: number });
           const sets: string[] = [], values: unknown[] = [id];
-          for (const key of ['total_extent_ac', 'expected_completion_on', 'planned_start_on'] as const) {
+          for (const key of ['total_extent_ac', 'expected_completion_on', 'planned_start_on',
+            'gt_govt_staff_allocated', 'gt_crew_allocated'] as const) {
             if (input[key] !== undefined) { values.push(input[key]); sets.push(`${key} = $${values.length}`); }
           }
           if (!sets.length) return row;
@@ -2173,13 +2259,13 @@ export async function registerSurveyRoutes(
             `INSERT INTO survey_village_billing(org_id, survey_village_id, milestone,
                percent, status, submitted_on, decided_on, reference_no, extent_ac,
                remarks, created_by, updated_by)
-             VALUES($1,$2,$3,$4,$5,COALESCE($6::date, CURRENT_DATE),$7,$8,$9,$10,$11,$11)
+             VALUES($1,$2,$3,$4,$5,$6::date,$7,$8,$9,$10,$11,$11)
              RETURNING *`,
             [u.orgId, id, input.milestone,
               // Defaulted from the milestone so the usual case needs no
               // decision; stored, so a different contract keeps its own split.
               input.percent ?? MILESTONE_PERCENT[input.milestone] ?? 0,
-              status, input.submitted_on ?? null, input.decided_on ?? null,
+              status, input.submitted_on ?? today(), input.decided_on ?? null,
               input.reference_no ?? null, input.extent_ac ?? null,
               input.remarks ?? null, u.id])).rows[0];
           return { ...row, percent: num(row.percent), extent_ac: num(row.extent_ac) };
@@ -2421,12 +2507,12 @@ export async function registerSurveyRoutes(
                 if (r.claim_id) {
                   await db.query(
                     `UPDATE survey_village_billing
-                        SET status = 'SUBMITTED', percent = $2, submitted_on = COALESCE($3::date, CURRENT_DATE),
+                        SET status = 'SUBMITTED', percent = $2, submitted_on = $3::date,
                             decided_on = NULL, reference_no = $4, extent_ac = $5, remarks = $6,
                             version = version + 1, updated_at = now(), updated_by = $7
                       WHERE id = $1`,
                     [r.claim_id, input.percent ?? MILESTONE_PERCENT[input.milestone] ?? 0,
-                      input.submitted_on ?? null, input.reference_no ?? null,
+                      input.submitted_on ?? today(), input.reference_no ?? null,
                       input.use_village_extent ? r.total_extent_ac : null,
                       input.remarks ?? null, u.id]);
                   continue;
@@ -2435,10 +2521,10 @@ export async function registerSurveyRoutes(
                   `INSERT INTO survey_village_billing(org_id, survey_village_id, milestone,
                      percent, status, submitted_on, reference_no, extent_ac, remarks,
                      created_by, updated_by)
-                   VALUES($1,$2,$3,$4,'SUBMITTED',COALESCE($5::date, CURRENT_DATE),$6,$7,$8,$9,$9)`,
+                   VALUES($1,$2,$3,$4,'SUBMITTED',$5::date,$6,$7,$8,$9,$9)`,
                   [u.orgId, r.id, input.milestone,
                     input.percent ?? MILESTONE_PERCENT[input.milestone] ?? 0,
-                    input.submitted_on ?? null, input.reference_no ?? null,
+                    input.submitted_on ?? today(), input.reference_no ?? null,
                     input.use_village_extent ? r.total_extent_ac : null,
                     input.remarks ?? null, u.id]);
               }
@@ -2503,12 +2589,12 @@ export async function registerSurveyRoutes(
           return (await db.query(
             `INSERT INTO survey_project_employees(org_id, survey_project_id, employee_id,
                project_role, assigned_on, created_by)
-             VALUES($1,$2,$3,$4,COALESCE($5::date, CURRENT_DATE),$6)
+             VALUES($1,$2,$3,$4,$5::date,$6)
              ON CONFLICT (survey_project_id, employee_id)
              DO UPDATE SET project_role = EXCLUDED.project_role, released_on = NULL
              RETURNING *`,
             [u.orgId, id, input.employee_id, input.project_role,
-              input.assigned_on ?? null, u.id])).rows[0];
+              input.assigned_on ?? today(), u.id])).rows[0];
         });
       reply.code(201);
       return { data: row };
@@ -2630,6 +2716,71 @@ export async function registerSurveyRoutes(
                 .sort((a, b) => b.days - a.days),
             };
           }),
+        },
+      };
+    });
+
+  /**
+   * The days one instrument sat idle, and where (§note 16).
+   *
+   * The productivity table says a rover was idle eleven days. That is a
+   * number; "eleven days idle, nine of them in Koyyuru waiting for the VRO"
+   * is a conversation with the mandal. Getting from one to the other meant
+   * reading the returns village by village.
+   *
+   * Every idle day, not a summary: eleven rows is a list somebody scans, and
+   * summarising them again would lose the dates, which are what an escalation
+   * is built on.
+   */
+  app.get('/api/v1/survey/projects/:id/rovers/:assetId/idle-days',
+    { preHandler: guard('survey.read') }, async req => {
+      const u = actor(req);
+      const { id, assetId } = req.params as { id: string; assetId: string };
+      const { q } = page(req);
+      await projectOr404(pool, u.orgId, id, u);
+      const to = String(q.to ?? today());
+      const from = String(q.from ?? '1900-01-01');
+
+      const rows = (await pool.query(
+        `SELECT se.entry_date, se.survey_village_id, ou.name AS village_name,
+                m.name AS mandal_name,
+                er.idle_reason, er.remarks,
+                COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), e.emp_no)
+                  AS employee_name
+           FROM survey_entry_rovers er
+           JOIN survey_entries se ON se.id = er.entry_id
+           JOIN survey_villages sv ON sv.id = se.survey_village_id
+           JOIN org_units ou ON ou.id = sv.village_id
+           LEFT JOIN org_units m ON m.id = ou.parent_id
+           LEFT JOIN employees e ON e.id = er.employee_id
+          WHERE se.org_id = $1 AND se.survey_project_id = $2
+            AND er.asset_id = $3::uuid AND er.status = 'IDLE'
+            AND se.entry_date BETWEEN $4::date AND $5::date
+          ORDER BY se.entry_date DESC`,
+        [u.orgId, id, assetId, from, to])).rows;
+
+      const asset = (await pool.query(
+        'SELECT asset_code, name FROM assets WHERE id = $1 AND org_id = $2',
+        [assetId, u.orgId])).rows[0];
+
+      return {
+        data: {
+          asset_code: asset?.asset_code ?? null,
+          asset_name: asset?.name ?? null,
+          from, to,
+          days: rows.map(r => ({
+            entry_date: iso(r.entry_date),
+            survey_village_id: r.survey_village_id,
+            village_name: r.village_name,
+            mandal_name: r.mandal_name,
+            idle_reason: r.idle_reason,
+            // The label comes from one place, so the badge on the summary
+            // and the row in this list cannot word the same reason
+            // differently.
+            idle_reason_label: reasonLabel(r.idle_reason),
+            remarks: r.remarks,
+            employee_name: r.employee_name,
+          })),
         },
       };
     });
@@ -3172,11 +3323,23 @@ export async function registerSurveyRoutes(
         .map(p => ({ id: p.villageId, name: String(p.row.village_name) }))
         .sort((a, b) => a.name.localeCompare(b.name));
 
+      /*
+       * Attendance over the window, for the villages in scope (§067).
+       *
+       * Bounded by the same dates and the same villages as everything else
+       * on the screen, so "82% turnout" and "40% complete" describe the same
+       * programme rather than two different slices of it.
+       */
+      const staffing = await staffingOver(
+        pool, u.orgId, id, from ?? '1900-01-01', asOf,
+        filtered ? villageIds : undefined);
+
       return {
         data: {
           level,
           as_of: asOf,
           from: from ?? null,
+          staffing,
           // What the figures below cover, so a screen can say so rather than
           // leaving a reader to remember what they picked.
           filter: {
@@ -3241,8 +3404,25 @@ export async function registerSurveyRoutes(
       const grain = (PERIOD_GRAINS as readonly string[]).includes(String(q.grain))
         ? String(q.grain) as PeriodGrain : 'DAY';
       const asOf = String(q.as_of ?? today());
-      const period = periodContaining(asOf, grain);
-      const prior = previousPeriod(period, grain);
+
+      /*
+       * A range somebody chose, rather than a calendar period.
+       *
+       * "The fortnight the minister's visit covered" is not a week and is
+       * not a month, and until now reporting on it meant running four weekly
+       * reports and adding them up by hand. The comparison period is the
+       * same length immediately before it, which is the only honest
+       * like-for-like when the period has no calendar meaning.
+       */
+      const custom = q.from && q.to
+        ? { from: String(q.from), to: String(q.to) } : null;
+      if (custom && custom.from > custom.to) {
+        fail('VALIDATION_ERROR', 'The range starts after it ends. Check the dates.', 422);
+      }
+      const period = custom
+        ? { ...custom, label: `${custom.from} to ${custom.to}` }
+        : periodContaining(asOf, grain);
+      const prior = custom ? priorRange(custom) : previousPeriod(period, grain);
       const level = (REPORT_LEVELS as readonly string[]).includes(String(q.level))
         ? String(q.level) as ReportLevel : 'mandal';
 
@@ -3262,7 +3442,7 @@ export async function registerSurveyRoutes(
            GROUP BY 1, 2`, [u.orgId, id, from, to])).rows;
       }
 
-      const [now, before, days, rovers, moved] = await Promise.all([
+      const [now, before, days, rovers, moved, staffNow, staffBefore] = await Promise.all([
         totals(period.from, period.to),
         totals(prior.from, prior.to),
         // Days actually worked, which is what a pace figure must divide by.
@@ -3301,7 +3481,10 @@ export async function registerSurveyRoutes(
            GROUP BY 1, 2, 3, s.display_order
            ORDER BY s.display_order`,
           [u.orgId, id, period.from, period.to]),
+        staffingOver(pool, u.orgId, id, period.from, period.to),
+        staffingOver(pool, u.orgId, id, prior.from, prior.to),
       ]);
+      const staffing = { now: staffNow, before: staffBefore };
 
       const sumBy = (rows: Array<Record<string, any>>, code: string) =>
         rows.filter(r => r.measure_code === code)
@@ -3363,6 +3546,12 @@ export async function registerSurveyRoutes(
           measures: Object.fromEntries(m.codes.map(c => [
             c, comparePeriods(round2(sumBy(now, c)), round2(sumBy(before, c))),
           ])),
+          // The measures with their labels and units, so a report can name
+          // what it is counting rather than printing a database code.
+          measure_list: m.rows.map(r => ({
+            code: r.code, label: r.label, group_label: r.group_label,
+            unit: r.unit, basis: r.basis,
+          })),
           effort: {
             active_days: activeDays,
             calendar_days: Math.round(
@@ -3378,6 +3567,11 @@ export async function registerSurveyRoutes(
             idle: Number(rovers.rows[0]?.idle ?? 0),
             idle_reasons: rovers.rows[0]?.idle_reasons ?? [],
           },
+          // Who was allotted to ground truthing and who came (§067). The gap
+          // is what the department is answerable for and what the programme
+          // loses days to.
+          staffing: staffing.now,
+          previous_staffing: staffing.before,
           stage_movements: moved.rows,
           units,
           overall,
@@ -3416,8 +3610,29 @@ export async function registerSurveyRoutes(
          GROUP BY e.entry_date, mm.code
          ORDER BY e.entry_date`, [u.orgId, id, from, to])).rows;
 
+      /*
+       * Attendance per day, bucketed alongside the quantities (§067).
+       *
+       * One query for the range rather than one per bucket: four hundred
+       * buckets is four hundred round trips, and this endpoint already
+       * refuses ranges wider than that for the same reason.
+       */
+      const staffDays = (await pool.query(
+        `SELECT e.entry_date, e.govt_staff_present, e.crew_present,
+                sv.gt_govt_staff_allocated, sv.gt_crew_allocated
+           FROM survey_entries e
+           JOIN survey_villages sv ON sv.id = e.survey_village_id
+          WHERE e.org_id = $1 AND e.survey_project_id = $2
+            AND e.entry_date >= $3 AND e.entry_date <= $4
+            AND (e.govt_staff_present IS NOT NULL OR e.crew_present IS NOT NULL)`,
+        [u.orgId, id, from, to])).rows;
+
       const periods = buckets.map(b => {
         const within = rows.filter(r => {
+          const d = iso(r.entry_date)!;
+          return d >= b.from && d <= b.to;
+        });
+        const staff = staffDays.filter(r => {
           const d = iso(r.entry_date)!;
           return d >= b.from && d <= b.to;
         });
@@ -3428,6 +3643,13 @@ export async function registerSurveyRoutes(
             code, within.filter(r => r.measure_code === code)
               .reduce((t, r) => t + Number(r.total), 0),
           ])),
+          staffing: summariseStaffing(staff.map((r): StaffingDay => ({
+            govtStaffPresent: r.govt_staff_present === null ? null : Number(r.govt_staff_present),
+            crewPresent: r.crew_present === null ? null : Number(r.crew_present),
+            govtStaffAllocated: r.gt_govt_staff_allocated === null
+              ? null : Number(r.gt_govt_staff_allocated),
+            crewAllocated: r.gt_crew_allocated === null ? null : Number(r.gt_crew_allocated),
+          }))),
         };
       });
 
@@ -3450,8 +3672,34 @@ export async function registerSurveyRoutes(
         stagePipeline(pool, u.orgId),
       ]);
 
+      /*
+       * Attendance per village, in one query (§067).
+       *
+       * A thousand villages is a thousand round trips done the obvious way,
+       * and this sheet is the one people pull for a whole programme.
+       */
+      const attendance = new Map<string, Record<string, number>>(
+        (await pool.query(
+          `SELECT e.survey_village_id,
+                  count(*) FILTER (WHERE e.govt_staff_present IS NOT NULL
+                                      OR e.crew_present IS NOT NULL)::int AS days_recorded,
+                  COALESCE(sum(e.govt_staff_present), 0)::int AS govt_staff_days,
+                  COALESCE(sum(e.crew_present), 0)::int       AS crew_days,
+                  count(*) FILTER (WHERE e.govt_staff_present = 0)::int AS days_no_govt_staff
+             FROM survey_entries e
+             JOIN survey_villages sv ON sv.id = e.survey_village_id
+            WHERE e.org_id = $1 AND sv.survey_project_id = $2
+            GROUP BY 1`, [u.orgId, id])).rows
+          .map(r => [String(r.survey_village_id), {
+            days_recorded: Number(r.days_recorded),
+            govt_staff_days: Number(r.govt_staff_days),
+            crew_days: Number(r.crew_days),
+            days_no_govt_staff: Number(r.days_no_govt_staff),
+          }]));
+
       return {
         data: pos.map(p => {
+          const att = attendance.get(p.villageId);
           const dates = p.row.stage_dates as Record<string,
             { started: string | null; completed: string | null; remarks?: string | null }>;
           const surveyed = (p.done.GOVT_LAND_EXTENT_AC ?? 0) + (p.done.PRIVATE_LAND_EXTENT_AC ?? 0);
@@ -3488,6 +3736,28 @@ export async function registerSurveyRoutes(
             assignee_name: p.row.assignee_name ?? null,
             planned_start_date: iso(p.row.planned_start_date),
             planned_end_date: iso(p.row.planned_end_date),
+            /*
+             * Ground-truthing staffing (§067): what was agreed with the
+             * mandal, and what turned up. Expected person-days are counted
+             * only over days that have a return — multiplying by the
+             * calendar would charge the department for Sundays.
+             */
+            gt_govt_staff_allocated: p.row.gt_govt_staff_allocated === null
+              ? null : Number(p.row.gt_govt_staff_allocated),
+            gt_crew_allocated: p.row.gt_crew_allocated === null
+              ? null : Number(p.row.gt_crew_allocated),
+            attendance_days: att?.days_recorded ?? 0,
+            govt_staff_days: att?.govt_staff_days ?? 0,
+            crew_days: att?.crew_days ?? 0,
+            days_no_govt_staff: att?.days_no_govt_staff ?? 0,
+            govt_staff_pct: att && att.days_recorded && p.row.gt_govt_staff_allocated
+              ? Math.round((att.govt_staff_days
+                / (att.days_recorded * Number(p.row.gt_govt_staff_allocated))) * 1000) / 10
+              : null,
+            crew_pct: att && att.days_recorded && p.row.gt_crew_allocated
+              ? Math.round((att.crew_days
+                / (att.days_recorded * Number(p.row.gt_crew_allocated))) * 1000) / 10
+              : null,
           };
         }),
       };

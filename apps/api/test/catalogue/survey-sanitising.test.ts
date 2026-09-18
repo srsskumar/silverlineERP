@@ -66,6 +66,7 @@ describe("characters Postgres cannot store", () => {
   it("survives control characters in remarks", async () => {
     const r = await post(w.admin, `/api/v1/survey/villages/${villageId}/stage`, {
       stage_code: "GROUND_TRUTHING", state: "IN_PROGRESS",
+      gt_govt_staff_allocated: 2, gt_crew_allocated: 4,
       remarks: "Line one\r\nLine two\u001b[31m",
     });
     expect(r.status, JSON.stringify(r.body)).not.toBe(500);

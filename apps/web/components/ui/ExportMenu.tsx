@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { Button } from '@/components/ui/Button';
-import { downloadCsv, downloadWorkbook, type SheetSpec } from '@/lib/xlsx';
+import { downloadCsv, downloadWorkbook, titleLines, type SheetSpec } from '@/lib/xlsx';
 
 /**
  * Take the table on screen away in a file.
@@ -33,20 +33,52 @@ export function ExportMenu({
   note?: string;
 }) {
   const empty = sheet.rows.length === 0;
+  const [busy, setBusy] = React.useState(false);
+  const lines = sheet.title ? titleLines(sheet.title) : [];
   return (
     <div className="flex flex-wrap items-center gap-1">
-      {note ? <span className="mr-1 text-2xs text-text-subtle">{note}</span> : null}
-      <Button type="button" variant="ghost" disabled={empty}
+      {/*
+        * The same masthead the file carries, for the printed copy.
+        *
+        * A page printed from the browser loses the chrome that said which
+        * programme and which dates it covered. Hidden on screen because it
+        * is already said above it, and printed because there it is not.
+        */}
+      {sheet.title ? (
+        <div className="hidden print:block print:w-full print:border-b print:border-black print:pb-2 print:mb-3">
+          <img src="/silverline-logo.png" alt="Silverline" className="mb-1 h-8" />
+          <div className="text-base font-semibold text-black">{sheet.title.heading}</div>
+          <dl className="mt-0.5 text-xs text-black">
+            {lines.map(([label, value]) => (
+              <div key={label} className="flex gap-1">
+                <dt className="font-medium">{label}:</dt>
+                <dd>{value}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      ) : null}
+
+      {note ? <span className="mr-1 text-2xs text-text-subtle print:hidden">{note}</span> : null}
+      <Button type="button" variant="ghost" disabled={empty || busy}
+        className="print:hidden"
         title={empty ? 'Nothing to download yet' : `Download ${sheet.rows.length} rows as Excel`}
-        onClick={() => downloadWorkbook([sheet], `${fileName}.xlsx`)}>
-        Excel
+        onClick={async () => {
+          // The logo is fetched before the file is built, so the button has
+          // to say it is working — a large report is not instant.
+          setBusy(true);
+          try { await downloadWorkbook([sheet], `${fileName}.xlsx`); }
+          finally { setBusy(false); }
+        }}>
+        {busy ? 'Preparing…' : 'Excel'}
       </Button>
-      <Button type="button" variant="ghost" disabled={empty}
+      <Button type="button" variant="ghost" disabled={empty || busy}
+        className="print:hidden"
         title={empty ? 'Nothing to download yet' : `Download ${sheet.rows.length} rows as CSV`}
         onClick={() => downloadCsv(sheet, `${fileName}.csv`)}>
         CSV
       </Button>
-      <Button type="button" variant="ghost"
+      <Button type="button" variant="ghost" className="print:hidden"
         title="Print this page, or save it as PDF from the print dialogue"
         onClick={() => window.print()}>
         Print / PDF

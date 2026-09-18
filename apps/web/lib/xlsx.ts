@@ -104,6 +104,61 @@ export interface SheetSpec {
   columns: SheetColumn[];
   /** Example rows, in the same order as the columns. */
   rows: string[][];
+  /** A masthead above the table saying what this is. */
+  title?: ReportTitle;
+}
+
+/**
+ * What a downloaded report says about itself.
+ *
+ * A spreadsheet that leaves a meeting is separated from the screen it came
+ * from within the hour. Without this it is a grid of numbers nobody can date,
+ * attribute or reproduce — and the argument that follows is about whether the
+ * figures are current rather than about what they say.
+ *
+ * Downloaded-on is stamped by the writer rather than passed in: the caller
+ * would have to remember, and a report that is wrong about its own date is
+ * worse than one that does not carry it.
+ */
+export interface ReportTitle {
+  /** What the report is. */
+  heading: string;
+  /** The programme or project it covers. */
+  project?: string;
+  /** The period reported on, already worded. */
+  period?: string;
+  /** The filters applied, already worded for a reader. */
+  filters?: string;
+  /** Anything else worth stamping, label then value. */
+  extra?: Array<[string, string]>;
+}
+
+/** The masthead as label/value lines, in the order they are written. */
+export function titleLines(t: ReportTitle): Array<[string, string]> {
+  const lines: Array<[string, string]> = [];
+  if (t.project) lines.push(['Programme', t.project]);
+  if (t.period) lines.push(['Period', t.period]);
+  // Stated even when nothing is filtered: "All villages" is information, and
+  // its absence is what makes a reader wonder what was left out.
+  lines.push(['Filters', t.filters && t.filters.trim() ? t.filters : 'None — everything included']);
+  for (const e of t.extra ?? []) lines.push(e);
+  lines.push(['Downloaded', new Intl.DateTimeFormat('en-GB', {
+    dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata',
+  }).format(new Date()) + ' IST']);
+  return lines;
+}
+
+/**
+ * How many rows the masthead occupies, including the blank separator.
+ *
+ * The logo is anchored over the first rows, so the text starts below it and
+ * the two never collide.
+ */
+export const LOGO_ROWS = 4;
+export function titleHeight(t: ReportTitle | undefined): number {
+  if (!t) return 0;
+  // Logo band, the heading, one row per line, and a blank before the table.
+  return LOGO_ROWS + 1 + titleLines(t).length + 1;
 }
 
 const esc = (s: string) =>
@@ -117,7 +172,7 @@ export function columnRef(index: number): string {
   return ref;
 }
 
-function sheetXml(spec: SheetSpec, validations: string): string {
+function sheetXml(spec: SheetSpec, validations: string, drawing = ''): string {
   const rows: string[] = [];
   const cells = (values: string[], rowNumber: number) =>
     values.map((v, i) =>
@@ -126,19 +181,49 @@ function sheetXml(spec: SheetSpec, validations: string): string {
       `<c r="${columnRef(i)}${rowNumber}" t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>`,
     ).join('');
 
-  rows.push(`<row r="1">${cells(spec.columns.map(c => c.header), 1)}</row>`);
-  spec.rows.forEach((r, i) => rows.push(`<row r="${i + 2}">${cells(r, i + 2)}</row>`));
+  // The masthead, written above the table. The logo is anchored over the
+  // first few rows, so the text starts below it.
+  let at = 1;
+  if (spec.title) {
+    at = LOGO_ROWS + 1;
+    rows.push(`<row r="${at}">${cells([spec.title.heading], at)}</row>`);
+    at += 1;
+    for (const [label, value] of titleLines(spec.title)) {
+      rows.push(`<row r="${at}">${cells([label, value], at)}</row>`);
+      at += 1;
+    }
+    at += 1; // one blank row, so the table reads as a table
+  }
+
+  const headerRow = at;
+  rows.push(`<row r="${headerRow}">${cells(spec.columns.map(c => c.header), headerRow)}</row>`);
+  spec.rows.forEach((r, i) =>
+    rows.push(`<row r="${headerRow + 1 + i}">${cells(r, headerRow + 1 + i)}</row>`));
 
   const cols = spec.columns
     .map((c, i) => `<col min="${i + 1}" max="${i + 1}" width="${c.width ?? 18}" customWidth="1"/>`)
     .join('');
 
+  // Freeze everything above the first data row, so scrolling a thousand
+  // villages keeps the headings and the report's identity in view.
+  const freeze = `<sheetViews><sheetView workbookViewId="0">`
+    + `<pane ySplit="${headerRow}" topLeftCell="A${headerRow + 1}" activePane="bottomLeft" state="frozen"/>`
+    + `</sheetView></sheetViews>`;
+
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+${freeze}
 <cols>${cols}</cols>
 <sheetData>${rows.join('')}</sheetData>
 ${validations}
+${drawing}
 </worksheet>`;
+}
+
+/** Where a column's validation range starts, given the masthead above it. */
+function firstDataRow(spec: SheetSpec): number {
+  return titleHeight(spec.title) + 2;
 }
 
 /**
@@ -149,9 +234,36 @@ ${validations}
  * list of two hundred employees does not. Referring to a range has no such
  * limit, and it also lets somebody widen a list by editing the sheet.
  */
-export function buildWorkbook(sheets: SheetSpec[]): Blob {
+/**
+ * The logo, as bytes, fetched once.
+ *
+ * Fetched rather than compiled in as base64: it is already served as a static
+ * asset, and inlining seven kilobytes of it into every bundle that can export
+ * a report is a cost paid by everybody who never downloads one.
+ *
+ * A failure is not an error. A report without its logo is still the report;
+ * refusing to produce one because an image would not load is not.
+ */
+let logoBytes: Promise<Uint8Array | null> | null = null;
+export function silverlineLogo(): Promise<Uint8Array | null> {
+  if (!logoBytes) {
+    logoBytes = fetch('/silverline-logo.png')
+      .then(r => (r.ok ? r.arrayBuffer() : null))
+      .then(b => (b ? new Uint8Array(b) : null))
+      .catch(() => null);
+  }
+  return logoBytes;
+}
+
+/** The logo's natural size, in EMU (914,400 per inch), scaled to fit. */
+const LOGO_W_EMU = 488 * 9525 * 0.75;
+const LOGO_H_EMU = 145 * 9525 * 0.75;
+
+export function buildWorkbook(sheets: SheetSpec[], logo?: Uint8Array | null): Blob {
   const listColumns: Array<{ values: string[]; ref: string }> = [];
   const enc = (s: string) => new TextEncoder().encode(s);
+  // Only sheets that carry a masthead get the logo over them.
+  const withLogo = logo ? sheets.map(sh => Boolean(sh.title)) : sheets.map(() => false);
 
   // Every option list across every sheet gets a column on the lookup sheet.
   for (const sheet of sheets) {
@@ -174,7 +286,7 @@ export function buildWorkbook(sheets: SheetSpec[]): Blob {
       validations.push(
         `<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1"` +
         ` errorTitle="Not an allowed value" error="Choose one of the values in the list."` +
-        ` sqref="${col}2:${col}5000">` +
+        ` sqref="${col}${firstDataRow(sheet)}:${col}${firstDataRow(sheet) + 5000}">` +
         `<formula1>Lists!$${list.ref}$2:$${list.ref}$${list.values.length + 1}</formula1>` +
         `</dataValidation>`,
       );
@@ -182,7 +294,8 @@ export function buildWorkbook(sheets: SheetSpec[]): Blob {
     const block = validations.length
       ? `<dataValidations count="${validations.length}">${validations.join('')}</dataValidations>`
       : '';
-    return sheetXml(sheet, block);
+    const idx = sheets.indexOf(sheet);
+    return sheetXml(sheet, block, withLogo[idx] ? '<drawing r:id="rId1"/>' : '');
   });
 
   // The lookup sheet: one column per list, with a header naming it.
@@ -224,15 +337,63 @@ ${all.map((_, i) =>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
 <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
 <Default Extension="xml" ContentType="application/xml"/>
+<Default Extension="png" ContentType="image/png"/>
 <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
 ${all.map((_, i) =>
     `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`,
-  ).join('')}</Types>`;
+  ).join('')}${logo
+    ? '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>'
+    : ''}</Types>`;
 
   const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
 </Relationships>`;
+
+  /*
+   * The logo, anchored over the masthead of each sheet that has one.
+   *
+   * oneCellAnchor pins it to A1 at its own size rather than stretching it
+   * across a cell range: a logo that resizes with somebody's column widths
+   * stops looking like the logo.
+   */
+  const drawingParts: Array<{ name: string; data: Uint8Array }> = [];
+  if (logo) {
+    const drawingXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+ xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<xdr:oneCellAnchor>
+<xdr:from><xdr:col>0</xdr:col><xdr:colOff>47625</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>47625</xdr:rowOff></xdr:from>
+<xdr:ext cx="${Math.round(LOGO_W_EMU)}" cy="${Math.round(LOGO_H_EMU)}"/>
+<xdr:pic>
+<xdr:nvPicPr><xdr:cNvPr id="1" name="Silverline"/><xdr:cNvPicPr/></xdr:nvPicPr>
+<xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>
+<xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>
+</xdr:pic>
+<xdr:clientData/>
+</xdr:oneCellAnchor>
+</xdr:wsDr>`;
+    const drawingRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/silverline.png"/>
+</Relationships>`;
+    drawingParts.push(
+      { name: 'xl/media/silverline.png', data: logo },
+      { name: 'xl/drawings/drawing1.xml', data: enc(drawingXml) },
+      { name: 'xl/drawings/_rels/drawing1.xml.rels', data: enc(drawingRels) },
+    );
+    // One drawing part, shared: the same image on every masthead sheet.
+    withLogo.forEach((has, i) => {
+      if (!has) return;
+      drawingParts.push({
+        name: `xl/worksheets/_rels/sheet${i + 1}.xml.rels`,
+        data: enc(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>`),
+      });
+    });
+  }
 
   return zipStore([
     { name: '[Content_Types].xml', data: enc(contentTypes) },
@@ -240,11 +401,14 @@ ${all.map((_, i) =>
     { name: 'xl/workbook.xml', data: enc(workbook) },
     { name: 'xl/_rels/workbook.xml.rels', data: enc(workbookRels) },
     ...sheetEntries,
+    ...drawingParts,
   ]);
 }
 
-export function downloadWorkbook(sheets: SheetSpec[], fileName: string): void {
-  const url = URL.createObjectURL(buildWorkbook(sheets));
+export async function downloadWorkbook(sheets: SheetSpec[], fileName: string): Promise<void> {
+  // A missing logo is not a reason to withhold the report.
+  const logo = sheets.some(s => s.title) ? await silverlineLogo() : null;
+  const url = URL.createObjectURL(buildWorkbook(sheets, logo));
   const link = document.createElement('a');
   link.href = url;
   link.download = fileName;
@@ -268,7 +432,23 @@ const csvCell = (value: string) =>
  * reader will see them. `optionsNote` below is that somewhere.
  */
 export function sheetCsv(spec: SheetSpec): string {
-  const lines = [spec.columns.map((c) => csvCell(c.header)).join(',')];
+  const lines: string[] = [];
+  /*
+   * The masthead, as leading lines.
+   *
+   * It makes the file something other than bare CSV, which is the point: a
+   * grid of numbers nobody can date or attribute is what this exists to stop.
+   * Anything reading it as data should skip to the header row, and the blank
+   * line marks where that is.
+   */
+  if (spec.title) {
+    lines.push(csvCell(spec.title.heading));
+    for (const [label, value] of titleLines(spec.title)) {
+      lines.push(`${csvCell(label)},${csvCell(value)}`);
+    }
+    lines.push('');
+  }
+  lines.push(spec.columns.map((c) => csvCell(c.header)).join(','));
   for (const row of spec.rows) lines.push(row.map(csvCell).join(','));
   return `${lines.join('\n')}\n`;
 }

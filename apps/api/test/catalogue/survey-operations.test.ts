@@ -248,7 +248,8 @@ describe("stage history", () => {
   it("keeps every movement, so time spent per stage is answerable", async () => {
     // The specification's worked example: nine days in GT, two in QC.
     await post(w.admin, `/api/v1/survey/villages/${villageA}/stage`,
-      { stage_code: "GROUND_TRUTHING", state: "IN_PROGRESS", started_on: day(0) });
+      { stage_code: "GROUND_TRUTHING", state: "IN_PROGRESS", started_on: day(0),
+        gt_govt_staff_allocated: 2, gt_crew_allocated: 4 });
     await post(w.admin, `/api/v1/survey/villages/${villageA}/stage`,
       { stage_code: "GROUND_TRUTHING", state: "COMPLETED",
         started_on: day(0), completed_on: day(9), remarks: "All parcels walked" });
@@ -1079,6 +1080,7 @@ describe("alerting on work that has stopped", () => {
     const id = await newVillage("Stalled village");
     await post(w.admin, `/api/v1/survey/villages/${id}/stage`, {
       stage_code: "GROUND_TRUTHING", state: "IN_PROGRESS",
+      gt_govt_staff_allocated: 2, gt_crew_allocated: 4,
     });
     await w.pool.query(
       `UPDATE survey_village_stages SET started_on = CURRENT_DATE - 60

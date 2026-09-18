@@ -5,6 +5,7 @@ import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
 import { AppShell } from '@/components/AppShell';
+import { stageTracksStaffing } from '@silverline/shared';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ErrorCard } from '@/components/ui/ErrorCard';
@@ -48,6 +49,15 @@ export default function SurveyEntryPage() {
   const [villageId, setVillageId] = React.useState('');
   const [date, setDate] = React.useState(today);
   const [deployed, setDeployed] = React.useState({ teams: 0, base: 0, rovers: 0 });
+  /*
+   * Who was actually in the village today (§067).
+   *
+   * Ground truthing is walked with the department's people, and the days
+   * they do not come are days our crew is paid to stand in a field. Held as
+   * strings rather than numbers so that blank stays blank: nobody was asked
+   * and nobody came are different answers, and only one of them is a finding.
+   */
+  const [attendance, setAttendance] = React.useState({ govt: '', crew: '' });
   const [values, setValues] = React.useState<Record<string, string>>({});
   const [notes, setNotes] = React.useState('');
   // One row per rover allocated to this village. The specification asks for
@@ -236,6 +246,10 @@ export default function SurveyEntryPage() {
           })),
           low_progress_reason: lowReason || undefined,
           low_progress_remarks: lowRemarks || undefined,
+          // Blank stays blank. Sending 0 for "not asked" would manufacture
+          // an absence out of a question nobody put.
+          govt_staff_present: attendance.govt === '' ? undefined : Number(attendance.govt),
+          crew_present: attendance.crew === '' ? undefined : Number(attendance.crew),
         },
       });
     },
@@ -243,6 +257,7 @@ export default function SurveyEntryPage() {
       setSaved(`${village?.village_name ?? 'Village'} — ${day(date)}`);
       setValues({});
       setNotes('');
+      setAttendance({ govt: '', crew: '' });
       setLowReason('');
       setLowRemarks('');
       qc.invalidateQueries({ queryKey: ['survey-villages'] });
@@ -342,6 +357,65 @@ export default function SurveyEntryPage() {
               </div>
             ) : null}
           </div>
+
+          {/*
+            * Who turned up, on both sides (§067).
+            *
+            * Only while ground truthing is running: no other stage is walked
+            * with the department, and asking on the rest collects figures
+            * that mean nothing. The allocation sits beside the box so the
+            * number being typed has something to be measured against.
+            */}
+          {village && stageTracksStaffing('GROUND_TRUTHING')
+            && String(village.stages?.GROUND_TRUTHING ?? 'NOT_STARTED') === 'IN_PROGRESS' ? (
+            <Card className="space-y-2 p-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h3 className="text-sm font-semibold text-text">Who was in the village today</h3>
+                <span className="text-2xs text-text-subtle">
+                  Agreed with the mandal:{' '}
+                  {village.gt_govt_staff_allocated ?? '—'} government staff,{' '}
+                  {village.gt_crew_allocated ?? '—'} of our crew
+                </span>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-2xs uppercase tracking-wide text-text-subtle">
+                    Government staff present
+                  </span>
+                  <input type="number" min={0} className={field} value={attendance.govt}
+                    placeholder={village.gt_govt_staff_allocated != null
+                      ? String(village.gt_govt_staff_allocated) : ''}
+                    onChange={(e) => setAttendance({ ...attendance, govt: e.target.value })} />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-2xs uppercase tracking-wide text-text-subtle">
+                    Our crew present
+                  </span>
+                  <input type="number" min={0} className={field} value={attendance.crew}
+                    placeholder={village.gt_crew_allocated != null
+                      ? String(village.gt_crew_allocated) : ''}
+                    onChange={(e) => setAttendance({ ...attendance, crew: e.target.value })} />
+                </label>
+              </div>
+              {attendance.govt !== '' && village.gt_govt_staff_allocated != null
+                && Number(attendance.govt) < Number(village.gt_govt_staff_allocated) ? (
+                <Notice tone="warning"
+                  title={Number(attendance.govt) === 0
+                    ? 'The department sent nobody today'
+                    : `${Number(village.gt_govt_staff_allocated) - Number(attendance.govt)} short of the agreed strength`}>
+                  {/* The number on its own reads as neutral. Said plainly it
+                      is what a supervisor raises with the mandal, and it is
+                      what the month's report will total up. */}
+                  Recorded and counted. If it held up the day’s work, say so in the
+                  reason below so the two sit together on the record.
+                </Notice>
+              ) : null}
+              <p className="text-2xs text-text-subtle">
+                Leave blank if nobody was counted. Zero means nobody came, which is a
+                different thing and is reported as one.
+              </p>
+            </Card>
+          ) : null}
 
           {village ? (
             <>

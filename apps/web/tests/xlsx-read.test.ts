@@ -144,3 +144,104 @@ describe('a workbook Excel itself would produce', () => {
     expect(rows[0]).toEqual(['AST-9', '', 'R12i']);
   });
 });
+
+describe('a report that says what it is', () => {
+  /*
+   * A spreadsheet that leaves a meeting is separated from the screen it came
+   * from within the hour. Without a masthead it is a grid of numbers nobody
+   * can date, attribute or reproduce — and the argument that follows is about
+   * whether the figures are current rather than about what they say.
+   */
+  const title = {
+    heading: 'Weekly progress report',
+    project: 'Krishna — Resurvey 1',
+    period: 'Week of 2026-09-14',
+    filters: 'Avanigadda mandal · ground truthing not finished',
+  };
+
+  async function read(spec: Parameters<typeof buildWorkbook>[0][0]) {
+    const blob = buildWorkbook([spec]);
+    return readXlsx(await blob.arrayBuffer());
+  }
+
+  it('writes the heading, the programme, the period and the filters', async () => {
+    const out = await read({
+      name: 'Report', title,
+      columns: [{ header: 'Mandal' }, { header: 'Acres' }],
+      rows: [['Avanigadda', '120']],
+    });
+    const flat = out.flat().join('|');
+    expect(flat).toContain('Weekly progress report');
+    expect(flat).toContain('Krishna — Resurvey 1');
+    expect(flat).toContain('Week of 2026-09-14');
+    expect(flat).toContain('Avanigadda mandal · ground truthing not finished');
+  });
+
+  it('stamps when it was downloaded, without being asked to', async () => {
+    // The caller would have to remember, and a report that is wrong about
+    // its own date is worse than one that does not carry it.
+    const out = await read({
+      name: 'Report', title,
+      columns: [{ header: 'Mandal' }], rows: [['Avanigadda']],
+    });
+    expect(out.flat().join('|')).toContain('Downloaded');
+  });
+
+  it('says so when nothing was filtered, rather than leaving it out', async () => {
+    // "All villages" is information. Its absence is what makes a reader
+    // wonder what was left out.
+    const out = await read({
+      name: 'Report', title: { heading: 'Everything' },
+      columns: [{ header: 'A' }], rows: [['1']],
+    });
+    expect(out.flat().join('|')).toMatch(/None — everything included/);
+  });
+
+  it('keeps the table readable underneath it', async () => {
+    const out = await read({
+      name: 'Report', title,
+      columns: [{ header: 'Mandal' }, { header: 'Acres' }],
+      rows: [['Avanigadda', '120'], ['Nandigama', '80']],
+    });
+    // The header row and its data still sit together, whatever is above.
+    const header = out.findIndex((r) => r[0] === 'Mandal');
+    expect(header).toBeGreaterThan(0);
+    expect(out[header + 1]).toEqual(['Avanigadda', '120']);
+    expect(out[header + 2]).toEqual(['Nandigama', '80']);
+  });
+
+  it('writes no masthead when none was asked for', async () => {
+    const out = await read({
+      name: 'Sheet', columns: [{ header: 'code' }], rows: [['AST-1']],
+    });
+    expect(out[0]).toEqual(['code']);
+  });
+});
+
+describe('a report with thousands of rows', () => {
+  it('writes and reads ten thousand rows without falling over', async () => {
+    /*
+     * A resurvey programme is a thousand villages, and a year of daily
+     * returns against them is tens of thousands of rows. A writer that is
+     * quadratic in the row count works on the test data and fails on the
+     * only data anybody wants to export.
+     */
+    const rows = Array.from({ length: 10_000 }, (_, i) =>
+      [`V${i}`, `Village ${i}`, String(i * 3), String(i % 97)]);
+    const started = Date.now();
+    const blob = buildWorkbook([{
+      name: 'Villages',
+      title: { heading: 'Every village', project: 'Krishna — Resurvey 1' },
+      columns: [{ header: 'Code' }, { header: 'Name' }, { header: 'Acres' }, { header: 'Points' }],
+      rows,
+    }]);
+    const out = await readXlsx(await blob.arrayBuffer());
+    const elapsed = Date.now() - started;
+
+    const header = out.findIndex((r) => r[0] === 'Code');
+    expect(out.length - header - 1).toBe(10_000);
+    expect(out[header + 10_000]).toEqual(['V9999', 'Village 9999', '29997', String(9999 % 97)]);
+    // Generous, but it catches an accidental quadratic outright.
+    expect(elapsed).toBeLessThan(20_000);
+  }, 60_000);
+});
