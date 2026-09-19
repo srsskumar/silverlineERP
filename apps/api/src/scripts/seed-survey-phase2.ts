@@ -266,23 +266,41 @@ async function main(): Promise<void> {
       const [lo, hi] = STAGE_PLAN_DAYS[st.code];
       return between(lo, hi);
     });
-    const chainDays = durations.reduce((a, b) => a + b, 0);
-
     /*
-     * Back-dated so the work fits behind today.
+     * The chain is anchored from its far end, not its near one.
      *
-     * A village whose deliverables are approved has been through five stages,
-     * and those five have to have happened. Taking the village's planned
-     * start at face value produced chains running months into the future and
-     * stages recorded as completed on a date that has not arrived — which the
-     * date constraint refused, correctly.
+     * Which end depends on what the village is doing. Work that is finished
+     * has to fit behind today, so the chain is pushed back far enough for
+     * that. Work still running should straddle today — a village whose GT is
+     * in progress is usually somewhere inside its window, occasionally past
+     * it, and hardly ever nine months past it.
+     *
+     * Anchoring everything from the planned start instead produced exactly
+     * that: villages that opened in January, still in ground truthing, and
+     * reported two hundred days late. Four villages in five late says nothing
+     * about any of them.
      */
-    const room = between(10, 60);
-    let cursor = maxDate(
-      PROGRAMME_START,
-      minDate(String(v.planned_start_on ?? PROGRAMME_START),
-        addDays(TODAY, -(chainDays + room))),
-    );
+    const finishedDays = durations
+      .filter((_, si) => stages[si].state === "COMPLETED")
+      .reduce((a, b) => a + b, 0);
+    const tail = stages[stages.length - 1];
+    const tailDays = durations[durations.length - 1];
+
+    let anchor: string;
+    if (tail.state === "COMPLETED") {
+      // Everything happened; leave room between the finish and today.
+      anchor = addDays(TODAY, -(finishedDays + between(10, 45)));
+    } else {
+      /*
+       * The running stage is due somewhere around now. Mostly ahead of its
+       * date, sometimes just past it — the slip below is what makes a village
+       * properly late, rather than the anchor doing it to all of them.
+       */
+      const dueIn = between(-25, 55);
+      anchor = addDays(TODAY, dueIn - tailDays - finishedDays);
+    }
+
+    let cursor = maxDate(PROGRAMME_START, anchor);
 
     startedVillages.push({
       id: String(v.id), extent: Number(v.total_extent_ac), gtStart: cursor,
