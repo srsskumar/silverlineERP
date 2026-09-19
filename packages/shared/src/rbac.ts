@@ -20,6 +20,16 @@ export const ROLE_CODES = [
   // their own modules rather than as unused codes.
   "SALES_BD_EXECUTIVE",
   "BID_TENDER_MANAGER",
+  /*
+   * Somebody from the department, given the land survey dashboard (§071).
+   *
+   * A role in this list rather than one the migration creates on its own,
+   * because every grant map below is keyed on this list — so adding it here
+   * forces each module to say out loud what an observer gets from it, and
+   * the answer is almost always nothing. A role that exists in the database
+   * and not in this list is exactly the drift the seed comment warns about.
+   */
+  "GOVT_OBSERVER",
 ] as const;
 
 export type RoleCode = (typeof ROLE_CODES)[number];
@@ -117,6 +127,8 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     PERMISSIONS.EMPLOYEES_READ,
   ],
  SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[],
+  /* An observer holds survey.dashboard and nothing else (§071). */
+  GOVT_OBSERVER: [],
 };
 
 /**

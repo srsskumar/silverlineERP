@@ -89,8 +89,7 @@ describe("the pipeline the specification describes", () => {
     const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/progress`);
     const codes = r.data.pipeline.map((s: any) => s.code);
     expect(codes).toEqual([
-      "GROUND_TRUTHING", "GT_QC", "VECTORIZATION", "VECTORIZATION_QC",
-      "RECORDS_PREPARATION", "LPM_GENERATION", "SUBMISSION", "REWORK",
+      "GROUND_TRUTHING", "GT_QC", "VECTORIZATION", "DATA_SUBMISSION", "FINAL_DELIVERABLES", "REWORK",
     ]);
   });
 
@@ -1606,7 +1605,7 @@ describe("what a village's crew are carrying", () => {
       asset_ids: [asset], employee_id: w.directEmployee, reason: "Field kit",
     });
     await post(w.admin, `/api/v1/survey/villages/${villageA}/crew`, {
-      employee_id: w.directEmployee, stage_code: "RECORDS_PREPARATION",
+      employee_id: w.directEmployee, stage_code: "FINAL_DELIVERABLES",
     });
 
     const r = await get(w.admin, `/api/v1/survey/villages/${villageA}/crew-assets`);
@@ -1634,7 +1633,7 @@ describe("what a village's crew are carrying", () => {
     // reporting it separately from the allocations.
     const crew = await get(w.admin, `/api/v1/survey/villages/${villageA}/crew`);
     const row = (crew.body.data as Array<Record<string, any>>)
-      .find((c) => c.employee_id === w.directEmployee && c.stage_code === "RECORDS_PREPARATION");
+      .find((c) => c.employee_id === w.directEmployee && c.stage_code === "FINAL_DELIVERABLES");
     expect(row).toBeTruthy();
     await post(w.admin, `/api/v1/survey/crew/${row!.id}/release`, {});
 

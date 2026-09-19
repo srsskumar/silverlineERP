@@ -52,8 +52,7 @@ const stage = (v: string, code: string, state: string, extra: Record<string, unk
 
 /** Walks a village up to and including the named stage. */
 async function completeTo(v: string, last: string) {
-  const order = ["GROUND_TRUTHING", "GT_QC", "VECTORIZATION", "VECTORIZATION_QC",
-    "RECORDS_PREPARATION", "LPM_GENERATION", "SUBMISSION"];
+  const order = ["GROUND_TRUTHING", "GT_QC", "VECTORIZATION", "DATA_SUBMISSION", "FINAL_DELIVERABLES"];
   for (const code of order) {
     const extra = code === "GROUND_TRUTHING"
       ? { gt_govt_staff_allocated: 2, gt_crew_allocated: 4 } : {};
@@ -105,22 +104,23 @@ describe("what a milestone may be claimed on", () => {
     expect(r.status, JSON.stringify(r.body)).toBe(201);
   });
 
-  it("holds the second claim until vectorisation QC has signed off", async () => {
+  it("holds the second claim until the department has approved the data", async () => {
     const r = await post(w.admin, `/api/v1/survey/villages/${village}/billing`,
       { milestone: 2 });
     expect(r.status).toBe(422);
-    expect(r.body.message).toMatch(/vectorization qc/i);
+    // §071 renamed the checkpoint; the claim still waits on the same event.
+    expect(r.body.message).toMatch(/data submission/i);
   });
 
   it("holds the third until the deliverables have gone in", async () => {
-    await completeTo(village, "VECTORIZATION_QC");
+    await completeTo(village, "DATA_SUBMISSION");
     expect((await post(w.admin, `/api/v1/survey/villages/${village}/billing`,
       { milestone: 2 })).status).toBe(201);
     const third = await post(w.admin, `/api/v1/survey/villages/${village}/billing`,
       { milestone: 3 });
     expect(third.status).toBe(422);
 
-    await completeTo(village, "SUBMISSION");
+    await completeTo(village, "FINAL_DELIVERABLES");
     expect((await post(w.admin, `/api/v1/survey/villages/${village}/billing`,
       { milestone: 3 })).status).toBe(201);
   });

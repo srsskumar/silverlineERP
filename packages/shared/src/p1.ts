@@ -69,7 +69,7 @@ export const P1_ROLE_GRANTS: Record<RoleCode, string[]> = {
   CLIENT_VIEWER: [],
   AUDITOR: [P1_PERMISSIONS.PAYROLL_READ, P1_PERMISSIONS.PAYSLIP_READ],
   INVENTORY_MANAGER: [],
- SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[],
+ SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[], GOVT_OBSERVER:[],
 };
 
 // ---------------------------------------------------------------------------

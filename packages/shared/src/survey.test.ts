@@ -17,6 +17,8 @@ import {
   milestoneEarned, milestoneBlockedNote, villageFinalsSchema, certifiedDifference,
   gcpSchema, checkGcp, GCP_WARNING_NOTES, formatCoordinate,
   extentVariancePct, extentVaries,
+  VILLAGE_LADDER, villagePosition, tallyByPosition, LADDER_KEYS, LADDER_INDEX,
+  gtStartSchema, milestoneBlockedNote,
 } from './survey.js';
 
 const BASIS: Record<string, MeasureBasis> = Object.fromEntries(
@@ -100,7 +102,7 @@ describe('villageState', () => {
     // A village whose parcels are all surveyed but whose records are not
     // prepared is not finished, and calling it finished makes the programme
     // look further along than it is.
-    const stages = { ...ALL_DONE, RECORDS_PREPARATION: 'IN_PROGRESS' as const };
+    const stages = { ...ALL_DONE, FINAL_DELIVERABLES: 'IN_PROGRESS' as const };
     expect(villageState(village({ stages, done: { GOVT_LAND_EXTENT_AC: 100 } }), STAGE_CODES))
       .toBe('IN_PROGRESS');
   });
@@ -423,7 +425,8 @@ describe('role grants', () => {
   it('gives an auditor reading and the forecast, and no way to change anything', () => {
     // An auditor reads management information including the projection; what
     // they must not have is any of the write permissions.
-    expect(SURVEY_ROLE_GRANTS.AUDITOR).toEqual(['survey.read', 'survey.forecast']);
+    expect(SURVEY_ROLE_GRANTS.AUDITOR)
+      .toEqual(['survey.read', 'survey.forecast', 'survey.dashboard']);
     for (const write of ['survey.enter', 'survey.manage', 'survey.target', 'survey.assign']) {
       expect(SURVEY_ROLE_GRANTS.AUDITOR, write).not.toContain(write);
     }
@@ -555,8 +558,7 @@ describe('the stage pipeline', () => {
 
   it('runs the stages the specification names, in order', () => {
     expect(STAGE_PIPELINE.filter(s => !s.offSequence).map(s => s.code)).toEqual([
-      'GROUND_TRUTHING', 'GT_QC', 'VECTORIZATION', 'VECTORIZATION_QC',
-      'RECORDS_PREPARATION', 'LPM_GENERATION', 'SUBMISSION',
+      'GROUND_TRUTHING', 'GT_QC', 'VECTORIZATION', 'DATA_SUBMISSION', 'FINAL_DELIVERABLES',
     ]);
   });
 
@@ -608,7 +610,7 @@ describe('currentStage', () => {
 
   it('reports the last stage of the sequence once everything is complete', () => {
     const all = Object.fromEntries(STAGE_PIPELINE.map(s => [s.code, 'COMPLETED' as const]));
-    expect(currentStage(all)).toEqual({ code: 'SUBMISSION', state: 'COMPLETED' });
+    expect(currentStage(all)).toEqual({ code: 'FINAL_DELIVERABLES', state: 'COMPLETED' });
   });
 
   it('says a village in rework is in rework, whatever the sequence says', () => {
@@ -1493,7 +1495,7 @@ describe('which stage asks about attendance', () => {
     // No other stage is walked with the department, and asking on the rest
     // would collect figures that mean nothing.
     expect(stageTracksStaffing('GROUND_TRUTHING')).toBe(true);
-    for (const code of ['GT_QC', 'VECTORIZATION', 'RECORDS_PREPARATION', 'SUBMISSION']) {
+    for (const code of ['GT_QC', 'VECTORIZATION', 'DATA_SUBMISSION', 'FINAL_DELIVERABLES']) {
       expect(stageTracksStaffing(code), code).toBe(false);
     }
     expect(stageTracksStaffing(null)).toBe(false);
@@ -1511,15 +1513,20 @@ describe('what a milestone may be claimed on', () => {
     expect(milestoneEarned(1, { GT_QC: 'COMPLETED' })).toBe(true);
   });
 
-  it('holds the second until vectorisation QC signs it off', () => {
+  it('holds the second until the department approves the data', () => {
+    // Renamed by §071, not moved: DATA_SUBMISSION is the checkpoint that was
+    // called VECTORIZATION_QC, named for what the department does at it.
     expect(milestoneEarned(2, { GT_QC: 'COMPLETED' })).toBe(false);
     expect(milestoneEarned(2, { VECTORIZATION: 'COMPLETED' })).toBe(false);
-    expect(milestoneEarned(2, { VECTORIZATION_QC: 'COMPLETED' })).toBe(true);
+    expect(milestoneEarned(2, { DATA_SUBMISSION: 'COMPLETED' })).toBe(true);
   });
 
   it('holds the third until the deliverables have gone in', () => {
-    expect(milestoneEarned(3, { VECTORIZATION_QC: 'COMPLETED' })).toBe(false);
-    expect(milestoneEarned(3, { SUBMISSION: 'COMPLETED' })).toBe(true);
+    expect(milestoneEarned(3, { DATA_SUBMISSION: 'COMPLETED' })).toBe(false);
+    // Submitted is enough here, unlike the two before it: the contract does
+    // not hold the money behind an approval the department may sit on.
+    expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'IN_PROGRESS' })).toBe(true);
+    expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'COMPLETED' })).toBe(true);
   });
 
   it('treats a village with no stages at all as having earned nothing', () => {
@@ -1545,7 +1552,7 @@ describe('what a milestone may be claimed on', () => {
   it('distinguishes a stage running from one never begun', () => {
     // "In progress, not finished" and "has not started" send somebody to
     // different places.
-    const running = milestoneBlockedNote(2, { VECTORIZATION_QC: 'IN_PROGRESS' }, label);
+    const running = milestoneBlockedNote(2, { DATA_SUBMISSION: 'IN_PROGRESS' }, label);
     expect(running).toMatch(/not finished/i);
     expect(running).not.toMatch(/has not started/i);
   });
@@ -1715,5 +1722,181 @@ describe('how far the surveyed extent has drifted from the record', () => {
   it('treats a negative threshold as the distance it is', () => {
     // A threshold typed with a minus sign means the same thing.
     expect(extentVaries(200, 180, -10)).toBe(true);
+  });
+});
+
+describe('the village ladder (§071)', () => {
+  it('reports the eleven positions the contract names, in the order of the work', () => {
+    expect(VILLAGE_LADDER.map(r => r.label)).toEqual([
+      'Not started',
+      'GT in progress', 'GT completed',
+      'GT QC in progress', 'GT QC completed',
+      'Vectorization in progress', 'Vectorization completed',
+      'Data submitted', 'Data approved',
+      'Final deliverables submitted', 'Final deliverables approved',
+    ]);
+  });
+
+  it('puts a village with nothing recorded at the bottom', () => {
+    expect(villagePosition({}).key).toBe('NOT_STARTED');
+    expect(villagePosition(undefined).key).toBe('NOT_STARTED');
+    expect(villagePosition({ GROUND_TRUTHING: 'NOT_STARTED' }).key).toBe('NOT_STARTED');
+  });
+
+  it('walks each rung as the work advances', () => {
+    const steps: Array<[Record<string, StageState>, string]> = [
+      [{ GROUND_TRUTHING: 'IN_PROGRESS' }, 'GT_IN_PROGRESS'],
+      [{ GROUND_TRUTHING: 'COMPLETED' }, 'GT_COMPLETED'],
+      [{ GROUND_TRUTHING: 'COMPLETED', GT_QC: 'IN_PROGRESS' }, 'GT_QC_IN_PROGRESS'],
+      [{ GROUND_TRUTHING: 'COMPLETED', GT_QC: 'COMPLETED' }, 'GT_QC_COMPLETED'],
+      [{ GT_QC: 'COMPLETED', VECTORIZATION: 'IN_PROGRESS' }, 'VECTORIZATION_IN_PROGRESS'],
+      [{ GT_QC: 'COMPLETED', VECTORIZATION: 'COMPLETED' }, 'VECTORIZATION_COMPLETED'],
+      [{ VECTORIZATION: 'COMPLETED', DATA_SUBMISSION: 'IN_PROGRESS' }, 'DATA_SUBMITTED'],
+      [{ VECTORIZATION: 'COMPLETED', DATA_SUBMISSION: 'COMPLETED' }, 'DATA_APPROVED'],
+      [{ DATA_SUBMISSION: 'COMPLETED', FINAL_DELIVERABLES: 'IN_PROGRESS' }, 'FINAL_SUBMITTED'],
+      [{ DATA_SUBMISSION: 'COMPLETED', FINAL_DELIVERABLES: 'COMPLETED' }, 'FINAL_APPROVED'],
+    ];
+    for (const [stages, expected] of steps) {
+      expect(villagePosition(stages).key, JSON.stringify(stages)).toBe(expected);
+    }
+  });
+
+  it('reports the furthest stage touched, not the earliest gap', () => {
+    // GT reopened after vectorisation began. An official asking where the
+    // village is means vectorisation; the reopened GT is a rework flag
+    // beside it, not a reason to drag the whole village backwards.
+    const p = villagePosition({
+      GROUND_TRUTHING: 'IN_PROGRESS', GT_QC: 'COMPLETED', VECTORIZATION: 'IN_PROGRESS',
+    });
+    expect(p.key).toBe('VECTORIZATION_IN_PROGRESS');
+  });
+
+  it('treats on hold as the in-progress rung and flags it separately', () => {
+    // Eleven positions is what the contract names. "On hold" is something
+    // true about a village at a position, not a twelfth position.
+    const p = villagePosition({ GROUND_TRUTHING: 'ON_HOLD' });
+    expect(p.key).toBe('GT_IN_PROGRESS');
+    expect(p.onHold).toBe(true);
+    expect(LADDER_KEYS).toHaveLength(11);
+  });
+
+  it('flags rework without moving the village', () => {
+    const p = villagePosition({ GT_QC: 'COMPLETED', REWORK: 'IN_PROGRESS' });
+    expect(p.key).toBe('GT_QC_COMPLETED');
+    expect(p.inRework).toBe(true);
+  });
+
+  it('ignores the retired stages entirely', () => {
+    // A stale row on a stage that is no longer part of the pipeline must not
+    // place a village anywhere. Records preparation is work between data
+    // approval and submission, and the ladder has no rung for it.
+    const p = villagePosition({
+      DATA_SUBMISSION: 'COMPLETED', RECORDS_PREPARATION: 'COMPLETED',
+      LPM_GENERATION: 'IN_PROGRESS', VECTORIZATION_QC: 'COMPLETED',
+    });
+    expect(p.key).toBe('DATA_APPROVED');
+  });
+
+  it('counts every village exactly once', () => {
+    const villages = [
+      { stages: {} },
+      { stages: { GROUND_TRUTHING: 'IN_PROGRESS' as StageState } },
+      { stages: { GROUND_TRUTHING: 'ON_HOLD' as StageState } },
+      { stages: { DATA_SUBMISSION: 'COMPLETED' as StageState } },
+      { stages: { FINAL_DELIVERABLES: 'COMPLETED' as StageState } },
+    ];
+    const tally = tallyByPosition(villages);
+    expect(Object.values(tally).reduce((a, b) => a + b, 0)).toBe(villages.length);
+    expect(tally.GT_IN_PROGRESS).toBe(2);
+    expect(tally.NOT_STARTED).toBe(1);
+    expect(tally.FINAL_APPROVED).toBe(1);
+  });
+
+  it('orders the rungs so "further along" is a comparison of indexes', () => {
+    expect(LADDER_INDEX.NOT_STARTED).toBe(0);
+    expect(LADDER_INDEX.FINAL_APPROVED).toBe(10);
+    expect(LADDER_INDEX.GT_COMPLETED).toBeLessThan(LADDER_INDEX.DATA_APPROVED);
+  });
+});
+
+describe('the pipeline after §071', () => {
+  it('is the five stages the eleven positions are made of', () => {
+    expect(STAGE_PIPELINE.filter(s => !s.offSequence).map(s => s.code)).toEqual([
+      'GROUND_TRUTHING', 'GT_QC', 'VECTORIZATION', 'DATA_SUBMISSION', 'FINAL_DELIVERABLES',
+    ]);
+  });
+
+  it('keeps rework off the sequence', () => {
+    expect(STAGE_PIPELINE.find(s => s.code === 'REWORK')?.offSequence).toBe(true);
+  });
+
+  it('still refuses a stage whose predecessor is unfinished', () => {
+    expect(stageBlockedBy('FINAL_DELIVERABLES', { DATA_SUBMISSION: 'IN_PROGRESS' }))
+      .toBe('DATA_SUBMISSION');
+    expect(stageBlockedBy('FINAL_DELIVERABLES', { DATA_SUBMISSION: 'COMPLETED' }))
+      .toBeNull();
+  });
+});
+
+describe('billing gates after §071', () => {
+  it('holds the first claim at GT QC, where it always was', () => {
+    expect(milestoneEarned(1, { GT_QC: 'COMPLETED' })).toBe(true);
+    expect(milestoneEarned(1, { GT_QC: 'IN_PROGRESS' })).toBe(false);
+  });
+
+  it('holds the second claim until the department approves the data', () => {
+    // The same checkpoint the old VECTORIZATION_QC gate named. Submitting is
+    // not being paid for: a submission can come back.
+    expect(milestoneEarned(2, { DATA_SUBMISSION: 'IN_PROGRESS' })).toBe(false);
+    expect(milestoneEarned(2, { DATA_SUBMISSION: 'COMPLETED' })).toBe(true);
+  });
+
+  it('releases the third claim when the deliverables go in, not when they come back', () => {
+    // The contract does not hold our money behind an approval that may take
+    // the department months.
+    expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'NOT_STARTED' })).toBe(false);
+    expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'IN_PROGRESS' })).toBe(true);
+    expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'COMPLETED' })).toBe(true);
+  });
+
+  it('says what is in the way in words that name the right event', () => {
+    const label = (c: string) => c.replace(/_/g, ' ').toLowerCase();
+    expect(milestoneBlockedNote(2, { DATA_SUBMISSION: 'IN_PROGRESS' }, label))
+      .toMatch(/signed off/);
+    expect(milestoneBlockedNote(3, {}, label)).toMatch(/goes in/);
+    expect(milestoneBlockedNote(1, { GT_QC: 'COMPLETED' }, label)).toBeNull();
+  });
+});
+
+describe('starting ground truthing (§071)', () => {
+  const ok = {
+    started_on: '2026-01-05', expected_end_on: '2026-02-20',
+    employee_ids: ['123e4567-e89b-12d3-a456-426614174000'],
+  };
+
+  it('accepts the four things agreed when a village starts', () => {
+    const r = gtStartSchema.safeParse({ ...ok, govt_staff_allocated: 2, crew_allocated: 6 });
+    expect(r.success, JSON.stringify(r.success ? {} : r.error.issues)).toBe(true);
+  });
+
+  it('refuses a village with nobody on it', () => {
+    const r = gtStartSchema.safeParse({ ...ok, employee_ids: [] });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0].message).toMatch(/at least one person/);
+  });
+
+  it('refuses a finish before the start', () => {
+    const r = gtStartSchema.safeParse({ ...ok, expected_end_on: '2026-01-04' });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0].message).toMatch(/cannot be before the start/);
+  });
+
+  it('lets the expected finish be in the future, unlike every other date here', () => {
+    const future = new Date(Date.now() + 90 * 86400_000).toISOString().slice(0, 10);
+    expect(gtStartSchema.safeParse({ ...ok, expected_end_on: future }).success).toBe(true);
+  });
+
+  it('will not take a headcount that is not a whole number of people', () => {
+    expect(gtStartSchema.safeParse({ ...ok, crew_allocated: 4.5 }).success).toBe(false);
   });
 });

@@ -369,6 +369,7 @@ export const LEDGER_ROLE_GRANTS: Record<RoleCode, string[]> = {
   PAYROLL_OFFICER: ['ar.read', 'ap.read', 'payable.hold', 'paymentrun.read', 'paymentrun.manage'],
   PROJECT_MANAGER: ['ar.read', 'ap.read'],
   BID_TENDER_MANAGER: ['ar.read'],
+  GOVT_OBSERVER: [],
   SALES_BD_EXECUTIVE: ['ar.read'],
   AUDITOR: ['ar.read', 'ap.read', 'paymentrun.read'],
   INVENTORY_MANAGER: ['ap.read'],

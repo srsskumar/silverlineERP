@@ -409,6 +409,7 @@ export const APPROVAL_ROLE_GRANTS: Record<RoleCode, string[]> = {
   PROJECT_MANAGER: ['approval.read', 'approval.read_all', 'approval.act', 'approval.delegate'],
   TEAM_LEAD: ['approval.read', 'approval.read_all', 'approval.act'],
   BID_TENDER_MANAGER: ['approval.read', 'approval.read_all', 'approval.act'],
+  GOVT_OBSERVER: [],
   HR_MANAGER: ['approval.read', 'approval.read_all', 'approval.act'],
   PAYROLL_OFFICER: ['approval.read', 'approval.read_all', 'approval.act'],
   INVENTORY_MANAGER: ['approval.read', 'approval.read_all', 'approval.act'],

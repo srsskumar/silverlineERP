@@ -44,6 +44,7 @@ export const CRM_ROLE_GRANTS: Record<RoleCode, string[]> = {
   EMPLOYEE: [],
   // §4.1: the Viewer cannot see tender financials at all.
   CLIENT_VIEWER: [],
+  GOVT_OBSERVER: [],
   HR_MANAGER: [],
   PAYROLL_OFFICER: [],
   INVENTORY_MANAGER: ['client.read'],

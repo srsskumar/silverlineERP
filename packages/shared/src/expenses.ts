@@ -488,6 +488,7 @@ export const EXPENSE_ROLE_GRANTS: Record<RoleCode, string[]> = {
   INVENTORY_MANAGER: ['expense.read', 'expense.manage'],
   SALES_BD_EXECUTIVE: ['expense.read', 'expense.manage'],
   BID_TENDER_MANAGER: ['expense.read', 'expense.manage'],
+  GOVT_OBSERVER: [],
   CLIENT_VIEWER: [],
 };
 

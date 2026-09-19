@@ -336,6 +336,7 @@ export const PROCUREMENT_ROLE_GRANTS: Record<RoleCode, string[]> = {
     'rfq.read', 'return.read', 'return.manage'],
   AUDITOR: ['requisition.read', 'po.read', 'grn.read', 'match.read', 'rfq.read', 'return.read'],
   BID_TENDER_MANAGER: ['requisition.read', 'po.read', 'rfq.read'],
+  GOVT_OBSERVER: [],
   EMPLOYEE: [],
   SALES_BD_EXECUTIVE: [],
   HR_MANAGER: [],

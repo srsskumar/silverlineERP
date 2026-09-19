@@ -115,19 +115,162 @@ export interface StageSeedOrdered extends StageSeed {
   offSequence?: boolean;
 }
 
+/*
+ * The five stages a village passes through, and rework.
+ *
+ * This list was seven stages long, and the screen built on it asked somebody
+ * to hold seven stages times four states in their head to answer "where is
+ * this village". The contract reports eleven positions, not twenty-eight, so
+ * the pipeline is now the five stages those eleven positions are made of —
+ * see VILLAGE_LADDER below, which is the thing anybody actually reads.
+ *
+ * Three stages came out. They are kept here, commented rather than deleted,
+ * because the work they named still happens — records are still prepared and
+ * LPMs are still generated — it is simply not a position the programme is
+ * reported at. Anything recorded against them was migrated onto the stage
+ * that now covers it (§071), so no village lost a date:
+ *
+ *   { code: 'VECTORIZATION_QC',    label: 'Vectorization QC',           displayOrder: 40, requires: 'VECTORIZATION' },
+ *   { code: 'RECORDS_PREPARATION', label: 'Records preparation',        displayOrder: 50, requires: 'VECTORIZATION_QC' },
+ *   { code: 'LPM_GENERATION',      label: 'LPM generation',             displayOrder: 60, requires: 'RECORDS_PREPARATION' },
+ *   { code: 'SUBMISSION',          label: 'Submission of deliverables', displayOrder: 70, requires: 'LPM_GENERATION' },
+ *
+ * VECTORIZATION_QC became DATA_SUBMISSION: the same checkpoint, named for
+ * what the department does at it rather than for what we do before it.
+ * RECORDS_PREPARATION, LPM_GENERATION and SUBMISSION became the two halves of
+ * FINAL_DELIVERABLES.
+ */
 export const STAGE_PIPELINE: StageSeedOrdered[] = [
   { code: 'GROUND_TRUTHING', label: 'Ground truthing', displayOrder: 10, tracksDailyProgress: true },
   { code: 'GT_QC', label: 'GT quality check', displayOrder: 20, requires: 'GROUND_TRUTHING' },
   { code: 'VECTORIZATION', label: 'Vectorization', displayOrder: 30, requires: 'GT_QC' },
-  { code: 'VECTORIZATION_QC', label: 'Vectorization QC', displayOrder: 40, requires: 'VECTORIZATION' },
-  { code: 'RECORDS_PREPARATION', label: 'Records preparation', displayOrder: 50, requires: 'VECTORIZATION_QC' },
-  { code: 'LPM_GENERATION', label: 'LPM generation', displayOrder: 60, requires: 'RECORDS_PREPARATION' },
-  { code: 'SUBMISSION', label: 'Submission of deliverables', displayOrder: 70, requires: 'LPM_GENERATION' },
+  /*
+   * Submitted, then approved.
+   *
+   * These two stages carry a handover rather than a piece of work, so their
+   * states read differently from the rest: IN_PROGRESS means "sent to the
+   * department and waiting", COMPLETED means "they accepted it". The state
+   * machine is the same one; only the words change, and the words are in
+   * LADDER_LABELS so no screen ever says "data submission in progress".
+   */
+  { code: 'DATA_SUBMISSION', label: 'Data submission', displayOrder: 40, requires: 'VECTORIZATION' },
+  { code: 'FINAL_DELIVERABLES', label: 'Final deliverables', displayOrder: 50, requires: 'DATA_SUBMISSION' },
   // Entered from wherever the work failed rather than reached in sequence, so
   // it waits on nothing. A village that comes back has a start and an end
   // like any other work, and the history has to show it happened.
-  { code: 'REWORK', label: 'Rework', displayOrder: 80, offSequence: true },
+  { code: 'REWORK', label: 'Rework', displayOrder: 90, offSequence: true },
 ];
+
+/* ------------------------------------------------------- the village ladder */
+
+/**
+ * The eleven positions a village is reported at.
+ *
+ * One village, one position, and every position is a sentence somebody
+ * outside this company can read. This is the whole simplification: the stage
+ * table still holds five stages and four states each, and nobody has to know
+ * that to answer "where is Jaggayyapeta".
+ *
+ * Ordered, and the order is the order of the work — so a bar chart of these
+ * reads left to right as a programme moving, and "further along" is a
+ * comparison the rung index answers directly.
+ */
+export interface LadderRung {
+  key: string;
+  label: string;
+  /** The stage this position is derived from. Null only for NOT_STARTED. */
+  stage: string | null;
+  /** The state of that stage which puts a village here. */
+  state: StageState | null;
+}
+
+export const VILLAGE_LADDER: LadderRung[] = [
+  { key: 'NOT_STARTED', label: 'Not started', stage: null, state: null },
+  { key: 'GT_IN_PROGRESS', label: 'GT in progress', stage: 'GROUND_TRUTHING', state: 'IN_PROGRESS' },
+  { key: 'GT_COMPLETED', label: 'GT completed', stage: 'GROUND_TRUTHING', state: 'COMPLETED' },
+  { key: 'GT_QC_IN_PROGRESS', label: 'GT QC in progress', stage: 'GT_QC', state: 'IN_PROGRESS' },
+  { key: 'GT_QC_COMPLETED', label: 'GT QC completed', stage: 'GT_QC', state: 'COMPLETED' },
+  { key: 'VECTORIZATION_IN_PROGRESS', label: 'Vectorization in progress', stage: 'VECTORIZATION', state: 'IN_PROGRESS' },
+  { key: 'VECTORIZATION_COMPLETED', label: 'Vectorization completed', stage: 'VECTORIZATION', state: 'COMPLETED' },
+  { key: 'DATA_SUBMITTED', label: 'Data submitted', stage: 'DATA_SUBMISSION', state: 'IN_PROGRESS' },
+  { key: 'DATA_APPROVED', label: 'Data approved', stage: 'DATA_SUBMISSION', state: 'COMPLETED' },
+  { key: 'FINAL_SUBMITTED', label: 'Final deliverables submitted', stage: 'FINAL_DELIVERABLES', state: 'IN_PROGRESS' },
+  { key: 'FINAL_APPROVED', label: 'Final deliverables approved', stage: 'FINAL_DELIVERABLES', state: 'COMPLETED' },
+];
+
+export const LADDER_KEYS = VILLAGE_LADDER.map(r => r.key);
+export type LadderKey = string;
+
+export const LADDER_LABELS: Record<string, string> =
+  Object.fromEntries(VILLAGE_LADDER.map(r => [r.key, r.label]));
+
+/** How far along the ladder a position is, 0 for not started. */
+export const LADDER_INDEX: Record<string, number> =
+  Object.fromEntries(VILLAGE_LADDER.map((r, i) => [r.key, i]));
+
+/**
+ * Where a village sits on the ladder.
+ *
+ * Read from the far end backwards: the furthest stage that has been touched
+ * is where the village has got to, whatever the stages behind it say. A
+ * village whose GT was reopened after vectorisation started is reported at
+ * vectorisation, because that is the truth an official is asking about; the
+ * reopened GT shows up as a rework flag beside it rather than dragging the
+ * whole village backwards.
+ *
+ * ON_HOLD counts as the in-progress position and is reported separately. The
+ * eleven positions are the eleven the contract names, and "on hold" is a
+ * thing that is true *about* a village at a position rather than a twelfth
+ * position.
+ */
+export interface LadderPosition {
+  key: string;
+  label: string;
+  index: number;
+  /** The stage behind the position, for anything that needs to drill in. */
+  stage: string | null;
+  onHold: boolean;
+  inRework: boolean;
+}
+
+export function villagePosition(
+  states: Record<string, StageState> | null | undefined,
+  ladder: LadderRung[] = VILLAGE_LADDER,
+): LadderPosition {
+  const map = states ?? {};
+  const onHold = Object.values(map).some(v => v === 'ON_HOLD');
+  const rework = map.REWORK === 'IN_PROGRESS' || map.REWORK === 'ON_HOLD';
+
+  for (let i = ladder.length - 1; i >= 1; i -= 1) {
+    const rung = ladder[i];
+    if (!rung.stage) continue;
+    const state = map[rung.stage];
+    if (state === undefined || state === 'NOT_STARTED') continue;
+    // ON_HOLD is work that started and stopped, so it sits at the
+    // in-progress rung rather than at the completed one above it.
+    const effective: StageState = state === 'ON_HOLD' ? 'IN_PROGRESS' : state;
+    if (effective !== rung.state) continue;
+    return {
+      key: rung.key, label: rung.label, index: i, stage: rung.stage,
+      onHold, inRework: rework,
+    };
+  }
+  return {
+    key: 'NOT_STARTED', label: LADDER_LABELS.NOT_STARTED, index: 0, stage: null,
+    onHold, inRework: rework,
+  };
+}
+
+/** How many villages sit at each of the eleven positions. */
+export function tallyByPosition(
+  villages: Array<{ stages?: Record<string, StageState> }>,
+  ladder: LadderRung[] = VILLAGE_LADDER,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const rung of ladder) out[rung.key] = 0;
+  for (const v of villages) out[villagePosition(v.stages, ladder).key] += 1;
+  return out;
+}
 
 /**
  * The same list, in the shape the seed writes.
@@ -725,6 +868,39 @@ export const surveyEntryPatchSchema = surveyEntrySchema
     amendment_reason: z.string().trim().max(500).optional(),
   });
 
+/**
+ * Starting ground truthing on a village.
+ *
+ * Four things are agreed when a village starts and none of them survived
+ * anywhere: who is on it, how many of the department's staff were promised,
+ * when it starts, and when it is expected to finish. They are asked together
+ * because they are agreed together — a form that collects them one at a time
+ * across four screens is a form where three of them stay empty.
+ */
+export const gtStartSchema = z.object({
+  started_on: pastDate,
+  /*
+   * Not pastDate: this one is deliberately in the future. A village that
+   * started today and is expected to finish today is the default nobody
+   * meant, so the date is required rather than defaulted.
+   */
+  expected_end_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD'),
+  /** The people put on it. At least one: a village nobody is on has not started. */
+  employee_ids: z.array(z.string().uuid())
+    .min(1, 'Put at least one person on the village — a village nobody is on has not started')
+    .max(100, 'That is more people than any village takes'),
+  govt_staff_allocated: headcount.nullable().optional(),
+  crew_allocated: headcount.nullable().optional(),
+  remarks: z.string().trim().max(2000).nullable().optional(),
+}).strict().superRefine((v, ctx) => {
+  if (v.expected_end_on < v.started_on) {
+    ctx.addIssue({
+      code: 'custom', path: ['expected_end_on'],
+      message: 'The expected finish cannot be before the start',
+    });
+  }
+});
+
 export const measureSchema = z.object({
   code: z.string().min(1).max(64).regex(/^[A-Z0-9_]+$/,
     'Use capitals, digits and underscores — the code is referenced by imports'),
@@ -777,6 +953,16 @@ export const SURVEY_PERMISSIONS = [
   // out the villages they ran without being able to set the targets their
   // own completion is measured against.
   'survey.certify',
+  /*
+   * The dashboard the department is given (§071).
+   *
+   * Its own permission rather than a weaker survey.read, because survey.read
+   * carries the crew lists, the rover utilisation and the claim register with
+   * it. An observer holding this and nothing else sees villages, extent and
+   * where each one has got to — and cannot reach anything that would tell
+   * them what the work cost us.
+   */
+  'survey.dashboard',
 ] as const;
 
 export const SURVEY_ROLE_GRANTS: Record<RoleCode, string[]> = {
@@ -785,19 +971,22 @@ export const SURVEY_ROLE_GRANTS: Record<RoleCode, string[]> = {
   // Runs the programme: sets the work list, the targets and who is on it, and
   // is the first role the specification lets see a forecast.
   PROJECT_MANAGER: ['survey.read', 'survey.enter', 'survey.manage', 'survey.target',
-    'survey.forecast', 'survey.assign', 'survey.qc', 'survey.vectorize', 'survey.certify'],
+    'survey.forecast', 'survey.assign', 'survey.qc', 'survey.vectorize', 'survey.certify',
+    'survey.dashboard'],
   // Records what the crew did and puts people on villages. Deliberately
   // cannot set the target its own completion is measured against, and does
   // not see the forecast.
-  TEAM_LEAD: ['survey.read', 'survey.enter', 'survey.assign', 'survey.certify'],
-  EMPLOYEE: ['survey.read', 'survey.enter'],
-  AUDITOR: ['survey.read', 'survey.forecast'],
-  HR_MANAGER: ['survey.read'],
+  TEAM_LEAD: ['survey.read', 'survey.enter', 'survey.assign', 'survey.certify', 'survey.dashboard'],
+  EMPLOYEE: ['survey.read', 'survey.enter', 'survey.dashboard'],
+  AUDITOR: ['survey.read', 'survey.forecast', 'survey.dashboard'],
+  HR_MANAGER: ['survey.read', 'survey.dashboard'],
   PAYROLL_OFFICER: [],
-  INVENTORY_MANAGER: ['survey.read'],
-  BID_TENDER_MANAGER: ['survey.read'],
-  SALES_BD_EXECUTIVE: ['survey.read'],
-  CLIENT_VIEWER: ['survey.read'],
+  INVENTORY_MANAGER: ['survey.read', 'survey.dashboard'],
+  BID_TENDER_MANAGER: ['survey.read', 'survey.dashboard'],
+  // The whole of the observer's access, in this module and in every other.
+  GOVT_OBSERVER: ['survey.dashboard'],
+  SALES_BD_EXECUTIVE: ['survey.read', 'survey.dashboard'],
+  CLIENT_VIEWER: ['survey.read', 'survey.dashboard'],
 };
 
 /* ------------------------------------------------- tasks drive the state */
@@ -1923,15 +2112,36 @@ export function priorRange(r: { from: string; to: string }): Period {
  */
 export const MILESTONE_REQUIRES: Record<number, string> = {
   1: 'GT_QC',
-  2: 'VECTORIZATION_QC',
-  3: 'SUBMISSION',
+  // Was VECTORIZATION_QC, which is the same checkpoint under its old name
+  // (§071). Nothing about when the money falls due has moved: the department
+  // approving the data is what the second claim has always waited on.
+  2: 'DATA_SUBMISSION',
+  // Was SUBMISSION. The third claim falls due when the deliverables go in,
+  // not when the department signs them off — see MILESTONE_EARNED_AT.
+  3: 'FINAL_DELIVERABLES',
+};
+
+/**
+ * The state of that stage which earns the milestone.
+ *
+ * Two of the three wait for a signature; the third does not, and the
+ * difference is the contract's rather than ours. The first and second claims
+ * fall due when the department accepts the work. The third falls due when the
+ * final deliverables are *submitted* — the money is not held behind an
+ * approval that may take the department months.
+ */
+export const MILESTONE_EARNED_AT: Record<number, StageState> = {
+  1: 'COMPLETED',
+  2: 'COMPLETED',
+  3: 'IN_PROGRESS',
 };
 
 /**
  * Whether a village has earned a milestone yet.
  *
- * `stages` is the village's stage map. Only COMPLETED counts: a stage in
- * progress is work that might still come back.
+ * `stages` is the village's stage map. Where the milestone waits on a
+ * signature, only COMPLETED counts: a stage in progress is work that might
+ * still come back.
  */
 export function milestoneEarned(
   milestone: number, stages: Record<string, string> | null | undefined,
@@ -1940,7 +2150,12 @@ export function milestoneEarned(
   // A milestone the contract does not gate is one anybody may claim; the
   // three that matter are all listed above.
   if (!required) return true;
-  return (stages ?? {})[required] === 'COMPLETED';
+  const at = (stages ?? {})[required] ?? 'NOT_STARTED';
+  const needed = MILESTONE_EARNED_AT[milestone] ?? 'COMPLETED';
+  if (needed === 'COMPLETED') return at === 'COMPLETED';
+  // A submission that has already been approved has certainly been made, so
+  // the later state earns the earlier milestone too.
+  return at === 'IN_PROGRESS' || at === 'COMPLETED';
 }
 
 /** Why a milestone cannot be claimed yet, in words somebody can act on. */
@@ -1952,11 +2167,13 @@ export function milestoneBlockedNote(
   const required = MILESTONE_REQUIRES[milestone];
   const at = (stages ?? {})[required] ?? 'NOT_STARTED';
   const label = stageLabelOf(required);
+  const name = MILESTONE_LABELS[milestone] ?? `Milestone ${milestone}`;
+  const due = (MILESTONE_EARNED_AT[milestone] ?? 'COMPLETED') === 'COMPLETED'
+    ? 'falls due when it is signed off'
+    : 'falls due when it goes in';
   return at === 'NOT_STARTED'
-    ? `${label} has not started on this village. ${
-      MILESTONE_LABELS[milestone] ?? `Milestone ${milestone}`} falls due when it is signed off.`
-    : `${label} is ${at.replace(/_/g, ' ').toLowerCase()}, not finished. ${
-      MILESTONE_LABELS[milestone] ?? `Milestone ${milestone}`} falls due when it is signed off.`;
+    ? `${label} has not started on this village. ${name} ${due}.`
+    : `${label} is ${at.replace(/_/g, ' ').toLowerCase()}, not finished. ${name} ${due}.`;
 }
 
 /* ------------------------------------------- certifying a finished village */

@@ -43,6 +43,7 @@ export const BILLING_ROLE_GRANTS: Record<RoleCode, string[]> = {
   TEAM_LEAD: ['boq.read','rabill.read'],
   AUDITOR: ['boq.read','rabill.read','retention.read'],
   BID_TENDER_MANAGER: ['boq.read','rabill.read'],
+  GOVT_OBSERVER: [],
   SALES_BD_EXECUTIVE: [],
   EMPLOYEE: [],
   CLIENT_VIEWER: [],

@@ -63,8 +63,8 @@ async function makeVillage(name: string): Promise<string> {
    * happens to a claim, not about when one may be raised — that rule has its
    * own suite — so every village here has earned all three.
    */
-  for (const code of ["GROUND_TRUTHING", "GT_QC", "VECTORIZATION", "VECTORIZATION_QC",
-    "RECORDS_PREPARATION", "LPM_GENERATION", "SUBMISSION"]) {
+  // The five stages of the pipeline after §071.
+  for (const code of ["GROUND_TRUTHING", "GT_QC", "VECTORIZATION", "DATA_SUBMISSION", "FINAL_DELIVERABLES"]) {
     const extra = code === "GROUND_TRUTHING"
       ? { gt_govt_staff_allocated: 2, gt_crew_allocated: 4 } : {};
     const moved = await post(w.admin, `/api/v1/survey/villages/${id}/stage`, {

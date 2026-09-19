@@ -90,7 +90,7 @@ export const S4_ROLE_GRANTS: Record<RoleCode, string[]> = {
   HR_MANAGER: [],
   PAYROLL_OFFICER: [],
   INVENTORY_MANAGER: [],
- SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[],
+ SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[], GOVT_OBSERVER:[],
 };
 
 // ---------------------------------------------------------------------------

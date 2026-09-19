@@ -229,8 +229,8 @@ describe("the task is the single source of the village's state", () => {
 
   it("reads a blocked stage as on hold", async () => {
     const adakula = await villageRow("ADAKULA");
-    await setTaskStatus(await stageTaskId(adakula.id, "RECORDS_PREPARATION"), "BLOCKED");
-    expect((await villageRow("ADAKULA")).stages.RECORDS_PREPARATION).toBe("ON_HOLD");
+    await setTaskStatus(await stageTaskId(adakula.id, "FINAL_DELIVERABLES"), "BLOCKED");
+    expect((await villageRow("ADAKULA")).stages.FINAL_DELIVERABLES).toBe("ON_HOLD");
   });
 
   it("completes the village only when every stage task is done", async () => {
@@ -318,7 +318,8 @@ describe("generating a board for a real programme", () => {
       { dry_run: true, include_stages: true });
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect(r.data.village_tasks).toBeGreaterThan(0);
-    expect(r.data.stage_tasks).toBe(r.data.village_tasks * 8);
+    // Five stages plus rework, since §071 (was seven plus rework).
+    expect(r.data.stage_tasks).toBe(r.data.village_tasks * 6);
 
     const after = await w.pool.query("SELECT count(*)::int AS n FROM tasks");
     expect(after.rows[0].n, "a preview writes nothing").toBe(before.rows[0].n);
@@ -328,7 +329,8 @@ describe("generating a board for a real programme", () => {
     const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/generate-tasks`,
       { dry_run: false, include_stages: true });
     expect(r.status, JSON.stringify(r.body)).toBe(200);
-    expect(r.data.stage_tasks).toBe(r.data.village_tasks * 8);
+    // Five stages plus rework, since §071 (was seven plus rework).
+    expect(r.data.stage_tasks).toBe(r.data.village_tasks * 6);
 
     // Every village carries its task, and every subtask hangs off the right
     // parent — the set-based insert relies on ordering, so this is the

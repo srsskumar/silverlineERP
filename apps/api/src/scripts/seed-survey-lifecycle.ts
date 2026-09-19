@@ -103,14 +103,15 @@ function profileFor(i: number): Profile {
   return "NOT_STARTED";
 }
 
+// The five stages of the pipeline after §071. The three that came out are
+// not seeded: nothing should create fresh rows on a retired stage.
 const STAGES_IN_ORDER = [
-  "GROUND_TRUTHING", "GT_QC", "VECTORIZATION", "VECTORIZATION_QC",
-  "RECORDS_PREPARATION", "LPM_GENERATION", "SUBMISSION",
+  "GROUND_TRUTHING", "GT_QC", "VECTORIZATION", "DATA_SUBMISSION", "FINAL_DELIVERABLES",
 ] as const;
 
 /** How far through the pipeline each profile has reached. */
 const REACHED: Record<Profile, number> = {
-  SUBMITTED: 7, RECORDS: 5, VECTORIZED: 4, GT_SIGNED: 2,
+  SUBMITTED: 5, RECORDS: 4, VECTORIZED: 3, GT_SIGNED: 2,
   GT_DONE: 1, GT_RUNNING: 0, ON_HOLD: 0, NOT_STARTED: 0,
 };
 

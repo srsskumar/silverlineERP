@@ -18,6 +18,7 @@ import { Badge } from '@/components/ui/Badge';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Notice, Section, Stat } from '@/components/finance/Primitives';
+import { SurveyDashboard } from '@/components/survey/Dashboard';
 import { GLOSSARY } from '@/components/ui/InfoHint';
 import { day, businessToday } from '@/lib/finance';
 import { useToast } from '@/components/ui/Toast';
@@ -42,7 +43,36 @@ type Row = Record<string, any>;
 
 /** One decimal, which is as fine as an acre figure is ever read on a chart. */
 const round1 = (n: number) => Math.round(n * 10) / 10;
-type Tab = 'progress' | 'report' | 'villages' | 'people' | 'deployment' | 'bottlenecks' | 'timeline' | 'summary' | 'control';
+type Tab = 'dashboard' | 'progress' | 'report' | 'villages' | 'people' | 'deployment'
+  | 'bottlenecks' | 'timeline' | 'summary' | 'control';
+
+/*
+ * What a reader is shown, and in what order (§071).
+ *
+ * Nine tabs was the complaint, and the nine were not equal: the dashboard
+ * answers the question almost everybody arrives with, and six of the others
+ * answer questions only somebody running the programme asks. So the list is
+ * now in two parts — what you see, and what you open when you need it — and
+ * the deep ones are behind "More". Nothing was deleted; every tab below still
+ * exists and still works.
+ */
+const PRIMARY_TABS: Tab[] = ['dashboard', 'progress', 'villages', 'report'];
+const MORE_TABS: Tab[] = [
+  'people', 'deployment', 'bottlenecks', 'timeline', 'summary', 'control',
+];
+
+const TAB_LABELS: Record<Tab, string> = {
+  dashboard: 'Dashboard',
+  progress: 'Progress',
+  villages: 'Villages',
+  report: 'Report',
+  people: 'Crew & rovers',
+  deployment: 'Deployment',
+  bottlenecks: 'Bottlenecks',
+  timeline: 'Trend',
+  summary: 'Summary',
+  control: 'Control points',
+};
 
 /**
  * Land survey progress (§59).
@@ -55,6 +85,16 @@ export default function SurveyPage() {
   const { session } = useAuth();
   const perms = { permissions: session?.permissions };
   const canRead = hasPermission(perms, 'survey.read');
+  /*
+   * The department's own view (§071).
+   *
+   * An official holds survey.dashboard and nothing else. They get this page
+   * with one tab on it, and every other tab is not merely hidden — the
+   * queries behind them are never issued, so a mistake in the markup cannot
+   * leak a crew list.
+   */
+  const canDashboard = hasPermission(perms, 'survey.dashboard');
+  const observerOnly = canDashboard && !canRead;
   const canEnter = hasPermission(perms, 'survey.enter');
   const canManage = hasPermission(perms, 'survey.manage');
   // Management information. The specification is explicit that a GT user
@@ -67,7 +107,8 @@ export default function SurveyPage() {
   const today = React.useMemo(() => businessToday(), []);
   const fy = React.useMemo(() => financialYearToDate(today), [today]);
 
-  const [tab, setTab] = React.useState<Tab>('progress');
+  const [tab, setTab] = React.useState<Tab>('dashboard');
+  const [showMore, setShowMore] = React.useState(false);
   const [projectId, setProjectId] = React.useState('');
   /**
    * A village another screen sent us to, opened on arrival.
@@ -91,8 +132,10 @@ export default function SurveyPage() {
   React.useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const wanted = q.get('tab');
-    if (wanted && (['progress', 'report', 'villages', 'people', 'deployment', 'bottlenecks', 'timeline', 'summary'] as string[])
-      .includes(wanted)) setTab(wanted as Tab);
+    if (wanted && ([...PRIMARY_TABS, ...MORE_TABS] as string[]).includes(wanted)) {
+      setTab(wanted as Tab);
+      if ((MORE_TABS as string[]).includes(wanted)) setShowMore(true);
+    }
     const village = q.get('village');
     if (village) { setTab('villages'); setOpenVillage(village); }
     const project = q.get('project');
@@ -103,10 +146,13 @@ export default function SurveyPage() {
   const [grain, setGrain] = React.useState<'DAY' | 'WEEK' | 'MONTH' | 'YEAR'>('MONTH');
 
   const projects = useQuery({
-    queryKey: ['survey-projects'],
-    enabled: canRead,
-    queryFn: async () =>
-      ((await apiRequestRaw('/api/v1/survey/projects?limit=100')).body as { data: Row[] }).data,
+    queryKey: ['survey-projects', observerOnly],
+    enabled: canRead || canDashboard,
+    queryFn: async () => ((await apiRequestRaw(observerOnly
+      // An observer gets the three fields a picker needs and no more; the
+      // full programme record is not theirs to read.
+      ? '/api/v1/survey/dashboard/projects'
+      : '/api/v1/survey/projects?limit=100')).body as { data: Row[] }).data,
     staleTime: 300_000,
   });
 
@@ -141,7 +187,7 @@ export default function SurveyPage() {
     },
   });
 
-  if (!canRead) {
+  if (!canRead && !canDashboard) {
     return (
       <AppShell>
         <PageHeader title="Land survey" />
@@ -150,6 +196,50 @@ export default function SurveyPage() {
             This screen needs the <code>survey.read</code> permission. An administrator can grant
             it from Security &rarr; Roles.
           </Notice>
+        </PageBody>
+      </AppShell>
+    );
+  }
+
+  /*
+   * The observer's page: the programme picker and the dashboard.
+   *
+   * Returned before the tab bar rather than hiding tabs inside it, so there
+   * is no arrangement of state in which an official is one stray click from
+   * the crew list. The detailed screens are not rendered at all.
+   */
+  if (observerOnly) {
+    return (
+      <AppShell>
+        <PageHeader
+          title="Land survey"
+          description="Programme progress, village by village."
+        />
+        <PageBody>
+          {projects.isLoading ? <Skeleton className="h-96" /> : null}
+          {(projects.data ?? []).length > 1 ? (
+            <div className="mb-4">
+              <label className="flex items-center gap-2 text-xs text-text-muted">
+                Programme
+                <select
+                  value={projectId}
+                  onChange={(e) => setProjectId(e.target.value)}
+                  className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+                >
+                  {(projects.data ?? []).map((p) => (
+                    <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : null}
+          {projectId ? (
+            <SurveyDashboard projectId={projectId} canDrill={false} />
+          ) : projects.isLoading ? null : (
+            <Notice tone="info" title="No active programme">
+              There is no active survey programme to show yet.
+            </Notice>
+          )}
         </PageBody>
       </AppShell>
     );
@@ -179,20 +269,29 @@ export default function SurveyPage() {
             * horizontally because of a strip at the top. Scrolls within itself
             * instead.
             */}
-          <div className="-mx-1 flex max-w-full gap-1 overflow-x-auto px-1 pb-1">
-            {(['progress', 'report', 'villages', 'people', 'deployment', 'bottlenecks', 'timeline', 'summary', 'control'] as const).map((t) => (
+          <div className="-mx-1 flex max-w-full flex-wrap gap-1 px-1 pb-1">
+            {PRIMARY_TABS.map((t) => (
               <Button key={t} type="button" variant={tab === t ? 'secondary' : 'ghost'}
                 onClick={() => setTab(t)}>
-                {t === 'progress' ? 'Progress'
-                  : t === 'report' ? 'Report'
-                    : t === 'villages' ? 'Villages'
-                      : t === 'people' ? 'Crew & rovers'
-                        : t === 'deployment' ? 'Deployment'
-                        : t === 'bottlenecks' ? 'Bottlenecks'
-                          : t === 'timeline' ? 'Trend'
-                            : t === 'control' ? 'Control points' : 'Summary'}
+                {TAB_LABELS[t]}
               </Button>
             ))}
+            {/*
+              * The six that only somebody running the programme opens. Kept
+              * one click away rather than removed — each one answers a real
+              * question, just not the question most people arrive with.
+              */}
+            <Button type="button" variant={showMore ? 'secondary' : 'ghost'}
+              onClick={() => setShowMore((v) => !v)}
+              aria-expanded={showMore}>
+              {showMore ? 'Fewer' : 'More'}
+            </Button>
+            {showMore ? MORE_TABS.map((t) => (
+              <Button key={t} type="button" variant={tab === t ? 'secondary' : 'ghost'}
+                onClick={() => setTab(t)}>
+                {TAB_LABELS[t]}
+              </Button>
+            )) : null}
           </div>
 
           <label className="flex items-center gap-1.5 text-xs text-text-muted">
@@ -231,6 +330,20 @@ export default function SurveyPage() {
           <EmptyState
             title="No survey programme yet"
             description="A programme holds the villages to be surveyed and everything recorded against them."
+          />
+        ) : null}
+
+        {projectId && tab === 'dashboard' ? (
+          <SurveyDashboard
+            projectId={projectId}
+            /*
+             * An observer sees the dashboard and stops there. Everything it
+             * links into — a village's crew, its returns, its claims — needs
+             * survey.read, and offering a link that 403s is worse than
+             * offering no link.
+             */
+            canDrill={canRead}
+            onOpenVillage={(id) => { setOpenVillage(id); setTab('villages'); }}
           />
         ) : null}
 

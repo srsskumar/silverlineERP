@@ -184,3 +184,59 @@ about the record rather than an observation.
 **59.9.5** The phone's own fix fills the coordinate fields as a starting
 position and says so. A phone is metres-accurate; a control point is not, and
 a field pre-filled from GPS without a caption is a field nobody overwrites.
+
+## 59.10 One village, one position
+
+**59.10.1** A village is reported at exactly one of eleven positions: not
+started; GT in progress; GT completed; GT QC in progress; GT QC completed;
+vectorization in progress; vectorization completed; data submitted; data
+approved; final deliverables submitted; final deliverables approved.
+
+**59.10.2** The position is derived from the stage rows, never stored. It is
+the furthest stage the village has touched — a stage reopened behind the work
+does not drag the village backwards, because "where is this village" is a
+question about the front of the work, not the back.
+
+**59.10.3** The pipeline is therefore the five stages those eleven positions
+are made of: ground truthing, GT QC, vectorization, data submission, final
+deliverables. Vectorization QC became data submission, named for what the
+department does at the checkpoint rather than for what we do before it.
+Records preparation and LPM generation are no longer stages: the work still
+happens, between data approval and submission, and it is not a position the
+programme is reported at. Nothing recorded against them was deleted.
+
+**59.10.4** On hold and rework are reported beside a village's position, never
+as positions of their own. Each is something true *about* a village at a
+position; making them positions would count a village twice and the eleven
+would stop adding up to the total.
+
+**59.10.5** Ground truthing starts on a village in one action, because it is
+one decision: the people on it, the government staff and crew agreed with the
+mandal, the start date and the expected finish. Anything that fails fails all
+of it — a village half-started is worse than one not started, because it looks
+done.
+
+**59.10.6** A control point is asked for when a village starts and does not
+block it. A crew already walking the boundary is not sent home because a
+coordinate has not been typed; the gap is reported against the village until
+it is closed.
+
+## 59.11 The dashboard
+
+**59.11.1** The module carries its own dashboard, inside it rather than in the
+projects dashboard. It opens on it, because the position of the programme is
+the question almost everybody arrives with.
+
+**59.11.2** It reports the eleven positions with a date range and filters by
+district, mandal and position, and every figure drills down — a position to
+the villages at it, a district to its mandals, a mandal to its villages.
+
+**59.11.3** It is built to be handed to the department. It carries no money,
+no names and no equipment, and it is served by its own query rather than by
+filtering the internal one — so a field added to the internal report tomorrow
+cannot appear on it.
+
+**59.11.4** `survey.dashboard` is a permission of its own and the
+`GOVT_OBSERVER` role holds it and nothing else. An observer is shown the
+dashboard and no other screen, and the detailed screens are not rendered for
+them at all rather than merely hidden.

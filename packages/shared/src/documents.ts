@@ -472,6 +472,7 @@ export const DOCUMENT_ROLE_GRANTS: Record<RoleCode, string[]> = {
   HR_MANAGER: ['document.read', 'document.manage', 'document.confidential'],
   PROJECT_MANAGER: ['document.read', 'document.manage'],
   BID_TENDER_MANAGER: ['document.read', 'document.manage'],
+  GOVT_OBSERVER: [],
   INVENTORY_MANAGER: ['document.read', 'document.manage'],
   PAYROLL_OFFICER: ['document.read', 'document.confidential'],
   // Reads everything including the confidential types, and places a hold.

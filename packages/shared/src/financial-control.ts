@@ -324,6 +324,7 @@ export const FINANCE_ROLE_GRANTS: Record<RoleCode, string[]> = {
     'period.read', 'bank.read', 'bank.reconcile', 'invoice.read', 'invoice.manage'],
   PROJECT_MANAGER: ['payment.read', 'period.read', 'invoice.read'],
   BID_TENDER_MANAGER: ['payment.read', 'invoice.read'],
+  GOVT_OBSERVER: [],
   AUDITOR: ['payment.read', 'period.read', 'bank.read', 'invoice.read'],
   TEAM_LEAD: [],
   INVENTORY_MANAGER: ['invoice.read'],

@@ -9,6 +9,7 @@ import {
   STAGE_CODES, REPORT_LEVELS, resolveStage, isOutOfScope, plannedTasksFor,
   tallyByStage, roverUtilisation, roverWindow, rankByWaste, pace, currentStage,
   outOfSequence, stageBlockedBy,
+  VILLAGE_LADDER, villagePosition, tallyByPosition, gtStartSchema,
   crewAssignmentSchema, roverAllocationSchema, stageRemarkSchema, STAGE_PIPELINE,
   crewBulkAssignmentSchema, roverBulkAllocationSchema, roverAllocationEditSchema,
   villageMoveSchema,
@@ -1114,6 +1115,121 @@ export async function registerSurveyRoutes(
    * table rather than the task's assignee. A task has one owner; a ground
    * truthing crew has six, and the GT crew is not the vectorization team.
    */
+  /**
+   * Start ground truthing on a village (§071).
+   *
+   * One call, because it is one decision. Putting the crew on, agreeing the
+   * headcounts and setting the dates were three screens and a stage change,
+   * and the result was villages that had been worked for a fortnight with no
+   * start date, no expected finish and nobody formally on them. Anything that
+   * fails here fails all of it — a village half-started is worse than one not
+   * started, because it looks done.
+   *
+   * The control point is asked for but does not block. A crew already walking
+   * the boundary is not sent home because a ten-figure coordinate has not
+   * been typed yet; the gap is reported instead, on the dashboard, against
+   * the village, until somebody closes it.
+   */
+  app.post('/api/v1/survey/villages/:id/start-gt', { preHandler: guard('survey.manage') },
+    async (req, reply) => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(gtStartSchema, req.body);
+      const data = await mutate(pool, req, 'survey.village.start_gt', 'survey_village',
+        async db => {
+          const village = await villageOr404(db, u.orgId, id, u, true);
+
+          const stage = (await db.query(
+            `SELECT id FROM survey_stages
+              WHERE org_id = $1 AND code = 'GROUND_TRUTHING' AND active`,
+            [u.orgId])).rows[0];
+          if (!stage) {
+            fail('UNKNOWN_STAGE', 'This organisation has no ground truthing stage.', 422);
+          }
+
+          const already = (await db.query(
+            `SELECT state FROM survey_village_stages
+              WHERE survey_village_id = $1 AND stage_id = $2`,
+            [id, stage.id])).rows[0];
+          if (already && already.state === 'COMPLETED') {
+            fail('ALREADY_COMPLETED',
+              'Ground truthing is already signed off on this village. Reopen it through '
+              + 'rework rather than starting it again.', 409);
+          }
+
+          // Every person named has to be real and ours before anything is
+          // written, so a typo in the fifth id does not leave the first four
+          // assigned to a village that never started.
+          for (const employeeId of input.employee_ids) {
+            await inOrg(db, 'employees', employeeId, u.orgId);
+          }
+
+          await db.query(
+            `UPDATE survey_villages
+                SET gt_started_on = $2, gt_expected_end_on = $3,
+                    gt_govt_staff_allocated = COALESCE($4, gt_govt_staff_allocated),
+                    gt_crew_allocated = COALESCE($5, gt_crew_allocated),
+                    updated_by = $6, updated_at = now()
+              WHERE id = $1`,
+            [id, input.started_on, input.expected_end_on,
+              input.govt_staff_allocated ?? null, input.crew_allocated ?? null, u.id]);
+
+          await db.query(
+            `INSERT INTO survey_village_stages
+               (org_id, survey_village_id, stage_id, state, started_on, updated_by)
+             VALUES ($1, $2, $3, 'IN_PROGRESS', $4, $5)
+             ON CONFLICT (survey_village_id, stage_id) DO UPDATE
+               SET state = 'IN_PROGRESS',
+                   started_on = COALESCE(survey_village_stages.started_on, EXCLUDED.started_on),
+                   updated_by = EXCLUDED.updated_by,
+                   updated_at = now()`,
+            [u.orgId, id, stage.id, input.started_on, u.id]);
+
+          // Already-on-the-village is not an error. Two people starting the
+          // same village within a minute of each other is ordinary, and the
+          // second one should not be told off for it.
+          let added = 0;
+          for (const employeeId of input.employee_ids) {
+            const r = await db.query(
+              `INSERT INTO survey_crew
+                 (org_id, survey_village_id, stage_id, employee_id, assigned_on, created_by)
+               SELECT $1, $2, $3, $4, $5, $6
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM survey_crew
+                   WHERE survey_village_id = $2 AND stage_id = $3
+                     AND employee_id = $4 AND released_on IS NULL)`,
+              [u.orgId, id, stage.id, employeeId, input.started_on, u.id]);
+            added += r.rowCount ?? 0;
+          }
+
+          const gcps = Number((await db.query(
+            'SELECT count(*)::int AS n FROM survey_village_gcps WHERE survey_village_id = $1',
+            [id])).rows[0].n);
+
+          return {
+            id,
+            survey_project_id: String(village.survey_project_id),
+            started_on: input.started_on,
+            expected_end_on: input.expected_end_on,
+            crew_added: added,
+            crew_named: input.employee_ids.length,
+            gcp_count: gcps,
+            /*
+             * Said plainly rather than refused. A village under way with no
+             * control point recorded is a real gap and it is reported
+             * everywhere until it is closed, but it is not a reason to stop
+             * a crew that is already in the field.
+             */
+            gcp_note: gcps === 0
+              ? 'No control point is recorded for this village yet. Ground truthing has '
+                + 'started; record the GCP as soon as the coordinates are to hand — until '
+                + 'then the village is flagged on the dashboard.'
+              : null,
+          };
+        });
+      reply.code(201);
+      return { data };
+    });
+
   app.get('/api/v1/survey/villages/:id/crew', { preHandler: guard('survey.read') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
     await villageOr404(pool, u.orgId, id, u);
@@ -4059,6 +4175,9 @@ export async function registerSurveyRoutes(
           // village state cannot answer this: "in progress" covers a village
           // on its first day of GT and one waiting for its LPM.
           by_stage: tallyByStage(g.items, pipeline),
+          // The same villages counted the way the dashboard counts them:
+          // one village, one position, eleven positions in all.
+          by_position: tallyByPosition(g.items),
           // Villages whose stages have been moved out of order. Reported
           // rather than prevented, because the task board drives the state
           // and the board is not this module's to police.
@@ -4126,6 +4245,8 @@ export async function registerSurveyRoutes(
           // headline and the rows below it cannot disagree.
           total: rollUp(pos, m.codes, codes, m.basis),
           by_stage: tallyByStage(pos, pipeline),
+          by_position: tallyByPosition(pos),
+          ladder: VILLAGE_LADDER.map(r => ({ key: r.key, label: r.label })),
           rovers,
           pace: paceFigures,
           pipeline: pipeline.map(st => ({
@@ -4164,6 +4285,211 @@ export async function registerSurveyRoutes(
    * Monday to Sunday, not Monday to Wednesday: clipping it to today would
    * make every week-on-week comparison compare three days against seven.
    */
+  /**
+   * The programme at a glance, for somebody outside the company (§071).
+   *
+   * A separate endpoint rather than a filtered view of /progress, and
+   * deliberately so. /progress carries crew lists, rover utilisation, idle
+   * reasons and the claim register alongside the figures; building the
+   * official's view by removing things from it means the next field added to
+   * /progress is exposed by default. This query selects what may be shown and
+   * can leak nothing else, because nothing else is in it.
+   *
+   * No money, no names, no equipment. Villages, extent, and where each one
+   * has got to.
+   */
+  /**
+   * The programmes an observer may look at (§071).
+   *
+   * Its own endpoint rather than relaxing /survey/projects, which returns the
+   * whole programme record — thresholds, pairing, status history — and grows
+   * whenever somebody adds a column. This returns the three fields a picker
+   * needs and can never return a fourth.
+   */
+  app.get('/api/v1/survey/dashboard/projects',
+    { preHandler: guard('survey.dashboard') }, async req => {
+      const u = actor(req);
+      const rows = (await pool.query(
+        `SELECT id, code, name FROM survey_projects
+          WHERE org_id = $1 AND status = 'ACTIVE'
+          ORDER BY name`, [u.orgId])).rows;
+      return { data: rows };
+    });
+
+  app.get('/api/v1/survey/projects/:id/dashboard',
+    { preHandler: guard('survey.dashboard') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const q = (req.query ?? {}) as Record<string, string | undefined>;
+      // An observer is not enrolled on the programme, so the scoping that
+      // governs staff does not apply to them; the permission is the grant.
+      const scoped = u.permissions.includes('survey.dashboard')
+        && !u.permissions.includes('survey.read');
+      const project = scoped
+        ? await inOrg(pool, 'survey_projects', id, u.orgId)
+        : await projectOr404(pool, u.orgId, id, u);
+
+      const to = dateParam(req, q.to, 'to', today());
+      const from = dateParam(req, q.from, 'from', '');
+      const level = (REPORT_LEVELS as readonly string[]).includes(String(q.level ?? ''))
+        ? String(q.level) as ReportLevel : 'district';
+      const fDistrict = String(q.district ?? '').trim();
+      const fMandal = String(q.mandal ?? '').trim();
+      const fPosition = String(q.position ?? '').trim();
+
+      const rows = (await pool.query(
+        `SELECT sv.id AS village_id, ou.name AS village_name, ou.code AS village_code,
+                sv.total_extent_ac, sv.gt_started_on, sv.gt_expected_end_on,
+                m.id AS mandal_id, m.name AS mandal_name,
+                pu.id AS parent_id, pu.name AS parent_name, pu.type AS parent_type,
+                gp.id AS grandparent_id, gp.name AS grandparent_name, gp.type AS grandparent_type,
+                (SELECT count(*)::int FROM survey_village_gcps g
+                  WHERE g.survey_village_id = sv.id) AS gcp_count,
+                COALESCE(json_object_agg(st.code, vst.state)
+                         FILTER (WHERE st.code IS NOT NULL), '{}'::json) AS stages
+         FROM survey_villages sv
+         JOIN org_units ou ON ou.id = sv.village_id
+         LEFT JOIN org_units m  ON m.id = ou.parent_id
+         LEFT JOIN org_units pu ON pu.id = m.parent_id
+         LEFT JOIN org_units gp ON gp.id = pu.parent_id
+         LEFT JOIN survey_village_stages vst ON vst.survey_village_id = sv.id
+         LEFT JOIN survey_stages st ON st.id = vst.stage_id AND st.active
+         WHERE sv.survey_project_id = $1 AND sv.org_id = $2
+         GROUP BY sv.id, ou.name, ou.code, m.id, m.name,
+                  pu.id, pu.name, pu.type, gp.id, gp.name, gp.type`,
+        [id, u.orgId])).rows;
+
+      const villages = rows.map(r => {
+        const stages = (r.stages ?? {}) as Record<string, StageState>;
+        return {
+          row: r,
+          villageId: String(r.village_id),
+          name: String(r.village_name),
+          code: r.village_code ? String(r.village_code) : null,
+          extentAc: num(r.total_extent_ac),
+          gcpCount: Number(r.gcp_count ?? 0),
+          gtStartedOn: iso(r.gt_started_on),
+          gtExpectedEndOn: iso(r.gt_expected_end_on),
+          stages,
+          position: villagePosition(stages),
+        };
+      });
+
+      const matches = villages.filter(v => {
+        const d = unitAt(v.row, 'district');
+        const mn = unitAt(v.row, 'mandal');
+        if (fDistrict && d?.id !== fDistrict) return false;
+        if (fMandal && mn?.id !== fMandal) return false;
+        if (fPosition && v.position.key !== fPosition) return false;
+        return true;
+      });
+
+      /*
+       * Extent recorded inside the window, against extent overall.
+       *
+       * The window bounds what was *done in* it. How far the programme has
+       * got is always as at the end of the window, because "62% complete" is
+       * a statement about the programme rather than about the fortnight.
+       */
+      const doneRows = (await pool.query(
+        `SELECT se.survey_village_id AS vid, COALESCE(sum(sev.quantity), 0) AS ac
+         FROM survey_entries se
+         JOIN survey_entry_values sev ON sev.entry_id = se.id
+         JOIN survey_measures sm ON sm.id = sev.measure_id AND sm.basis = 'EXTENT'
+         WHERE se.survey_project_id = $1 AND se.org_id = $2
+           AND ($3 = '' OR se.entry_date >= $3::date)
+           AND se.entry_date <= $4::date
+         GROUP BY 1`,
+        [id, u.orgId, from, to])).rows;
+      const doneBy = new Map(doneRows.map(r => [String(r.vid), Number(r.ac)]));
+
+      const group = (lvl: ReportLevel) => {
+        const g = new Map<string, { id: string | null; name: string; items: typeof matches }>();
+        for (const v of matches) {
+          const unit = unitAt(v.row, lvl);
+          const key = unit?.id ?? '__unattributed__';
+          if (!g.has(key)) {
+            g.set(key, {
+              id: unit?.id ?? null, name: unit?.name ?? 'Not attributed', items: [],
+            });
+          }
+          g.get(key)!.items.push(v);
+        }
+        return [...g.values()].map(row => ({
+          id: row.id,
+          name: row.name,
+          villages: row.items.length,
+          extent_ac: row.items.reduce((t, v) => t + (v.extentAc ?? 0), 0),
+          extent_sqkm: acresToSqKm(row.items.reduce((t, v) => t + (v.extentAc ?? 0), 0)),
+          surveyed_ac: row.items.reduce((t, v) => t + (doneBy.get(v.villageId) ?? 0), 0),
+          // Where each village in this group has got to. The chart and the
+          // drill-down read the same numbers.
+          by_position: tallyByPosition(row.items),
+          completed: row.items.filter(v => v.position.key === 'FINAL_APPROVED').length,
+          not_started: row.items.filter(v => v.position.key === 'NOT_STARTED').length,
+        })).sort((a, b) => a.name.localeCompare(b.name));
+      };
+
+      const totalExtent = matches.reduce((t, v) => t + (v.extentAc ?? 0), 0);
+      const surveyed = matches.reduce((t, v) => t + (doneBy.get(v.villageId) ?? 0), 0);
+
+      const districts = [...new Map(villages
+        .map(v => unitAt(v.row, 'district')).filter(Boolean)
+        .map(d => [d!.id, d!])).values()].sort((a, b) => a.name.localeCompare(b.name));
+      const mandals = [...new Map(villages
+        .filter(v => !fDistrict || unitAt(v.row, 'district')?.id === fDistrict)
+        .map(v => unitAt(v.row, 'mandal')).filter(Boolean)
+        .map(d => [d!.id, d!])).values()].sort((a, b) => a.name.localeCompare(b.name));
+
+      return {
+        data: {
+          project: { id: String(project.id), name: String(project.name), code: project.code },
+          period: { from: from || null, to },
+          level,
+          filter: {
+            district: fDistrict || null, mandal: fMandal || null,
+            position: fPosition || null,
+            villages: matches.length, of_villages: villages.length,
+          },
+          options: { districts, mandals },
+          /* The eleven positions, in order, so a chart never has to sort. */
+          ladder: VILLAGE_LADDER.map(r => ({ key: r.key, label: r.label })),
+          totals: {
+            villages: matches.length,
+            extent_ac: totalExtent,
+            extent_sqkm: acresToSqKm(totalExtent),
+            surveyed_ac: surveyed,
+            surveyed_sqkm: acresToSqKm(surveyed),
+            by_position: tallyByPosition(matches),
+            // Reported separately from the positions, because on hold is
+            // something true about a village at a position rather than a
+            // twelfth position.
+            on_hold: matches.filter(v => v.position.onHold).length,
+            in_rework: matches.filter(v => v.position.inRework).length,
+            gcp_missing: matches.filter(
+              v => v.position.index > 0 && v.gcpCount === 0).length,
+          },
+          rows: group(level),
+          villages: matches
+            .map(v => ({
+              id: v.villageId, name: v.name, code: v.code,
+              district: unitAt(v.row, 'district')?.name ?? null,
+              mandal: unitAt(v.row, 'mandal')?.name ?? null,
+              extent_ac: v.extentAc,
+              extent_sqkm: acresToSqKm(v.extentAc ?? 0),
+              surveyed_ac: doneBy.get(v.villageId) ?? 0,
+              position: v.position.key,
+              position_label: v.position.label,
+              on_hold: v.position.onHold,
+              in_rework: v.position.inRework,
+              gt_started_on: v.gtStartedOn,
+              gt_expected_end_on: v.gtExpectedEndOn,
+              gcp_count: v.gcpCount,
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name)),
+        },
+      };
+    });
+
   app.get('/api/v1/survey/projects/:id/report', { preHandler: guard('survey.read') },
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;

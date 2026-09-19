@@ -328,6 +328,7 @@ export const INVENTORY_ROLE_GRANTS: Record<RoleCode, string[]> = {
   TEAM_LEAD: ['stock.read', 'location.read', 'reservation.read'],
   AUDITOR: ['stock.read', 'location.read', 'reservation.read', 'stockcount.read'],
   BID_TENDER_MANAGER: ['stock.read'],
+  GOVT_OBSERVER: [],
   EMPLOYEE: [],
   HR_MANAGER: [],
   PAYROLL_OFFICER: [],

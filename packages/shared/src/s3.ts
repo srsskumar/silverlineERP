@@ -54,7 +54,7 @@ export const S3_ROLE_GRANTS: Record<RoleCode, string[]> = {
   EMPLOYEE: [S3_PERMISSIONS.LEAVE_REQUEST],
   CLIENT_VIEWER: [],
   AUDITOR: [S3_PERMISSIONS.LEAVE_READ],
- SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[],
+ SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[], GOVT_OBSERVER:[],
 };
 
 // ---------------------------------------------------------------------------

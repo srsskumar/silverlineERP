@@ -202,6 +202,7 @@ export const COST_CONTROL_ROLE_GRANTS: Record<RoleCode, string[]> = {
   AUDITOR: ['costhead.read', 'budget.read', 'cost.read'],
   INVENTORY_MANAGER: ['costhead.read', 'cost.read'],
   BID_TENDER_MANAGER: ['costhead.read', 'budget.read', 'cost.read'],
+  GOVT_OBSERVER: [],
   SALES_BD_EXECUTIVE: [],
   EMPLOYEE: [],
   HR_MANAGER: [],

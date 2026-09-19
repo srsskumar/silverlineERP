@@ -74,8 +74,48 @@ const REPORT = {
   overall: { measures: {} },
 };
 
+const LADDER = [
+  { key: 'NOT_STARTED', label: 'Not started' },
+  { key: 'GT_IN_PROGRESS', label: 'GT in progress' },
+  { key: 'GT_COMPLETED', label: 'GT completed' },
+  { key: 'GT_QC_IN_PROGRESS', label: 'GT QC in progress' },
+  { key: 'GT_QC_COMPLETED', label: 'GT QC completed' },
+  { key: 'VECTORIZATION_IN_PROGRESS', label: 'Vectorization in progress' },
+  { key: 'VECTORIZATION_COMPLETED', label: 'Vectorization completed' },
+  { key: 'DATA_SUBMITTED', label: 'Data submitted' },
+  { key: 'DATA_APPROVED', label: 'Data approved' },
+  { key: 'FINAL_SUBMITTED', label: 'Final deliverables submitted' },
+  { key: 'FINAL_APPROVED', label: 'Final deliverables approved' },
+];
+
+const DASHBOARD = {
+  project: { id: 'p1', name: 'Krishna', code: 'KR1' },
+  period: { from: null, to: '2026-09-19' },
+  level: 'district',
+  filter: { district: null, mandal: null, position: null, villages: 1, of_villages: 1 },
+  options: { districts: [{ id: 'd1', name: 'Krishna' }], mandals: [{ id: 'm1', name: 'Koyyuru' }] },
+  ladder: LADDER,
+  totals: {
+    villages: 1, extent_ac: 200, extent_sqkm: 0.81, surveyed_ac: 120, surveyed_sqkm: 0.49,
+    by_position: Object.fromEntries(LADDER.map(r => [r.key, r.key === 'GT_COMPLETED' ? 1 : 0])),
+    on_hold: 0, in_rework: 0, gcp_missing: 0,
+  },
+  rows: [{ id: 'd1', name: 'Krishna', villages: 1, extent_ac: 200, extent_sqkm: 0.81,
+    surveyed_ac: 120,
+    by_position: Object.fromEntries(LADDER.map(r => [r.key, r.key === 'GT_COMPLETED' ? 1 : 0])),
+    completed: 0, not_started: 0 }],
+  villages: [{ id: 'v1', name: 'Adakula', code: '1501041', district: 'Krishna',
+    mandal: 'Koyyuru', extent_ac: 200, extent_sqkm: 0.81, surveyed_ac: 120,
+    position: 'GT_COMPLETED', position_label: 'GT completed', on_hold: false,
+    in_rework: false, gt_started_on: '2026-09-01', gt_expected_end_on: '2026-10-01',
+    gcp_count: 1 }],
+};
+
 /** Every endpoint these screens reach for, keyed by a fragment of the path. */
 const ROUTES: Array<[string, unknown]> = [
+  // Before /progress: both match a path containing "/progress"? No — but the
+  // dashboard path must be matched ahead of the generic /villages fragment.
+  ['/dashboard', DASHBOARD],
   ['/progress', PROGRESS],
   ['/report', REPORT],
   ['/villages', [VILLAGE]],
@@ -148,8 +188,30 @@ function wrap(node: React.ReactElement) {
   );
 }
 
-const TABS = ['Progress', 'Report', 'Villages', 'Crew & rovers', 'Deployment',
-  'Bottlenecks', 'Trend', 'Summary', 'Control points'] as const;
+/*
+ * The four anybody sees, and the six behind "More" (§071).
+ *
+ * Split the way the screen splits them, so the test has to click "More" to
+ * reach the deep ones — which is also the only way it would notice if that
+ * button ever stopped revealing them.
+ */
+const PRIMARY = ['Dashboard', 'Progress', 'Villages', 'Report'] as const;
+const BEHIND_MORE = ['Crew & rovers', 'Deployment', 'Bottlenecks', 'Trend',
+  'Summary', 'Control points'] as const;
+const TABS = [...PRIMARY, ...BEHIND_MORE] as const;
+
+/** Reveal a tab, opening "More" first when it lives there. */
+async function reveal(tab: string): Promise<HTMLElement> {
+  // Only open "More" when the tab is not already showing — it is a toggle, and
+  // clicking it for the second deep tab would close it again.
+  if ((BEHIND_MORE as readonly string[]).includes(tab)
+      && !screen.queryByRole('button', { name: tab })) {
+    await waitFor(() => expect(screen.getByRole('button', { name: 'More' })).toBeInTheDocument());
+    screen.getByRole('button', { name: 'More' }).click();
+  }
+  await waitFor(() => expect(screen.getByRole('button', { name: tab })).toBeInTheDocument());
+  return screen.getByRole('button', { name: tab });
+}
 
 describe('the land survey screen', () => {
   it('mounts without throwing', async () => {
@@ -161,8 +223,27 @@ describe('the land survey screen', () => {
   it('offers every tab', async () => {
     const { default: SurveyPage } = await import('@/app/survey/page');
     wrap(React.createElement(SurveyPage));
-    for (const tab of TABS) {
+    for (const tab of PRIMARY) {
       await waitFor(() => expect(screen.getByRole('button', { name: tab })).toBeInTheDocument());
+    }
+    // The six deep ones are one click away, not gone.
+    for (const tab of BEHIND_MORE) {
+      expect(screen.queryByRole('button', { name: tab })).toBeNull();
+    }
+    for (const tab of BEHIND_MORE) await reveal(tab);
+  });
+
+  it('opens on the dashboard', async () => {
+    // The question almost everybody arrives with, so it is the first thing
+    // they see rather than the fifth tab along.
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() =>
+      expect(screen.getByText('Where every village has got to')).toBeInTheDocument());
+    for (const rung of LADDER) {
+      // getAllBy: a rung name is both a bar on the chart and, for some, a
+      // value in the village table below it.
+      expect(screen.getAllByText(rung.label).length, rung.key).toBeGreaterThan(0);
     }
   });
 
@@ -182,9 +263,7 @@ describe('the land survey screen', () => {
       try {
         const { default: SurveyPage } = await import('@/app/survey/page');
         wrap(React.createElement(SurveyPage));
-        await waitFor(() =>
-          expect(screen.getByRole('button', { name: tab })).toBeInTheDocument());
-        screen.getByRole('button', { name: tab }).click();
+        (await reveal(tab)).click();
         // Long enough for the tab's own queries to resolve and re-render.
         await waitFor(() => expect(
           screen.getByRole('button', { name: tab })).toBeInTheDocument());

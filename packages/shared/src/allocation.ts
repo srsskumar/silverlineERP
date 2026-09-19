@@ -246,6 +246,7 @@ export const ALLOCATION_ROLE_GRANTS: Record<RoleCode, string[]> = {
   EMPLOYEE: [],
   INVENTORY_MANAGER: [],
   BID_TENDER_MANAGER: ['allocation.read'],
+  GOVT_OBSERVER: [],
   SALES_BD_EXECUTIVE: [],
   CLIENT_VIEWER: [],
 };
