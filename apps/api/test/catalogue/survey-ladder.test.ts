@@ -170,12 +170,27 @@ describe("what an observer may see", () => {
    * than assumed.
    */
   it("carries no money, no names and no equipment", async () => {
+    /*
+     * Checked as field names rather than as words.
+     *
+     * The first version of this looked for the substring "employee" and
+     * "rover" anywhere in the response, which caught the delay reasons
+     * "Employee issue" and "Rover issue" (§073) — labels describing why a
+     * programme is behind, not people or equipment. What must not appear is
+     * an identifier or a figure: the name of a person, the code of an
+     * instrument, or anything about what the work is worth.
+     */
     const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
-    const body = JSON.stringify(r.data).toLowerCase();
-    for (const leak of ["milestone", "billing", "claim", "invoice", "amount",
-      "employee", "crew", "rover", "asset", "utilisation", "percent_claimed"]) {
+    const body = JSON.stringify(r.data);
+    for (const leak of ["employee_id", "employee_name", "assignee", "asset_id",
+      "asset_code", "serial_number", "milestone", "billing", "claim", "invoice",
+      "amount", "percent_claimed", "extent_rate", "crew_assigned"]) {
       expect(body, leak).not.toContain(leak);
     }
+    // And no UUID belonging to a person or an asset, whatever it is called.
+    const people = await w.pool.query(
+      "SELECT id FROM employees WHERE org_id = $1 LIMIT 50", [w.orgId]);
+    for (const row of people.rows) expect(body).not.toContain(String(row.id));
   });
 
   it("lets an observer read the dashboard and nothing else", async () => {
@@ -431,5 +446,130 @@ describe("the village list at scale", () => {
     const all = await get(w.admin, `/api/v1/survey/projects/${programmeId}/villages`);
     expect(all.body.data.length).toBe(all.body.total);
     expect(all.body.has_more).toBe(false);
+  });
+});
+
+describe("why the work is held up (§073)", () => {
+  let held = "";
+
+  beforeAll(async () => {
+    held = await makeVillage("JANGAREDDYGUDEM", 120);
+    await post(w.admin, `/api/v1/survey/villages/${held}/start-gt`, {
+      started_on: "2026-01-06", expected_end_on: "2026-02-06",
+      employee_ids: [w.directEmployee], govt_staff_allocated: 2, crew_allocated: 4,
+    });
+    // A stage that missed its date, and said why.
+    await post(w.admin, `/api/v1/survey/villages/${held}/stage`, {
+      stage_code: "GROUND_TRUTHING", state: "COMPLETED",
+      completed_on: "2026-03-20", variance_reason: "NO_DEPT_STAFF",
+    });
+    // A day that fell short, and said why.
+    await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: held, entry_date: workDate(),
+      teams_deployed: 1, dgps_rovers: 1, values: { GOVT_LAND_EXTENT_AC: 1 },
+      low_progress_reason: "WEATHER",
+    });
+  });
+
+  it("counts each reason in its own unit and never sums across them", async () => {
+    /*
+     * A stage, an instrument-day and a short day are three different things.
+     * Adding them would produce a number with no meaning, so each source is
+     * reported separately and says what it counts.
+     */
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const reasons = r.data.reasons;
+    expect(reasons.stage_variance.unit).toBe("stages");
+    expect(reasons.instrument_idle.unit).toBe("instrument-days");
+    expect(reasons.low_progress.unit).toBe("days");
+    expect(Object.keys(reasons).sort())
+      .toEqual(["instrument_idle", "low_progress", "stage_variance"]);
+  });
+
+  it("lists every reason in the vocabulary, including the ones at zero", async () => {
+    // A reason that never occurred is a finding of its own, but only if the
+    // reader can see it was looked for. A list that shows only what happened
+    // reads differently every time it is opened.
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    for (const group of ["stage_variance", "instrument_idle", "low_progress"]) {
+      const codes = (r.data.reasons[group].by_reason as Array<{ code: string }>)
+        .map(x => x.code);
+      expect(codes, group).toEqual([
+        "WEATHER", "ACCESS", "EQUIPMENT", "ROVER", "DATA_TECHNICAL", "EMPLOYEE",
+        "FIELD_CONDITIONS", "DEPENDENCY", "NO_DEPT_STAFF", "OTHER",
+      ]);
+    }
+  });
+
+  it("counts the stage that missed its date under the reason given", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    const row = (r.data.reasons.stage_variance.by_reason as Array<Record<string, number | string>>)
+      .find(x => x.code === "NO_DEPT_STAFF");
+    expect(Number(row!.count)).toBeGreaterThanOrEqual(1);
+    expect(Number(row!.villages)).toBeGreaterThanOrEqual(1);
+  });
+
+  it("drills a reason down to the villages behind it", async () => {
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/dashboard`
+      + `?reason=NO_DEPT_STAFF&reason_source=stage_variance`);
+    expect(r.status).toBe(200);
+    expect(r.data.filter.reason).toBe("NO_DEPT_STAFF");
+    const ids = (r.data.villages as Array<{ id: string }>).map(v => v.id);
+    expect(ids).toContain(held);
+    // The roll-up is over the same villages, so the number clicked and the
+    // list shown cannot disagree.
+    expect((r.data.rows as Array<{ villages: number }>)
+      .reduce((t, x) => t + x.villages, 0)).toBe(r.data.filter.villages);
+  });
+
+  it("keeps the three sources apart when drilling", async () => {
+    // "Weather" against a stage that missed its date and "weather" against an
+    // idle instrument are different facts about different villages. Merging
+    // them would hand somebody a list that does not match what they clicked.
+    const short = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/dashboard`
+      + `?reason=WEATHER&reason_source=low_progress`);
+    expect((short.data.villages as Array<{ id: string }>).map(v => v.id)).toContain(held);
+
+    const stage = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/dashboard`
+      + `?reason=WEATHER&reason_source=stage_variance`);
+    expect((stage.data.villages as Array<{ id: string }>).map(v => v.id)).not.toContain(held);
+  });
+
+  it("searches every source when none is named", async () => {
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/dashboard?reason=WEATHER`);
+    expect((r.data.villages as Array<{ id: string }>).map(v => v.id)).toContain(held);
+  });
+
+  it("refuses a reason it does not record, and says which it does", async () => {
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/dashboard?reason=RAIN`);
+    expect(r.status).toBe(422);
+    expect(String(r.body.message)).toMatch(/WEATHER/);
+  });
+
+  it("refuses a source that is not one of the three", async () => {
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/dashboard?reason=WEATHER&reason_source=vibes`);
+    expect(r.status).toBe(422);
+    expect(String(r.body.message)).toMatch(/instrument_idle/);
+  });
+
+  it("still tells an observer nothing it should not", async () => {
+    // The reasons are aggregate counts of why a programme is behind, which is
+    // exactly what the department is entitled to. No instrument, no person
+    // and no claim is named alongside them.
+    const r = await get(w.role.GOVT_OBSERVER,
+      `/api/v1/survey/projects/${programmeId}/dashboard`);
+    expect(r.status).toBe(200);
+    const body = JSON.stringify(r.data);
+    for (const leak of ["asset_code", "employee_id", "employee_name", "serial_number",
+      "milestone", "percent_claimed", "amount", "invoice"]) {
+      expect(body, leak).not.toContain(leak);
+    }
   });
 });

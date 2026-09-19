@@ -63,12 +63,21 @@ interface DashboardVillage {
   slip_needs_reason: boolean;
 }
 
+interface ReasonRow { code: string; label: string; count: number; villages: number }
+interface ReasonGroup {
+  unit: string;
+  note: string;
+  total: number;
+  by_reason: ReasonRow[];
+}
+
 interface DashboardData {
   project: { id: string; name: string; code: string | null };
   period: { from: string | null; to: string };
   level: string;
   filter: {
     district: string | null; mandal: string | null; position: string | null;
+    reason: string | null; reason_source: string | null;
     villages: number; of_villages: number;
   };
   options: { districts: Unit[]; mandals: Unit[] };
@@ -80,6 +89,11 @@ interface DashboardData {
     by_position: Record<string, number>;
     on_hold: number; in_rework: number; gcp_missing: number;
     late: number; late_unexplained: number; unplanned: number;
+  };
+  reasons: {
+    stage_variance: ReasonGroup;
+    instrument_idle: ReasonGroup;
+    low_progress: ReasonGroup;
   };
   rows: DashboardRow[];
   villages: DashboardVillage[];
@@ -123,17 +137,21 @@ export function SurveyDashboard({
   const [district, setDistrict] = React.useState('');
   const [mandal, setMandal] = React.useState('');
   const [position, setPosition] = React.useState('');
+  const [reason, setReason] = React.useState<{ code: string; source: string } | null>(null);
   const sel = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
 
   const query = useQuery({
-    queryKey: ['survey', 'dashboard', projectId, from, to, level, district, mandal, position],
+    queryKey: ['survey', 'dashboard', projectId, from, to, level, district, mandal,
+      position, reason?.code ?? '', reason?.source ?? ''],
     queryFn: async () => ((await apiRequestRaw(
       `/api/v1/survey/projects/${projectId}/dashboard`
       + `?level=${encodeURIComponent(level)}`
       + (from ? `&from=${from}` : '') + (to ? `&to=${to}` : '')
       + (district ? `&district=${encodeURIComponent(district)}` : '')
       + (mandal ? `&mandal=${encodeURIComponent(mandal)}` : '')
-      + (position ? `&position=${encodeURIComponent(position)}` : ''),
+      + (position ? `&position=${encodeURIComponent(position)}` : '')
+      + (reason ? `&reason=${encodeURIComponent(reason.code)}`
+        + `&reason_source=${encodeURIComponent(reason.source)}` : ''),
     )).body as { data: DashboardData }),
     enabled: Boolean(projectId),
   });
@@ -155,6 +173,7 @@ export function SurveyDashboard({
         district ? d?.options.districts.find((u: Unit) => u.id === district)?.name : null,
         mandal ? d?.options.mandals.find((u: Unit) => u.id === mandal)?.name : null,
         position ? ladder.find((r: Rung) => r.key === position)?.label : null,
+        reason ? `Reason: ${reason.code.replace(/_/g, ' ').toLowerCase()}` : null,
       ].filter(Boolean).join(' · ') || 'No filters applied',
       extra: [
         ['Villages', `${d?.filter.villages ?? 0} of ${d?.filter.of_villages ?? 0}`],
@@ -181,7 +200,7 @@ export function SurveyDashboard({
       v.slip_note ?? 'no dates set', v.slip_stage ?? '', v.slip_reason ?? '',
       v.gt_started_on ?? '', v.gt_expected_end_on ?? '', String(v.gcp_count),
     ]),
-  }), [d, totals, district, mandal, position, ladder]);
+  }), [d, totals, district, mandal, position, reason, ladder]);
 
   if (query.isLoading) return <Skeleton className="h-96" />;
   if (query.isError) {
@@ -235,6 +254,11 @@ export function SurveyDashboard({
           {position ? (
             <Button variant="ghost" onClick={() => setPosition('')}>
               Clear “{ladder.find((r: Rung) => r.key === position)?.label ?? position}”
+            </Button>
+          ) : null}
+          {reason ? (
+            <Button variant="ghost" onClick={() => setReason(null)}>
+              Clear reason
             </Button>
           ) : null}
           <div className="ml-auto">
@@ -366,6 +390,93 @@ export function SurveyDashboard({
             </Badge>
           ) : null}
         </div>
+      </Card>
+
+      {/* --------------------------------------------------- why work is held up */}
+      <Card className="p-4">
+        <div className="mb-1 flex items-baseline justify-between gap-2">
+          <h3 className="text-sm font-semibold text-text">Why the work is held up</h3>
+          <span className="text-2xs text-text-subtle">
+            Select a reason to see the villages behind it
+          </span>
+        </div>
+        {/*
+          * Three lists, never one total.
+          *
+          * The module collects a reason at three separate moments and all
+          * three draw on the same fixed vocabulary, which is what makes them
+          * comparable — but a stage, an instrument-day and a short day are
+          * three different units and adding them would be a number with no
+          * meaning. Each says what it counts.
+          */}
+        <div className="grid gap-4 md:grid-cols-3">
+          {([
+            ['stage_variance', d.reasons.stage_variance, 'Stages that missed their date'],
+            ['instrument_idle', d.reasons.instrument_idle, 'Instruments standing idle'],
+            ['low_progress', d.reasons.low_progress, 'Days that fell short'],
+          ] as Array<[string, ReasonGroup, string]>).map(([key, group, heading]) => {
+            const top = Math.max(1, ...group.by_reason.map((r: ReasonRow) => r.count));
+            return (
+              <div key={key} className="min-w-0">
+                <div className="mb-1 flex items-baseline justify-between gap-2">
+                  <h4 className="text-xs font-semibold text-text">{heading}</h4>
+                  <span className="text-2xs tabular-nums text-text-subtle">
+                    {num(group.total)} {group.unit}
+                  </span>
+                </div>
+                <ul className="space-y-0.5">
+                  {group.by_reason.map((r: ReasonRow) => {
+                    const selected = reason?.code === r.code && reason?.source === key;
+                    return (
+                      <li key={r.code}>
+                        <button
+                          type="button"
+                          aria-pressed={selected}
+                          disabled={r.count === 0}
+                          onClick={() => setReason(selected ? null : { code: r.code, source: key })}
+                          className={`flex w-full items-center gap-2 rounded px-1.5 py-1 text-left
+                            ${r.count === 0
+                              ? 'cursor-default opacity-40'
+                              : 'hover:bg-surface-sunken'}
+                            ${selected ? 'bg-surface-sunken ring-1 ring-border' : ''}`}
+                        >
+                          <span className="w-32 shrink-0 truncate text-2xs text-text">
+                            {r.label}
+                          </span>
+                          <span className="relative h-3.5 flex-1 overflow-hidden rounded bg-surface-sunken">
+                            <span className="absolute inset-y-0 left-0 rounded bg-amber-500/80"
+                              style={{ width: `${(r.count / top) * 100}%` }} />
+                          </span>
+                          <span className="w-10 shrink-0 text-right text-2xs tabular-nums text-text">
+                            {num(r.count)}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {/*
+                  * A reason with no occurrences is still listed, greyed.
+                  * "No departmental staff" being absent is a finding of its
+                  * own, but only if a reader can see it was looked for.
+                  */}
+              </div>
+            );
+          })}
+        </div>
+        {reason ? (
+          <div className="mt-3 flex items-center gap-2 border-t border-border pt-3">
+            <span className="text-xs text-text-muted">
+              Showing {num(d.filter.villages)} villages where{' '}
+              <strong className="text-text">
+                {d.reasons[reason.source as keyof DashboardData['reasons']]
+                  .by_reason.find((r: ReasonRow) => r.code === reason.code)?.label ?? reason.code}
+              </strong>{' '}
+              was recorded.
+            </span>
+            <Button variant="ghost" onClick={() => setReason(null)}>Clear</Button>
+          </div>
+        ) : null}
       </Card>
 
       {/* -------------------------------------------------------- the roll-up */}

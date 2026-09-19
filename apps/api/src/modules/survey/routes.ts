@@ -10,6 +10,7 @@ import {
   tallyByStage, roverUtilisation, roverWindow, rankByWaste, pace, currentStage,
   outOfSequence, stageBlockedBy,
   VILLAGE_LADDER, villagePosition, tallyByPosition, gtStartSchema,
+  DELAY_REASON_CODES,
   stageVariance, varianceNote, villageVariances,
   crewAssignmentSchema, roverAllocationSchema, stageRemarkSchema, STAGE_PIPELINE,
   crewBulkAssignmentSchema, roverBulkAllocationSchema, roverAllocationEditSchema,
@@ -4424,6 +4425,28 @@ export async function registerSurveyRoutes(
       const fDistrict = String(q.district ?? '').trim();
       const fMandal = String(q.mandal ?? '').trim();
       const fPosition = String(q.position ?? '').trim();
+      /*
+       * Drilling into a reason (§073).
+       *
+       * `reason` is the delay code; `reason_source` says which of the three
+       * places it was recorded. Both are needed: "weather" against a stage
+       * that missed its date and "weather" against an idle instrument are
+       * different facts about different villages, and merging them would
+       * hand somebody a list that does not match the number they clicked.
+       */
+      const fReason = String(q.reason ?? '').trim().toUpperCase();
+      const fReasonSource = String(q.reason_source ?? '').trim().toLowerCase();
+      if (fReason && !(DELAY_REASON_CODES as string[]).includes(fReason)) {
+        fail('VALIDATION_ERROR',
+          `"${fReason.slice(0, 40)}" is not a reason this system records. `
+          + `Use one of: ${DELAY_REASON_CODES.join(', ')}.`, 422);
+      }
+      const REASON_SOURCES = ['stage_variance', 'instrument_idle', 'low_progress'];
+      if (fReasonSource && !REASON_SOURCES.includes(fReasonSource)) {
+        fail('VALIDATION_ERROR',
+          `"${fReasonSource.slice(0, 40)}" is not somewhere a reason is recorded. `
+          + `Use one of: ${REASON_SOURCES.join(', ')}.`, 422);
+      }
 
       const rows = (await pool.query(
         `SELECT sv.id AS village_id, ou.name AS village_name, ou.code AS village_code,
@@ -4490,12 +4513,52 @@ export async function registerSurveyRoutes(
         };
       });
 
+      /*
+       * Villages carrying the reason asked about, where one was asked about.
+       *
+       * Resolved against the database rather than against what has already
+       * been loaded, because two of the three sources live on daily rows and
+       * are bounded by the same window as everything else on this screen.
+       */
+      let reasonVillages: Set<string> | null = null;
+      if (fReason) {
+        const sources = fReasonSource ? [fReasonSource] : REASON_SOURCES;
+        const found = new Set<string>();
+        for (const source of sources) {
+          const sql = source === 'stage_variance'
+            ? `SELECT DISTINCT vs.survey_village_id AS id
+                 FROM survey_village_stages vs
+                 JOIN survey_villages sv ON sv.id = vs.survey_village_id
+                WHERE sv.survey_project_id = $1 AND vs.org_id = $2
+                  AND vs.variance_reason = $3`
+            : source === 'instrument_idle'
+              ? `SELECT DISTINCT e.survey_village_id AS id
+                   FROM survey_entry_rovers er
+                   JOIN survey_entries e ON e.id = er.entry_id
+                  WHERE e.survey_project_id = $1 AND er.org_id = $2
+                    AND er.status = 'IDLE' AND er.idle_reason = $3
+                    AND ($4 = '' OR e.entry_date >= $4::date)
+                    AND e.entry_date <= $5::date`
+              : `SELECT DISTINCT e.survey_village_id AS id
+                   FROM survey_entries e
+                  WHERE e.survey_project_id = $1 AND e.org_id = $2
+                    AND e.low_progress_reason = $3
+                    AND ($4 = '' OR e.entry_date >= $4::date)
+                    AND e.entry_date <= $5::date`;
+          const args = source === 'stage_variance'
+            ? [id, u.orgId, fReason] : [id, u.orgId, fReason, from, to];
+          for (const r of (await pool.query(sql, args)).rows) found.add(String(r.id));
+        }
+        reasonVillages = found;
+      }
+
       const matches = villages.filter(v => {
         const d = unitAt(v.row, 'district');
         const mn = unitAt(v.row, 'mandal');
         if (fDistrict && d?.id !== fDistrict) return false;
         if (fMandal && mn?.id !== fMandal) return false;
         if (fPosition && v.position.key !== fPosition) return false;
+        if (reasonVillages && !reasonVillages.has(v.villageId)) return false;
         return true;
       });
 
@@ -4549,6 +4612,77 @@ export async function registerSurveyRoutes(
       const totalExtent = matches.reduce((t, v) => t + (v.extentAc ?? 0), 0);
       const surveyed = matches.reduce((t, v) => t + (doneBy.get(v.villageId) ?? 0), 0);
 
+      /*
+       * Why the work is held up, counted three ways (§073).
+       *
+       * A dashboard that says four hundred villages are behind and stops
+       * there gives an official nothing to do about it. The module already
+       * collects a reason at three separate moments — when a stage misses
+       * its date, when an instrument stands idle for a day, and when a day
+       * produces less than the programme expects — and all three draw on the
+       * same fixed vocabulary, which is exactly what makes them addable.
+       *
+       * Counted in three separate queries rather than one union: the units
+       * differ and adding them would be nonsense. A stage is a stage, an idle
+       * instrument is an instrument-day, and a short day is a day. Each is
+       * reported in its own unit and the screen says which.
+       */
+      const matchedIds = matches.map(v => v.villageId);
+      const reasonArgs: unknown[] = [u.orgId, matchedIds, from, to];
+      const [stageWhy, idleWhy, shortWhy] = matchedIds.length === 0
+        ? [[], [], []]
+        : await Promise.all([
+          pool.query(
+            `SELECT vs.variance_reason AS reason,
+                    count(*)::int AS count,
+                    count(DISTINCT vs.survey_village_id)::int AS villages
+               FROM survey_village_stages vs
+              WHERE vs.org_id = $1 AND vs.survey_village_id = ANY($2::uuid[])
+                AND vs.variance_reason IS NOT NULL
+              GROUP BY 1`, [u.orgId, matchedIds]).then(r => r.rows),
+          pool.query(
+            `SELECT er.idle_reason AS reason,
+                    count(*)::int AS count,
+                    count(DISTINCT e.survey_village_id)::int AS villages
+               FROM survey_entry_rovers er
+               JOIN survey_entries e ON e.id = er.entry_id
+              WHERE er.org_id = $1 AND e.survey_village_id = ANY($2::uuid[])
+                AND er.status = 'IDLE' AND er.idle_reason IS NOT NULL
+                AND ($3 = '' OR e.entry_date >= $3::date)
+                AND e.entry_date <= $4::date
+              GROUP BY 1`, reasonArgs).then(r => r.rows),
+          pool.query(
+            `SELECT e.low_progress_reason AS reason,
+                    count(*)::int AS count,
+                    count(DISTINCT e.survey_village_id)::int AS villages
+               FROM survey_entries e
+              WHERE e.org_id = $1 AND e.survey_village_id = ANY($2::uuid[])
+                AND e.low_progress_reason IS NOT NULL
+                AND ($3 = '' OR e.entry_date >= $3::date)
+                AND e.entry_date <= $4::date
+              GROUP BY 1`, reasonArgs).then(r => r.rows),
+        ]);
+
+      /**
+       * Every reason in the vocabulary, in a fixed order, including the ones
+       * that did not happen.
+       *
+       * A list that only shows what occurred reads differently every time it
+       * is opened, and "no departmental staff" being absent is a finding of
+       * its own — but only if the reader can see it was looked for.
+       */
+      const tally = (
+        rows: Array<Record<string, unknown>>,
+      ) => {
+        const by = new Map(rows.map(r => [String(r.reason), r]));
+        return DELAY_REASONS.map(dr => ({
+          code: dr.code,
+          label: dr.label,
+          count: Number(by.get(dr.code)?.count ?? 0),
+          villages: Number(by.get(dr.code)?.villages ?? 0),
+        }));
+      };
+
       const districts = [...new Map(villages
         .map(v => unitAt(v.row, 'district')).filter(Boolean)
         .map(d => [d!.id, d!])).values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -4565,6 +4699,8 @@ export async function registerSurveyRoutes(
           filter: {
             district: fDistrict || null, mandal: fMandal || null,
             position: fPosition || null,
+            reason: fReason || null,
+            reason_source: fReasonSource || null,
             villages: matches.length, of_villages: villages.length,
           },
           options: { districts, mandals },
@@ -4596,6 +4732,31 @@ export async function registerSurveyRoutes(
             late_unexplained: matches.filter(v => v.worst?.variance.needsReason).length,
             unplanned: matches.filter(v => v.worst?.variance.basis === 'NO_PLAN'
               || v.worst === null).length,
+          },
+          /*
+           * Reported per source and never summed across them: a stage, an
+           * instrument-day and a short day are three different units, and a
+           * single total would be a number with no meaning.
+           */
+          reasons: {
+            stage_variance: {
+              unit: 'stages',
+              note: 'Stages that missed their expected date, by the reason recorded',
+              total: stageWhy.reduce((t, r) => t + Number(r.count), 0),
+              by_reason: tally(stageWhy),
+            },
+            instrument_idle: {
+              unit: 'instrument-days',
+              note: 'Days an allocated instrument was returned as idle, by reason',
+              total: idleWhy.reduce((t, r) => t + Number(r.count), 0),
+              by_reason: tally(idleWhy),
+            },
+            low_progress: {
+              unit: 'days',
+              note: "Days that produced less than the programme's threshold, by reason",
+              total: shortWhy.reduce((t, r) => t + Number(r.count), 0),
+              by_reason: tally(shortWhy),
+            },
           },
           rows: group(level),
           villages: matches

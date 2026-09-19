@@ -580,6 +580,218 @@ async function main(): Promise<void> {
         decided_on, extent_ac, created_by, updated_by)`, 10, claimRows, 300);
   console.log(`  ${claimRows.length} billing claims`);
 
+  /* --- every other case a screen has to draw ---------------------------- */
+
+  /*
+   * A programme that only ever produced happy rows tests nothing. What
+   * follows is the awkward half: days that went badly and said why, villages
+   * paused or sent back, claims the department returned, figures certified
+   * at something other than what was recorded, and people and instruments
+   * that have come off a village and left a history behind them.
+   */
+
+  // Low progress, with a reason. Every reason in the vocabulary appears, and
+  // "other" always carries the sentence that makes it useful.
+  const lowRows = (await pool.query(
+    `SELECT id FROM survey_entries WHERE survey_project_id = $1
+       AND low_progress_reason IS NULL ORDER BY id`, [programmeId])).rows;
+  let lowSet = 0;
+  for (let i = 0; i < lowRows.length; i += 1) {
+    if (i % 8 !== 3) continue;
+    /*
+     * Counted off the rows selected, not off the loop index.
+     *
+     * Taking every eighth row and then indexing the reason by the same `i`
+     * strides 8 through a list of 10, which visits five of them and never
+     * the other five. The same aliasing once left seven of nine idle reasons
+     * with no data at all.
+     */
+    const reason = VARIANCE_REASONS[lowSet % VARIANCE_REASONS.length];
+    await pool.query(
+      `UPDATE survey_entries
+          SET low_progress_reason = $2, low_progress_remarks = $3
+        WHERE id = $1`,
+      [lowRows[i].id, reason,
+        reason === "OTHER" ? pick(OTHER_REMARKS) : null]);
+    lowSet += 1;
+  }
+  console.log(`  ${lowSet} short days with a reason`);
+
+  // Punches on a slice of the returns, so the attendance-to-progress join
+  // has something on both sides of it.
+  await pool.query(
+    `UPDATE survey_entries
+        SET punch_in_at  = (entry_date + time '08:15') AT TIME ZONE 'Asia/Kolkata',
+            punch_out_at = (entry_date + time '17:40') AT TIME ZONE 'Asia/Kolkata',
+            punch_in_lat = 16.31, punch_in_lng = 80.44,
+            punch_out_lat = 16.32, punch_out_lng = 80.45
+      WHERE survey_project_id = $1 AND punch_in_at IS NULL
+        AND (('x' || substr(md5(id::text), 1, 8))::bit(32)::int % 5) = 0`,
+    [programmeId]);
+
+  /*
+   * Villages held and villages sent back.
+   *
+   * Neither is a rung on the ladder — both are things true about a village at
+   * a rung — so both have to appear somewhere for the dashboard's flags to
+   * have anything to count.
+   */
+  const running = (await pool.query(
+    `SELECT vs.id, vs.survey_village_id, vs.stage_id
+       FROM survey_village_stages vs
+       JOIN survey_villages v ON v.id = vs.survey_village_id
+      WHERE v.survey_project_id = $1 AND vs.state = 'IN_PROGRESS'
+      ORDER BY vs.id`, [programmeId])).rows;
+  const heldIds = running.filter((_, i) => i % 9 === 4).map(r => r.id);
+  if (heldIds.length) {
+    await pool.query(
+      `UPDATE survey_village_stages SET state = 'ON_HOLD'
+        WHERE id = ANY($1::uuid[])`, [heldIds]);
+    await pool.query(
+      `UPDATE survey_villages SET status_override = 'ON_HOLD',
+              status_remarks = 'Paused pending revenue department clearance'
+        WHERE id IN (SELECT survey_village_id FROM survey_village_stages
+                      WHERE id = ANY($1::uuid[]))`, [heldIds]);
+  }
+
+  const reworkStage = stageIds.get("REWORK");
+  const reworkRows: unknown[][] = [];
+  if (reworkStage) {
+    const candidates = (await pool.query(
+      `SELECT v.id FROM survey_villages v
+        WHERE v.survey_project_id = $1
+          AND EXISTS (SELECT 1 FROM survey_village_stages vs
+                       JOIN survey_stages s ON s.id = vs.stage_id
+                      WHERE vs.survey_village_id = v.id AND s.code = 'GT_QC'
+                        AND vs.state = 'COMPLETED')
+        ORDER BY v.id LIMIT 45`, [programmeId])).rows;
+    candidates.forEach((v, i) => {
+      reworkRows.push([orgId, String(v.id), reworkStage,
+        i % 3 === 0 ? "COMPLETED" : "IN_PROGRESS",
+        addDays(TODAY, -between(20, 80)),
+        i % 3 === 0 ? addDays(TODAY, -between(1, 15)) : null,
+        "Boundary disputed after QC; parcels re-walked", by]);
+    });
+    await chunkInsert(pool,
+      `INSERT INTO survey_village_stages
+         (org_id, survey_village_id, stage_id, state, started_on, completed_on,
+          remarks, updated_by)`, 8, reworkRows, 200);
+    await pool.query(
+      `UPDATE survey_villages SET status_override = 'REWORK',
+              status_remarks = 'Returned by QC; boundary parcels re-walked'
+        WHERE id = ANY($1::uuid[]) AND status_override IS NULL`,
+      [reworkRows.filter(r => r[3] === "IN_PROGRESS").map(r => r[1])]);
+  }
+  console.log(`  ${heldIds.length} held, ${reworkRows.length} in or through rework`);
+
+  /*
+   * Targets, so a count measure has a denominator.
+   *
+   * Without one the completion of a points or parcels measure is reported as
+   * unknown — correctly, and on every village, which means that branch of
+   * the report never gets looked at.
+   */
+  const targetVillages = (await pool.query(
+    `SELECT id, total_extent_ac FROM survey_villages
+      WHERE survey_project_id = $1 ORDER BY id LIMIT 500`, [programmeId])).rows;
+  const targetRows: unknown[][] = [];
+  for (const v of targetVillages) {
+    for (const m of countMeasures.slice(0, 3)) {
+      targetRows.push([orgId, String(v.id), String(m.id),
+        Math.max(10, Math.round(Number(v.total_extent_ac) / between(2, 6))), by]);
+    }
+  }
+  await chunkInsert(pool,
+    `INSERT INTO survey_targets
+       (org_id, survey_village_id, measure_id, target_quantity, updated_by)`,
+    5, targetRows, 400);
+  console.log(`  ${targetRows.length} targets`);
+
+  /*
+   * Certified totals on the villages that are finished.
+   *
+   * Deliberately not equal to what the returns add up to on all of them: the
+   * whole point of certifying is that somebody signs a figure, and the screen
+   * that shows both exists because the two differ.
+   */
+  const finished = (await pool.query(
+    `SELECT v.id, v.total_extent_ac FROM survey_villages v
+      WHERE v.survey_project_id = $1
+        AND EXISTS (SELECT 1 FROM survey_village_stages vs
+                     JOIN survey_stages s ON s.id = vs.stage_id
+                    WHERE vs.survey_village_id = v.id
+                      AND s.code = 'FINAL_DELIVERABLES' AND vs.state = 'COMPLETED')
+      ORDER BY v.id`, [programmeId])).rows;
+  const finalRows: unknown[][] = [];
+  for (let i = 0; i < finished.length; i += 1) {
+    const recorded = (await pool.query(
+      `SELECT sm.code, COALESCE(sum(sev.quantity), 0) AS q
+         FROM survey_entries e
+         JOIN survey_entry_values sev ON sev.entry_id = e.id
+         JOIN survey_measures sm ON sm.id = sev.measure_id AND sm.basis = 'EXTENT'
+        WHERE e.survey_village_id = $1 GROUP BY 1`, [finished[i].id])).rows;
+    /*
+     * A finished village with no daily returns behind it still gets
+     * certified. Its figure is the village's extent rather than a sum of
+     * nothing — which is the case the two-figure screen exists for: what was
+     * signed, beside what the returns actually add up to.
+     */
+    const basis = recorded.length ? recorded : extentMeasures.map(m => ({
+      code: m.code,
+      q: Number((finished[i] as Record<string, unknown>).total_extent_ac ?? 0)
+        / Math.max(1, extentMeasures.length),
+    }));
+    for (const r of basis) {
+      const measure = measures.find(m => m.code === r.code);
+      if (!measure) continue;
+      const drift = i % 3 === 0 ? 1 + (rand() * 0.06 - 0.03) : 1;
+      finalRows.push([orgId, String(finished[i].id), String(measure.id),
+        Math.round(Number(r.q) * drift * 100) / 100,
+        drift === 1 ? "Agrees with the daily returns"
+          : "Re-measured at handover against the department's own traverse", by]);
+    }
+  }
+  await chunkInsert(pool,
+    `INSERT INTO survey_village_finals
+       (org_id, survey_village_id, measure_id, quantity, reason, certified_by)`,
+    6, finalRows, 200);
+  console.log(`  ${finalRows.length} certified figures`);
+
+  // Claims the department sent back.
+  await pool.query(
+    `UPDATE survey_village_billing b
+        SET status = 'REJECTED', decided_on = $2,
+            remarks = 'Returned: extent statement did not match the LPM schedule'
+       FROM survey_villages v
+      WHERE v.id = b.survey_village_id AND v.survey_project_id = $1
+        AND b.status = 'SUBMITTED'
+        AND (('x' || substr(md5(b.id::text), 1, 8))::bit(32)::int % 9) = 0`,
+    [programmeId, addDays(TODAY, -between(5, 40))]);
+
+  /*
+   * People and instruments that have come off a village.
+   *
+   * A released row is history, and the screens that show "who is on this
+   * village now" are only correct if there is history for them to exclude.
+   */
+  // GREATEST, because somebody cannot come off a village before they went
+  // on to it — and the table says so.
+  await pool.query(
+    `UPDATE survey_crew c SET released_on = GREATEST(c.assigned_on, $2::date)
+       FROM survey_villages v
+      WHERE v.id = c.survey_village_id AND v.survey_project_id = $1
+        AND c.released_on IS NULL
+        AND (('x' || substr(md5(c.id::text), 1, 8))::bit(32)::int % 11) = 0`,
+    [programmeId, addDays(TODAY, -between(3, 30))]);
+  await pool.query(
+    `UPDATE survey_rover_allocations ra
+        SET released_on = GREATEST(ra.allocated_on, $2::date)
+       FROM survey_villages v
+      WHERE v.id = ra.survey_village_id AND v.survey_project_id = $1
+        AND ra.released_on IS NULL
+        AND (('x' || substr(md5(ra.id::text), 1, 8))::bit(32)::int % 13) = 0`,
+    [programmeId, addDays(TODAY, -between(2, 20))]);
+
   console.log(`\ndone — ${NAME} (${programmeId})`);
   await pool.end();
 }

@@ -88,11 +88,26 @@ const LADDER = [
   { key: 'FINAL_APPROVED', label: 'Final deliverables approved' },
 ];
 
+/** The delay vocabulary, in the order the API returns it. */
+const REASONS = [
+  { code: 'WEATHER', label: 'Weather' },
+  { code: 'ACCESS', label: 'Local or access issue' },
+  { code: 'EQUIPMENT', label: 'Equipment problem' },
+  { code: 'ROVER', label: 'Rover issue' },
+  { code: 'DATA_TECHNICAL', label: 'Data or technical issue' },
+  { code: 'EMPLOYEE', label: 'Employee issue' },
+  { code: 'FIELD_CONDITIONS', label: 'Field conditions' },
+  { code: 'DEPENDENCY', label: 'Dependency on another team' },
+  { code: 'NO_DEPT_STAFF', label: 'No departmental staff' },
+  { code: 'OTHER', label: 'Other' },
+];
+
 const DASHBOARD = {
   project: { id: 'p1', name: 'Krishna', code: 'KR1' },
   period: { from: null, to: '2026-09-19' },
   level: 'district',
-  filter: { district: null, mandal: null, position: null, villages: 1, of_villages: 1 },
+  filter: { district: null, mandal: null, position: null, reason: null,
+    reason_source: null, villages: 1, of_villages: 1 },
   options: { districts: [{ id: 'd1', name: 'Krishna' }], mandals: [{ id: 'm1', name: 'Koyyuru' }] },
   ladder: LADDER,
   totals: {
@@ -100,6 +115,14 @@ const DASHBOARD = {
     by_position: Object.fromEntries(LADDER.map(r => [r.key, r.key === 'GT_COMPLETED' ? 1 : 0])),
     on_hold: 0, in_rework: 0, gcp_missing: 0,
     late: 1, late_unexplained: 1, unplanned: 0,
+  },
+  reasons: {
+    stage_variance: { unit: 'stages', note: '', total: 3,
+      by_reason: REASONS.map((r, i) => ({ ...r, count: i === 0 ? 3 : 0, villages: i === 0 ? 1 : 0 })) },
+    instrument_idle: { unit: 'instrument-days', note: '', total: 2,
+      by_reason: REASONS.map((r, i) => ({ ...r, count: i === 3 ? 2 : 0, villages: i === 3 ? 1 : 0 })) },
+    low_progress: { unit: 'days', note: '', total: 1,
+      by_reason: REASONS.map((r, i) => ({ ...r, count: i === 8 ? 1 : 0, villages: i === 8 ? 1 : 0 })) },
   },
   rows: [{ id: 'd1', name: 'Krishna', villages: 1, extent_ac: 200, extent_sqkm: 0.81,
     surveyed_ac: 120,
@@ -261,6 +284,36 @@ describe('the land survey screen', () => {
     expect(screen.getByText('1 slipping with no reason recorded')).toBeInTheDocument();
     expect(screen.getByText('8 days late')).toBeInTheDocument();
     expect(screen.getByText('reason not given')).toBeInTheDocument();
+  });
+
+  it('shows why the work is held up, in all three places a reason is recorded', async () => {
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() =>
+      expect(screen.getByText('Why the work is held up')).toBeInTheDocument());
+    expect(screen.getByText('Stages that missed their date')).toBeInTheDocument();
+    expect(screen.getByText('Instruments standing idle')).toBeInTheDocument();
+    expect(screen.getByText('Days that fell short')).toBeInTheDocument();
+    // Every reason listed in every group, including the ones at zero: a
+    // reason being absent is a finding, but only if it was visibly looked for.
+    for (const r of REASONS) {
+      expect(screen.getAllByText(r.label).length, r.code).toBe(3);
+    }
+    // The three units are named and never summed.
+    expect(screen.getByText('3 stages')).toBeInTheDocument();
+    expect(screen.getByText('2 instrument-days')).toBeInTheDocument();
+    expect(screen.getByText('1 days')).toBeInTheDocument();
+  });
+
+  it('lets a reason be clicked, and leaves the ones that never happened alone', async () => {
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() =>
+      expect(screen.getByText('Why the work is held up')).toBeInTheDocument());
+    const weather = screen.getAllByText('Weather').map(
+      (el) => el.closest('button')!).filter(Boolean);
+    // Recorded against a stage, so that one is live; the other two are not.
+    expect(weather.filter((b) => !b.hasAttribute('disabled'))).toHaveLength(1);
   });
 
   it('opens on the dashboard', async () => {
