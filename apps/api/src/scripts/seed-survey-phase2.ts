@@ -519,19 +519,30 @@ async function main(): Promise<void> {
    */
   const allocByVillage = new Map<string, string>();
   for (const r of roverRows) allocByVillage.set(String(r[1]), String(r[2]));
+  // Who was carrying it. Employee productivity is attributed entirely through
+  // the instrument, so a rover-day with no person on it counts for nobody.
+  const crewByVillage = new Map<string, string[]>();
+  for (const r of crewRows) {
+    const v = String(r[1]);
+    crewByVillage.set(v, [...(crewByVillage.get(v) ?? []), String(r[3])]);
+  }
   const entryRoverRows: unknown[][] = [];
   for (const e of entries) {
-    const asset = allocByVillage.get(String(e.survey_village_id));
+    const village = String(e.survey_village_id);
+    const asset = allocByVillage.get(village);
     if (!asset) continue;
+    const crew = crewByVillage.get(village) ?? [];
     const idle = rand() < 0.14;
     const reason = idle ? pick(VARIANCE_REASONS) : null;
     entryRoverRows.push([orgId, String(e.id), asset,
       idle ? "IDLE" : "UTILIZED", reason,
-      reason === "OTHER" ? pick(OTHER_REMARKS) : null]);
+      reason === "OTHER" ? pick(OTHER_REMARKS) : null,
+      crew.length ? crew[Math.floor(rand() * crew.length)] : null]);
   }
   await chunkInsert(pool,
     `INSERT INTO survey_entry_rovers
-       (org_id, entry_id, asset_id, status, idle_reason, remarks)`, 6, entryRoverRows, 400);
+       (org_id, entry_id, asset_id, status, idle_reason, remarks, employee_id)`,
+    7, entryRoverRows, 400);
 
   console.log(`  ${entryRows.length} daily returns, ${valueRows.length} measure values, `
     + `${entryRoverRows.length} instrument-days`);
