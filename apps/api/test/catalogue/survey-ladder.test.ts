@@ -308,3 +308,100 @@ describe("billing gates after the rename", () => {
     expect(early.status).toBe(422);
   });
 });
+
+describe("a stage carries its plan (§072)", () => {
+  let planned = "";
+
+  beforeAll(async () => {
+    planned = await makeVillage("HANUMANPALEM", 150);
+    await post(w.admin, `/api/v1/survey/villages/${planned}/start-gt`, {
+      started_on: "2026-01-05", expected_end_on: "2026-02-05",
+      employee_ids: [w.directEmployee], govt_staff_allocated: 2, crew_allocated: 5,
+    });
+  });
+
+  it("puts the dates on the stage, not beside it", async () => {
+    // §071 briefly held these on the village as well. Two rows holding the
+    // same two facts is how the two come to disagree.
+    const cols = await w.pool.query(
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'survey_villages' AND column_name IN
+          ('gt_started_on', 'gt_expected_end_on')`);
+    expect(cols.rowCount).toBe(0);
+
+    const row = await w.pool.query(
+      `SELECT vs.started_on, vs.expected_start_on, vs.expected_end_on
+         FROM survey_village_stages vs JOIN survey_stages s ON s.id = vs.stage_id
+        WHERE vs.survey_village_id = $1 AND s.code = 'GROUND_TRUTHING'`, [planned]);
+    expect(row.rows[0].expected_end_on).toBeTruthy();
+  });
+
+  it("reports how far off plan a finished stage came in", async () => {
+    const r = await post(w.admin, `/api/v1/survey/villages/${planned}/stage`, {
+      stage_code: "GROUND_TRUTHING", state: "COMPLETED",
+      completed_on: "2026-02-20", variance_reason: "WEATHER",
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.variance_days).toBe(15);
+    expect(r.data.variance_note).toBe("15 days late");
+    expect(r.data.variance_needs_reason).toBe(false);
+  });
+
+  it("does not erase the plan when somebody records what happened", async () => {
+    /*
+     * The bug this guards: an update that carried no expected dates would
+     * copy the absent fields over the plan, and the variance every screen
+     * reports would quietly become null the first time anybody touched the
+     * stage.
+     */
+    const r = await post(w.admin, `/api/v1/survey/villages/${planned}/stage`, {
+      stage_code: "GROUND_TRUTHING", state: "COMPLETED", completed_on: "2026-02-21",
+    });
+    expect(r.status).toBe(200);
+    expect(r.data.expected_end_on).toBe("2026-02-05");
+    expect(r.data.variance_days).toBe(16);
+    // The reason given earlier stands too.
+    expect(r.data.variance_reason).toBe("WEATHER");
+  });
+
+  it("refuses a plan that finishes before it starts", async () => {
+    const r = await post(w.admin, `/api/v1/survey/villages/${planned}/stage`, {
+      stage_code: "GT_QC", state: "IN_PROGRESS", started_on: "2026-03-01",
+      expected_start_on: "2026-04-01", expected_end_on: "2026-03-01",
+    });
+    expect(r.status).toBe(422);
+  });
+
+  it('refuses an "other" variance with nothing said', async () => {
+    const r = await post(w.admin, `/api/v1/survey/villages/${planned}/stage`, {
+      stage_code: "GT_QC", state: "IN_PROGRESS", started_on: "2026-03-01",
+      variance_reason: "OTHER",
+    });
+    expect(r.status).toBe(422);
+  });
+
+  it("carries the slip and the stage responsible onto the dashboard", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    const v = (r.data.villages as Array<Record<string, any>>).find(x => x.id === planned);
+    expect(v!.slip_days).toBe(16);
+    expect(v!.slip_stage).toBe("GROUND_TRUTHING");
+    expect(v!.slip_note).toBe("16 days late");
+    expect(v!.slip_reason).toBe("WEATHER");
+    expect(r.data.totals.late).toBeGreaterThanOrEqual(1);
+  });
+
+  it("counts a village with no dates as unplanned rather than on time", async () => {
+    // A village with no expected date is not a village running to time, and
+    // counting it as one is how a programme reports itself green.
+    const bare = await makeVillage("INDUKURPET", 90);
+    await post(w.admin, `/api/v1/survey/villages/${bare}/stage`, {
+      stage_code: "GROUND_TRUTHING", state: "IN_PROGRESS", started_on: "2026-03-01",
+      gt_govt_staff_allocated: 1, gt_crew_allocated: 3,
+    });
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    const v = (r.data.villages as Array<Record<string, any>>).find(x => x.id === bare);
+    expect(v!.slip_note).toBeNull();
+    expect(v!.slip_days).toBeNull();
+    expect(r.data.totals.unplanned).toBeGreaterThanOrEqual(1);
+  });
+});

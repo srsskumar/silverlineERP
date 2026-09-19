@@ -916,11 +916,34 @@ export const targetSchema = z.object({
   target_quantity: z.number().finite().positive().max(MAX_QUANTITY, TOO_BIG),
 });
 
+/**
+ * The planned dates and the reason the actual ones differ (§072).
+ *
+ * Shared by every route that writes a stage, because a plan recorded on one
+ * of them and not the others is a plan that exists for some villages.
+ */
+export const stagePlanFields = {
+  expected_start_on: isoDate.nullable().optional(),
+  expected_end_on: isoDate.nullable().optional(),
+  /*
+   * The same delay vocabulary as idle instruments and short days (§052).
+   *
+   * One list, so "why was this stage late" and "why was that rover idle" can
+   * be counted together. Two lists would drift within a month and make the
+   * two reports incomparable, which is most of why the vocabulary is fixed
+   * at all.
+   */
+  variance_reason: z.enum(DELAY_REASON_CODES as unknown as [string, ...string[]])
+    .nullable().optional(),
+  variance_remarks: z.string().trim().max(2000).nullable().optional(),
+};
+
 export const stageUpdateSchema = z.object({
   stage_code: z.string().min(1).max(64),
   state: z.enum(STAGE_STATES),
   started_on: isoDate.nullable().optional(),
   completed_on: isoDate.nullable().optional(),
+  ...stagePlanFields,
   /*
    * How the village is staffed for ground truthing (§067).
    *
@@ -937,7 +960,123 @@ export const stageUpdateSchema = z.object({
 }).refine(
   v => !v.started_on || !v.completed_on || v.completed_on >= v.started_on,
   { message: 'A stage cannot be completed before it started', path: ['completed_on'] },
+).refine(
+  v => !v.expected_start_on || !v.expected_end_on
+    || v.expected_end_on >= v.expected_start_on,
+  { message: 'A stage cannot be expected to finish before it starts',
+    path: ['expected_end_on'] },
+).refine(
+  v => v.variance_reason !== 'OTHER' || Boolean(v.variance_remarks?.trim()),
+  { message: 'A variance reason of "other" must say what happened',
+    path: ['variance_remarks'] },
 );
+
+/* ------------------------------------------------------ plan vs actual (§072) */
+
+export interface StageDates {
+  state?: StageState | string | null;
+  startedOn?: string | null;
+  completedOn?: string | null;
+  expectedStartOn?: string | null;
+  expectedEndOn?: string | null;
+  varianceReason?: string | null;
+}
+
+/**
+ * How a stage ran against its plan.
+ *
+ * `days` is signed and reads the way people speak: positive is late, negative
+ * is early. Null means the question cannot be asked — no plan, or nothing to
+ * compare a plan against yet — and null is reported as unknown rather than as
+ * zero, because a stage with no expected date is not a stage that finished on
+ * time.
+ *
+ * A stage still running is measured against today, so a village three weeks
+ * past its date is late now rather than late in hindsight. That is the whole
+ * value of the figure: it is a warning while something can still be done.
+ */
+export interface StageVariance {
+  /** Signed days: + late, - early, null when unanswerable. */
+  days: number | null;
+  /** Measured against the finish, or against today for work still running. */
+  basis: 'COMPLETED' | 'RUNNING' | 'NOT_STARTED' | 'NO_PLAN';
+  late: boolean;
+  /** True when the variance is big enough that a reason should be recorded. */
+  needsReason: boolean;
+  reason: string | null;
+}
+
+/** Days between two ISO dates, b - a. */
+function daysBetween(a: string, b: string): number {
+  const ms = Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`);
+  return Math.round(ms / 86_400_000);
+}
+
+/**
+ * A slip small enough that asking for an explanation would train people to
+ * type "delay" into every box. A working week.
+ */
+export const VARIANCE_REASON_THRESHOLD_DAYS = 5;
+
+export function stageVariance(
+  stage: StageDates,
+  today: string,
+  thresholdDays: number = VARIANCE_REASON_THRESHOLD_DAYS,
+): StageVariance {
+  const reason = stage.varianceReason ?? null;
+  const expected = stage.expectedEndOn ?? null;
+  if (!expected) {
+    return { days: null, basis: 'NO_PLAN', late: false, needsReason: false, reason };
+  }
+
+  if (stage.completedOn) {
+    const days = daysBetween(expected, stage.completedOn);
+    return {
+      days, basis: 'COMPLETED', late: days > 0,
+      needsReason: Math.abs(days) > thresholdDays && !reason,
+      reason,
+    };
+  }
+
+  // Not finished. Measured against today, so lateness is news rather than
+  // history — but only once the date has actually passed.
+  const days = daysBetween(expected, today);
+  const started = stage.state === 'IN_PROGRESS' || stage.state === 'ON_HOLD'
+    || Boolean(stage.startedOn);
+  return {
+    days: days > 0 ? days : 0,
+    basis: started ? 'RUNNING' : 'NOT_STARTED',
+    late: days > 0,
+    needsReason: days > thresholdDays && !reason,
+    reason,
+  };
+}
+
+/** "8 days late", "3 days early", "on time", or null when there is no plan. */
+export function varianceNote(v: StageVariance): string | null {
+  if (v.days === null) return null;
+  if (v.days === 0) return v.basis === 'COMPLETED' ? 'on time' : 'on schedule';
+  const n = Math.abs(v.days);
+  const unit = n === 1 ? 'day' : 'days';
+  return v.days > 0 ? `${n} ${unit} late` : `${n} ${unit} early`;
+}
+
+/**
+ * Every stage of a village measured against its plan, worst first.
+ *
+ * Worst first because the list exists to be acted on: a supervisor opening a
+ * village wants the stage that is hurting, not the stage that happens to come
+ * first in the pipeline.
+ */
+export function villageVariances(
+  stages: Array<StageDates & { stageCode: string }>,
+  today: string,
+  thresholdDays: number = VARIANCE_REASON_THRESHOLD_DAYS,
+): Array<{ stageCode: string; variance: StageVariance }> {
+  return stages
+    .map(st => ({ stageCode: st.stageCode, variance: stageVariance(st, today, thresholdDays) }))
+    .sort((a, b) => (b.variance.days ?? -Infinity) - (a.variance.days ?? -Infinity));
+}
 
 export const REPORT_LEVELS = ['village', 'mandal', 'division', 'district', 'programme'] as const;
 export type ReportLevel = (typeof REPORT_LEVELS)[number];
@@ -1412,6 +1551,7 @@ export const stageRemarkSchema = z.object({
   state: z.enum(STAGE_STATES),
   started_on: isoDate.nullable().optional(),
   completed_on: isoDate.nullable().optional(),
+  ...stagePlanFields,
   remarks: z.string().max(2000).nullable().optional(),
   /*
    * How the village is staffed for ground truthing (§067).

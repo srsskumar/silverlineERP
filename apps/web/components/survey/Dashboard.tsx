@@ -37,6 +37,7 @@ interface DashboardRow {
   by_position: Record<string, number>;
   completed: number;
   not_started: number;
+  late: number;
 }
 
 interface DashboardVillage {
@@ -55,6 +56,11 @@ interface DashboardVillage {
   gt_started_on: string | null;
   gt_expected_end_on: string | null;
   gcp_count: number;
+  slip_days: number | null;
+  slip_stage: string | null;
+  slip_note: string | null;
+  slip_reason: string | null;
+  slip_needs_reason: boolean;
 }
 
 interface DashboardData {
@@ -73,6 +79,7 @@ interface DashboardData {
     surveyed_ac: number; surveyed_sqkm: number;
     by_position: Record<string, number>;
     on_hold: number; in_rework: number; gcp_missing: number;
+    late: number; late_unexplained: number; unplanned: number;
   };
   rows: DashboardRow[];
   villages: DashboardVillage[];
@@ -88,6 +95,11 @@ const dec = (n: number | null | undefined) =>
  * any label is. Deliberately not red for early rungs: a village not started
  * is a village whose turn has not come, not a village in trouble.
  */
+/** Whether a bar has room for its own number inside it. */
+function wideEnough(count: number, max: number): boolean {
+  return max > 0 && count / max > 0.14;
+}
+
 function rungTone(index: number, total: number): string {
   if (index === 0) return 'bg-neutral-400/70 dark:bg-neutral-500/70';
   const share = index / Math.max(1, total - 1);
@@ -156,6 +168,8 @@ export function SurveyDashboard({
       { header: 'Extent (Ac)', width: 12 }, { header: 'Extent (km²)', width: 12 },
       { header: 'Surveyed (Ac)', width: 13 }, { header: 'Status', width: 28 },
       { header: 'On hold', width: 9 }, { header: 'In rework', width: 10 },
+      { header: 'Against plan', width: 16 }, { header: 'Slipping stage', width: 20 },
+      { header: 'Variance reason', width: 18 },
       { header: 'GT started', width: 12 }, { header: 'GT expected end', width: 15 },
       { header: 'Control points', width: 13 },
     ],
@@ -164,6 +178,7 @@ export function SurveyDashboard({
       dec(v.extent_ac), dec(v.extent_sqkm), dec(v.surveyed_ac),
       v.position_label,
       v.on_hold ? 'yes' : '', v.in_rework ? 'yes' : '',
+      v.slip_note ?? 'no dates set', v.slip_stage ?? '', v.slip_reason ?? '',
       v.gt_started_on ?? '', v.gt_expected_end_on ?? '', String(v.gcp_count),
     ]),
   }), [d, totals, district, mandal, position, ladder]);
@@ -236,7 +251,7 @@ export function SurveyDashboard({
       </Card>
 
       {/* ------------------------------------------------------- the headline */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Stat label="Villages" value={num(totals.villages)}
           explain="Every village in this programme, after the filters above." />
         <Stat label="Extent to survey" value={`${dec(totals.extent_ac)} Ac`}
@@ -250,6 +265,10 @@ export function SurveyDashboard({
         <Stat label="Villages finished" value={`${num(finished)} of ${num(totals.villages)}`}
           tone={finished > 0 ? 'success' : 'default'}
           explain="Final deliverables approved by the department." />
+        <Stat label="Behind plan" value={num(totals.late)}
+          tone={totals.late > 0 ? 'danger' : 'success'}
+          hint={totals.unplanned > 0 ? `${num(totals.unplanned)} have no dates set` : undefined}
+          explain="Villages whose worst stage is past its expected finish. Work still running is measured against today, so this is a warning rather than a post-mortem." />
       </div>
 
       {/* ------------------------------------------------ the eleven positions */}
@@ -276,15 +295,35 @@ export function SurveyDashboard({
                     hover:bg-surface-sunken ${selected ? 'bg-surface-sunken ring-1 ring-border' : ''}`}
                 >
                   <span className="w-56 shrink-0 truncate text-sm text-text">{rung.label}</span>
-                  <span className="relative h-5 flex-1 overflow-hidden rounded bg-surface-sunken">
+                  <span className="relative h-6 flex-1 overflow-hidden rounded bg-surface-sunken">
                     <span
                       className={`absolute inset-y-0 left-0 rounded ${rungTone(i, ladder.length)}`}
                       style={{ width: `${(count / maxRung) * 100}%` }}
                     />
+                    {/*
+                      * The count sits on its own bar.
+                      *
+                      * Reading a bar and then tracking across to a column of
+                      * figures is two movements for one fact, and on eleven
+                      * rows people lose their line. Inside the bar while it
+                      * is wide enough to hold the number, just outside it
+                      * when it is not — so a village count is never hidden
+                      * by the thing that represents it.
+                      */}
+                    <span
+                      className={`absolute inset-y-0 flex items-center text-2xs font-semibold tabular-nums
+                        ${wideEnough(count, maxRung)
+                          ? 'text-white/95 dark:text-white'
+                          : 'text-text'}`}
+                      style={wideEnough(count, maxRung)
+                        ? { right: `calc(${100 - (count / maxRung) * 100}% + 0.5rem)` }
+                        : { left: `calc(${(count / maxRung) * 100}% + 0.5rem)` }}
+                    >
+                      {num(count)}
+                    </span>
                   </span>
-                  <span className="w-28 shrink-0 text-right text-sm tabular-nums text-text">
-                    {num(count)}
-                    <span className="ml-1.5 text-2xs text-text-subtle">{share}%</span>
+                  <span className="w-16 shrink-0 text-right text-2xs tabular-nums text-text-subtle">
+                    {share}%
                   </span>
                 </button>
               </li>
@@ -297,21 +336,36 @@ export function SurveyDashboard({
           * positions would mean a village counted twice, and the eleven
           * would stop adding up to the total.
           */}
-        {(totals.on_hold > 0 || totals.in_rework > 0 || totals.gcp_missing > 0) ? (
-          <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
-            {totals.on_hold > 0 ? (
-              <Badge tone="warning">{num(totals.on_hold)} on hold</Badge>
-            ) : null}
-            {totals.in_rework > 0 ? (
-              <Badge tone="warning">{num(totals.in_rework)} in rework</Badge>
-            ) : null}
-            {totals.gcp_missing > 0 ? (
-              <Badge tone="danger">
-                {num(totals.gcp_missing)} started with no control point recorded
-              </Badge>
-            ) : null}
-          </div>
-        ) : null}
+        <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
+          {totals.late > 0 ? (
+            <Badge tone="danger">{num(totals.late)} behind plan</Badge>
+          ) : null}
+          {totals.late_unexplained > 0 ? (
+            <Badge tone="warning">
+              {num(totals.late_unexplained)} slipping with no reason recorded
+            </Badge>
+          ) : null}
+          {/*
+            * Never folded into "on schedule". A village with no expected date
+            * is not a village running to time, and counting it as one is how
+            * a programme reports itself green while nobody knows when
+            * anything is due.
+            */}
+          {totals.unplanned > 0 ? (
+            <Badge tone="neutral">{num(totals.unplanned)} with no dates set</Badge>
+          ) : null}
+          {totals.on_hold > 0 ? (
+            <Badge tone="warning">{num(totals.on_hold)} on hold</Badge>
+          ) : null}
+          {totals.in_rework > 0 ? (
+            <Badge tone="warning">{num(totals.in_rework)} in rework</Badge>
+          ) : null}
+          {totals.gcp_missing > 0 ? (
+            <Badge tone="danger">
+              {num(totals.gcp_missing)} started with no control point recorded
+            </Badge>
+          ) : null}
+        </div>
       </Card>
 
       {/* -------------------------------------------------------- the roll-up */}
@@ -335,6 +389,7 @@ export function SurveyDashboard({
                 <TH className="text-right">Surveyed (Ac)</TH>
                 <TH className="text-right">Not started</TH>
                 <TH className="text-right">Finished</TH>
+                <TH className="text-right">Behind plan</TH>
                 <TH>Spread</TH>
               </TR>
             </THead>
@@ -363,6 +418,9 @@ export function SurveyDashboard({
                   <TD className="text-right tabular-nums">{dec(row.surveyed_ac)}</TD>
                   <TD className="text-right tabular-nums">{num(row.not_started)}</TD>
                   <TD className="text-right tabular-nums">{num(row.completed)}</TD>
+                  <TD className={`text-right tabular-nums ${row.late > 0 ? 'text-danger' : ''}`}>
+                    {num(row.late)}
+                  </TD>
                   <TD>
                     {/* The same eleven positions, as one bar per group. */}
                     <span className="flex h-3 w-40 overflow-hidden rounded bg-surface-sunken"
@@ -382,7 +440,7 @@ export function SurveyDashboard({
                 </TR>
               ))}
               {d.rows.length === 0 ? (
-                <TR><TD colSpan={7} className="py-6 text-center text-sm text-text-muted">
+                <TR><TD colSpan={8} className="py-6 text-center text-sm text-text-muted">
                   No villages match these filters.
                 </TD></TR>
               ) : null}
@@ -407,8 +465,9 @@ export function SurveyDashboard({
                 <TH className="text-right">Extent (Ac)</TH>
                 <TH className="text-right">Surveyed (Ac)</TH>
                 <TH>Status</TH>
+                <TH>Against plan</TH>
                 <TH>GT started</TH>
-                <TH>Expected end</TH>
+                <TH>GT expected end</TH>
               </TR>
             </THead>
             <TBody>
@@ -439,12 +498,36 @@ export function SurveyDashboard({
                         ? <Badge tone="danger" size="sm">no GCP</Badge> : null}
                     </span>
                   </TD>
+                  <TD>
+                    {v.slip_note === null ? (
+                      <span className="text-2xs text-text-subtle">no dates set</span>
+                    ) : (
+                      <span className="flex flex-wrap items-center gap-1">
+                        <span className={`text-sm ${
+                          (v.slip_days ?? 0) > 0 ? 'text-danger' : 'text-text-muted'}`}>
+                          {v.slip_note}
+                        </span>
+                        {v.slip_stage ? (
+                          <span className="text-2xs text-text-subtle">
+                            ({v.slip_stage.replace(/_/g, ' ').toLowerCase()})
+                          </span>
+                        ) : null}
+                        {v.slip_reason ? (
+                          <Badge tone="neutral" size="sm">
+                            {v.slip_reason.replace(/_/g, ' ').toLowerCase()}
+                          </Badge>
+                        ) : v.slip_needs_reason ? (
+                          <Badge tone="warning" size="sm">reason not given</Badge>
+                        ) : null}
+                      </span>
+                    )}
+                  </TD>
                   <TD className="tabular-nums text-text-muted">{v.gt_started_on ?? '—'}</TD>
                   <TD className="tabular-nums text-text-muted">{v.gt_expected_end_on ?? '—'}</TD>
                 </TR>
               ))}
               {d.villages.length === 0 ? (
-                <TR><TD colSpan={8} className="py-6 text-center text-sm text-text-muted">
+                <TR><TD colSpan={9} className="py-6 text-center text-sm text-text-muted">
                   No villages match these filters.
                 </TD></TR>
               ) : null}

@@ -16,7 +16,7 @@
  */
 import * as React from 'react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 /* ------------------------------------------------------------ the fixtures */
@@ -99,16 +99,18 @@ const DASHBOARD = {
     villages: 1, extent_ac: 200, extent_sqkm: 0.81, surveyed_ac: 120, surveyed_sqkm: 0.49,
     by_position: Object.fromEntries(LADDER.map(r => [r.key, r.key === 'GT_COMPLETED' ? 1 : 0])),
     on_hold: 0, in_rework: 0, gcp_missing: 0,
+    late: 1, late_unexplained: 1, unplanned: 0,
   },
   rows: [{ id: 'd1', name: 'Krishna', villages: 1, extent_ac: 200, extent_sqkm: 0.81,
     surveyed_ac: 120,
     by_position: Object.fromEntries(LADDER.map(r => [r.key, r.key === 'GT_COMPLETED' ? 1 : 0])),
-    completed: 0, not_started: 0 }],
+    completed: 0, not_started: 0, late: 1 }],
   villages: [{ id: 'v1', name: 'Adakula', code: '1501041', district: 'Krishna',
     mandal: 'Koyyuru', extent_ac: 200, extent_sqkm: 0.81, surveyed_ac: 120,
     position: 'GT_COMPLETED', position_label: 'GT completed', on_hold: false,
     in_rework: false, gt_started_on: '2026-09-01', gt_expected_end_on: '2026-10-01',
-    gcp_count: 1 }],
+    gcp_count: 1, slip_days: 8, slip_stage: 'GROUND_TRUTHING', slip_note: '8 days late',
+    slip_reason: null, slip_needs_reason: true }],
 };
 
 /** Every endpoint these screens reach for, keyed by a fragment of the path. */
@@ -231,6 +233,34 @@ describe('the land survey screen', () => {
       expect(screen.queryByRole('button', { name: tab })).toBeNull();
     }
     for (const tab of BEHIND_MORE) await reveal(tab);
+  });
+
+  it('writes the village count on every bar', async () => {
+    // The ask was plain: show the numbers of villages at each stage. Reading
+    // a bar and tracking across to a column of figures is two movements for
+    // one fact, and on eleven rows people lose their line.
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() =>
+      expect(screen.getByText('Where every village has got to')).toBeInTheDocument());
+    // Read inside the row rather than off its concatenated text: "1" and
+    // "100%" run together in textContent and a loose regex would pass on the
+    // percentage alone.
+    for (const rung of LADDER) {
+      const row = screen.getByRole('button', { name: new RegExp(rung.label) });
+      const expected = rung.key === 'GT_COMPLETED' ? '1' : '0';
+      expect(within(row).getByText(expected), rung.key).toBeInTheDocument();
+    }
+  });
+
+  it('reports what is behind plan, and what has no plan at all', async () => {
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() =>
+      expect(screen.getByText('1 behind plan')).toBeInTheDocument());
+    expect(screen.getByText('1 slipping with no reason recorded')).toBeInTheDocument();
+    expect(screen.getByText('8 days late')).toBeInTheDocument();
+    expect(screen.getByText('reason not given')).toBeInTheDocument();
   });
 
   it('opens on the dashboard', async () => {

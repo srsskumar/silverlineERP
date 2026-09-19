@@ -19,6 +19,8 @@ import {
   extentVariancePct, extentVaries,
   VILLAGE_LADDER, villagePosition, tallyByPosition, LADDER_KEYS, LADDER_INDEX,
   gtStartSchema, milestoneBlockedNote,
+  stageVariance, varianceNote, villageVariances, stageUpdateSchema,
+  DELAY_REASON_CODES,
 } from './survey.js';
 
 const BASIS: Record<string, MeasureBasis> = Object.fromEntries(
@@ -1898,5 +1900,138 @@ describe('starting ground truthing (§071)', () => {
 
   it('will not take a headcount that is not a whole number of people', () => {
     expect(gtStartSchema.safeParse({ ...ok, crew_allocated: 4.5 }).success).toBe(false);
+  });
+});
+
+describe('plan against actual (§072)', () => {
+  const TODAY = '2026-09-20';
+
+  it('says nothing at all when there is no plan', () => {
+    // A stage with no expected date is not a stage that finished on time.
+    const v = stageVariance({ state: 'COMPLETED', completedOn: '2026-09-01' }, TODAY);
+    expect(v.days).toBeNull();
+    expect(v.basis).toBe('NO_PLAN');
+    expect(varianceNote(v)).toBeNull();
+  });
+
+  it('measures a finished stage against the date it was promised', () => {
+    const late = stageVariance(
+      { state: 'COMPLETED', expectedEndOn: '2026-09-01', completedOn: '2026-09-09' }, TODAY);
+    expect(late.days).toBe(8);
+    expect(late.late).toBe(true);
+    expect(varianceNote(late)).toBe('8 days late');
+
+    const early = stageVariance(
+      { state: 'COMPLETED', expectedEndOn: '2026-09-10', completedOn: '2026-09-07' }, TODAY);
+    expect(early.days).toBe(-3);
+    expect(early.late).toBe(false);
+    expect(varianceNote(early)).toBe('3 days early');
+
+    const onTime = stageVariance(
+      { state: 'COMPLETED', expectedEndOn: '2026-09-07', completedOn: '2026-09-07' }, TODAY);
+    expect(onTime.days).toBe(0);
+    expect(varianceNote(onTime)).toBe('on time');
+  });
+
+  it('measures work still running against today, so lateness is news', () => {
+    // The whole value of the figure: a warning while something can still be
+    // done about it, not a finding after the fact.
+    const running = stageVariance(
+      { state: 'IN_PROGRESS', startedOn: '2026-08-01', expectedEndOn: '2026-09-01' }, TODAY);
+    expect(running.basis).toBe('RUNNING');
+    expect(running.days).toBe(19);
+    expect(running.late).toBe(true);
+  });
+
+  it('does not call a stage late before its date has passed', () => {
+    const ahead = stageVariance(
+      { state: 'IN_PROGRESS', startedOn: '2026-09-01', expectedEndOn: '2026-10-01' }, TODAY);
+    expect(ahead.days).toBe(0);
+    expect(ahead.late).toBe(false);
+    expect(ahead.needsReason).toBe(false);
+  });
+
+  it('notices a stage that has not begun and is already overdue', () => {
+    const unstarted = stageVariance({ state: 'NOT_STARTED', expectedEndOn: '2026-09-01' }, TODAY);
+    expect(unstarted.basis).toBe('NOT_STARTED');
+    expect(unstarted.late).toBe(true);
+    expect(unstarted.days).toBe(19);
+  });
+
+  it('asks for a reason only once the slip is worth explaining', () => {
+    // Asking about two days trains people to type "delay" into every box.
+    const small = stageVariance(
+      { state: 'COMPLETED', expectedEndOn: '2026-09-01', completedOn: '2026-09-04' }, TODAY);
+    expect(small.needsReason).toBe(false);
+
+    const big = stageVariance(
+      { state: 'COMPLETED', expectedEndOn: '2026-09-01', completedOn: '2026-09-20' }, TODAY);
+    expect(big.needsReason).toBe(true);
+
+    const explained = stageVariance({
+      state: 'COMPLETED', expectedEndOn: '2026-09-01', completedOn: '2026-09-20',
+      varianceReason: 'WEATHER',
+    }, TODAY);
+    expect(explained.needsReason).toBe(false);
+    expect(explained.reason).toBe('WEATHER');
+  });
+
+  it('asks about finishing far early too, which is usually a wrong plan', () => {
+    const veryEarly = stageVariance(
+      { state: 'COMPLETED', expectedEndOn: '2026-09-30', completedOn: '2026-09-01' }, TODAY);
+    expect(veryEarly.late).toBe(false);
+    expect(veryEarly.needsReason).toBe(true);
+  });
+
+  it('puts the worst stage of a village first', () => {
+    const ordered = villageVariances([
+      { stageCode: 'GT_QC', expectedEndOn: '2026-09-18', completedOn: '2026-09-19' },
+      { stageCode: 'GROUND_TRUTHING', expectedEndOn: '2026-08-01', completedOn: '2026-09-01' },
+      { stageCode: 'VECTORIZATION', expectedEndOn: '2026-09-25', completedOn: '2026-09-20' },
+    ], TODAY);
+    expect(ordered.map(o => o.stageCode))
+      .toEqual(['GROUND_TRUTHING', 'GT_QC', 'VECTORIZATION']);
+    expect(ordered[0].variance.days).toBe(31);
+  });
+});
+
+describe('the stage schema carries the plan (§072)', () => {
+  const base = { stage_code: 'GROUND_TRUTHING', state: 'IN_PROGRESS' as const };
+
+  it('takes both planned dates and a reason', () => {
+    const r = stageUpdateSchema.safeParse({
+      ...base, started_on: '2026-09-01',
+      expected_start_on: '2026-09-01', expected_end_on: '2026-10-01',
+      variance_reason: 'WEATHER',
+    });
+    expect(r.success, JSON.stringify(r.success ? {} : r.error.issues)).toBe(true);
+  });
+
+  it('refuses a plan that finishes before it starts', () => {
+    const r = stageUpdateSchema.safeParse({
+      ...base, expected_start_on: '2026-10-01', expected_end_on: '2026-09-01',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('refuses an "other" variance with nothing said', () => {
+    const r = stageUpdateSchema.safeParse({ ...base, variance_reason: 'OTHER' });
+    expect(r.success).toBe(false);
+    const ok = stageUpdateSchema.safeParse({
+      ...base, variance_reason: 'OTHER', variance_remarks: 'Panchayat election',
+    });
+    expect(ok.success).toBe(true);
+  });
+
+  it('will not invent a reason outside the delay vocabulary', () => {
+    // One list across the module, so late stages and idle rovers count together.
+    const r = stageUpdateSchema.safeParse({ ...base, variance_reason: 'SLOW' });
+    expect(r.success).toBe(false);
+    for (const code of DELAY_REASON_CODES) {
+      const each = stageUpdateSchema.safeParse({
+        ...base, variance_reason: code, variance_remarks: 'because',
+      });
+      expect(each.success, code).toBe(true);
+    }
   });
 });

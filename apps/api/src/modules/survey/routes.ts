@@ -10,6 +10,7 @@ import {
   tallyByStage, roverUtilisation, roverWindow, rankByWaste, pace, currentStage,
   outOfSequence, stageBlockedBy,
   VILLAGE_LADDER, villagePosition, tallyByPosition, gtStartSchema,
+  stageVariance, varianceNote, villageVariances,
   crewAssignmentSchema, roverAllocationSchema, stageRemarkSchema, STAGE_PIPELINE,
   crewBulkAssignmentSchema, roverBulkAllocationSchema, roverAllocationEditSchema,
   villageMoveSchema,
@@ -1089,19 +1090,61 @@ export async function registerSurveyRoutes(
               input.remarks ?? null, u.id]);
         }
 
-        return (await db.query(
+        /*
+         * The plan is left alone unless this call carries one (§072).
+         *
+         * Somebody recording that a stage finished is answering "what
+         * happened", not "what was promised". Copying an absent field over
+         * the expected dates would quietly erase the plan the variance is
+         * measured against — every time anyone touched the stage.
+         */
+        const row = (await db.query(
           `INSERT INTO survey_village_stages(org_id, survey_village_id, stage_id, state,
-             started_on, completed_on, remarks, updated_by)
-           VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+             started_on, completed_on, remarks,
+             expected_start_on, expected_end_on, variance_reason, variance_remarks,
+             updated_by)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
            ON CONFLICT (survey_village_id, stage_id)
            DO UPDATE SET state = EXCLUDED.state, started_on = EXCLUDED.started_on,
                          completed_on = EXCLUDED.completed_on,
                          remarks = EXCLUDED.remarks,
+                         expected_start_on = COALESCE(
+                           EXCLUDED.expected_start_on, survey_village_stages.expected_start_on),
+                         expected_end_on = COALESCE(
+                           EXCLUDED.expected_end_on, survey_village_stages.expected_end_on),
+                         variance_reason = COALESCE(
+                           EXCLUDED.variance_reason, survey_village_stages.variance_reason),
+                         variance_remarks = COALESCE(
+                           EXCLUDED.variance_remarks, survey_village_stages.variance_remarks),
                          updated_at = now(), updated_by = EXCLUDED.updated_by
            RETURNING *`,
           [u.orgId, id, stage.id, input.state,
             input.started_on ?? null, input.completed_on ?? null,
-            input.remarks ?? null, u.id])).rows[0];
+            input.remarks ?? null,
+            input.expected_start_on ?? null, input.expected_end_on ?? null,
+            input.variance_reason ?? null, input.variance_remarks ?? null,
+            u.id])).rows[0];
+
+        // Reported back with the row, so the screen that just wrote it can
+        // say "eight days late" without asking again.
+        const variance = stageVariance({
+          state: row.state,
+          startedOn: iso(row.started_on),
+          completedOn: iso(row.completed_on),
+          expectedEndOn: iso(row.expected_end_on),
+          varianceReason: row.variance_reason,
+        }, today());
+        return {
+          ...row,
+          started_on: iso(row.started_on),
+          completed_on: iso(row.completed_on),
+          expected_start_on: iso(row.expected_start_on),
+          expected_end_on: iso(row.expected_end_on),
+          variance_days: variance.days,
+          variance_basis: variance.basis,
+          variance_note: varianceNote(variance),
+          variance_needs_reason: variance.needsReason,
+        };
       }),
     };
   });
@@ -1163,26 +1206,34 @@ export async function registerSurveyRoutes(
             await inOrg(db, 'employees', employeeId, u.orgId);
           }
 
+          // Headcounts live on the village: they govern every day's return
+          // afterwards, not just the stage.
           await db.query(
             `UPDATE survey_villages
-                SET gt_started_on = $2, gt_expected_end_on = $3,
-                    gt_govt_staff_allocated = COALESCE($4, gt_govt_staff_allocated),
-                    gt_crew_allocated = COALESCE($5, gt_crew_allocated),
-                    updated_by = $6, updated_at = now()
+                SET gt_govt_staff_allocated = COALESCE($2, gt_govt_staff_allocated),
+                    gt_crew_allocated = COALESCE($3, gt_crew_allocated),
+                    updated_by = $4, updated_at = now()
               WHERE id = $1`,
-            [id, input.started_on, input.expected_end_on,
-              input.govt_staff_allocated ?? null, input.crew_allocated ?? null, u.id]);
+            [id, input.govt_staff_allocated ?? null,
+              input.crew_allocated ?? null, u.id]);
 
+          // Both dates go on the stage row (§072). They are the stage's start
+          // and expected finish, and a second copy on the village is how the
+          // two come to disagree.
           await db.query(
             `INSERT INTO survey_village_stages
-               (org_id, survey_village_id, stage_id, state, started_on, updated_by)
-             VALUES ($1, $2, $3, 'IN_PROGRESS', $4, $5)
+               (org_id, survey_village_id, stage_id, state, started_on,
+                expected_start_on, expected_end_on, updated_by)
+             VALUES ($1, $2, $3, 'IN_PROGRESS', $4, $4, $5, $6)
              ON CONFLICT (survey_village_id, stage_id) DO UPDATE
                SET state = 'IN_PROGRESS',
                    started_on = COALESCE(survey_village_stages.started_on, EXCLUDED.started_on),
+                   expected_start_on = COALESCE(
+                     survey_village_stages.expected_start_on, EXCLUDED.expected_start_on),
+                   expected_end_on = EXCLUDED.expected_end_on,
                    updated_by = EXCLUDED.updated_by,
                    updated_at = now()`,
-            [u.orgId, id, stage.id, input.started_on, u.id]);
+            [u.orgId, id, stage.id, input.started_on, input.expected_end_on, u.id]);
 
           // Already-on-the-village is not an error. Two people starting the
           // same village within a minute of each other is ordinary, and the
@@ -4338,14 +4389,28 @@ export async function registerSurveyRoutes(
 
       const rows = (await pool.query(
         `SELECT sv.id AS village_id, ou.name AS village_name, ou.code AS village_code,
-                sv.total_extent_ac, sv.gt_started_on, sv.gt_expected_end_on,
+                sv.total_extent_ac,
+                -- Ground truthing's own dates, read from its stage row rather
+                -- than from a second copy on the village (§072).
+                gt.started_on      AS gt_started_on,
+                gt.expected_end_on AS gt_expected_end_on,
+                gt.completed_on    AS gt_completed_on,
                 m.id AS mandal_id, m.name AS mandal_name,
                 pu.id AS parent_id, pu.name AS parent_name, pu.type AS parent_type,
                 gp.id AS grandparent_id, gp.name AS grandparent_name, gp.type AS grandparent_type,
                 (SELECT count(*)::int FROM survey_village_gcps g
                   WHERE g.survey_village_id = sv.id) AS gcp_count,
                 COALESCE(json_object_agg(st.code, vst.state)
-                         FILTER (WHERE st.code IS NOT NULL), '{}'::json) AS stages
+                         FILTER (WHERE st.code IS NOT NULL), '{}'::json) AS stages,
+                -- Each stage's plan and outcome, so lateness is computed from
+                -- the same rows the position is (§072).
+                COALESCE(json_agg(json_build_object(
+                    'stageCode', st.code, 'state', vst.state,
+                    'startedOn', vst.started_on, 'completedOn', vst.completed_on,
+                    'expectedStartOn', vst.expected_start_on,
+                    'expectedEndOn', vst.expected_end_on,
+                    'varianceReason', vst.variance_reason)
+                  ) FILTER (WHERE st.code IS NOT NULL), '[]'::json) AS stage_plan
          FROM survey_villages sv
          JOIN org_units ou ON ou.id = sv.village_id
          LEFT JOIN org_units m  ON m.id = ou.parent_id
@@ -4353,15 +4418,28 @@ export async function registerSurveyRoutes(
          LEFT JOIN org_units gp ON gp.id = pu.parent_id
          LEFT JOIN survey_village_stages vst ON vst.survey_village_id = sv.id
          LEFT JOIN survey_stages st ON st.id = vst.stage_id AND st.active
+         LEFT JOIN survey_village_stages gt ON gt.survey_village_id = sv.id
+           AND gt.stage_id = (SELECT id FROM survey_stages
+                               WHERE org_id = sv.org_id AND code = 'GROUND_TRUTHING')
          WHERE sv.survey_project_id = $1 AND sv.org_id = $2
          GROUP BY sv.id, ou.name, ou.code, m.id, m.name,
-                  pu.id, pu.name, pu.type, gp.id, gp.name, gp.type`,
+                  pu.id, pu.name, pu.type, gp.id, gp.name, gp.type,
+                  gt.started_on, gt.expected_end_on, gt.completed_on`,
         [id, u.orgId])).rows;
 
+      const asOf = today();
       const villages = rows.map(r => {
         const stages = (r.stages ?? {}) as Record<string, StageState>;
+        const plan = (r.stage_plan ?? []) as Array<Record<string, string | null>>;
+        // The worst stage is the one worth naming on a list of 1,200 villages.
+        const worst = villageVariances(plan.map(pl => ({
+          stageCode: String(pl.stageCode),
+          state: pl.state, startedOn: pl.startedOn, completedOn: pl.completedOn,
+          expectedEndOn: pl.expectedEndOn, varianceReason: pl.varianceReason,
+        })), asOf)[0] ?? null;
         return {
           row: r,
+          worst,
           villageId: String(r.village_id),
           name: String(r.village_name),
           code: r.village_code ? String(r.village_code) : null,
@@ -4426,6 +4504,7 @@ export async function registerSurveyRoutes(
           by_position: tallyByPosition(row.items),
           completed: row.items.filter(v => v.position.key === 'FINAL_APPROVED').length,
           not_started: row.items.filter(v => v.position.key === 'NOT_STARTED').length,
+          late: row.items.filter(v => v.worst?.variance.late).length,
         })).sort((a, b) => a.name.localeCompare(b.name));
       };
 
@@ -4467,6 +4546,18 @@ export async function registerSurveyRoutes(
             in_rework: matches.filter(v => v.position.inRework).length,
             gcp_missing: matches.filter(
               v => v.position.index > 0 && v.gcpCount === 0).length,
+            /*
+             * Against plan, across the programme (§072).
+             *
+             * `unplanned` is reported rather than folded into "on schedule":
+             * a village with no expected date is not a village running to
+             * time, and counting it as one is how a programme reports itself
+             * green while nobody knows when anything is due.
+             */
+            late: matches.filter(v => v.worst?.variance.late).length,
+            late_unexplained: matches.filter(v => v.worst?.variance.needsReason).length,
+            unplanned: matches.filter(v => v.worst?.variance.basis === 'NO_PLAN'
+              || v.worst === null).length,
           },
           rows: group(level),
           villages: matches
@@ -4484,6 +4575,18 @@ export async function registerSurveyRoutes(
               gt_started_on: v.gtStartedOn,
               gt_expected_end_on: v.gtExpectedEndOn,
               gcp_count: v.gcpCount,
+              /*
+               * How far off plan the village is, and where.
+               *
+               * One figure rather than five: on a list of twelve hundred
+               * villages the question is "which ones are slipping", and the
+               * stage responsible is what makes the answer actionable.
+               */
+              slip_days: v.worst?.variance.days ?? null,
+              slip_stage: v.worst && v.worst.variance.late ? v.worst.stageCode : null,
+              slip_note: v.worst ? varianceNote(v.worst.variance) : null,
+              slip_reason: v.worst?.variance.reason ?? null,
+              slip_needs_reason: Boolean(v.worst?.variance.needsReason),
             }))
             .sort((a, b) => a.name.localeCompare(b.name)),
         },
