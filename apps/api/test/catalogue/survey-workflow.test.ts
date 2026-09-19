@@ -237,8 +237,18 @@ describe("rovers", () => {
     expect(r.status).toBe(201);
   });
 
-  it("reports what was used against what was out, and what sat idle", async () => {
-    // Two rovers out on the day, one reported in use.
+  it("separates a rover reported idle from one nobody reported on", async () => {
+    /*
+     * Two rovers out: rover1 moved to villageB in the test above, rover2 goes
+     * to villageA. Only villageA files a return, and it accounts for one
+     * instrument.
+     *
+     * So villageA's rover is used, and villageB's is *unaccounted* — not
+     * idle. This assertion used to read "1 idle", which asserted that rover1
+     * sat in a store all day when nobody had said anything about it at all.
+     * The same arithmetic told a project manager every morning, before the
+     * day's returns came in, that his entire fleet was idle.
+     */
     await post(w.admin, `/api/v1/survey/villages/${villageA}/rovers`,
       { asset_id: rover2, allocated_on: TODAY });
     await post(w.admin, "/api/v1/survey/entries", {
@@ -250,7 +260,27 @@ describe("rovers", () => {
       `/api/v1/survey/projects/${programmeId}/progress?to=${TODAY}`);
     expect(r.data.rovers.allocated).toBe(2);
     expect(r.data.rovers.used).toBe(1);
+    expect(r.data.rovers.idle).toBe(0);
+    expect(r.data.rovers.unaccounted).toBe(1);
+    // Of the instruments the returns actually spoke for, every one was used.
+    expect(r.data.rovers.utilisationPct).toBe(100);
+  });
+
+  it("reports a rover its village returned as idle", async () => {
+    // The other half of the distinction: villageB files, and says the
+    // instrument it holds did nothing.
+    await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: villageB, entry_date: TODAY,
+      teams_deployed: 1, dgps_rovers: 0, values: { GOVT_LAND_EXTENT_AC: 3 },
+      low_progress_reason: "ROVER",
+    });
+
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/progress?to=${TODAY}`);
+    expect(r.data.rovers.allocated).toBe(2);
+    expect(r.data.rovers.used).toBe(1);
     expect(r.data.rovers.idle).toBe(1);
+    expect(r.data.rovers.unaccounted).toBe(0);
     expect(r.data.rovers.utilisationPct).toBe(50);
   });
 

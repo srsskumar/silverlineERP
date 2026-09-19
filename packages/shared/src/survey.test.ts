@@ -2035,3 +2035,37 @@ describe('the stage schema carries the plan (§072)', () => {
     }
   });
 });
+
+describe('a rover nobody reported on', () => {
+  it('is unaccounted, not idle', () => {
+    // Before this, every morning ahead of the day's returns the screen told a
+    // project manager his whole fleet was sitting in a store. A false alarm
+    // daily is how a number stops being read.
+    const r = roverUtilisation({ allocated: 127, used: 0, accountedFor: 0 });
+    expect(r.idle).toBe(0);
+    expect(r.unaccounted).toBe(127);
+    // No denominator anybody measured, so no percentage.
+    expect(r.utilisationPct).toBeNull();
+  });
+
+  it('counts idle only among the rovers the returns spoke for', () => {
+    const r = roverUtilisation({ allocated: 127, used: 90, accountedFor: 100 });
+    expect(r.idle).toBe(10);
+    expect(r.unaccounted).toBe(27);
+    expect(r.utilisationPct).toBe(90);
+  });
+
+  it('leaves callers that cannot tell exactly as they were', () => {
+    const r = roverUtilisation({ allocated: 30, used: 11 });
+    expect(r.idle).toBe(19);
+    expect(r.unaccounted).toBe(0);
+    expect(r.utilisationPct).toBe(36.67);
+  });
+
+  it('still reports equipment run off the books', () => {
+    const r = roverUtilisation({ allocated: 10, used: 14, accountedFor: 10 });
+    expect(r.overUsed).toBe(true);
+    expect(r.idle).toBe(0);
+    expect(r.unaccounted).toBe(0);
+  });
+});

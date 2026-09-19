@@ -1376,11 +1376,26 @@ export interface RoverDay {
   allocated: number;
   /** Rovers the crews reported using. */
   used: number;
+  /**
+   * Rovers the day's returns actually spoke for, used or idle.
+   *
+   * Optional: callers that cannot tell leave it out and every allocated rover
+   * is treated as accounted for, which is what this did before the
+   * distinction existed.
+   */
+  accountedFor?: number;
 }
 
 export interface RoverUtilisation extends RoverDay {
   idle: number;
-  /** Null rather than zero when nothing is allocated — there is no ratio. */
+  /**
+   * Rovers whose village filed no return at all that day.
+   *
+   * Not idle. Nobody has said what these did, and saying they sat in a store
+   * is an assertion the record does not support.
+   */
+  unaccounted: number;
+  /** Null rather than zero when nothing is accounted for — there is no ratio. */
   utilisationPct: number | null;
   /** Used exceeds allocated: somebody is running equipment off the books. */
   overUsed: boolean;
@@ -1393,17 +1408,31 @@ export interface RoverUtilisation extends RoverDay {
  * and eleven used is not "eleven rovers of progress", it is nineteen sitting
  * in a store while the schedule assumes otherwise — and nothing in the
  * spreadsheet this replaces would ever have shown that.
+ *
+ * But a rover nobody has reported on is not a rover reported as idle, and
+ * this used to treat them as the same thing. Every morning before the day's
+ * returns came in, the screen told a project manager his whole fleet was
+ * sitting in a store — a false alarm daily, which is how a number stops
+ * being read. `accountedFor` is how many the returns actually covered; the
+ * rest are reported as unaccounted and kept out of the ratio, because a
+ * percentage of a denominator nobody has measured is not a percentage.
  */
 export function roverUtilisation(day: RoverDay): RoverUtilisation {
   const allocated = Math.max(0, Math.round(day.allocated));
   const used = Math.max(0, Math.round(day.used));
+  // Older callers pass no count of what was returned; for them everything
+  // allocated is still treated as accounted for, exactly as before.
+  const accounted = day.accountedFor === undefined
+    ? allocated : Math.max(0, Math.round(day.accountedFor));
+  const covered = Math.max(used, Math.min(accounted, allocated));
   return {
     allocated,
     used,
     // Never negative: more used than allocated is its own signal, reported
     // below rather than folded into a negative idle count.
-    idle: Math.max(0, allocated - used),
-    utilisationPct: allocated > 0 ? round((used / allocated) * 100) : null,
+    idle: Math.max(0, covered - used),
+    unaccounted: Math.max(0, allocated - covered),
+    utilisationPct: covered > 0 ? round((used / covered) * 100) : null,
     overUsed: used > allocated,
   };
 }

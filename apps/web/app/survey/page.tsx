@@ -732,7 +732,12 @@ function Progress({
             tone={data.rovers?.overUsed ? 'danger' : undefined} />
           <Stat label="Idle" value={data.rovers?.idle ?? 0}
             tone={(data.rovers?.idle ?? 0) > 0 ? 'warning' : 'success'}
-            hint={pct(data.rovers?.utilisationPct)}
+            hint={(data.rovers?.unaccounted ?? 0) > 0
+              // Said plainly rather than folded into idle. Before the day's
+              // returns are in, every instrument is unaccounted for, and
+              // calling that "idle" is a false alarm every morning.
+              ? `${data.rovers?.unaccounted} not yet reported on`
+              : pct(data.rovers?.utilisationPct)}
             explain={GLOSSARY.idleRovers} />
           <Stat label="Projected finish"
             value={data.pace?.projectedFinish ? day(data.pace.projectedFinish) : '—'}

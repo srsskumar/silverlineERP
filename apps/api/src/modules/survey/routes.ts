@@ -4180,12 +4180,29 @@ export async function registerSurveyRoutes(
               AND (ra.released_on IS NULL OR ra.released_on >= $3::date)${scope}) AS allocated,
            (SELECT COALESCE(sum(e.dgps_rovers), 0)::int FROM survey_entries e
             WHERE e.org_id = $1 AND e.survey_project_id = $2 AND e.entry_date = $3::date${entryScope})
-             AS used`,
+             AS used,
+           /*
+            * Rovers the day's returns actually speak for.
+            *
+            * A village that filed nothing has said nothing about its
+            * instruments, and counting them as idle told a project manager
+            * every morning that his whole fleet was in a store. Counted from
+            * the allocations of the villages that did file.
+            */
+           (SELECT count(*)::int FROM survey_rover_allocations ra
+             JOIN survey_villages sv ON sv.id = ra.survey_village_id
+            WHERE sv.survey_project_id = $2 AND ra.org_id = $1
+              AND ra.allocated_on <= $3::date
+              AND (ra.released_on IS NULL OR ra.released_on >= $3::date)${scope}
+              AND EXISTS (SELECT 1 FROM survey_entries e2
+                           WHERE e2.survey_village_id = sv.id
+                             AND e2.entry_date = $3::date)) AS accounted_for`,
         roverArgs)).rows[0];
       const rovers = {
         as_of: asOf,
         ...roverUtilisation({
           allocated: Number(roverRow.allocated), used: Number(roverRow.used),
+          accountedFor: Number(roverRow.accounted_for),
         }),
       };
 
