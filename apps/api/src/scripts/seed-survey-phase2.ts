@@ -160,23 +160,26 @@ async function main(): Promise<void> {
     "SELECT id FROM users WHERE org_id = $1 ORDER BY created_at LIMIT 1", [orgId])).rows[0];
   const by = String(admin.id);
 
+  /*
+   * Re-runnable rather than all-or-nothing.
+   *
+   * Every insert below either carries ON CONFLICT DO NOTHING or is looked up
+   * first, and the generator is seeded, so a second run writes only what a
+   * first run missed. An early exit on "the programme exists" meant a run
+   * that failed halfway could only be fixed by deleting what it had written.
+   */
   const existing = (await pool.query(
     "SELECT id FROM survey_projects WHERE org_id = $1 AND code = $2", [orgId, CODE])).rows[0];
-  if (existing) {
-    console.log(`${CODE} already exists (${existing.id}); nothing to do.`);
-    await pool.end();
-    return;
-  }
+  console.log(existing
+    ? `topping up ${NAME}`
+    : `seeding ${NAME} — ${VILLAGE_COUNT} villages`);
 
-  console.log(`seeding ${NAME} — ${VILLAGE_COUNT} villages`);
-
-  const programme = (await pool.query(
+  const programmeId = existing ? String(existing.id) : String((await pool.query(
     `INSERT INTO survey_projects
        (org_id, code, name, status, started_on, target_completion_on,
         low_progress_threshold_ac, stage_sla_days, created_by, updated_by)
      VALUES ($1,$2,$3,'ACTIVE',$4,$5,8,45,$6,$6) RETURNING id`,
-    [orgId, CODE, NAME, PROGRAMME_START, "2027-03-31", by])).rows[0];
-  const programmeId = String(programme.id);
+    [orgId, CODE, NAME, PROGRAMME_START, "2027-03-31", by])).rows[0].id);
 
   /* --- geography ------------------------------------------------------- */
   const districtIds: string[] = [];
@@ -385,9 +388,30 @@ async function main(): Promise<void> {
   const employees = (await pool.query(
     "SELECT id FROM employees WHERE org_id = $1 AND status = 'ACTIVE' ORDER BY id", [orgId])
   ).rows.map(r => String(r.id));
+  /*
+   * The programme's own instruments.
+   *
+   * A rover can only be in one village at a time, and the register held a
+   * dozen — so allocating them across nine hundred villages wrote twelve
+   * rows and the crew, rover and productivity screens came back all but
+   * empty. A twelve-hundred-village resurvey is worked with a fleet, and
+   * these are it. Coded P2-RVR- so they are obviously this programme's.
+   */
+  const ROVER_FLEET = 140;
+  const assetRows: unknown[][] = [];
+  for (let i = 0; i < ROVER_FLEET; i += 1) {
+    assetRows.push([orgId, `P2-RVR-${String(i).padStart(3, "0")}`,
+      `DGPS Rover P2-${String(i).padStart(3, "0")}`, "SURVEY",
+      `SN-P2-${String(100000 + i)}`, "GOOD", "AVAILABLE", by]);
+  }
+  await chunkInsert(pool,
+    `INSERT INTO assets
+       (org_id, asset_code, name, category, serial_number, condition, status, created_by)`,
+    8, assetRows, 200);
   const rovers = (await pool.query(
-    `SELECT id FROM assets WHERE org_id = $1 AND upper(category) = 'SURVEY' ORDER BY id`,
+    `SELECT id FROM assets WHERE org_id = $1 AND asset_code LIKE 'P2-RVR-%' ORDER BY asset_code`,
     [orgId])).rows.map(r => String(r.id));
+  console.log(`  ${rovers.length} instruments in the fleet`);
   const measures = (await pool.query(
     "SELECT id, code, basis FROM survey_measures WHERE org_id = $1", [orgId])).rows;
   const extentMeasures = measures.filter(m => m.basis === "EXTENT");
@@ -412,8 +436,10 @@ async function main(): Promise<void> {
           (12 + rand() * 90).toFixed(1), "44N", v.gtStart, by, by]);
       }
     }
-    if (rovers.length && i % 2 === 0) {
-      roverRows.push([orgId, v.id, rovers[i % rovers.length], v.gtStart, by]);
+    // One instrument, one village: the register enforces it, so allocating
+    // the same rover round a loop would write the first and discard the rest.
+    if (rovers.length && i < rovers.length) {
+      roverRows.push([orgId, v.id, rovers[i], v.gtStart, by]);
     }
   });
   await chunkInsert(pool,
