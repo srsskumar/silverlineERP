@@ -481,7 +481,34 @@ async function main(): Promise<void> {
   await chunkInsert(pool,
     "INSERT INTO survey_entry_values(org_id, entry_id, measure_id, quantity)",
     4, valueRows, 400);
-  console.log(`  ${entryRows.length} daily returns, ${valueRows.length} measure values`);
+
+  /*
+   * A row per instrument per day.
+   *
+   * Without these the crew-and-rover screens and the two productivity
+   * reports have nothing to read and come back empty — which looks exactly
+   * like a broken page, and is how a gap in test data gets mistaken for a
+   * gap in the product. A seventh of the days are idle, each with a reason,
+   * so the idle drill-down has something to drill into.
+   */
+  const allocByVillage = new Map<string, string>();
+  for (const r of roverRows) allocByVillage.set(String(r[1]), String(r[2]));
+  const entryRoverRows: unknown[][] = [];
+  for (const e of entries) {
+    const asset = allocByVillage.get(String(e.survey_village_id));
+    if (!asset) continue;
+    const idle = rand() < 0.14;
+    const reason = idle ? pick(VARIANCE_REASONS) : null;
+    entryRoverRows.push([orgId, String(e.id), asset,
+      idle ? "IDLE" : "UTILIZED", reason,
+      reason === "OTHER" ? pick(OTHER_REMARKS) : null]);
+  }
+  await chunkInsert(pool,
+    `INSERT INTO survey_entry_rovers
+       (org_id, entry_id, asset_id, status, idle_reason, remarks)`, 6, entryRoverRows, 400);
+
+  console.log(`  ${entryRows.length} daily returns, ${valueRows.length} measure values, `
+    + `${entryRoverRows.length} instrument-days`);
 
   /* --- claims on what has been earned ----------------------------------- */
   const earned = (await pool.query(

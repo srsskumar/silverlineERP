@@ -405,3 +405,31 @@ describe("a stage carries its plan (§072)", () => {
     expect(r.data.totals.unplanned).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe("the village list at scale", () => {
+  it("honours a limit instead of ignoring it", async () => {
+    /*
+     * This route took a `limit` and returned everything anyway. At twelve
+     * hundred villages that is a two-megabyte answer to a request for two
+     * rows — and a parameter that does nothing is worse than one that does
+     * not exist, because the caller believes it worked.
+     */
+    const paged = await get(w.admin, `/api/v1/survey/projects/${programmeId}/villages?limit=2`);
+    expect(paged.status).toBe(200);
+    expect(paged.body.data).toHaveLength(2);
+    expect(paged.body.total).toBeGreaterThan(2);
+    expect(paged.body.has_more).toBe(true);
+
+    const second = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/villages?limit=2&offset=2`);
+    expect(second.body.data[0].id).not.toBe(paged.body.data[0].id);
+  });
+
+  it("still returns the whole list when no page is asked for", async () => {
+    // The Villages screen filters, sorts and exports what it holds; a default
+    // page would silently narrow all three.
+    const all = await get(w.admin, `/api/v1/survey/projects/${programmeId}/villages`);
+    expect(all.body.data.length).toBe(all.body.total);
+    expect(all.body.has_more).toBe(false);
+  });
+});

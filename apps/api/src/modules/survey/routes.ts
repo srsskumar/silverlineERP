@@ -835,12 +835,33 @@ export async function registerSurveyRoutes(
     const u = actor(req), id = (req.params as { id: string }).id;
     const { q } = page(req);
     await projectOr404(pool, u.orgId, id, u);
-    const [m, codes, pos] = await Promise.all([
+    const [m, codes, all] = await Promise.all([
       measures(pool, u.orgId), stageCodes(pool, u.orgId),
       positions(pool, u.orgId, id, { asOf: dateParam(req, q.as_of, 'as_of', today()) }),
     ]);
 
+    /*
+     * The whole list by default; a page when one is asked for.
+     *
+     * This route took a `limit` and ignored it, which at twelve hundred
+     * villages is a two-megabyte response to a request for fifty — and a
+     * parameter that does nothing is worse than one that does not exist,
+     * because the caller believes it worked.
+     *
+     * The default stays "everything" rather than becoming thirty: the
+     * Villages screen filters, sorts and exports what it holds, and a page
+     * would silently narrow all three. Callers that want a page now ask for
+     * one and are told whether more remain.
+     */
+    const wantsPage = q.limit !== undefined && q.limit !== '';
+    const limit = wantsPage
+      ? Math.min(1000, Math.max(1, Number(q.limit) || 30)) : all.length;
+    const offset = Math.max(0, Number(q.offset) || 0);
+    const pos = wantsPage ? all.slice(offset, offset + limit) : all;
+
     return {
+      total: all.length,
+      has_more: wantsPage && offset + pos.length < all.length,
       data: pos.map(p => ({
         id: p.villageId,
         village_id: p.row.village_id,
