@@ -10,11 +10,17 @@ import { messageOf } from '@/lib/form-errors';
 import { businessToday } from '@/lib/finance';
 import {
   MILESTONE_LABELS, MILESTONE_PERCENT, BILLING_SKIP_LABELS, BILLING_STATUS_LABELS,
+  MILESTONE_REQUIRES, milestoneEarned, milestoneBlockedNote, STAGE_PIPELINE,
 } from '@silverline/shared';
 
 type Row = Record<string, any>;
 
 const field = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
+
+/** A stage's name, for the sentence that says what is in the way. */
+const labelOfStage = (code: string): string =>
+  STAGE_PIPELINE.find((s) => s.code === code)?.label
+  ?? code.replace(/_/g, ' ').toLowerCase();
 
 /**
  * Claim, or record a decision on, the villages that are selected (§066).
@@ -30,12 +36,16 @@ const field = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm te
  * is written until they have read the answer.
  */
 export function BillingBulkBar({
-  selected, canManage, onDone, onClear,
+  selected, villages, canManage, onDone, onClear, onKeepEligible,
 }: {
   selected: string[];
+  /** The selected villages themselves, so eligibility can be read off them. */
+  villages: Row[];
   canManage: boolean;
   onDone: () => void;
   onClear: () => void;
+  /** Narrow the selection to the villages that have earned the milestone. */
+  onKeepEligible: (ids: string[]) => void;
 }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -93,6 +103,42 @@ export function BillingBulkBar({
       onDone();
     },
   });
+
+  /*
+   * Which of the selected villages have actually earned this milestone
+   * (§077).
+   *
+   * Worked out here, from the stages already on screen, using the same
+   * function the server refuses with. The server has always refused an
+   * unearned claim and listed it as skipped — but only after a dry run, and
+   * after somebody had swept a thousand villages into a selection. Saying so
+   * before the press is the difference between a filter and a rejection.
+   *
+   * Only for SUBMIT. Recording the department's decision on a claim that
+   * already exists says nothing about whether the stage is finished.
+   */
+  const gate = React.useMemo(() => {
+    if (action !== 'SUBMIT') return null;
+    const n = Number(milestone);
+    const picked = villages.filter((v) => selected.includes(String(v.id)));
+    const eligible = picked.filter((v) => milestoneEarned(n, v.stages ?? {}));
+    const blocked = picked.filter((v) => !milestoneEarned(n, v.stages ?? {}));
+    /* Grouped by what is in the way: two hundred names is not a sentence. */
+    const why = blocked.reduce<Record<string, number>>((acc, v) => {
+      const note = milestoneBlockedNote(n, v.stages ?? {}, labelOfStage)
+        ?? 'Not earned yet';
+      acc[note] = (acc[note] ?? 0) + 1;
+      return acc;
+    }, {});
+    return {
+      required: MILESTONE_REQUIRES[n],
+      eligible: eligible.map((v) => String(v.id)),
+      blocked: blocked.length,
+      why,
+      /* Unknown rather than false when the row carries no stages at all. */
+      unknown: picked.length !== selected.length,
+    };
+  }, [action, milestone, selected, villages]);
 
   if (!canManage || selected.length === 0) return null;
 
@@ -177,6 +223,43 @@ export function BillingBulkBar({
         </Button>
         <Button type="button" variant="ghost" onClick={onClear}>Clear selection</Button>
       </div>
+
+      {/*
+        * What has been earned, before anything is sent.
+        *
+        * The contract does not release money for work in progress, so a claim
+        * on a village whose QC has not signed off comes back — and a returned
+        * claim costs a month. The server has always refused these; saying so
+        * here, against the selection on screen, is the difference between a
+        * filter and a rejection.
+        */}
+      {gate && gate.blocked > 0 ? (
+        <Notice
+          tone="warning"
+          title={`${gate.blocked} of ${selected.length} selected cannot be claimed at ${
+            (MILESTONE_LABELS as Row)[Number(milestone)] ?? `milestone ${milestone}`}`}
+        >
+          <ul className="mt-1 space-y-0.5 text-xs text-text-muted">
+            {Object.entries(gate.why).map(([note, n]) => (
+              <li key={note}>{n} — {note}</li>
+            ))}
+          </ul>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button type="button" variant="secondary"
+              disabled={gate.eligible.length === 0}
+              onClick={() => onKeepEligible(gate.eligible)}>
+              {gate.eligible.length === 0
+                ? 'None of these are eligible'
+                : `Keep the ${gate.eligible.length} that ${
+                  gate.eligible.length === 1 ? 'is' : 'are'} eligible`}
+            </Button>
+            <span className="text-2xs text-text-subtle">
+              Submitting anyway records nothing for these — they are listed as
+              skipped and left exactly as they were.
+            </span>
+          </div>
+        </Notice>
+      ) : null}
 
       {preview ? (
         <div className="space-y-2">

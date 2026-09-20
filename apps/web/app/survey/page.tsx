@@ -26,6 +26,7 @@ import { messageOf } from '@/lib/form-errors';
 import {
   staffingNote, formatCoordinate, GCP_WARNING_NOTES, checkGcp,
   extentVariancePct, extentVaries, acresToSqKm,
+  VILLAGE_LADDER, villagePosition, milestoneEarned, milestoneBlockedNote,
 } from '@silverline/shared';
 import {
   GRAINS, LEVEL_LABELS, REPORT_LEVELS, STAGE_STATE_LABELS, TALLY_LABELS, TALLY_ORDER,
@@ -2298,6 +2299,16 @@ function Villages({
   // Which state of that stage: outstanding covers everything not finished.
   const [stageState, setStageState] = React.useState('OUTSTANDING');
   /*
+   * Where the village has got to, as the dashboard reports it (§077).
+   *
+   * The stage-and-state pair above answers "what is happening to vectorisation
+   * across the programme"; this answers "which villages are at GT QC
+   * completed", which is the same question the dashboard is read for and was
+   * the one this screen could not be filtered by. Both, because they are
+   * genuinely different questions.
+   */
+  const [position, setPosition] = React.useState('');
+  /*
    * Which villages to pull by what has been claimed on them (§066).
    *
    * "Everything where the first claim has gone in and the second has not" is
@@ -2410,6 +2421,7 @@ function Villages({
       const at = stageStateOf(v, stage);
       if (stageState === 'OUTSTANDING' ? at === 'COMPLETED' : at !== stageState) return false;
     }
+    if (position && villagePosition(v.stages ?? {}).key !== position) return false;
     if (!matchesBillingFilter(v.claimed_milestones ?? [], billing)) return false;
     if (!needle) return true;
     return [v.village_name, v.mandal_name, v.district_name, v.village_code]
@@ -2492,7 +2504,8 @@ function Villages({
                 cellText(v.assignee_name),
               ];
             }),
-  }), [rows, measures, pipeline, projectName, district, mandal, stage, stageState, billing, filter]);
+  }), [rows, measures, pipeline, projectName, district, mandal, stage, stageState,
+    billing, filter, position]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
 
   // Every hook above has now run. These are safe.
@@ -2536,6 +2549,16 @@ function Villages({
             <option key={String(p.code)} value={String(p.code)}>{String(p.label)}</option>
           ))}
         </select>
+        {/* The eleven positions the dashboard reports, so a reader can land
+            on the same list the chart counted. */}
+        <select value={position} onChange={(e) => setPosition(e.target.value)}
+          title="Where the village has got to, as the dashboard reports it"
+          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+          <option value="">Any stage status</option>
+          {VILLAGE_LADDER.map((r: { key: string; label: string }) => (
+            <option key={r.key} value={r.key}>{r.label}</option>
+          ))}
+        </select>
         <select value={billing} onChange={(e) => setBilling(e.target.value)}
           title="Pull villages by what has been submitted for billing"
           className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
@@ -2565,9 +2588,9 @@ function Villages({
         {canManage && rows.length > 0 && rows.length < all.length ? (
           <MoveVillages projectId={projectId} villages={rows} />
         ) : null}
-        {(district || mandal || stage || filter || billing) ? (
+        {(district || mandal || stage || filter || billing || position) ? (
           <Button type="button" variant="ghost" onClick={() => {
-            setDistrict(''); setMandal(''); setStage('');
+            setDistrict(''); setMandal(''); setStage(''); setPosition('');
             setStageState('OUTSTANDING'); setFilter(''); setBilling('');
           }}>Clear</Button>
         ) : null}
@@ -2594,9 +2617,11 @@ function Villages({
         */}
       <BillingBulkBar
         selected={selectedHere}
+        villages={rows}
         canManage={canManage}
         onDone={() => setPicked(new Set())}
         onClear={() => setPicked(new Set())}
+        onKeepEligible={(ids) => setPicked(new Set(ids))}
       />
 
       {/* Capped height: the horizontal scrollbar for a twelve-column table

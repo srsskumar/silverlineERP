@@ -16,7 +16,7 @@
  */
 import * as React from 'react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 /* ------------------------------------------------------------ the fixtures */
@@ -170,7 +170,11 @@ const ROUTES: Array<[string, unknown]> = [
   ['/dashboard', DASHBOARD],
   ['/progress', PROGRESS],
   ['/report', REPORT],
-  ['/villages', [VILLAGE]],
+  ['/villages', [VILLAGE, {
+    ...VILLAGE, id: 'v2', village_name: 'Butchampeta', village_code: '1501042',
+    // Past GT QC, so it has earned the first claim where Adakula has not.
+    stages: { GROUND_TRUTHING: 'COMPLETED', GT_QC: 'COMPLETED' },
+  }]],
   ['/summary', [{ mandal: 'Koyyuru', village: 'Adakula', extent_ac: 200, extent_sq_km: 0.81,
     gt_status: 'COMPLETED', vectorization_status: 'NOT_STARTED', points: 400, lpms: 0,
     actual_extent_ac: 190, actual_extent_sq_km: 0.77, gt_started_on: '2026-09-01',
@@ -430,6 +434,52 @@ describe('the land survey screen', () => {
     expect(cells[2]).toBe('100%');
     expect(cells[3]).toBe('200');
     expect(cells[5]).toBe('120');
+  });
+
+  it('filters the villages by stage status, the way the dashboard counts them', async () => {
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    (await reveal('Villages')).click();
+    await waitFor(() => expect(screen.getByText('Adakula')).toBeInTheDocument());
+
+    const picker = screen.getByTitle(/Where the village has got to/);
+    // Every rung the dashboard reports is offered here too.
+    for (const rung of LADDER) {
+      expect(within(picker).getByText(rung.label), rung.key).toBeInTheDocument();
+    }
+
+    // Adakula's ground truthing is in progress; Butchampeta is past QC.
+    fireEvent.change(picker, { target: { value: 'GT_QC_COMPLETED' } });
+    await waitFor(() => expect(screen.queryByText('Adakula')).toBeNull());
+    expect(screen.getByText('Butchampeta')).toBeInTheDocument();
+  });
+
+  it('says which selected villages have not earned the milestone, before sending', async () => {
+    /*
+     * The server has always refused an unearned claim, but only after a dry
+     * run and after somebody had swept a thousand villages into a selection.
+     * The contract does not release money for work in progress, and a claim
+     * the department returns costs a month.
+     */
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    (await reveal('Villages')).click();
+    await waitFor(() => expect(screen.getByText('Adakula')).toBeInTheDocument());
+
+    const selectAll = screen.getByLabelText(/Select every village shown/);
+    fireEvent.click(selectAll);
+
+    // Adakula is still in ground truthing; Butchampeta has passed QC.
+    await waitFor(() =>
+      expect(screen.getByText(/1 of 2 selected cannot be claimed/)).toBeInTheDocument());
+    // Scoped to the notice: "GT quality check" is also a stage in the filter
+    // above it and a column in the table below.
+    const notice = screen.getByText(/1 of 2 selected cannot be claimed/)
+      .closest('div')!.parentElement!;
+    expect(within(notice).getByText(/GT quality check/)).toBeInTheDocument();
+    // And the way out is one press, not a re-tick of the whole list.
+    expect(screen.getByRole('button', { name: 'Keep the 1 that is eligible' }))
+      .toBeInTheDocument();
   });
 
   it('opens on the dashboard', async () => {
