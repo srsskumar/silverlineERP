@@ -102,6 +102,23 @@ export interface StageSeed { code: string; label: string; displayOrder: number }
  */
 export interface StageSeedOrdered extends StageSeed {
   requires?: string;
+  /**
+   * The stage that signs this one off (§078).
+   *
+   * Finishing work and having it accepted are two different events, and the
+   * contract pays on the second. Ground truthing is signed off by GT QC;
+   * vectorization by the department approving the data. A stage that is
+   * itself the acceptance — `isSignOff` below — signs off the one before it
+   * and needs nothing after.
+   */
+  signedOffBy?: string;
+  /**
+   * This stage *is* an acceptance rather than a piece of work.
+   *
+   * Its COMPLETED means somebody outside this company put their name to it,
+   * which is the only state the contract releases money on.
+   */
+  isSignOff?: boolean;
   /** Daily progress is recorded against this stage. */
   tracksDailyProgress?: boolean;
   /**
@@ -141,9 +158,12 @@ export interface StageSeedOrdered extends StageSeed {
  * FINAL_DELIVERABLES.
  */
 export const STAGE_PIPELINE: StageSeedOrdered[] = [
-  { code: 'GROUND_TRUTHING', label: 'Ground truthing', displayOrder: 10, tracksDailyProgress: true },
-  { code: 'GT_QC', label: 'GT quality check', displayOrder: 20, requires: 'GROUND_TRUTHING' },
-  { code: 'VECTORIZATION', label: 'Vectorization', displayOrder: 30, requires: 'GT_QC' },
+  {
+    code: 'GROUND_TRUTHING', label: 'Ground truthing', displayOrder: 10,
+    tracksDailyProgress: true, signedOffBy: 'GT_QC',
+  },
+  { code: 'GT_QC', label: 'GT quality check', displayOrder: 20, requires: 'GROUND_TRUTHING', isSignOff: true },
+  { code: 'VECTORIZATION', label: 'Vectorization', displayOrder: 30, requires: 'GT_QC', signedOffBy: 'DATA_SUBMISSION' },
   /*
    * Submitted, then approved.
    *
@@ -153,8 +173,14 @@ export const STAGE_PIPELINE: StageSeedOrdered[] = [
    * machine is the same one; only the words change, and the words are in
    * LADDER_LABELS so no screen ever says "data submission in progress".
    */
-  { code: 'DATA_SUBMISSION', label: 'Data submission', displayOrder: 40, requires: 'VECTORIZATION' },
-  { code: 'FINAL_DELIVERABLES', label: 'Final deliverables', displayOrder: 50, requires: 'DATA_SUBMISSION' },
+  {
+    code: 'DATA_SUBMISSION', label: 'Data submission', displayOrder: 40,
+    requires: 'VECTORIZATION', isSignOff: true,
+  },
+  {
+    code: 'FINAL_DELIVERABLES', label: 'Final deliverables', displayOrder: 50,
+    requires: 'DATA_SUBMISSION', isSignOff: true,
+  },
   // Entered from wherever the work failed rather than reached in sequence, so
   // it waits on nothing. A village that comes back has a start and an end
   // like any other work, and the history has to show it happened.
@@ -2355,11 +2381,94 @@ export const MILESTONE_REQUIRES: Record<number, string> = {
  * final deliverables are *submitted* — the money is not held behind an
  * approval that may take the department months.
  */
+/**
+ * The state of that stage which earns the milestone.
+ *
+ * Every one of them is COMPLETED, and on a sign-off stage COMPLETED means
+ * the department has accepted the work. The third claim used to release on
+ * IN_PROGRESS — the deliverables having gone in — on the reasoning that our
+ * money should not sit behind an approval the department may take months
+ * over. That is overruled: a submission is not an acceptance, and a claim
+ * against work nobody has signed for is a claim that comes back.
+ *
+ * Kept as a map rather than folded into a constant, because a later contract
+ * may well pay something on submission and this is where that would be said.
+ */
 export const MILESTONE_EARNED_AT: Record<number, StageState> = {
   1: 'COMPLETED',
   2: 'COMPLETED',
-  3: 'IN_PROGRESS',
+  3: 'COMPLETED',
 };
+
+/* --------------------------------------------- signed off, not just finished */
+
+/** The stages that are an acceptance rather than a piece of work. */
+export const SIGN_OFF_STAGES = STAGE_PIPELINE
+  .filter(s => s.isSignOff).map(s => s.code);
+
+export function isSignOffStage(code: string | null | undefined): boolean {
+  return Boolean(code) && SIGN_OFF_STAGES.includes(String(code));
+}
+
+/**
+ * Which stage signs a given one off.
+ *
+ * A sign-off stage signs itself: its own COMPLETED is the acceptance. Every
+ * other stage names the one that accepts it, and a stage that names nothing
+ * has no acceptance at all — which `unsignedStages` below exists to catch,
+ * because a pipeline with a gap in it is a pipeline that can bill for work
+ * nobody checked.
+ */
+export function signOffFor(
+  code: string, pipeline: StageSeedOrdered[] = STAGE_PIPELINE,
+): string | null {
+  const stage = pipeline.find(s => s.code === code);
+  if (!stage || stage.offSequence) return null;
+  if (stage.isSignOff) return stage.code;
+  return stage.signedOffBy ?? null;
+}
+
+/** Whether a stage has been accepted, not merely finished. */
+export function stageSignedOff(
+  code: string,
+  stages: Record<string, string> | null | undefined,
+  pipeline: StageSeedOrdered[] = STAGE_PIPELINE,
+): boolean {
+  const gate = signOffFor(code, pipeline);
+  if (!gate) return false;
+  return (stages ?? {})[gate] === 'COMPLETED';
+}
+
+/**
+ * Forward stages with nobody to accept them.
+ *
+ * Always empty, and asserted to be: every stage either is an acceptance or
+ * names one. This exists so that adding a sixth stage and forgetting to say
+ * who signs it off fails a test rather than quietly becoming billable.
+ */
+export function unsignedStages(
+  pipeline: StageSeedOrdered[] = STAGE_PIPELINE,
+): string[] {
+  return pipeline
+    .filter(s => !s.offSequence && !s.isSignOff && !s.signedOffBy)
+    .map(s => s.code);
+}
+
+/**
+ * Which milestones a village has earned, in order.
+ *
+ * One place, so the screen that greys a button, the bar that narrows a
+ * selection and the route that refuses a claim are all reading the same
+ * answer rather than three implementations of the same rule.
+ */
+export function earnedMilestones(
+  stages: Record<string, string> | null | undefined,
+): number[] {
+  return Object.keys(MILESTONE_REQUIRES)
+    .map(Number)
+    .filter(m => milestoneEarned(m, stages))
+    .sort((a, b) => a - b);
+}
 
 /**
  * Whether a village has earned a milestone yet.

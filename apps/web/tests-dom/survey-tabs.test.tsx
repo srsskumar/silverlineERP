@@ -115,6 +115,13 @@ const DASHBOARD = {
     by_position: Object.fromEntries(LADDER.map(r => [r.key, r.key === 'GT_COMPLETED' ? 1 : 0])),
     on_hold: 0, in_rework: 0, gcp_missing: 0,
     late: 1, late_unexplained: 1, unplanned: 0,
+    earned: { 1: 1, 2: 0, 3: 0 },
+    awaiting_sign_off: [
+      { code: 'GROUND_TRUTHING', label: 'Ground truthing', villages: 2,
+        signed_off_by: 'GT_QC' },
+      { code: 'VECTORIZATION', label: 'Vectorization', villages: 0,
+        signed_off_by: 'DATA_SUBMISSION' },
+    ],
     positions: LADDER.map(r => r.key === 'GT_COMPLETED'
       ? { ...r, villages: 1, extent_ac: 200, extent_sqkm: 0.81,
           surveyed_ac: 120, surveyed_sqkm: 0.49, share_pct: 100 }
@@ -156,7 +163,7 @@ const DASHBOARD = {
     mandal: 'Koyyuru', extent_ac: 200, extent_sqkm: 0.81, surveyed_ac: 120,
     position: 'GT_COMPLETED', position_label: 'GT completed', on_hold: false,
     in_rework: false, gt_started_on: '2026-09-01', gt_expected_end_on: '2026-10-01',
-    gcp_count: 1, slip_days: 8, slip_stage: 'GROUND_TRUTHING', slip_note: '8 days late',
+    gcp_count: 1, earned_milestones: [], slip_days: 8, slip_stage: 'GROUND_TRUTHING', slip_note: '8 days late',
     slip_reason: null, slip_needs_reason: true,
     gt_completed_on: '2026-10-09', surveyed_sqkm: 0.49,
     stage_days: { GROUND_TRUTHING: 38 }, days_in_stage: 38,
@@ -480,6 +487,21 @@ describe('the land survey screen', () => {
     // And the way out is one press, not a re-tick of the whole list.
     expect(screen.getByRole('button', { name: 'Keep the 1 that is eligible' }))
       .toBeInTheDocument();
+  });
+
+  it('separates work that is finished from work that has been accepted', async () => {
+    /*
+     * The contract pays on the signature, not the completion. A dashboard
+     * that only showed completions would report a programme as billable
+     * months before any of it is.
+     */
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() =>
+      expect(screen.getByText('Waiting to be signed off')).toBeInTheDocument());
+    expect(screen.getByText('2 ground truthing awaiting gt qc')).toBeInTheDocument();
+    expect(screen.getByText('1 eligible for milestone 1')).toBeInTheDocument();
+    expect(screen.getByText('0 eligible for milestone 3')).toBeInTheDocument();
   });
 
   it('opens on the dashboard', async () => {

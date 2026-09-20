@@ -180,7 +180,19 @@ describe("what an observer may see", () => {
      * an identifier or a figure: the name of a person, the code of an
      * instrument, or anything about what the work is worth.
      */
-    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    /*
+     * Read as the observer, not as an administrator.
+     *
+     * It used to fetch this as admin, which happened to pass while the
+     * dashboard carried nothing commercial at all. It now carries billing
+     * eligibility for the people entitled to it (§078), and an assertion
+     * against the wrong reader would have been satisfied only by taking that
+     * away from everybody. What the claim is actually about is the
+     * department's copy.
+     */
+    const r = await get(w.role.GOVT_OBSERVER,
+      `/api/v1/survey/projects/${programmeId}/dashboard`);
+    expect(r.status).toBe(200);
     const body = JSON.stringify(r.data);
     for (const leak of ["employee_id", "employee_name", "assignee", "asset_id",
       "asset_code", "serial_number", "milestone", "billing", "claim", "invoice",
@@ -824,6 +836,81 @@ describe("the eleven rungs as figures (§076)", () => {
     // Every other rung is empty once one is selected.
     for (const row of rows) {
       if (String(row.key) !== "NOT_STARTED") expect(row.villages).toBe(0);
+    }
+  });
+});
+
+describe("billing waits for an acceptance (§078)", () => {
+  let awaiting = "";
+
+  beforeAll(async () => {
+    awaiting = await makeVillage("NANDIGAMA", 140);
+    for (const [code, state, on] of [
+      ["GROUND_TRUTHING", "COMPLETED", "2026-02-01"],
+      ["GT_QC", "COMPLETED", "2026-02-15"],
+      ["VECTORIZATION", "COMPLETED", "2026-03-10"],
+      ["DATA_SUBMISSION", "COMPLETED", "2026-04-01"],
+    ] as const) {
+      await post(w.admin, `/api/v1/survey/villages/${awaiting}/stage`, {
+        stage_code: code, state, completed_on: on,
+        ...(code === "GROUND_TRUTHING"
+          ? { gt_govt_staff_allocated: 2, gt_crew_allocated: 4 } : {}),
+      });
+    }
+    // Deliverables submitted, not yet accepted.
+    await post(w.admin, `/api/v1/survey/villages/${awaiting}/stage`, {
+      stage_code: "FINAL_DELIVERABLES", state: "IN_PROGRESS", started_on: "2026-04-20",
+    });
+  });
+
+  it("refuses the third claim on deliverables that have only gone in", async () => {
+    const r = await post(w.admin, `/api/v1/survey/villages/${awaiting}/billing`,
+      { milestone: 3 });
+    expect(r.status).toBe(422);
+    expect(String(r.body.message)).toMatch(/signed off/i);
+  });
+
+  it("allows it once the department has accepted them", async () => {
+    await post(w.admin, `/api/v1/survey/villages/${awaiting}/stage`, {
+      stage_code: "FINAL_DELIVERABLES", state: "COMPLETED", completed_on: "2026-05-15",
+    });
+    const r = await post(w.admin, `/api/v1/survey/villages/${awaiting}/billing`,
+      { milestone: 3 });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+
+  it("counts what is finished but unsigned, per stage", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    const rows = r.data.totals.awaiting_sign_off as Array<Record<string, unknown>>;
+    // Only the stages that are work; an acceptance does not await itself.
+    expect(rows.map(x => x.code)).toEqual(["GROUND_TRUTHING", "VECTORIZATION"]);
+    expect(rows.find(x => x.code === "GROUND_TRUTHING")!.signed_off_by).toBe("GT_QC");
+    expect(rows.find(x => x.code === "VECTORIZATION")!.signed_off_by)
+      .toBe("DATA_SUBMISSION");
+  });
+
+  it("agrees with itself about what may be claimed", async () => {
+    /*
+     * The figure on the dashboard and the list on the village rows are two
+     * readings of one rule, and this is where they would drift apart.
+     */
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    const villages = r.data.villages as Array<{ earned_milestones: number[] }>;
+    for (const milestone of [1, 2, 3]) {
+      const fromRows = villages
+        .filter(v => v.earned_milestones.includes(milestone)).length;
+      expect(Number(r.data.totals.earned[String(milestone)]), `milestone ${milestone}`)
+        .toBe(fromRows);
+    }
+  });
+
+  it("never reports a village as earning a later claim without the earlier one", async () => {
+    // The stages are a sequence and the acceptances follow it, so earning the
+    // third without the second would mean a stage was signed off out of order.
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    for (const v of r.data.villages as Array<{ earned_milestones: number[] }>) {
+      if (v.earned_milestones.includes(3)) expect(v.earned_milestones).toContain(2);
+      if (v.earned_milestones.includes(2)) expect(v.earned_milestones).toContain(1);
     }
   });
 });

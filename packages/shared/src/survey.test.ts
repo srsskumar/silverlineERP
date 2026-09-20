@@ -23,6 +23,8 @@ import {
   DELAY_REASON_CODES,
   gtReasonRequired, surveyEntrySchema, surveyEntryPatchSchema,
   surveyEntryBase,
+  unsignedStages, signOffFor, stageSignedOff, isSignOffStage,
+  SIGN_OFF_STAGES, earnedMilestones, MILESTONE_REQUIRES, MILESTONE_EARNED_AT,
 } from './survey.js';
 
 const BASIS: Record<string, MeasureBasis> = Object.fromEntries(
@@ -1527,11 +1529,10 @@ describe('what a milestone may be claimed on', () => {
     expect(milestoneEarned(2, { DATA_SUBMISSION: 'COMPLETED' })).toBe(true);
   });
 
-  it('holds the third until the deliverables have gone in', () => {
+  it('holds the third until the deliverables have been accepted', () => {
     expect(milestoneEarned(3, { DATA_SUBMISSION: 'COMPLETED' })).toBe(false);
-    // Submitted is enough here, unlike the two before it: the contract does
-    // not hold the money behind an approval the department may sit on.
-    expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'IN_PROGRESS' })).toBe(true);
+    // Submitted is not accepted (§078). Every claim now waits on a signature.
+    expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'IN_PROGRESS' })).toBe(false);
     expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'COMPLETED' })).toBe(true);
   });
 
@@ -1857,11 +1858,11 @@ describe('billing gates after §071', () => {
     expect(milestoneEarned(2, { DATA_SUBMISSION: 'COMPLETED' })).toBe(true);
   });
 
-  it('releases the third claim when the deliverables go in, not when they come back', () => {
-    // The contract does not hold our money behind an approval that may take
-    // the department months.
+  it('holds the third claim until the deliverables come back accepted', () => {
+    // §072 released this on submission; §078 overruled it. A claim against
+    // work nobody has signed for is a claim that comes back.
     expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'NOT_STARTED' })).toBe(false);
-    expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'IN_PROGRESS' })).toBe(true);
+    expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'IN_PROGRESS' })).toBe(false);
     expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'COMPLETED' })).toBe(true);
   });
 
@@ -1869,7 +1870,7 @@ describe('billing gates after §071', () => {
     const label = (c: string) => c.replace(/_/g, ' ').toLowerCase();
     expect(milestoneBlockedNote(2, { DATA_SUBMISSION: 'IN_PROGRESS' }, label))
       .toMatch(/signed off/);
-    expect(milestoneBlockedNote(3, {}, label)).toMatch(/goes in/);
+    expect(milestoneBlockedNote(3, {}, label)).toMatch(/signed off/);
     expect(milestoneBlockedNote(1, { GT_QC: 'COMPLETED' }, label)).toBeNull();
   });
 });
@@ -2148,5 +2149,85 @@ describe("the day's return can carry the reason (§074)", () => {
     // have made it underivable, which is why the base is kept unrefined.
     expect(surveyEntryPatchSchema.safeParse({ values: { GOVT_LAND_EXTENT_AC: 5 } }).success)
       .toBe(true);
+  });
+});
+
+describe('signed off, not just finished (§078)', () => {
+  it('gives every stage in the pipeline somebody to accept it', () => {
+    /*
+     * The guard this exists for: adding a sixth stage and forgetting to say
+     * who signs it off would otherwise make it quietly billable on its own
+     * say-so.
+     */
+    expect(unsignedStages()).toEqual([]);
+  });
+
+  it('names the acceptance for each piece of work', () => {
+    expect(signOffFor('GROUND_TRUTHING')).toBe('GT_QC');
+    expect(signOffFor('VECTORIZATION')).toBe('DATA_SUBMISSION');
+    // An acceptance signs itself: its own COMPLETED is the signature.
+    expect(signOffFor('GT_QC')).toBe('GT_QC');
+    expect(signOffFor('DATA_SUBMISSION')).toBe('DATA_SUBMISSION');
+    expect(signOffFor('FINAL_DELIVERABLES')).toBe('FINAL_DELIVERABLES');
+    // Rework is off the sequence and accepts nothing.
+    expect(signOffFor('REWORK')).toBeNull();
+  });
+
+  it('knows which stages are an acceptance rather than a piece of work', () => {
+    expect(SIGN_OFF_STAGES).toEqual(['GT_QC', 'DATA_SUBMISSION', 'FINAL_DELIVERABLES']);
+    expect(isSignOffStage('GT_QC')).toBe(true);
+    expect(isSignOffStage('GROUND_TRUTHING')).toBe(false);
+    expect(isSignOffStage(null)).toBe(false);
+  });
+
+  it('does not call work signed off just because it finished', () => {
+    // Ground truthing complete and QC not started is work nobody has checked.
+    expect(stageSignedOff('GROUND_TRUTHING', { GROUND_TRUTHING: 'COMPLETED' })).toBe(false);
+    expect(stageSignedOff('GROUND_TRUTHING',
+      { GROUND_TRUTHING: 'COMPLETED', GT_QC: 'IN_PROGRESS' })).toBe(false);
+    expect(stageSignedOff('GROUND_TRUTHING',
+      { GROUND_TRUTHING: 'COMPLETED', GT_QC: 'COMPLETED' })).toBe(true);
+  });
+});
+
+describe('billing waits for an acceptance (§078)', () => {
+  it('no longer releases the third claim on a submission', () => {
+    /*
+     * Overruled deliberately. §072 released this when the deliverables went
+     * in, so our money would not sit behind an approval the department might
+     * take months over. A submission is not an acceptance, and a claim
+     * against work nobody has signed for is a claim that comes back.
+     */
+    expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'IN_PROGRESS' })).toBe(false);
+    expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'COMPLETED' })).toBe(true);
+  });
+
+  it('gates every milestone on a stage that is an acceptance', () => {
+    for (const milestone of [1, 2, 3]) {
+      const required = MILESTONE_REQUIRES[milestone];
+      expect(isSignOffStage(required), `milestone ${milestone} -> ${required}`).toBe(true);
+      expect(MILESTONE_EARNED_AT[milestone], String(milestone)).toBe('COMPLETED');
+    }
+  });
+
+  it('lists what a village has earned, in order', () => {
+    expect(earnedMilestones({})).toEqual([]);
+    expect(earnedMilestones({ GT_QC: 'COMPLETED' })).toEqual([1]);
+    expect(earnedMilestones({ GT_QC: 'COMPLETED', DATA_SUBMISSION: 'COMPLETED' }))
+      .toEqual([1, 2]);
+    expect(earnedMilestones({
+      GT_QC: 'COMPLETED', DATA_SUBMISSION: 'COMPLETED', FINAL_DELIVERABLES: 'COMPLETED',
+    })).toEqual([1, 2, 3]);
+    // Submitted but not approved earns nothing new.
+    expect(earnedMilestones({
+      GT_QC: 'COMPLETED', DATA_SUBMISSION: 'COMPLETED', FINAL_DELIVERABLES: 'IN_PROGRESS',
+    })).toEqual([1, 2]);
+  });
+
+  it('says the deliverables are awaiting approval rather than missing', () => {
+    const label = (c: string) => c.replace(/_/g, ' ').toLowerCase();
+    const note = milestoneBlockedNote(3, { FINAL_DELIVERABLES: 'IN_PROGRESS' }, label);
+    expect(note).toMatch(/not finished/i);
+    expect(note).toMatch(/signed off/i);
   });
 });

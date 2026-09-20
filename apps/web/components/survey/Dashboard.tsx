@@ -63,6 +63,7 @@ interface DashboardVillage {
   holders?: string[];
   holder_count?: number;
   gcp_count: number;
+  earned_milestones: number[];
   slip_days: number | null;
   slip_stage: string | null;
   slip_note: string | null;
@@ -108,6 +109,10 @@ interface DashboardData {
     on_hold: number; in_rework: number; gcp_missing: number;
     late: number; late_unexplained: number; unplanned: number;
     positions: PositionRow[];
+    earned: Record<string, number>;
+    awaiting_sign_off: Array<{
+      code: string; label: string; villages: number; signed_off_by: string | null;
+    }>;
   };
   stage_days: Array<{
     code: string; label: string;
@@ -675,6 +680,38 @@ export function SurveyDashboard({
             </TBody>
           </Table>
         </TableWrap>
+      </Card>
+
+      {/* ------------------------------------------ finished, and not yet accepted */}
+      <Card className="p-4">
+        <div className="mb-2 flex items-baseline justify-between gap-2">
+          <h3 className="text-sm font-semibold text-text">Waiting to be signed off</h3>
+          <span className="text-2xs text-text-subtle">
+            Finishing work and having it accepted are different events, and the
+            contract pays on the second
+          </span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {totals.awaiting_sign_off.map((st) => (
+            <Badge key={st.code} tone={st.villages > 0 ? 'warning' : 'neutral'}>
+              {`${num(st.villages)} ${st.label.toLowerCase()} awaiting ${
+                (st.signed_off_by ?? '').replace(/_/g, ' ').toLowerCase()}`}
+            </Badge>
+          ))}
+        </div>
+        {/*
+          * What may actually be claimed, beside it. Counted from the same
+          * rule the claim route refuses with, so a reader is never told on
+          * one screen that something is billable and on the next that it is
+          * not.
+          */}
+        <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
+          {Object.entries(totals.earned).map(([milestone, n]) => (
+            <Badge key={milestone} tone={n > 0 ? 'success' : 'neutral'}>
+              {`${num(n)} eligible for milestone ${milestone}`}
+            </Badge>
+          ))}
+        </div>
       </Card>
 
       {/* --------------------------------------------------- why work is held up */}

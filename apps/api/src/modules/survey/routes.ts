@@ -12,6 +12,7 @@ import {
   VILLAGE_LADDER, villagePosition, tallyByPosition, gtStartSchema,
   DELAY_REASON_CODES,
   stageVariance, varianceNote, villageVariances, gtReasonRequired, delayReasonLabel as dLabel,
+  earnedMilestones, stageSignedOff, signOffFor,
   crewAssignmentSchema, roverAllocationSchema, stageRemarkSchema, STAGE_PIPELINE,
   crewBulkAssignmentSchema, roverBulkAllocationSchema, roverAllocationEditSchema,
   villageMoveSchema,
@@ -4870,6 +4871,36 @@ export async function registerSurveyRoutes(
             late_unexplained: matches.filter(v => v.worst?.variance.needsReason).length,
             unplanned: matches.filter(v => v.worst?.variance.basis === 'NO_PLAN'
               || v.worst === null).length,
+            /*
+             * Villages whose work has been accepted, per milestone (§078).
+             *
+             * Finishing a stage and having it accepted are different events
+             * and the contract pays on the second, so this counts signatures
+             * rather than completions. Reported so every tab reads the same
+             * figure as the claim route.
+             *
+             * Not for the department. "How many villages are eligible for
+             * the second milestone" is our commercial position — it says how
+             * much we are about to invoice them for — and the observer's view
+             * carries no money. The sign-off counts below stay, because work
+             * finished and unchecked is progress rather than price.
+             */
+            ...(observerView ? {} : {
+              earned: Object.fromEntries(
+                Object.keys(MILESTONE_REQUIRES).map(m => [
+                  m, matches.filter(v => milestoneEarned(Number(m), v.stages)).length,
+                ])),
+            }),
+            /* Finished but not yet accepted, which is the chase list. */
+            awaiting_sign_off: STAGE_PIPELINE
+              .filter(st => !st.offSequence && !st.isSignOff)
+              .map(st => ({
+                code: st.code,
+                label: st.label,
+                villages: matches.filter(v =>
+                  v.stages[st.code] === 'COMPLETED' && !stageSignedOff(st.code, v.stages)).length,
+                signed_off_by: signOffFor(st.code),
+              })),
           },
           /*
            * How long each stage takes, and how many villages are sitting in
@@ -5008,6 +5039,18 @@ export async function registerSurveyRoutes(
               slip_note: v.worst ? varianceNote(v.worst.variance) : null,
               slip_reason: v.worst?.variance.reason ?? null,
               slip_needs_reason: Boolean(v.worst?.variance.needsReason),
+              /*
+               * What this village has earned (§078).
+               *
+               * Computed from the same rule the claim route refuses with, so
+               * the screen that greys a button, the bar that narrows a
+               * selection and the route that rejects a submission are three
+               * readings of one answer rather than three implementations.
+               *
+               * Dropped for the department along with everything else about
+               * what the work is worth.
+               */
+              ...(observerView ? {} : { earned_milestones: earnedMilestones(v.stages) }),
             }))
             .sort((a, b) => a.name.localeCompare(b.name)),
         },
