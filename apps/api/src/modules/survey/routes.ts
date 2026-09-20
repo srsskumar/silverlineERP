@@ -4824,6 +4824,33 @@ export async function registerSurveyRoutes(
             surveyed_ac: surveyed,
             surveyed_sqkm: acresToSqKm(surveyed),
             by_position: tallyByPosition(matches),
+            /*
+             * The same eleven rungs with their extent, for the table beside
+             * the chart (§076).
+             *
+             * Sent as figures per rung rather than as a finished total,
+             * because the table's last row has to be the sum of the rows
+             * above it. A total fetched separately is a total that can
+             * disagree with what is on the screen, and the reader has no way
+             * to tell which of the two is wrong.
+             */
+            positions: VILLAGE_LADDER.map(rung => {
+              const at = matches.filter(v => v.position.key === rung.key);
+              const extent = at.reduce((t, v) => t + (v.extentAc ?? 0), 0);
+              const done = at.reduce((t, v) => t + (doneBy.get(v.villageId) ?? 0), 0);
+              return {
+                key: rung.key,
+                label: rung.label,
+                villages: at.length,
+                extent_ac: extent,
+                extent_sqkm: acresToSqKm(extent),
+                surveyed_ac: done,
+                surveyed_sqkm: acresToSqKm(done),
+                /* Of the villages on screen, not of the programme. */
+                share_pct: matches.length
+                  ? Math.round((at.length / matches.length) * 1000) / 10 : 0,
+              };
+            }),
             // Reported separately from the positions, because on hold is
             // something true about a village at a position rather than a
             // twelfth position.

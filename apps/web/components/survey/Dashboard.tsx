@@ -70,6 +70,17 @@ interface DashboardVillage {
   slip_needs_reason: boolean;
 }
 
+interface PositionRow {
+  key: string;
+  label: string;
+  villages: number;
+  extent_ac: number;
+  extent_sqkm: number;
+  surveyed_ac: number;
+  surveyed_sqkm: number;
+  share_pct: number;
+}
+
 interface ReasonRow { code: string; label: string; count: number; villages: number }
 interface ReasonGroup {
   unit: string;
@@ -96,6 +107,7 @@ interface DashboardData {
     by_position: Record<string, number>;
     on_hold: number; in_rework: number; gcp_missing: number;
     late: number; late_unexplained: number; unplanned: number;
+    positions: PositionRow[];
   };
   stage_days: Array<{
     code: string; label: string;
@@ -329,6 +341,9 @@ export function SurveyDashboard({
   if (!d || !totals) return <EmptyState title="Nothing to show yet" />;
 
   const maxRung = Math.max(1, ...ladder.map((r: Rung) => totals.by_position[r.key] ?? 0));
+  /** The last row of the table, added up from the rows above it. */
+  const sum = (field: keyof PositionRow): number =>
+    totals.positions.reduce((t, p) => t + Number(p[field] ?? 0), 0);
   const surveyedPct = totals.extent_ac > 0
     ? Math.round((totals.surveyed_ac / totals.extent_ac) * 1000) / 10 : null;
   const finished = totals.by_position.FINAL_APPROVED ?? 0;
@@ -424,7 +439,9 @@ export function SurveyDashboard({
             One village counted once. Select a row to filter everything below.
           </span>
         </div>
-        <ul className="space-y-1">
+        {/* Named, so the bars can be addressed apart from the table of the
+            same eleven rungs below them. */}
+        <ul className="space-y-1" aria-label="Villages by stage, as bars">
           {ladder.map((rung: Rung, i: number) => {
             const count = totals.by_position[rung.key] ?? 0;
             const share = totals.villages > 0
@@ -475,6 +492,84 @@ export function SurveyDashboard({
             );
           })}
         </ul>
+        {/*
+          * The same eleven rungs again, as figures.
+          *
+          * The chart answers "where is the weight" at a glance and is
+          * useless for reading a number off; the table answers "how many, and
+          * how much extent" and is useless for seeing the shape. Both, rather
+          * than a compromise that does neither — and the reader who has to
+          * put a figure in a note can take it from here without counting
+          * pixels.
+          *
+          * The last row is summed from the rows above it rather than taken
+          * from the headline. A total fetched separately is a total that can
+          * disagree with what is on the screen, and nothing tells the reader
+          * which of the two to believe.
+          */}
+        <div className="mt-4 border-t border-border pt-3">
+          <TableWrap>
+            <Table>
+              <THead>
+                <TR>
+                  <TH>Stage</TH>
+                  <TH className="text-right">Villages</TH>
+                  <TH className="text-right">Share</TH>
+                  <TH className="text-right">Extent (Ac)</TH>
+                  <TH className="text-right">Extent (km²)</TH>
+                  <TH className="text-right">Surveyed (Ac)</TH>
+                  <TH className="text-right">Surveyed (km²)</TH>
+                </TR>
+              </THead>
+              <TBody>
+                {totals.positions.map((p: PositionRow) => {
+                  const selected = position === p.key;
+                  return (
+                    <TR key={p.key}
+                      className={selected ? 'bg-surface-sunken' : undefined}>
+                      <TD>
+                        <button type="button"
+                          aria-pressed={selected}
+                          onClick={() => setPosition(selected ? '' : p.key)}
+                          className="text-left text-primary underline-offset-2 hover:underline">
+                          {p.label}
+                        </button>
+                      </TD>
+                      <TD className="text-right tabular-nums">{num(p.villages)}</TD>
+                      <TD className="text-right tabular-nums text-text-muted">
+                        {p.share_pct}%
+                      </TD>
+                      <TD className="text-right tabular-nums">{dec(p.extent_ac)}</TD>
+                      <TD className="text-right tabular-nums text-text-muted">
+                        {dec(p.extent_sqkm)}
+                      </TD>
+                      <TD className="text-right tabular-nums">{dec(p.surveyed_ac)}</TD>
+                      <TD className="text-right tabular-nums text-text-muted">
+                        {dec(p.surveyed_sqkm)}
+                      </TD>
+                    </TR>
+                  );
+                })}
+                <TR className="border-t-2 border-border font-semibold">
+                  <TD>Total</TD>
+                  <TD className="text-right tabular-nums">{num(sum('villages'))}</TD>
+                  <TD className="text-right tabular-nums text-text-muted">
+                    {Math.round(sum('share_pct') * 10) / 10}%
+                  </TD>
+                  <TD className="text-right tabular-nums">{dec(sum('extent_ac'))}</TD>
+                  <TD className="text-right tabular-nums text-text-muted">
+                    {dec(sum('extent_sqkm'))}
+                  </TD>
+                  <TD className="text-right tabular-nums">{dec(sum('surveyed_ac'))}</TD>
+                  <TD className="text-right tabular-nums text-text-muted">
+                    {dec(sum('surveyed_sqkm'))}
+                  </TD>
+                </TR>
+              </TBody>
+            </Table>
+          </TableWrap>
+        </div>
+
         {/*
           * Reported beside the ladder rather than as extra rungs. Each is
           * something true *about* a village at a position; making them

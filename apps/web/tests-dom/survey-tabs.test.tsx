@@ -115,6 +115,11 @@ const DASHBOARD = {
     by_position: Object.fromEntries(LADDER.map(r => [r.key, r.key === 'GT_COMPLETED' ? 1 : 0])),
     on_hold: 0, in_rework: 0, gcp_missing: 0,
     late: 1, late_unexplained: 1, unplanned: 0,
+    positions: LADDER.map(r => r.key === 'GT_COMPLETED'
+      ? { ...r, villages: 1, extent_ac: 200, extent_sqkm: 0.81,
+          surveyed_ac: 120, surveyed_sqkm: 0.49, share_pct: 100 }
+      : { ...r, villages: 0, extent_ac: 0, extent_sqkm: 0,
+          surveyed_ac: 0, surveyed_sqkm: 0, share_pct: 0 }),
   },
   reasons: {
     stage_variance: { unit: 'stages', note: '', total: 3,
@@ -291,8 +296,11 @@ describe('the land survey screen', () => {
     // Read inside the row rather than off its concatenated text: "1" and
     // "100%" run together in textContent and a loose regex would pass on the
     // percentage alone.
+    // Scoped to the bars: the table of the same eleven rungs below them has
+    // a button per row too.
+    const bars = screen.getByRole('list', { name: /as bars/ });
     for (const rung of LADDER) {
-      const row = screen.getByRole('button', { name: new RegExp(rung.label) });
+      const row = within(bars).getByRole('button', { name: new RegExp(rung.label) });
       const expected = rung.key === 'GT_COMPLETED' ? '1' : '0';
       expect(within(row).getByText(expected), rung.key).toBeInTheDocument();
     }
@@ -365,8 +373,8 @@ describe('the land survey screen', () => {
     expect(screen.getByText('GT expected end')).toBeInTheDocument();
     // Surveyed extent carries km² as well as acres.
     expect(screen.getAllByText(/0\.49/).length).toBeGreaterThan(0);
-    // Both roll-ups and the village list carry it.
-    expect(screen.getAllByText('Surveyed (km²)').length).toBe(3);
+    // Two roll-ups, the stage table and the village list all carry it.
+    expect(screen.getAllByText('Surveyed (km²)').length).toBe(4);
   });
 
   it('rolls up by mandal as well as by district', async () => {
@@ -386,6 +394,42 @@ describe('the land survey screen', () => {
     const card = screen.getByText('By mandal').closest('div')!.parentElement!;
     expect(within(card).getByText('District')).toBeInTheDocument();
     expect(within(card).getByText('Krishna')).toBeInTheDocument();
+  });
+
+  it('shows the eleven rungs as figures as well as a chart', async () => {
+    /*
+     * The chart answers "where is the weight" and is useless for reading a
+     * number off; the table answers "how many, and how much extent". A reader
+     * putting a figure in a note should not have to count pixels.
+     */
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() =>
+      expect(screen.getByText('Where every village has got to')).toBeInTheDocument());
+    const card = screen.getByText('Where every village has got to')
+      .closest('div')!.parentElement!;
+    expect(within(card).getByText('Stage')).toBeInTheDocument();
+    expect(within(card).getByText('Share')).toBeInTheDocument();
+    // Every rung has a row, whether or not anything is at it.
+    for (const rung of LADDER) {
+      expect(within(card).getAllByText(rung.label).length, rung.key)
+        .toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('ends the table with a total summed from the rows above it', async () => {
+    // A total fetched separately is a total that can disagree with what is on
+    // the screen, and nothing tells the reader which of the two to believe.
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() => expect(screen.getByText('Total')).toBeInTheDocument());
+    const row = screen.getByText('Total').closest('tr')!;
+    const cells = within(row).getAllByRole('cell').map((c) => c.textContent);
+    // One village, 100% of what is shown, 200 acres, 120 surveyed.
+    expect(cells[1]).toBe('1');
+    expect(cells[2]).toBe('100%');
+    expect(cells[3]).toBe('200');
+    expect(cells[5]).toBe('120');
   });
 
   it('opens on the dashboard', async () => {

@@ -765,3 +765,65 @@ describe("the mandal roll-up (§075)", () => {
       .toBeLessThanOrEqual(total(all.data.by_mandal));
   });
 });
+
+describe("the eleven rungs as figures (§076)", () => {
+  it("sends every rung with its extent, in the order of the work", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    const rows = r.data.totals.positions as Array<Record<string, number | string>>;
+    expect(rows).toHaveLength(11);
+    expect(rows.map(x => x.key)).toEqual([
+      "NOT_STARTED", "GT_IN_PROGRESS", "GT_COMPLETED",
+      "GT_QC_IN_PROGRESS", "GT_QC_COMPLETED",
+      "VECTORIZATION_IN_PROGRESS", "VECTORIZATION_COMPLETED",
+      "DATA_SUBMITTED", "DATA_APPROVED",
+      "FINAL_SUBMITTED", "FINAL_APPROVED",
+    ]);
+    for (const row of rows) {
+      for (const field of ["villages", "extent_ac", "extent_sqkm",
+        "surveyed_ac", "surveyed_sqkm", "share_pct"]) {
+        expect(row, field).toHaveProperty(field);
+      }
+    }
+  });
+
+  it("adds up to the headline, so the table's last row cannot contradict it", async () => {
+    /*
+     * The whole reason the figures are sent per rung rather than as a
+     * finished total: a total fetched separately is a total that can
+     * disagree with the rows on the screen, and the reader has no way to
+     * tell which of the two is wrong.
+     */
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    const rows = r.data.totals.positions as Array<Record<string, number>>;
+    const sum = (f: string) => rows.reduce((t, x) => t + Number(x[f]), 0);
+    expect(sum("villages")).toBe(r.data.totals.villages);
+    expect(sum("extent_ac")).toBeCloseTo(r.data.totals.extent_ac, 4);
+    expect(sum("surveyed_ac")).toBeCloseTo(r.data.totals.surveyed_ac, 4);
+    // And the counts agree with the chart's own tally of the same villages.
+    for (const row of rows) {
+      expect(row.villages, String(row.key))
+        .toBe(r.data.totals.by_position[String(row.key)]);
+    }
+  });
+
+  it("keeps the shares to a hundred across the rungs shown", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    const rows = r.data.totals.positions as Array<{ share_pct: number }>;
+    const total = rows.reduce((t, x) => t + x.share_pct, 0);
+    // Rounded to a tenth per row, so a tenth or two of drift is arithmetic
+    // rather than a mistake.
+    expect(Math.abs(total - 100)).toBeLessThan(1);
+  });
+
+  it("narrows with the filters, and still adds up", async () => {
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/dashboard?position=NOT_STARTED`);
+    const rows = r.data.totals.positions as Array<Record<string, number>>;
+    expect(rows.reduce((t, x) => t + Number(x.villages), 0))
+      .toBe(r.data.filter.villages);
+    // Every other rung is empty once one is selected.
+    for (const row of rows) {
+      if (String(row.key) !== "NOT_STARTED") expect(row.villages).toBe(0);
+    }
+  });
+});
