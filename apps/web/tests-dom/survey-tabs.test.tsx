@@ -75,9 +75,10 @@ const REPORT = {
 };
 
 const LADDER = [
-  { key: 'NOT_STARTED', label: 'Not started' },
+  { key: 'NOT_STARTED', label: 'Not started', note: 'Nothing has been recorded yet.' },
   { key: 'GT_IN_PROGRESS', label: 'GT in progress' },
-  { key: 'GT_COMPLETED', label: 'GT completed' },
+  { key: 'GT_COMPLETED', label: 'GT completed',
+    note: 'The walking is finished. Nobody has checked it yet, so none of it can be billed.' },
   { key: 'GT_QC_IN_PROGRESS', label: 'GT QC in progress' },
   { key: 'GT_QC_COMPLETED', label: 'GT QC completed' },
   { key: 'VECTORIZATION_IN_PROGRESS', label: 'Vectorization in progress' },
@@ -116,6 +117,7 @@ const DASHBOARD = {
     on_hold: 0, in_rework: 0, gcp_missing: 0,
     late: 1, late_unexplained: 1, unplanned: 0,
     earned: { 1: 1, 2: 0, 3: 0 },
+    claimed_unearned: { 1: 0, 2: 0, 3: 2 },
     awaiting_sign_off: [
       { code: 'GROUND_TRUTHING', label: 'Ground truthing', villages: 2,
         signed_off_by: 'GT_QC' },
@@ -502,6 +504,36 @@ describe('the land survey screen', () => {
     expect(screen.getByText('2 ground truthing awaiting gt qc')).toBeInTheDocument();
     expect(screen.getByText('1 eligible for milestone 1')).toBeInTheDocument();
     expect(screen.getByText('0 eligible for milestone 3')).toBeInTheDocument();
+    // Claims raised before the rule tightened are named, not erased.
+    expect(screen.getByText('2 claimed at milestone 3 without a sign-off'))
+      .toBeInTheDocument();
+  });
+
+  it('explains what each position means rather than assuming the jargon', async () => {
+    /*
+     * "Data submitted" and "data approved" are days apart in the work and
+     * months apart in the money. A reader who does not know that reads the
+     * dashboard as though they were the same thing.
+     */
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() =>
+      expect(screen.getByText('Where every village has got to')).toBeInTheDocument());
+    const bars = screen.getByRole('list', { name: /as bars/ });
+    const gt = within(bars).getByRole('button', { name: /GT completed/ });
+    expect(gt.getAttribute('title')).toMatch(/none of it can be billed/);
+  });
+
+  it('spells the position out in full once the screen is narrowed to it', async () => {
+    // A hover is no use to somebody who has already filtered to one rung.
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() =>
+      expect(screen.getByText('Where every village has got to')).toBeInTheDocument());
+    const bars = screen.getByRole('list', { name: /as bars/ });
+    within(bars).getByRole('button', { name: /GT completed/ }).click();
+    await waitFor(() =>
+      expect(screen.getByText(/none of it can be billed/)).toBeInTheDocument());
   });
 
   it('opens on the dashboard', async () => {

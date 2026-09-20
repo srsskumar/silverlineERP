@@ -224,6 +224,40 @@ export const VILLAGE_LADDER: LadderRung[] = [
   { key: 'FINAL_APPROVED', label: 'Final deliverables approved', stage: 'FINAL_DELIVERABLES', state: 'COMPLETED' },
 ];
 
+/**
+ * What each position means, in words somebody outside the programme can read.
+ *
+ * Every one of these labels is a term of art. "Data submitted" and "Data
+ * approved" are three days apart in the work and three months apart in the
+ * money, and a reader who does not know that reads the dashboard as though
+ * they were the same thing. Held beside the labels rather than in the
+ * markup, so the screen, the export and the filter all explain it the same
+ * way.
+ */
+export const LADDER_NOTES: Record<string, string> = {
+  NOT_STARTED: 'Nothing has been recorded against this village yet. Its turn has not come.',
+  GT_IN_PROGRESS: 'A crew is walking the boundaries with the department\'s staff, '
+    + 'recording what is on the ground.',
+  GT_COMPLETED: 'The walking is finished. Nobody has checked it yet, so none of it '
+    + 'can be billed.',
+  GT_QC_IN_PROGRESS: 'The ground truthing is being checked against the records '
+    + 'before it goes any further.',
+  GT_QC_COMPLETED: 'The check passed. This is the first point the contract releases '
+    + 'money — 50% of the village.',
+  VECTORIZATION_IN_PROGRESS: 'The checked survey is being drawn up into the digital '
+    + 'cadastral map.',
+  VECTORIZATION_COMPLETED: 'The drawing is finished and has gone no further. Nothing '
+    + 'is billable until the department accepts the data.',
+  DATA_SUBMITTED: 'The data has gone to the department and is waiting on them. '
+    + 'Submitting is not being paid for.',
+  DATA_APPROVED: 'The department accepted the data. The second 30% of the village '
+    + 'falls due.',
+  FINAL_SUBMITTED: 'The final deliverables — records, LPMs, the lot — have gone in '
+    + 'and are waiting on the department.',
+  FINAL_APPROVED: 'The department signed the deliverables off. The village is '
+    + 'finished and the last 20% falls due.',
+};
+
 export const LADDER_KEYS = VILLAGE_LADDER.map(r => r.key);
 export type LadderKey = string;
 

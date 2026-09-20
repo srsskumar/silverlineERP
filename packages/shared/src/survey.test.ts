@@ -25,6 +25,7 @@ import {
   surveyEntryBase,
   unsignedStages, signOffFor, stageSignedOff, isSignOffStage,
   SIGN_OFF_STAGES, earnedMilestones, MILESTONE_REQUIRES, MILESTONE_EARNED_AT,
+  LADDER_NOTES,
 } from './survey.js';
 
 const BASIS: Record<string, MeasureBasis> = Object.fromEntries(
@@ -2229,5 +2230,31 @@ describe('billing waits for an acceptance (§078)', () => {
     const note = milestoneBlockedNote(3, { FINAL_DELIVERABLES: 'IN_PROGRESS' }, label);
     expect(note).toMatch(/not finished/i);
     expect(note).toMatch(/signed off/i);
+  });
+});
+
+describe('the ladder explains itself (§079)', () => {
+  it('has a plain-English note for every position', () => {
+    // A label that is a term of art and nothing else is a label only the
+    // people who wrote it can read.
+    for (const rung of VILLAGE_LADDER) {
+      expect(LADDER_NOTES[rung.key], rung.key).toBeTruthy();
+      expect(LADDER_NOTES[rung.key].length, rung.key).toBeGreaterThan(30);
+    }
+    expect(Object.keys(LADDER_NOTES).sort()).toEqual(LADDER_KEYS.slice().sort());
+  });
+
+  it('says out loud where the money falls due', () => {
+    // The three points the contract pays on, in the words of the rung rather
+    // than in a separate document nobody opens.
+    expect(LADDER_NOTES.GT_QC_COMPLETED).toMatch(/50%/);
+    expect(LADDER_NOTES.DATA_APPROVED).toMatch(/30%/);
+    expect(LADDER_NOTES.FINAL_APPROVED).toMatch(/20%/);
+  });
+
+  it('warns where finishing is not being paid', () => {
+    // The distinction §078 turns on, said where somebody reads the figure.
+    expect(LADDER_NOTES.GT_COMPLETED).toMatch(/cannot be billed|none of it/i);
+    expect(LADDER_NOTES.DATA_SUBMITTED).toMatch(/not being paid|waiting/i);
   });
 });

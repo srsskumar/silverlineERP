@@ -10,10 +10,21 @@
 -- against a fresh database and not against a deployment. A migration is the
 -- thing that actually runs everywhere, so the grants belong here.
 --
--- `document.read` and `document.upload` already exist, from the employee
--- document feature. They are left exactly as they are.
+-- `document.read` and `document.upload` come from the employee document
+-- feature — but from the seed script, not from a migration, and the seed runs
+-- after migrations on a database that does not exist yet. So on a genuinely
+-- empty database this migration used to fail on its own foreign key: it
+-- granted `document.read` to ten roles before anything had defined it, and a
+-- fresh build died here. Every deployment that worked had been seeded first
+-- and never noticed.
+--
+-- Named here, idempotently, so a migration depends on migrations and nothing
+-- else. Re-running against a database that already has them changes nothing,
+-- and this file does not run again where it has already been applied.
 
 INSERT INTO permissions (code, description, module) VALUES
+  ('document.read',        'See the document register',                          'documents'),
+  ('document.upload',      'Attach a document',                                  'documents'),
   ('document.manage',      'Add and amend documents on the register',            'documents'),
   ('document.confidential','See the detail of confidential documents',           'documents'),
   ('document.delete',      'Delete a document once retention permits',           'documents'),

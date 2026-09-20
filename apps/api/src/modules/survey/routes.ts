@@ -9,7 +9,7 @@ import {
   STAGE_CODES, REPORT_LEVELS, resolveStage, isOutOfScope, plannedTasksFor,
   tallyByStage, roverUtilisation, roverWindow, rankByWaste, pace, currentStage,
   outOfSequence, stageBlockedBy,
-  VILLAGE_LADDER, villagePosition, tallyByPosition, gtStartSchema,
+  VILLAGE_LADDER, LADDER_NOTES, villagePosition, tallyByPosition, gtStartSchema,
   DELAY_REASON_CODES,
   stageVariance, varianceNote, villageVariances, gtReasonRequired, delayReasonLabel as dLabel,
   earnedMilestones, stageSignedOff, signOffFor,
@@ -4409,7 +4409,11 @@ export async function registerSurveyRoutes(
           total: rollUp(pos, m.codes, codes, m.basis),
           by_stage: tallyByStage(pos, pipeline),
           by_position: tallyByPosition(pos),
-          ladder: VILLAGE_LADDER.map(r => ({ key: r.key, label: r.label })),
+          /* The label and what it means, so the screen never has to carry
+             a second copy of the explanation. */
+          ladder: VILLAGE_LADDER.map(r => ({
+            key: r.key, label: r.label, note: LADDER_NOTES[r.key] ?? null,
+          })),
           rovers,
           pace: paceFigures,
           pipeline: pipeline.map(st => ({
@@ -4691,6 +4695,23 @@ export async function registerSurveyRoutes(
         [id, u.orgId, from, to])).rows;
       const doneBy = new Map(doneRows.map(r => [String(r.vid), Number(r.ac)]));
 
+      /*
+       * Which milestones have been claimed on each village.
+       *
+       * Read for everybody and reported to nobody outside the company: it
+       * feeds the "claimed but not earned" count below, which is ours.
+       */
+      const claimRows = observerView ? [] : (await pool.query(
+        `SELECT b.survey_village_id AS vid,
+                array_agg(DISTINCT b.milestone) AS milestones
+           FROM survey_village_billing b
+           JOIN survey_villages sv ON sv.id = b.survey_village_id
+          WHERE sv.survey_project_id = $1 AND b.org_id = $2
+            AND b.status <> 'REJECTED'
+          GROUP BY 1`, [id, u.orgId])).rows;
+      const claimedBy = new Map<string, number[]>(
+        claimRows.map(r => [String(r.vid), (r.milestones as number[]).map(Number)]));
+
       const group = (lvl: ReportLevel) => {
         const g = new Map<string, { id: string | null; name: string; items: typeof matches }>();
         for (const v of matches) {
@@ -4817,7 +4838,11 @@ export async function registerSurveyRoutes(
           },
           options: { districts, mandals },
           /* The eleven positions, in order, so a chart never has to sort. */
-          ladder: VILLAGE_LADDER.map(r => ({ key: r.key, label: r.label })),
+          /* The label and what it means, so the screen never has to carry
+             a second copy of the explanation. */
+          ladder: VILLAGE_LADDER.map(r => ({
+            key: r.key, label: r.label, note: LADDER_NOTES[r.key] ?? null,
+          })),
           totals: {
             villages: matches.length,
             extent_ac: totalExtent,
@@ -4889,6 +4914,26 @@ export async function registerSurveyRoutes(
               earned: Object.fromEntries(
                 Object.keys(MILESTONE_REQUIRES).map(m => [
                   m, matches.filter(v => milestoneEarned(Number(m), v.stages)).length,
+                ])),
+              /*
+               * Claims standing against work nobody has accepted (§079).
+               *
+               * Tightening the rule (§078) did not reach backwards, and it
+               * should not: a claim already with the department is a fact,
+               * not a mistake to be erased. But a rule enforced on new claims
+               * and silent about the old ones leaves a programme quietly
+               * inconsistent with itself, and the first anybody hears of it
+               * is the department asking.
+               *
+               * Counted, named, and left alone. What to do about them is a
+               * decision about money and belongs to somebody who can make it.
+               */
+              claimed_unearned: Object.fromEntries(
+                Object.keys(MILESTONE_REQUIRES).map(m => [
+                  m,
+                  matches.filter(v =>
+                    (claimedBy.get(v.villageId) ?? []).includes(Number(m))
+                    && !milestoneEarned(Number(m), v.stages)).length,
                 ])),
             }),
             /* Finished but not yet accepted, which is the chase list. */

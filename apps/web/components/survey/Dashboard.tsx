@@ -24,7 +24,7 @@ import { Table, TBody, TD, TH, THead, TR, TableWrap } from '@/components/ui/Tabl
 import { Stat } from '@/components/finance/Primitives';
 import { ExportMenu } from '@/components/ui/ExportMenu';
 
-interface Rung { key: string; label: string }
+interface Rung { key: string; label: string; note?: string | null }
 interface Unit { id: string; name: string }
 
 interface DashboardRow {
@@ -110,6 +110,7 @@ interface DashboardData {
     late: number; late_unexplained: number; unplanned: number;
     positions: PositionRow[];
     earned: Record<string, number>;
+    claimed_unearned: Record<string, number>;
     awaiting_sign_off: Array<{
       code: string; label: string; villages: number; signed_off_by: string | null;
     }>;
@@ -412,6 +413,16 @@ export function SurveyDashboard({
             Showing {num(d.filter.villages)} of {num(d.filter.of_villages)} villages.
           </p>
         ) : null}
+        {/* A hover is no use to somebody who has already narrowed the screen
+            to one position and wants to know what they are looking at. */}
+        {position ? (
+          <p className="mt-2 text-xs text-text-muted">
+            <strong className="text-text">
+              {ladder.find((r: Rung) => r.key === position)?.label}
+            </strong>{' '}
+            — {ladder.find((r: Rung) => r.key === position)?.note}
+          </p>
+        ) : null}
       </Card>
 
       {/* ------------------------------------------------------- the headline */}
@@ -457,6 +468,10 @@ export function SurveyDashboard({
                 <button
                   type="button"
                   aria-pressed={selected}
+                  /* Every one of these labels is a term of art: "data
+                     submitted" and "data approved" are days apart in the work
+                     and months apart in the money. */
+                  title={rung.note ?? undefined}
                   onClick={() => setPosition(selected ? '' : rung.key)}
                   className={`flex w-full items-center gap-3 rounded px-2 py-1.5 text-left transition
                     hover:bg-surface-sunken ${selected ? 'bg-surface-sunken ring-1 ring-border' : ''}`}
@@ -535,6 +550,7 @@ export function SurveyDashboard({
                       <TD>
                         <button type="button"
                           aria-pressed={selected}
+                          title={ladder.find((r: Rung) => r.key === p.key)?.note ?? undefined}
                           onClick={() => setPosition(selected ? '' : p.key)}
                           className="text-left text-primary underline-offset-2 hover:underline">
                           {p.label}
@@ -712,6 +728,31 @@ export function SurveyDashboard({
             </Badge>
           ))}
         </div>
+        {/*
+          * Claims already with the department against work nobody has
+          * accepted.
+          *
+          * The rule tightened and did not reach backwards, which is right —
+          * a claim already sent is a fact rather than a mistake to erase.
+          * But a rule enforced on new claims and silent about the old ones
+          * leaves a programme quietly disagreeing with itself, and the first
+          * anybody hears of it is the department asking.
+          */}
+        {Object.values(totals.claimed_unearned).some((n) => n > 0) ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {Object.entries(totals.claimed_unearned)
+              .filter(([, n]) => n > 0)
+              .map(([milestone, n]) => (
+                <Badge key={milestone} tone="danger">
+                  {`${num(n)} claimed at milestone ${milestone} without a sign-off`}
+                </Badge>
+              ))}
+            <span className="text-2xs text-text-subtle">
+              Raised before the rule tightened. Left exactly as they are — what
+              to do about them is a decision about money.
+            </span>
+          </div>
+        ) : null}
       </Card>
 
       {/* --------------------------------------------------- why work is held up */}

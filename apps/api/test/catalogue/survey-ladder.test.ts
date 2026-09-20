@@ -914,3 +914,76 @@ describe("billing waits for an acceptance (§078)", () => {
     }
   });
 });
+
+describe("claims that would not be raised today (§079)", () => {
+  let legacy = "";
+
+  beforeAll(async () => {
+    legacy = await makeVillage("PAMARRU", 100);
+    for (const [code, state, on] of [
+      ["GROUND_TRUTHING", "COMPLETED", "2026-02-01"],
+      ["GT_QC", "COMPLETED", "2026-02-15"],
+      ["VECTORIZATION", "COMPLETED", "2026-03-10"],
+      ["DATA_SUBMISSION", "COMPLETED", "2026-04-01"],
+      ["FINAL_DELIVERABLES", "COMPLETED", "2026-05-01"],
+    ] as const) {
+      await post(w.admin, `/api/v1/survey/villages/${legacy}/stage`, {
+        stage_code: code, state, completed_on: on,
+        ...(code === "GROUND_TRUTHING"
+          ? { gt_govt_staff_allocated: 1, gt_crew_allocated: 3 } : {}),
+      });
+    }
+    await post(w.admin, `/api/v1/survey/villages/${legacy}/billing`, { milestone: 3 });
+    /*
+     * Then the acceptance is withdrawn — the department sends the
+     * deliverables back. The claim stands; the work no longer qualifies.
+     * Exactly the shape of the rows §078 left behind.
+     */
+    await w.pool.query(
+      `UPDATE survey_village_stages vs SET state = 'IN_PROGRESS', completed_on = NULL
+         FROM survey_stages s
+        WHERE s.id = vs.stage_id AND s.code = 'FINAL_DELIVERABLES'
+          AND vs.survey_village_id = $1`, [legacy]);
+  });
+
+  it("counts a standing claim against work that is not signed off", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    expect(Number(r.data.totals.claimed_unearned["3"])).toBeGreaterThanOrEqual(1);
+  });
+
+  it("leaves the claim exactly where it is", async () => {
+    // A claim already with the department is a fact, not a mistake to erase.
+    const claims = await get(w.admin, `/api/v1/survey/villages/${legacy}/billing`);
+    expect((claims.data as Array<{ milestone: number }>).some(c => c.milestone === 3))
+      .toBe(true);
+  });
+
+  it("would refuse the same claim today", async () => {
+    const other = await makeVillage("REPALLE-2", 90);
+    for (const [code, state, on] of [
+      ["GROUND_TRUTHING", "COMPLETED", "2026-02-01"],
+      ["GT_QC", "COMPLETED", "2026-02-15"],
+      ["VECTORIZATION", "COMPLETED", "2026-03-10"],
+      ["DATA_SUBMISSION", "COMPLETED", "2026-04-01"],
+    ] as const) {
+      await post(w.admin, `/api/v1/survey/villages/${other}/stage`, {
+        stage_code: code, state, completed_on: on,
+        ...(code === "GROUND_TRUTHING"
+          ? { gt_govt_staff_allocated: 1, gt_crew_allocated: 3 } : {}),
+      });
+    }
+    await post(w.admin, `/api/v1/survey/villages/${other}/stage`, {
+      stage_code: "FINAL_DELIVERABLES", state: "IN_PROGRESS", started_on: "2026-04-20",
+    });
+    const r = await post(w.admin, `/api/v1/survey/villages/${other}/billing`,
+      { milestone: 3 });
+    expect(r.status).toBe(422);
+  });
+
+  it("tells the department nothing about any of it", async () => {
+    const r = await get(w.role.GOVT_OBSERVER,
+      `/api/v1/survey/projects/${programmeId}/dashboard`);
+    expect(r.data.totals).not.toHaveProperty("claimed_unearned");
+    expect(r.data.totals).not.toHaveProperty("earned");
+  });
+});
