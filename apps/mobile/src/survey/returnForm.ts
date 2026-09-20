@@ -15,6 +15,7 @@
 import {
   checkLowProgress,
   checkRoverDay,
+  gtReasonRequired,
   reasonNeedsRemarks,
   type RoverDayStatus,
 } from "@silverline/shared";
@@ -37,6 +38,9 @@ export interface ReturnDraft {
   notes: string;
   lowProgressReason: string | null;
   lowProgressRemarks: string;
+  /** Why ground truthing has run past its date, when the server will ask. */
+  gtVarianceReason: string | null;
+  gtVarianceRemarks: string;
 }
 
 export function emptyDraft(): ReturnDraft {
@@ -48,6 +52,8 @@ export function emptyDraft(): ReturnDraft {
     notes: "",
     lowProgressReason: null,
     lowProgressRemarks: "",
+    gtVarianceReason: null,
+    gtVarianceRemarks: "",
   };
 }
 
@@ -111,6 +117,15 @@ export function buildEntry(args: {
   measures: SurveyMeasure[];
   draft: ReturnDraft;
   lowProgressThresholdAc: number | null;
+  /** Ground truthing's plan, so the device can ask what the server will. */
+  groundTruthing?: {
+    state?: string | null;
+    expectedEndOn?: string | null;
+    completedOn?: string | null;
+    varianceReason?: string | null;
+  } | null;
+  /** The village's business day, for measuring lateness against. */
+  today?: string;
 }): BuildResult {
   const { draft, measures } = args;
   const problems: string[] = [];
@@ -164,6 +179,27 @@ export function buildEntry(args: {
     problems.push('A low-progress reason of "other" must say what happened.');
   }
 
+  /*
+   * Ground truthing past its date has to say why, and the server refuses the
+   * day until it does. Asked here so the answer is given while somebody who
+   * knows it is holding the phone — the outbox cannot ask, and a refusal
+   * that surfaces tomorrow throws the day away.
+   */
+  const gtOverdue = args.groundTruthing
+    ? gtReasonRequired(args.groundTruthing, args.today ?? args.entryDate)
+    : false;
+  if (gtOverdue && !draft.gtVarianceReason) {
+    problems.push(
+      `Ground truthing was due on ${args.groundTruthing?.expectedEndOn} and is still `
+      + "open. Say why before recording another day — it is asked once.",
+    );
+  }
+  if (draft.gtVarianceReason
+      && reasonNeedsRemarks(draft.gtVarianceReason)
+      && !draft.gtVarianceRemarks.trim()) {
+    problems.push('A reason of "other" must say what happened.');
+  }
+
   if (Object.keys(values).length === 0 && rovers.length === 0) {
     problems.push("Nothing is recorded. Enter a quantity, or account for the instruments.");
   }
@@ -195,6 +231,14 @@ export function buildEntry(args: {
         : {}),
       govt_staff_present: govt.value,
       crew_present: crew.value,
+      ...(draft.gtVarianceReason
+        ? {
+            gt_variance_reason: draft.gtVarianceReason,
+            ...(draft.gtVarianceRemarks.trim()
+              ? { gt_variance_remarks: draft.gtVarianceRemarks.trim() }
+              : {}),
+          }
+        : {}),
     },
   };
 }

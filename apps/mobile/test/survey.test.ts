@@ -301,3 +301,76 @@ describe("survey tab gating", () => {
     assert.equal(can(["survey.read", "survey.enter"], PERMISSIONS.SURVEY_ENTER), true);
   });
 });
+
+describe("ground truthing past its date, on the phone", () => {
+  const base = {
+    villageId: VILLAGE,
+    entryDate: TODAY,
+    measures: MEASURES,
+    lowProgressThresholdAc: null as number | null,
+    today: TODAY,
+  };
+
+  it("asks for the reason the server will demand, before the outbox takes it", () => {
+    /*
+     * The failure this prevents: the route refuses a day on an overdue
+     * village, the return is already queued, and the queue discards what the
+     * server rejects. The day's work is gone and nobody is asked anything.
+     */
+    const r = buildEntry({
+      ...base,
+      draft: draft({ quantities: { PVT_EXTENT: "12" } }),
+      groundTruthing: { state: "IN_PROGRESS", expectedEndOn: "2026-08-01" },
+    });
+    assert.equal(r.ok, false);
+    if (r.ok) return;
+    assert.match(r.problems.join(" "), /due on 2026-08-01/);
+  });
+
+  it("takes the reason and sends it with the day", () => {
+    const r = buildEntry({
+      ...base,
+      draft: draft({
+        quantities: { PVT_EXTENT: "12" },
+        gtVarianceReason: "NO_DEPT_STAFF",
+      }),
+      groundTruthing: { state: "IN_PROGRESS", expectedEndOn: "2026-08-01" },
+    });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(r.entry.gt_variance_reason, "NO_DEPT_STAFF");
+  });
+
+  it("stops asking once the reason is on the stage", () => {
+    const r = buildEntry({
+      ...base,
+      draft: draft({ quantities: { PVT_EXTENT: "12" } }),
+      groundTruthing: {
+        state: "IN_PROGRESS", expectedEndOn: "2026-08-01", varianceReason: "WEATHER",
+      },
+    });
+    assert.equal(r.ok, true);
+  });
+
+  it("never asks a village that is inside its window, or has no date", () => {
+    for (const gt of [
+      { state: "IN_PROGRESS", expectedEndOn: "2026-12-01" },
+      { state: "IN_PROGRESS", expectedEndOn: null },
+      null,
+    ]) {
+      const r = buildEntry({
+        ...base, draft: draft({ quantities: { PVT_EXTENT: "12" } }), groundTruthing: gt,
+      });
+      assert.equal(r.ok, true, JSON.stringify(gt));
+    }
+  });
+
+  it('insists on the sentence when the reason is "other"', () => {
+    const r = buildEntry({
+      ...base,
+      draft: draft({ quantities: { PVT_EXTENT: "12" }, gtVarianceReason: "OTHER" }),
+      groundTruthing: { state: "IN_PROGRESS", expectedEndOn: "2026-08-01" },
+    });
+    assert.equal(r.ok, false);
+  });
+});

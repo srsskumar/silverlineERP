@@ -66,6 +66,15 @@ export default function SurveyEntryPage() {
     status: 'UTILIZED' | 'IDLE'; idle_reason: string; remarks: string;
   }>>({});
   const [lowReason, setLowReason] = React.useState('');
+  /*
+   * Why ground truthing has run past its date (§081).
+   *
+   * The server refuses the day until somebody says. Asked here rather than
+   * discovered through a rejection, because whoever is filing the day knows
+   * the answer and is already at the keyboard.
+   */
+  const [gtReason, setGtReason] = React.useState('');
+  const [gtRemarks, setGtRemarks] = React.useState('');
   const [lowRemarks, setLowRemarks] = React.useState('');
   const [saved, setSaved] = React.useState<string | null>(null);
 
@@ -237,6 +246,8 @@ export default function SurveyEntryPage() {
             // several instruments work it together.
           })),
           low_progress_reason: lowReason || undefined,
+          gt_variance_reason: gtReason || undefined,
+          gt_variance_remarks: gtReason && gtRemarks.trim() ? gtRemarks.trim() : undefined,
           low_progress_remarks: lowRemarks || undefined,
           // Blank stays blank. Sending 0 for "not asked" would manufacture
           // an absence out of a question nobody put.
@@ -628,6 +639,46 @@ export default function SurveyEntryPage() {
                   </div>
                 </section>
               ))}
+
+              {/*
+                * Demanded, not offered, and only while it is owed.
+                *
+                * Ground truthing past its date has to say why before another
+                * day goes on it. Once the reason is on the stage this
+                * disappears: the point is to get the explanation on file,
+                * not to make somebody retype it every evening.
+                */}
+              {(() => {
+                const gt = (village?.stage_dates as Record<string, Record<string, string | null>>
+                  | undefined)?.GROUND_TRUTHING;
+                return gt?.expectedEnd && !gt.varianceReason && !gt.completed
+                  && String(gt.expectedEnd) < today;
+              })() ? (
+                  <div className="rounded-md border border-warning/40 bg-warning-subtle p-3">
+                    <p className="text-sm font-medium text-text">
+                      Ground truthing was due on {day(String(
+                        (village?.stage_dates as Record<string, Record<string, string>>)
+                          ?.GROUND_TRUTHING?.expectedEnd))}
+                    </p>
+                    <p className="mt-0.5 text-xs text-text-muted">
+                      Say why before recording another day on this village. Asked once.
+                    </p>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      <select className={field} value={gtReason}
+                        onChange={(e) => setGtReason(e.target.value)}>
+                        <option value="">Choose a reason…</option>
+                        {DELAY_REASON_OPTIONS.map((o) => (
+                          <option key={o.code} value={o.code}>{o.label}</option>
+                        ))}
+                      </select>
+                      {gtReason === 'OTHER' ? (
+                        <input className={field} value={gtRemarks}
+                          placeholder="What happened?"
+                          onChange={(e) => setGtRemarks(e.target.value)} />
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
 
               {/* Offered rather than forced: the server decides whether the
                   day is below the programme's threshold, and says so if it

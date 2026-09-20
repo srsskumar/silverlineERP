@@ -127,6 +127,13 @@ export function DailyReturn({
       measures,
       draft,
       lowProgressThresholdAc: village.low_progress_threshold_ac,
+      groundTruthing: {
+        state: village.gt_state,
+        expectedEndOn: village.gt_expected_end_on,
+        completedOn: village.gt_completed_on,
+        varianceReason: village.gt_variance_reason,
+      },
+      today: workDate,
     });
     if (!built.ok) {
       setProblems(built.problems);
@@ -281,6 +288,42 @@ export function DailyReturn({
           />
         </Card>
       ) : null}
+
+      {/*
+        * Asked only while it is owed.
+        *
+        * Ground truthing past its date has to say why, and the server refuses
+        * the day until it does. Once the reason is on the stage the question
+        * disappears — the point is to get the explanation on file, not to
+        * make a crew retype it every evening.
+        */}
+      {village.gt_expected_end_on
+        && !village.gt_variance_reason
+        && village.gt_completed_on === null
+        && village.gt_expected_end_on < workDate ? (
+          <Card title="Ground truthing is past its date">
+            <Muted>
+              {`This village was due to finish ground truthing on ${
+                village.gt_expected_end_on}. Say why before recording another day.`}
+            </Muted>
+            <View style={{ marginTop: space.sm }}>
+              <ReasonPicker
+                value={draft.gtVarianceReason}
+                onChange={code => setDraft(d => ({ ...d, gtVarianceReason: code }))}
+              />
+              {draft.gtVarianceReason ? (
+                <Input
+                  label="What happened"
+                  value={draft.gtVarianceRemarks}
+                  onChangeText={(v: string) =>
+                    setDraft(d => ({ ...d, gtVarianceRemarks: v }))}
+                  placeholder={draft.gtVarianceReason === "OTHER" ? "Required" : "Optional"}
+                  multiline
+                />
+              ) : null}
+            </View>
+          </Card>
+        ) : null}
 
       <Card title="Anything else">
         <SectionLabel>Reason, if the day was short</SectionLabel>

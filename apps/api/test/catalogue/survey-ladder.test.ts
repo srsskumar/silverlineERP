@@ -1074,3 +1074,52 @@ describe("the data obeys the rules that govern it (§080)", () => {
     });
   }
 });
+
+describe("a crew can answer what the server asks (§081)", () => {
+  let overdue = "";
+
+  beforeAll(async () => {
+    overdue = await makeVillage("TENALI-2", 130);
+    await post(w.admin, `/api/v1/survey/villages/${overdue}/start-gt`, {
+      started_on: "2026-01-04", expected_end_on: "2026-02-04",
+      employee_ids: [w.directEmployee], govt_staff_allocated: 2, crew_allocated: 4,
+    });
+  });
+
+  it("tells the device the stage is overdue before it queues anything", async () => {
+    /*
+     * The failure this closes: a hard refusal on the entry route that no
+     * client could answer. On mobile the return is already in an outbox that
+     * discards what the server rejects, so the day's work would be lost and
+     * nobody asked anything.
+     */
+    const r = await get(w.directUser, "/api/v1/survey/me/villages");
+    const v = (r.body.data as Array<Record<string, unknown>>)
+      .find(x => x.id === overdue);
+    expect(v, "the village they are crewed to").toBeTruthy();
+    expect(v!.gt_expected_end_on).toBe("2026-02-04");
+    expect(v!.gt_variance_reason).toBeNull();
+    expect(v!.gt_state).toBe("IN_PROGRESS");
+  });
+
+  it("stops saying so once the reason is recorded", async () => {
+    await post(w.directUser, "/api/v1/survey/entries", {
+      survey_village_id: overdue, entry_date: workDate(),
+      teams_deployed: 1, dgps_rovers: 1, values: { GOVT_LAND_EXTENT_AC: 9 },
+      gt_variance_reason: "ACCESS",
+    });
+    const r = await get(w.directUser, "/api/v1/survey/me/villages");
+    const v = (r.body.data as Array<Record<string, unknown>>)
+      .find(x => x.id === overdue);
+    expect(v!.gt_variance_reason).toBe("ACCESS");
+  });
+
+  it("carries the plan on the village list the desk screens read", async () => {
+    // The web entry form reads it from here rather than from a second
+    // endpoint, so both clients apply one rule from one source.
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/villages`);
+    const v = (r.body.data as Array<Record<string, any>>).find(x => x.id === overdue);
+    expect(v!.stage_dates.GROUND_TRUTHING.expectedEnd).toBe("2026-02-04");
+    expect(v!.stage_dates.GROUND_TRUTHING.varianceReason).toBe("ACCESS");
+  });
+});

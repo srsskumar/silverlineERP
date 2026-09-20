@@ -187,15 +187,24 @@ describe("the crew", () => {
   it("releases rather than deletes, so last season is still answerable", async () => {
     const crew = await get(w.admin, `/api/v1/survey/villages/${villageB}/crew`);
     const member = crew.data.find((c: any) => c.stage_code === "GT_QC");
+    /*
+     * Released today, not on a date written into the test.
+     *
+     * This said "2026-09-20" and passed until the clock reached the 21st, at
+     * which point it was releasing somebody the day before they were
+     * assigned — which the table refuses, correctly. A fixed date in a test
+     * about relative time is a test with an expiry nobody wrote down.
+     */
+    const released_on = workDate();
     const r = await post(w.admin, `/api/v1/survey/crew/${member.id}/release`,
-      { released_on: "2026-09-20" });
-    expect(r.status).toBe(200);
+      { released_on });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
 
     const after = await get(w.admin, `/api/v1/survey/villages/${villageB}/crew`);
     const released = after.data.find((c: any) => c.id === member.id);
     expect(released).toBeTruthy();
     expect(released.active).toBe(false);
-    expect(released.released_on).toBe("2026-09-20");
+    expect(released.released_on).toBe(released_on);
   });
 });
 

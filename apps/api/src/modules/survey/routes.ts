@@ -246,6 +246,8 @@ export async function registerSurveyRoutes(
       `SELECT vs.survey_village_id, s.code AS stage_code, vs.remarks,
               vs.state AS own_state, vs.started_on AS own_started_on,
               vs.completed_on AS own_completed_on,
+              vs.expected_start_on, vs.expected_end_on,
+              vs.variance_reason, vs.variance_remarks,
               vs.task_id,
               t.status AS task_status, t.actual_start_at, t.actual_end_at
        FROM survey_village_stages vs
@@ -266,8 +268,13 @@ export async function registerSurveyRoutes(
       target.get(key)![String(t.measure_code)] = Number(t.target_quantity);
     }
     const stage = new Map<string, Record<string, StageState>>();
-    const stageDates = new Map<string, Record<string,
-      { started: string | null; completed: string | null; remarks?: string | null }>>();
+    const stageDates = new Map<string, Record<string, {
+      started: string | null; completed: string | null; remarks?: string | null;
+      /* The plan and the reason it was missed (§072), so any screen showing a
+         stage can show what was promised beside what happened. */
+      expectedStart?: string | null; expectedEnd?: string | null;
+      varianceReason?: string | null; varianceRemarks?: string | null;
+    }>>();
     for (const s of stages) {
       const key = String(s.survey_village_id);
       if (!stage.has(key)) { stage.set(key, {}); stageDates.set(key, {}); }
@@ -285,6 +292,10 @@ export async function registerSurveyRoutes(
       stageDates.get(key)![String(s.stage_code)] = {
         started: resolved.startedOn, completed: resolved.completedOn,
         remarks: s.remarks ?? null,
+        expectedStart: iso(s.expected_start_on),
+        expectedEnd: iso(s.expected_end_on),
+        varianceReason: s.variance_reason ?? null,
+        varianceRemarks: s.variance_remarks ?? null,
       };
     }
 
@@ -1384,6 +1395,21 @@ export async function registerSurveyRoutes(
               -- cannot ask anybody anything: the question has to be put while
               -- the person is still standing there.
               p.low_progress_threshold_ac,
+              /*
+               * Ground truthing's plan, and whether it has been answered for
+               * already (§081).
+               *
+               * The return route refuses a day on a village whose GT is past
+               * its date with no reason given. The device has to apply that
+               * rule before it queues anything, for the same reason the
+               * low-progress threshold travels here: a refusal that surfaces
+               * after the crew has walked out cannot ask them anything, and
+               * the outbox discards what the server rejects.
+               */
+              gt.expected_end_on  AS gt_expected_end_on,
+              gt.completed_on     AS gt_completed_on,
+              gt.state            AS gt_state,
+              gt.variance_reason  AS gt_variance_reason,
               s.code AS stage_code, s.label AS stage_label,
               EXISTS (SELECT 1 FROM survey_entries se
                       WHERE se.survey_village_id = sv.id
@@ -1397,6 +1423,9 @@ export async function registerSurveyRoutes(
        LEFT JOIN org_units d ON d.id = COALESCE(
          (SELECT parent_id FROM org_units WHERE id = m.parent_id), m.parent_id)
        JOIN users usr ON usr.employee_id = c.employee_id
+       LEFT JOIN survey_village_stages gt ON gt.survey_village_id = sv.id
+         AND gt.stage_id = (SELECT id FROM survey_stages
+                             WHERE org_id = sv.org_id AND code = 'GROUND_TRUTHING')
        WHERE c.org_id = $1 AND usr.id = $2
          AND c.released_on IS NULL
          AND p.status = 'ACTIVE'
@@ -1406,6 +1435,10 @@ export async function registerSurveyRoutes(
         ...r,
         total_extent_ac: num(r.total_extent_ac),
         low_progress_threshold_ac: num(r.low_progress_threshold_ac),
+        gt_expected_end_on: iso(r.gt_expected_end_on),
+        gt_completed_on: iso(r.gt_completed_on),
+        gt_state: r.gt_state ?? null,
+        gt_variance_reason: r.gt_variance_reason ?? null,
         filed_today: r.filed_today === true,
       })),
       // So the app can label the question it is about to ask.

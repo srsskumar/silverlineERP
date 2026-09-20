@@ -144,6 +144,18 @@ export interface MyVillage {
    * will, before the return goes into a queue that cannot ask questions.
    */
   low_progress_threshold_ac: number | null;
+  /*
+   * Ground truthing's plan, and whether it has been answered for already.
+   *
+   * The server refuses a day on a village whose GT is past its date with no
+   * reason recorded. Carried here for the same reason the threshold is: the
+   * outbox cannot put a question to anybody, and a refusal that arrives
+   * tomorrow discards the day's work.
+   */
+  gt_expected_end_on: string | null;
+  gt_completed_on: string | null;
+  gt_state: string | null;
+  gt_variance_reason: string | null;
   /** Whether today's progress return has already been filed for it. */
   filed_today: boolean;
 }
@@ -245,6 +257,9 @@ export interface SurveyEntryInput {
   /** Null and zero differ: null is "nobody was asked", zero is "nobody came". */
   govt_staff_present?: number | null;
   crew_present?: number | null;
+  /** Why ground truthing has run past its date. Written onto the stage. */
+  gt_variance_reason?: string | null;
+  gt_variance_remarks?: string | null;
 }
 
 export async function postSurveyEntry(
