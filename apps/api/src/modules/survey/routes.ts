@@ -4916,6 +4916,28 @@ export async function registerSurveyRoutes(
             },
           },
           rows: group(level),
+          /*
+           * The mandal roll-up, always, beside whatever level was asked for.
+           *
+           * A district tells an official the programme is behind; the mandal
+           * tells them which tahsildar to ring. It is the level the work is
+           * actually organised at — crews are posted to mandals, the
+           * department staffs them by mandal — so it is sent unconditionally
+           * rather than only when somebody thinks to change the grouping.
+           *
+           * Skipped when the grouping already *is* mandal, because two
+           * identical tables is not a second view of anything. Parent named
+           * on each row, since mandal names repeat across districts and a
+           * list of thirty bare names is unreadable.
+           */
+          by_mandal: level === 'mandal' ? null : group('mandal').map(row => {
+            const anyVillage = matches.find(
+              v => (unitAt(v.row, 'mandal')?.id ?? null) === row.id);
+            return {
+              ...row,
+              district: anyVillage ? unitAt(anyVillage.row, 'district')?.name ?? null : null,
+            };
+          }),
           villages: matches
             .map(v => ({
               id: v.villageId, name: v.name, code: v.code,

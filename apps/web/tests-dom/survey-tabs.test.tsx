@@ -143,6 +143,10 @@ const DASHBOARD = {
     surveyed_ac: 120, surveyed_sqkm: 0.49,
     by_position: Object.fromEntries(LADDER.map(r => [r.key, r.key === 'GT_COMPLETED' ? 1 : 0])),
     completed: 0, not_started: 0, late: 1 }],
+  by_mandal: [{ id: 'm1', name: 'Koyyuru', district: 'Krishna', villages: 1,
+    extent_ac: 200, extent_sqkm: 0.81, surveyed_ac: 120, surveyed_sqkm: 0.49,
+    by_position: Object.fromEntries(LADDER.map(r => [r.key, r.key === 'GT_COMPLETED' ? 1 : 0])),
+    completed: 0, not_started: 0, late: 1 }],
   villages: [{ id: 'v1', name: 'Adakula', code: '1501041', district: 'Krishna',
     mandal: 'Koyyuru', extent_ac: 200, extent_sqkm: 0.81, surveyed_ac: 120,
     position: 'GT_COMPLETED', position_label: 'GT completed', on_hold: false,
@@ -361,8 +365,27 @@ describe('the land survey screen', () => {
     expect(screen.getByText('GT expected end')).toBeInTheDocument();
     // Surveyed extent carries km² as well as acres.
     expect(screen.getAllByText(/0\.49/).length).toBeGreaterThan(0);
-    // Both the roll-up and the village list carry it.
-    expect(screen.getAllByText('Surveyed (km²)').length).toBe(2);
+    // Both roll-ups and the village list carry it.
+    expect(screen.getAllByText('Surveyed (km²)').length).toBe(3);
+  });
+
+  it('rolls up by mandal as well as by district', async () => {
+    /*
+     * A district says the programme is behind; the mandal says which
+     * tahsildar to ring. It is the level the work is organised at, so it is
+     * always shown rather than only when somebody changes the grouping.
+     */
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() => expect(screen.getByText('By district')).toBeInTheDocument());
+    expect(screen.getByText('By mandal')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Koyyuru' })).toBeInTheDocument();
+    // Mandal names repeat across districts, so the parent is named beside
+    // them. Scoped to the mandal card: "District" is also a filter label, a
+    // grouping option and a column on two other tables.
+    const card = screen.getByText('By mandal').closest('div')!.parentElement!;
+    expect(within(card).getByText('District')).toBeInTheDocument();
+    expect(within(card).getByText('Krishna')).toBeInTheDocument();
   });
 
   it('opens on the dashboard', async () => {

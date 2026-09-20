@@ -21,7 +21,8 @@
     "db:migrate": "npm run migrate --workspace=apps/api",
     "db:seed": "npm run seed --workspace=apps/api",
     "catalogue": "node scripts/catalogue-coverage.mjs",
-    "catalogue:json": "node scripts/catalogue-coverage.mjs --json"
+    "catalogue:json": "node scripts/catalogue-coverage.mjs --json",
+    "test:survey": "npm run build --workspace=@silverline/shared && npm run test --workspace=@silverline/shared && npm run test:survey --workspace=apps/api && npm run test --workspace=apps/web"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.1",

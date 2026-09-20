@@ -11,7 +11,9 @@
     "test": "vitest run",
     "lint": "tsc --noEmit -p tsconfig.json",
     "worker": "tsx src/jobs.ts",
-    "backfill:pii-hashes": "tsx src/scripts/backfill-pii-hashes.ts"
+    "backfill:pii-hashes": "tsx src/scripts/backfill-pii-hashes.ts",
+    "test:survey": "vitest run test/catalogue/survey-ladder.test.ts test/catalogue/survey.test.ts test/catalogue/survey-operations.test.ts test/catalogue/survey-workflow.test.ts test/catalogue/survey-tasks.test.ts test/catalogue/survey-billing.test.ts test/catalogue/survey-import.test.ts test/catalogue/village-gcp.test.ts test/catalogue/village-billing.test.ts test/catalogue/village-close-out.test.ts test/catalogue/village-daily.test.ts test/catalogue/kit-gap.test.ts",
+    "profile:setup": "tsx test/profile-setup.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

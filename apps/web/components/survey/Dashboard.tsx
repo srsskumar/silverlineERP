@@ -110,6 +110,8 @@ interface DashboardData {
     low_progress: ReasonGroup;
   };
   rows: DashboardRow[];
+  /** The mandal roll-up, sent unless the grouping above already is mandal. */
+  by_mandal: Array<DashboardRow & { district: string | null }> | null;
   villages: DashboardVillage[];
 }
 
@@ -135,6 +137,105 @@ function rungTone(index: number, total: number): string {
   if (share < 0.6) return 'bg-indigo-500/80';
   if (share < 0.9) return 'bg-emerald-500/75';
   return 'bg-emerald-600';
+}
+
+/**
+ * One roll-up table, drawn the same way wherever it appears.
+ *
+ * The district grouping and the mandal grouping are the same nine columns
+ * over different rows, and they were about to be the same JSX twice — which
+ * is how one of them quietly stops matching the other.
+ */
+function RollUp({
+  title, unitHeading, note, rows, ladder, onSelect,
+}: {
+  title: string;
+  unitHeading: string;
+  note: string;
+  rows: Array<DashboardRow & { district?: string | null }>;
+  ladder: Rung[];
+  onSelect: (row: DashboardRow) => void;
+}) {
+  const showsParent = rows.some(r => r.district);
+  return (
+    <Card className="p-0">
+      <div className="flex items-baseline justify-between gap-2 px-4 py-3">
+        <h3 className="text-sm font-semibold text-text">{title}</h3>
+        <span className="text-2xs text-text-subtle">{note}</span>
+      </div>
+      <TableWrap tall={rows.length > 15}>
+        <Table>
+          <THead>
+            <TR>
+              <TH>{unitHeading}</TH>
+              {/* Mandal names repeat across districts; thirty bare ones read
+                  as a list of nothing. */}
+              {showsParent ? <TH>District</TH> : null}
+              <TH className="text-right">Villages</TH>
+              <TH className="text-right">Extent (Ac)</TH>
+              <TH className="text-right">Extent (km²)</TH>
+              <TH className="text-right">Surveyed (Ac)</TH>
+              <TH className="text-right">Surveyed (km²)</TH>
+              <TH className="text-right">Not started</TH>
+              <TH className="text-right">Finished</TH>
+              <TH className="text-right">Behind plan</TH>
+              <TH>Spread</TH>
+            </TR>
+          </THead>
+          <TBody>
+            {rows.map((row) => (
+              <TR key={row.id ?? '__none__'}>
+                <TD>
+                  {row.id ? (
+                    <button type="button"
+                      className="text-left text-primary underline-offset-2 hover:underline"
+                      onClick={() => onSelect(row)}>
+                      {row.name}
+                    </button>
+                  ) : row.name}
+                </TD>
+                {showsParent ? (
+                  <TD className="text-text-muted">{row.district ?? '—'}</TD>
+                ) : null}
+                <TD className="text-right tabular-nums">{num(row.villages)}</TD>
+                <TD className="text-right tabular-nums">{dec(row.extent_ac)}</TD>
+                <TD className="text-right tabular-nums text-text-muted">{dec(row.extent_sqkm)}</TD>
+                <TD className="text-right tabular-nums">{dec(row.surveyed_ac)}</TD>
+                <TD className="text-right tabular-nums text-text-muted">{dec(row.surveyed_sqkm)}</TD>
+                <TD className="text-right tabular-nums">{num(row.not_started)}</TD>
+                <TD className="text-right tabular-nums">{num(row.completed)}</TD>
+                <TD className={`text-right tabular-nums ${row.late > 0 ? 'text-danger' : ''}`}>
+                  {num(row.late)}
+                </TD>
+                <TD>
+                  {/* The same eleven positions, as one bar per group. */}
+                  <span className="flex h-3 w-40 overflow-hidden rounded bg-surface-sunken"
+                    title={ladder
+                      .map((r: Rung) => `${r.label}: ${row.by_position[r.key] ?? 0}`)
+                      .filter((t: string) => !t.endsWith(': 0')).join('\n')}>
+                    {ladder.map((r: Rung, i: number) => {
+                      const n = row.by_position[r.key] ?? 0;
+                      if (!n) return null;
+                      return (
+                        <span key={r.key} className={rungTone(i, ladder.length)}
+                          style={{ width: `${(n / Math.max(1, row.villages)) * 100}%` }} />
+                      );
+                    })}
+                  </span>
+                </TD>
+              </TR>
+            ))}
+            {rows.length === 0 ? (
+              <TR><TD colSpan={showsParent ? 11 : 10}
+                className="py-6 text-center text-sm text-text-muted">
+                No villages match these filters.
+              </TD></TR>
+            ) : null}
+          </TBody>
+        </Table>
+      </TableWrap>
+    </Card>
+  );
 }
 
 export function SurveyDashboard({
@@ -568,90 +669,40 @@ export function SurveyDashboard({
         ) : null}
       </Card>
 
-      {/* -------------------------------------------------------- the roll-up */}
-      <Card className="p-0">
-        <div className="flex items-baseline justify-between gap-2 px-4 py-3">
-          <h3 className="text-sm font-semibold text-text">
-            By {level}
-          </h3>
-          <span className="text-2xs text-text-subtle">
-            {level === 'mandal' ? 'Select a mandal to see its villages'
-              : 'Group by mandal to go a level deeper'}
-          </span>
-        </div>
-        <TableWrap>
-          <Table>
-            <THead>
-              <TR>
-                <TH>{level[0].toUpperCase() + level.slice(1)}</TH>
-                <TH className="text-right">Villages</TH>
-                <TH className="text-right">Extent (Ac)</TH>
-                <TH className="text-right">Extent (km²)</TH>
-                <TH className="text-right">Surveyed (Ac)</TH>
-                <TH className="text-right">Surveyed (km²)</TH>
-                <TH className="text-right">Not started</TH>
-                <TH className="text-right">Finished</TH>
-                <TH className="text-right">Behind plan</TH>
-                <TH>Spread</TH>
-              </TR>
-            </THead>
-            <TBody>
-              {d.rows.map((row: DashboardRow) => (
-                <TR key={row.id ?? '__none__'}>
-                  <TD>
-                    {row.id && level !== 'mandal' ? (
-                      <button type="button"
-                        className="text-left text-primary underline-offset-2 hover:underline"
-                        onClick={() => {
-                          if (level === 'district') { setDistrict(row.id!); setLevel('mandal'); }
-                        }}>
-                        {row.name}
-                      </button>
-                    ) : row.id && level === 'mandal' ? (
-                      <button type="button"
-                        className="text-left text-primary underline-offset-2 hover:underline"
-                        onClick={() => setMandal(row.id!)}>
-                        {row.name}
-                      </button>
-                    ) : row.name}
-                  </TD>
-                  <TD className="text-right tabular-nums">{num(row.villages)}</TD>
-                  <TD className="text-right tabular-nums">{dec(row.extent_ac)}</TD>
-                  <TD className="text-right tabular-nums text-text-muted">{dec(row.extent_sqkm)}</TD>
-                  <TD className="text-right tabular-nums">{dec(row.surveyed_ac)}</TD>
-                  <TD className="text-right tabular-nums text-text-muted">{dec(row.surveyed_sqkm)}</TD>
-                  <TD className="text-right tabular-nums">{num(row.not_started)}</TD>
-                  <TD className="text-right tabular-nums">{num(row.completed)}</TD>
-                  <TD className={`text-right tabular-nums ${row.late > 0 ? 'text-danger' : ''}`}>
-                    {num(row.late)}
-                  </TD>
-                  <TD>
-                    {/* The same eleven positions, as one bar per group. */}
-                    <span className="flex h-3 w-40 overflow-hidden rounded bg-surface-sunken"
-                      title={ladder
-                        .map((r: Rung) => `${r.label}: ${row.by_position[r.key] ?? 0}`)
-                        .filter((t: string) => !t.endsWith(': 0')).join('\n')}>
-                      {ladder.map((r: Rung, i: number) => {
-                        const n = row.by_position[r.key] ?? 0;
-                        if (!n) return null;
-                        return (
-                          <span key={r.key} className={rungTone(i, ladder.length)}
-                            style={{ width: `${(n / Math.max(1, row.villages)) * 100}%` }} />
-                        );
-                      })}
-                    </span>
-                  </TD>
-                </TR>
-              ))}
-              {d.rows.length === 0 ? (
-                <TR><TD colSpan={10} className="py-6 text-center text-sm text-text-muted">
-                  No villages match these filters.
-                </TD></TR>
-              ) : null}
-            </TBody>
-          </Table>
-        </TableWrap>
-      </Card>
+      {/* -------------------------------------------------------- the roll-ups */}
+      <RollUp
+        title={`By ${level}`}
+        unitHeading={level[0].toUpperCase() + level.slice(1)}
+        note={level === 'mandal'
+          ? 'Select a mandal to see its villages'
+          : 'Select a row to narrow everything below'}
+        rows={d.rows}
+        ladder={ladder}
+        onSelect={(row) => {
+          if (level === 'district') { setDistrict(row.id!); setLevel('mandal'); return; }
+          if (level === 'mandal') setMandal(row.id!);
+        }}
+      />
+
+      {/*
+        * The mandal roll-up, beside whatever level was asked for.
+        *
+        * A district tells an official the programme is behind; the mandal
+        * tells them which tahsildar to ring. It is the level the work is
+        * actually organised at — crews are posted to mandals and the
+        * department staffs them by mandal — so it is always here rather than
+        * only when somebody thinks to change the grouping above.
+        */}
+      {d.by_mandal ? (
+        <RollUp
+          title="By mandal"
+          unitHeading="Mandal"
+          note="Select a mandal to narrow everything below"
+          rows={d.by_mandal}
+          ladder={ladder}
+          onSelect={(row) => setMandal(row.id!)}
+        />
+      ) : null}
 
       {/* ------------------------------------------------------- the villages */}
       <Card className="p-0">

@@ -717,3 +717,51 @@ describe("how long, and sitting with whom (§074)", () => {
     }
   });
 });
+
+describe("the mandal roll-up (§075)", () => {
+  it("comes with every dashboard, whatever the grouping asked for", async () => {
+    // A district says the programme is behind; the mandal says which
+    // tahsildar to ring, and it is the level the work is organised at.
+    const byDistrict = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/dashboard?level=district`);
+    expect(byDistrict.data.by_mandal).not.toBeNull();
+    expect(Array.isArray(byDistrict.data.by_mandal)).toBe(true);
+  });
+
+  it("names the district beside each mandal", async () => {
+    // Mandal names repeat across districts; thirty bare ones read as a list
+    // of nothing.
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    const rows = r.data.by_mandal as Array<Record<string, unknown>>;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.some(x => typeof x.district === "string")).toBe(true);
+  });
+
+  it("adds up to the same villages as the level above it", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    const mandals = (r.data.by_mandal as Array<{ villages: number }>)
+      .reduce((t, x) => t + x.villages, 0);
+    const districts = (r.data.rows as Array<{ villages: number }>)
+      .reduce((t, x) => t + x.villages, 0);
+    expect(mandals).toBe(districts);
+    expect(mandals).toBe(r.data.filter.villages);
+  });
+
+  it("is left out when the grouping already is mandal", async () => {
+    // Two identical tables is not a second view of anything.
+    const r = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/dashboard?level=mandal`);
+    expect(r.data.by_mandal).toBeNull();
+  });
+
+  it("narrows with every other filter on the screen", async () => {
+    const all = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    const narrowed = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/dashboard?position=NOT_STARTED`);
+    const total = (rows: Array<{ villages: number }>) =>
+      rows.reduce((t, x) => t + x.villages, 0);
+    expect(total(narrowed.data.by_mandal)).toBe(narrowed.data.filter.villages);
+    expect(total(narrowed.data.by_mandal))
+      .toBeLessThanOrEqual(total(all.data.by_mandal));
+  });
+});
