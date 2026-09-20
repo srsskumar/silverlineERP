@@ -141,12 +141,13 @@ const OTHER_REMARKS = [
 
 async function chunkInsert(
   pool: Pool, sql: string, cols: number, rows: unknown[][], size = 500,
+  onConflict = "ON CONFLICT DO NOTHING",
 ): Promise<void> {
   for (let i = 0; i < rows.length; i += size) {
     const slice = rows.slice(i, i + size);
     const values = slice.map((_, r) =>
       `(${Array.from({ length: cols }, (_, c) => `$${r * cols + c + 1}`).join(",")})`).join(",");
-    await pool.query(`${sql} VALUES ${values} ON CONFLICT DO NOTHING`, slice.flat());
+    await pool.query(`${sql} VALUES ${values} ${onConflict}`, slice.flat());
   }
 }
 
@@ -464,7 +465,16 @@ async function main(): Promise<void> {
    * up, and six thousand returns does that without making this script a
    * twenty-minute job.
    */
-  const withReturns = startedVillages.slice(0, 400);
+  /*
+   * Spread across the ladder rather than taken off the front of the list.
+   *
+   * The villages are ordered by code and the ladder was dealt in that order,
+   * so the first four hundred were all early-stage — and the dashboard showed
+   * nothing surveyed at exactly the stages where the work is most complete.
+   * Every fourth village, wherever it sits, gives every rung returns behind
+   * it.
+   */
+  const withReturns = startedVillages.filter((_, i) => i % 2 === 0);
   const entryRows: unknown[][] = [];
   withReturns.forEach((v, i) => {
     const days = between(8, 22);
@@ -504,9 +514,20 @@ async function main(): Promise<void> {
       valueRows.push([orgId, String(e.id), String(m.id), between(8, 90)]);
     }
   }
+  /*
+   * Upserted, not inserted-and-skipped.
+   *
+   * The share each day carries is the village's extent divided by however
+   * many days it has, so it changes whenever a run adds a day. Leaving the
+   * old rows alone made the cumulative overshoot the extent — every village
+   * with returns was reporting more surveyed than it contains, which is the
+   * one number anybody spots. Rewriting them makes a second run converge on
+   * the same figures as the first rather than pile on top of it.
+   */
   await chunkInsert(pool,
     "INSERT INTO survey_entry_values(org_id, entry_id, measure_id, quantity)",
-    4, valueRows, 400);
+    4, valueRows, 400,
+    "ON CONFLICT (entry_id, measure_id) DO UPDATE SET quantity = EXCLUDED.quantity");
 
   /*
    * A row per instrument per day.
