@@ -134,8 +134,11 @@ describe("recording a claim", () => {
 
   it("accepts a backdated one, because the letter went out last week", async () => {
     const past = workDate(new Date(Date.now() - 7 * 86400_000));
+    // The second, because claims go in order (§080) and the first is already
+    // standing on this village. What is being tested is the date, not which
+    // milestone carries it.
     const r = await post(w.admin, `/api/v1/survey/villages/${villageA}/billing`,
-      { milestone: 3, submitted_on: past, extent_ac: 411.5 });
+      { milestone: 2, submitted_on: past, extent_ac: 411.5 });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     expect(r.data.submitted_on).toBe(past);
     // The extent claimed is what was surveyed, which need not be the extent
@@ -148,18 +151,19 @@ describe("what has been claimed on a village", () => {
   it("adds up the share released, ignoring what came back", async () => {
     const r = await get(w.admin, `/api/v1/survey/villages/${villageA}/billing`);
     expect(r.status).toBe(200);
-    // Milestone 1 at 50 and milestone 3 at 20 are standing; the approved
-    // attempt at 2 was refused above and never written.
-    expect(r.meta.claimed_percent).toBe(70);
-    expect(r.data.map((c: any) => c.milestone)).toEqual([1, 3]);
+    // Milestone 1 at 50 and milestone 2 at 30 are standing. The third is not
+    // claimable yet on this village: claims go in order (§080) and there is
+    // nothing above the second.
+    expect(r.meta.claimed_percent).toBe(80);
+    expect(r.data.map((c: any) => c.milestone)).toEqual([1, 2]);
   });
 
   it("stops counting a claim the department returned", async () => {
     const list = await get(w.admin, `/api/v1/survey/villages/${villageA}/billing`);
-    const third = list.data.find((c: any) => c.milestone === 3);
+    const second = list.data.find((c: any) => c.milestone === 2);
     const today = workDate();
-    const r = await patch({ ...w.admin, ...(await ver(third.id)) },
-      `/api/v1/survey/billing/${third.id}`,
+    const r = await patch({ ...w.admin, ...(await ver(second.id)) },
+      `/api/v1/survey/billing/${second.id}`,
       { status: "REJECTED", decided_on: today, remarks: "LPM sheets short" });
     expect(r.status, JSON.stringify(r.body)).toBe(200);
 
@@ -199,7 +203,7 @@ describe("pulling the list the office needs", () => {
     const r = await get(w.admin,
       `/api/v1/survey/billing?project_id=${programmeId}&status=REJECTED`);
     expect(r.data.length).toBe(1);
-    expect(r.data[0].milestone).toBe(3);
+    expect(r.data[0].milestone).toBe(2);
   });
 
   it("lists villages still owing a milestone", async () => {
@@ -212,10 +216,10 @@ describe("pulling the list the office needs", () => {
     expect(ids).toContain(villageA);
     expect(ids).toContain(villageB);
 
-    const owed3 = await get(w.admin,
-      `/api/v1/survey/billing?project_id=${programmeId}&outstanding=3`);
-    // Village A's third claim was returned, so it is owed again.
-    expect(owed3.data.map((v: any) => v.id)).toContain(villageA);
+    const owed2 = await get(w.admin,
+      `/api/v1/survey/billing?project_id=${programmeId}&outstanding=2`);
+    // Village A's second claim was returned, so it is owed again.
+    expect(owed2.data.map((v: any) => v.id)).toContain(villageA);
   });
 
   it("says which milestones a still-owing village has already claimed", async () => {

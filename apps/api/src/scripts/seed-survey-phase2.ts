@@ -574,7 +574,11 @@ async function main(): Promise<void> {
             sv.total_extent_ac,
             bool_or(s.code = 'GT_QC' AND vs.state = 'COMPLETED')              AS m1,
             bool_or(s.code = 'DATA_SUBMISSION' AND vs.state = 'COMPLETED')    AS m2,
-            bool_or(s.code = 'FINAL_DELIVERABLES' AND vs.state <> 'NOT_STARTED') AS m3
+            -- COMPLETED, not merely started (§078). Submitting is not being
+            -- paid for, and this line used to say otherwise — which is how
+            -- the corpus came to hold thirty-nine claims the routes would
+            -- refuse today.
+            bool_or(s.code = 'FINAL_DELIVERABLES' AND vs.state = 'COMPLETED') AS m3
        FROM survey_villages sv
        JOIN survey_village_stages vs ON vs.survey_village_id = sv.id
        JOIN survey_stages s ON s.id = vs.stage_id
@@ -583,8 +587,16 @@ async function main(): Promise<void> {
   const claimRows: unknown[][] = [];
   const PERCENT: Record<number, number> = { 1: 50, 2: 30, 3: 20 };
   for (const row of earned) {
+    /*
+     * Claims are a sequence, and stop at the first one not earned.
+     *
+     * The routes refuse a milestone whose predecessor is not standing, and
+     * this loop used to emit each one independently — so a village that had
+     * earned the second and not the first got a second claim on its own,
+     * which the department cannot reconcile against its own file.
+     */
     for (const [milestone, ok] of [[1, row.m1], [2, row.m2], [3, row.m3]] as const) {
-      if (!ok) continue;
+      if (!ok) break;
       // A mix of standing, approved and paid, so the billing screen has more
       // than one state to draw.
       const roll = rand();
@@ -841,6 +853,73 @@ async function main(): Promise<void> {
         AND ra.released_on IS NULL
         AND (('x' || substr(md5(ra.id::text), 1, 8))::bit(32)::int % 13) = 0`,
     [programmeId, addDays(TODAY, -between(2, 20))]);
+
+  /* --- bring the claims back in line with the rules -------------------- */
+
+  /*
+   * Claims the routes would refuse today.
+   *
+   * The generator above used to release the third milestone on a submission
+   * rather than an acceptance (§078 moved it), and to emit each milestone
+   * independently rather than as a sequence — so the corpus carried claims
+   * that could not be raised now. A demonstration dataset that contradicts
+   * the rules it is demonstrating is worse than no dataset.
+   *
+   * All of them go. Keeping a handful to exercise the dashboard's
+   * "claimed without a sign-off" count was tried and is wrong: an audit that
+   * always reports a fault is an audit people learn to scroll past, and the
+   * case is already covered by a test that claims a village and then has the
+   * acceptance withdrawn. Edge cases belong in tests; the corpus should be
+   * something the rules would accept.
+   */
+  const KEEP_LEGACY = 0;
+
+  const stale = (await pool.query(
+    `SELECT b.id, b.milestone
+       FROM survey_village_billing b
+       JOIN survey_villages sv ON sv.id = b.survey_village_id
+      WHERE sv.survey_project_id = $1 AND b.status <> 'REJECTED'
+        AND NOT EXISTS (
+          SELECT 1 FROM survey_village_stages vs
+            JOIN survey_stages st ON st.id = vs.stage_id
+           WHERE vs.survey_village_id = b.survey_village_id
+             AND st.code = CASE b.milestone
+                   WHEN 1 THEN 'GT_QC'
+                   WHEN 2 THEN 'DATA_SUBMISSION'
+                   ELSE 'FINAL_DELIVERABLES' END
+             AND vs.state = 'COMPLETED')
+      ORDER BY b.milestone DESC, b.id`, [programmeId])).rows;
+
+  const keep = stale.filter(r => Number(r.milestone) === 3).slice(0, KEEP_LEGACY);
+  const keepIds = new Set(keep.map(r => String(r.id)));
+  const drop = stale.filter(r => !keepIds.has(String(r.id))).map(r => String(r.id));
+
+  if (drop.length) {
+    await pool.query("DELETE FROM survey_village_billing WHERE id = ANY($1::uuid[])", [drop]);
+  }
+
+  /*
+   * And claims whose predecessor is missing.
+   *
+   * Removed from the top down, because dropping the first of three would
+   * orphan the two above it — the loop runs until nothing more is orphaned.
+   */
+  let orphaned = 0;
+  for (let pass = 0; pass < 3; pass += 1) {
+    const r = await pool.query(
+      `DELETE FROM survey_village_billing b
+        USING survey_villages sv
+        WHERE sv.id = b.survey_village_id AND sv.survey_project_id = $1
+          AND b.milestone > 1 AND b.status <> 'REJECTED'
+          AND NOT EXISTS (
+            SELECT 1 FROM survey_village_billing e
+             WHERE e.survey_village_id = b.survey_village_id
+               AND e.milestone = b.milestone - 1 AND e.status <> 'REJECTED')`,
+      [programmeId]);
+    orphaned += r.rowCount ?? 0;
+    if (!r.rowCount) break;
+  }
+  console.log(`  claims reconciled: ${drop.length} withdrawn, ${orphaned} orphaned`);
 
   console.log(`\ndone — ${NAME} (${programmeId})`);
   await pool.end();

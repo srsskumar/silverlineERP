@@ -324,7 +324,11 @@ describe("starting ground truthing", () => {
 
 describe("billing gates after the rename", () => {
   it("still holds the second claim until the department approves the data", async () => {
-    // villageA is at DATA_APPROVED, so the second claim is earned.
+    // villageA is at DATA_APPROVED, so the second claim is earned — once the
+    // first is standing, because claims go in order (§080).
+    const first = await post(w.admin, `/api/v1/survey/villages/${villageA}/billing`,
+      { milestone: 1 });
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
     const r = await post(w.admin, `/api/v1/survey/villages/${villageA}/billing`,
       { milestone: 2 });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
@@ -874,6 +878,11 @@ describe("billing waits for an acceptance (§078)", () => {
     await post(w.admin, `/api/v1/survey/villages/${awaiting}/stage`, {
       stage_code: "FINAL_DELIVERABLES", state: "COMPLETED", completed_on: "2026-05-15",
     });
+    for (const milestone of [1, 2]) {
+      const earlier = await post(w.admin,
+        `/api/v1/survey/villages/${awaiting}/billing`, { milestone });
+      expect(earlier.status, JSON.stringify(earlier.body)).toBe(201);
+    }
     const r = await post(w.admin, `/api/v1/survey/villages/${awaiting}/billing`,
       { milestone: 3 });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
@@ -933,7 +942,9 @@ describe("claims that would not be raised today (§079)", () => {
           ? { gt_govt_staff_allocated: 1, gt_crew_allocated: 3 } : {}),
       });
     }
-    await post(w.admin, `/api/v1/survey/villages/${legacy}/billing`, { milestone: 3 });
+    for (const milestone of [1, 2, 3]) {
+      await post(w.admin, `/api/v1/survey/villages/${legacy}/billing`, { milestone });
+    }
     /*
      * Then the acceptance is withdrawn — the department sends the
      * deliverables back. The claim stands; the work no longer qualifies.
@@ -941,6 +952,24 @@ describe("claims that would not be raised today (§079)", () => {
      */
     await w.pool.query(
       `UPDATE survey_village_stages vs SET state = 'IN_PROGRESS', completed_on = NULL
+         FROM survey_stages s
+        WHERE s.id = vs.stage_id AND s.code = 'FINAL_DELIVERABLES'
+          AND vs.survey_village_id = $1`, [legacy]);
+  });
+
+  /*
+   * Put the acceptance back.
+   *
+   * This block deliberately manufactures a row the routes would refuse, which
+   * is the only way to test that it is counted. Leaving it behind would make
+   * the invariant checks below fail on data a test invented — so the fixture
+   * cleans up after itself rather than the assertions being loosened to
+   * tolerate it.
+   */
+  afterAll(async () => {
+    await w.pool.query(
+      `UPDATE survey_village_stages vs
+          SET state = 'COMPLETED', completed_on = DATE '2026-05-01'
          FROM survey_stages s
         WHERE s.id = vs.stage_id AND s.code = 'FINAL_DELIVERABLES'
           AND vs.survey_village_id = $1`, [legacy]);
@@ -975,9 +1004,13 @@ describe("claims that would not be raised today (§079)", () => {
     await post(w.admin, `/api/v1/survey/villages/${other}/stage`, {
       stage_code: "FINAL_DELIVERABLES", state: "IN_PROGRESS", started_on: "2026-04-20",
     });
+    for (const milestone of [1, 2]) {
+      await post(w.admin, `/api/v1/survey/villages/${other}/billing`, { milestone });
+    }
     const r = await post(w.admin, `/api/v1/survey/villages/${other}/billing`,
       { milestone: 3 });
     expect(r.status).toBe(422);
+    expect(r.body.code).toBe("MILESTONE_NOT_EARNED");
   });
 
   it("tells the department nothing about any of it", async () => {
@@ -986,4 +1019,58 @@ describe("claims that would not be raised today (§079)", () => {
     expect(r.data.totals).not.toHaveProperty("claimed_unearned");
     expect(r.data.totals).not.toHaveProperty("earned");
   });
+});
+
+describe("the data obeys the rules that govern it (§080)", () => {
+  /*
+   * The audit script's checks, run against whatever this suite has built.
+   *
+   * Every rule here is enforced at the point of writing, which says nothing
+   * about rows already there — and rules get tightened, data gets imported
+   * and stages get corrected afterwards. These assert that the catalogue's
+   * own data could still be written today, so a change that starts producing
+   * rows the routes would refuse fails here rather than in a demonstration.
+   */
+  const faults: Array<[string, string]> = [
+    ["claims against work nobody signed off", `
+      SELECT count(*)::int AS n FROM survey_village_billing b
+       WHERE b.status <> 'REJECTED'
+         AND NOT EXISTS (
+           SELECT 1 FROM survey_village_stages vs
+             JOIN survey_stages st ON st.id = vs.stage_id
+            WHERE vs.survey_village_id = b.survey_village_id
+              AND st.code = CASE b.milestone
+                    WHEN 1 THEN 'GT_QC' WHEN 2 THEN 'DATA_SUBMISSION'
+                    ELSE 'FINAL_DELIVERABLES' END
+              AND vs.state = 'COMPLETED')`],
+    ["a later claim standing without the earlier one", `
+      SELECT count(*)::int AS n FROM survey_village_billing b
+       WHERE b.status <> 'REJECTED' AND b.milestone > 1
+         AND NOT EXISTS (
+           SELECT 1 FROM survey_village_billing e
+            WHERE e.survey_village_id = b.survey_village_id
+              AND e.milestone = b.milestone - 1 AND e.status <> 'REJECTED')`],
+    ["stages complete with no completion date", `
+      SELECT count(*)::int AS n FROM survey_village_stages
+       WHERE state = 'COMPLETED' AND completed_on IS NULL`],
+    ["villages recording more surveyed than they contain", `
+      SELECT count(*)::int AS n FROM (
+        SELECT sv.id FROM survey_villages sv
+          JOIN survey_entries e ON e.survey_village_id = sv.id
+          JOIN survey_entry_values sev ON sev.entry_id = e.id
+          JOIN survey_measures m ON m.id = sev.measure_id AND m.basis = 'EXTENT'
+         GROUP BY sv.id, sv.total_extent_ac
+        HAVING sum(sev.quantity) > sv.total_extent_ac) x`],
+    ["grants of a permission nothing defines", `
+      SELECT count(*)::int AS n FROM role_permissions rp
+       LEFT JOIN permissions p ON p.code = rp.permission_code
+       WHERE p.code IS NULL`],
+  ];
+
+  for (const [label, sql] of faults) {
+    it(`leaves no ${label}`, async () => {
+      const r = await w.pool.query(sql);
+      expect(Number(r.rows[0].n), label).toBe(0);
+    });
+  }
 });

@@ -2611,6 +2611,36 @@ export async function registerSurveyRoutes(
   }
 
   /**
+   * Every milestone below this one has to be standing (§080).
+   *
+   * Milestones are a sequence and the department reconciles them against its
+   * own file, so a second claim with no first is one they cannot place. The
+   * bulk route has always refused it; this path did not, and the same rule
+   * enforced on one way in and not the other is the same as not enforced —
+   * the corpus carried fifteen claims stranded above a gap because of it.
+   *
+   * A rejected claim does not count as standing: the department sent it back,
+   * so there is nothing on their file to reconcile against.
+   */
+  async function inOrderOr422(
+    db: Pool | PoolClient, villageId: string, milestone: number,
+  ): Promise<void> {
+    if (milestone <= 1) return;
+    const below = (await db.query(
+      `SELECT milestone FROM survey_village_billing
+        WHERE survey_village_id = $1 AND milestone < $2 AND status <> 'REJECTED'`,
+      [villageId, milestone])).rows.map(r => Number(r.milestone));
+    const missing: number[] = [];
+    for (let m = 1; m < milestone; m += 1) if (!below.includes(m)) missing.push(m);
+    if (missing.length === 0) return;
+    fail('MILESTONE_OUT_OF_ORDER',
+      `Milestone ${milestone} cannot be claimed before ${
+        missing.map(m => `milestone ${m}`).join(' and ')} on this village. `
+      + 'The department reconciles claims against its own file in order, and one '
+      + 'that arrives out of sequence is one they cannot place.', 422);
+  }
+
+  /**
    * A village's returns, day by day, with what was out and who came (§note 19).
    *
    * The summary sheet totals a village's life; this is the working underneath
@@ -3245,6 +3275,7 @@ export async function registerSurveyRoutes(
         async db => {
           await villageOr404(db, u.orgId, id, u);
           await earnedOr422(db, req, u.orgId, id, input.milestone);
+          await inOrderOr422(db, id, input.milestone);
           const existing = await db.query(
             'SELECT milestone FROM survey_village_billing WHERE survey_village_id = $1 AND milestone = $2',
             [id, input.milestone]);
