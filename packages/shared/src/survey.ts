@@ -817,7 +817,12 @@ export const roverDaySchema = z.object({
   employee_id: z.string().uuid().nullable().optional(),
 });
 
-export const surveyEntrySchema = z.object({
+/*
+ * The base object, kept unrefined so the patch schema can be derived from it.
+ * A superRefine turns a ZodObject into a ZodEffects, which has no `.omit` —
+ * the same shape gcpSchema and gcpPatchSchema already deal with.
+ */
+export const surveyEntryBase = z.object({
   survey_village_id: z.string().uuid(),
   entry_date: pastDate,
   teams_deployed: z.number().int().min(0).optional(),
@@ -851,9 +856,34 @@ export const surveyEntrySchema = z.object({
    */
   govt_staff_present: headcount.nullable().optional(),
   crew_present: headcount.nullable().optional(),
+  /*
+   * Why ground truthing has run past its date (§074).
+   *
+   * Carried on the day's return because that is when somebody who knows the
+   * answer is already typing. Written onto the ground-truthing stage rather
+   * than onto the day: it explains the stage, not the afternoon.
+   */
+  gt_variance_reason: z.enum(DELAY_REASON_CODES as unknown as [string, ...string[]])
+    .nullable().optional(),
+  gt_variance_remarks: z.string().trim().max(2000).nullable().optional(),
 });
 
-export const surveyEntryPatchSchema = surveyEntrySchema
+/** "Other" with nothing said is the option people pick to get past the form. */
+function refineGtVariance(
+  v: { gt_variance_reason?: string | null; gt_variance_remarks?: string | null },
+  ctx: z.RefinementCtx,
+): void {
+  if (v.gt_variance_reason === 'OTHER' && !v.gt_variance_remarks?.trim()) {
+    ctx.addIssue({
+      code: 'custom', path: ['gt_variance_remarks'],
+      message: 'A reason of "other" must say what happened',
+    });
+  }
+}
+
+export const surveyEntrySchema = surveyEntryBase.superRefine(refineGtVariance);
+
+export const surveyEntryPatchSchema = surveyEntryBase
   .omit({ survey_village_id: true, entry_date: true })
   .partial()
   .extend({
@@ -1050,6 +1080,32 @@ export function stageVariance(
     needsReason: days > thresholdDays && !reason,
     reason,
   };
+}
+
+/**
+ * Whether ground truthing is past its date with nothing said about it (§074).
+ *
+ * The one variance that is always demanded rather than merely asked for.
+ * Ground truthing is the stage the department staffs alongside us and the one
+ * every later stage waits on, so a village sitting past its date with no
+ * explanation is the single most expensive silence in the programme — and the
+ * answer is known on the day, by the people standing in the village.
+ *
+ * Demanded once, not daily: the point is to get the reason on file, not to
+ * hold a crew to ransom every evening for an answer they already gave.
+ */
+export function gtReasonRequired(
+  stage: StageDates | null | undefined,
+  today: string,
+): boolean {
+  if (!stage) return false;
+  if (stage.varianceReason) return false;
+  const expected = stage.expectedEndOn ?? null;
+  if (!expected) return false;
+  // Finished late, or still running past the date. Finished early or on time
+  // needs no explanation, and neither does work still inside its window.
+  const against = stage.completedOn ?? today;
+  return against > expected;
 }
 
 /** "8 days late", "3 days early", "on time", or null when there is no plan. */

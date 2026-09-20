@@ -124,8 +124,23 @@ const DASHBOARD = {
     low_progress: { unit: 'days', note: '', total: 1,
       by_reason: REASONS.map((r, i) => ({ ...r, count: i === 8 ? 1 : 0, villages: i === 8 ? 1 : 0 })) },
   },
+  stage_days: [
+    { code: 'GROUND_TRUTHING', label: 'Ground truthing', villages_measured: 1,
+      villages_here: 3, avg_days: 21.5, median_days: 20, max_days: 44,
+      holders: [{ name: 'Ravi Kumar', villages: 2 }], unassigned: 1 },
+    { code: 'GT_QC', label: 'GT quality check', villages_measured: 0, villages_here: 1,
+      avg_days: null, median_days: null, max_days: null, holders: [], unassigned: 1 },
+    { code: 'VECTORIZATION', label: 'Vectorization', villages_measured: 0, villages_here: 0,
+      avg_days: null, median_days: null, max_days: null, holders: [], unassigned: 0 },
+    { code: 'DATA_SUBMISSION', label: 'Data submission', villages_measured: 0,
+      villages_here: 0, avg_days: null, median_days: null, max_days: null,
+      holders: [], unassigned: 0 },
+    { code: 'FINAL_DELIVERABLES', label: 'Final deliverables', villages_measured: 0,
+      villages_here: 0, avg_days: null, median_days: null, max_days: null,
+      holders: [], unassigned: 0 },
+  ],
   rows: [{ id: 'd1', name: 'Krishna', villages: 1, extent_ac: 200, extent_sqkm: 0.81,
-    surveyed_ac: 120,
+    surveyed_ac: 120, surveyed_sqkm: 0.49,
     by_position: Object.fromEntries(LADDER.map(r => [r.key, r.key === 'GT_COMPLETED' ? 1 : 0])),
     completed: 0, not_started: 0, late: 1 }],
   villages: [{ id: 'v1', name: 'Adakula', code: '1501041', district: 'Krishna',
@@ -133,7 +148,10 @@ const DASHBOARD = {
     position: 'GT_COMPLETED', position_label: 'GT completed', on_hold: false,
     in_rework: false, gt_started_on: '2026-09-01', gt_expected_end_on: '2026-10-01',
     gcp_count: 1, slip_days: 8, slip_stage: 'GROUND_TRUTHING', slip_note: '8 days late',
-    slip_reason: null, slip_needs_reason: true }],
+    slip_reason: null, slip_needs_reason: true,
+    gt_completed_on: '2026-10-09', surveyed_sqkm: 0.49,
+    stage_days: { GROUND_TRUTHING: 38 }, days_in_stage: 38,
+    holders: ['Ravi Kumar', 'Sita Devi'], holder_count: 2 }],
 };
 
 /** Every endpoint these screens reach for, keyed by a fragment of the path. */
@@ -314,6 +332,37 @@ describe('the land survey screen', () => {
       (el) => el.closest('button')!).filter(Boolean);
     // Recorded against a stage, so that one is live; the other two are not.
     expect(weather.filter((b) => !b.hasAttribute('disabled'))).toHaveLength(1);
+  });
+
+  it('reports how long each stage takes and who it is sitting with', async () => {
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() =>
+      expect(screen.getByText('How long each stage takes')).toBeInTheDocument());
+    // Median beside the mean: a few villages stuck for months drag an average
+    // somewhere no village actually is.
+    expect(screen.getByText('Median days')).toBeInTheDocument();
+    expect(screen.getByText('Average days')).toBeInTheDocument();
+    expect(screen.getByText('Ravi Kumar · 2')).toBeInTheDocument();
+    // A stage with villages on it and nobody holding them is worth its own badge.
+    expect(screen.getByText('1 with nobody')).toBeInTheDocument();
+    // And a stage whose villages have nobody at all says so in words.
+    expect(screen.getByText('nobody assigned')).toBeInTheDocument();
+  });
+
+  it('shows the actual GT completion beside the promised one, and km² beside acres', async () => {
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() =>
+      expect(screen.getByText('GT actual end')).toBeInTheDocument());
+    // Appears in the village row and again in the export preview, so count
+    // rather than insist on one.
+    expect(screen.getAllByText('2026-10-09').length).toBeGreaterThan(0);
+    expect(screen.getByText('GT expected end')).toBeInTheDocument();
+    // Surveyed extent carries km² as well as acres.
+    expect(screen.getAllByText(/0\.49/).length).toBeGreaterThan(0);
+    // Both the roll-up and the village list carry it.
+    expect(screen.getAllByText('Surveyed (km²)').length).toBe(2);
   });
 
   it('opens on the dashboard', async () => {

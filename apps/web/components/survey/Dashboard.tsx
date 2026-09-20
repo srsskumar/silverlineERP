@@ -34,6 +34,7 @@ interface DashboardRow {
   extent_ac: number;
   extent_sqkm: number;
   surveyed_ac: number;
+  surveyed_sqkm: number;
   by_position: Record<string, number>;
   completed: number;
   not_started: number;
@@ -55,6 +56,12 @@ interface DashboardVillage {
   in_rework: boolean;
   gt_started_on: string | null;
   gt_expected_end_on: string | null;
+  gt_completed_on: string | null;
+  surveyed_sqkm: number;
+  stage_days: Record<string, number | null>;
+  days_in_stage: number | null;
+  holders?: string[];
+  holder_count?: number;
   gcp_count: number;
   slip_days: number | null;
   slip_stage: string | null;
@@ -90,6 +97,13 @@ interface DashboardData {
     on_hold: number; in_rework: number; gcp_missing: number;
     late: number; late_unexplained: number; unplanned: number;
   };
+  stage_days: Array<{
+    code: string; label: string;
+    villages_measured: number; villages_here: number;
+    avg_days: number | null; median_days: number | null; max_days: number | null;
+    holders?: Array<{ name: string; villages: number }>;
+    unassigned?: number;
+  }>;
   reasons: {
     stage_variance: ReasonGroup;
     instrument_idle: ReasonGroup;
@@ -185,20 +199,25 @@ export function SurveyDashboard({
       { header: 'Village', width: 24 }, { header: 'Code', width: 12 },
       { header: 'District', width: 18 }, { header: 'Mandal', width: 18 },
       { header: 'Extent (Ac)', width: 12 }, { header: 'Extent (km²)', width: 12 },
-      { header: 'Surveyed (Ac)', width: 13 }, { header: 'Status', width: 28 },
+      { header: 'Surveyed (Ac)', width: 13 }, { header: 'Surveyed (km²)', width: 14 },
+      { header: 'Status', width: 28 }, { header: 'Days in stage', width: 13 },
+      { header: 'Sitting with', width: 30 },
       { header: 'On hold', width: 9 }, { header: 'In rework', width: 10 },
       { header: 'Against plan', width: 16 }, { header: 'Slipping stage', width: 20 },
       { header: 'Variance reason', width: 18 },
       { header: 'GT started', width: 12 }, { header: 'GT expected end', width: 15 },
-      { header: 'Control points', width: 13 },
+      { header: 'GT completed', width: 14 }, { header: 'Control points', width: 13 },
     ],
     rows: (d?.villages ?? []).map((v: DashboardVillage) => [
       v.name, v.code ?? '', v.district ?? '', v.mandal ?? '',
-      dec(v.extent_ac), dec(v.extent_sqkm), dec(v.surveyed_ac),
+      dec(v.extent_ac), dec(v.extent_sqkm), dec(v.surveyed_ac), dec(v.surveyed_sqkm),
       v.position_label,
+      v.days_in_stage === null ? '' : String(v.days_in_stage),
+      (v.holders ?? []).join(', '),
       v.on_hold ? 'yes' : '', v.in_rework ? 'yes' : '',
       v.slip_note ?? 'no dates set', v.slip_stage ?? '', v.slip_reason ?? '',
-      v.gt_started_on ?? '', v.gt_expected_end_on ?? '', String(v.gcp_count),
+      v.gt_started_on ?? '', v.gt_expected_end_on ?? '', v.gt_completed_on ?? '',
+      String(v.gcp_count),
     ]),
   }), [d, totals, district, mandal, position, reason, ladder]);
 
@@ -282,7 +301,8 @@ export function SurveyDashboard({
           hint={`${dec(totals.extent_sqkm)} km²`}
           explain="The total extent of the villages shown. One acre is 0.00404686 km²." />
         <Stat label="Surveyed" value={`${dec(totals.surveyed_ac)} Ac`}
-          hint={surveyedPct === null ? undefined : `${surveyedPct}% of extent`}
+          hint={`${dec(totals.surveyed_sqkm)} km²${
+            surveyedPct === null ? '' : ` · ${surveyedPct}% of extent`}`}
           explain={d.period.from
             ? 'Extent recorded between the two dates above.'
             : 'Extent recorded up to the date above.'} />
@@ -392,6 +412,75 @@ export function SurveyDashboard({
         </div>
       </Card>
 
+      {/* ------------------------------------------ how long, and sitting with whom */}
+      <Card className="p-0">
+        <div className="flex items-baseline justify-between gap-2 px-4 py-3">
+          <h3 className="text-sm font-semibold text-text">How long each stage takes</h3>
+          <span className="text-2xs text-text-subtle">
+            Open stages counted to today, so the figure is current rather than final
+          </span>
+        </div>
+        <TableWrap>
+          <Table>
+            <THead>
+              <TR>
+                <TH>Stage</TH>
+                <TH className="text-right">Villages here now</TH>
+                <TH className="text-right">Median days</TH>
+                <TH className="text-right">Average days</TH>
+                <TH className="text-right">Longest</TH>
+                {canDrill ? <TH>Sitting with</TH> : null}
+              </TR>
+            </THead>
+            <TBody>
+              {d.stage_days.map((st) => (
+                <TR key={st.code}>
+                  <TD className="font-medium">{st.label}</TD>
+                  <TD className="text-right tabular-nums">{num(st.villages_here)}</TD>
+                  {/*
+                    * The median first, and the average beside it. A handful of
+                    * villages stuck for half a year drags a mean somewhere no
+                    * village actually is; "half clear in eleven days" is the
+                    * sentence somebody can plan around.
+                    */}
+                  <TD className="text-right tabular-nums">
+                    {st.median_days === null ? '—' : num(st.median_days)}
+                  </TD>
+                  <TD className="text-right tabular-nums text-text-muted">
+                    {st.avg_days === null ? '—' : dec(st.avg_days)}
+                  </TD>
+                  <TD className="text-right tabular-nums text-text-muted">
+                    {st.max_days === null ? '—' : num(st.max_days)}
+                  </TD>
+                  {canDrill ? (
+                    <TD>
+                      {(st.holders ?? []).length === 0 ? (
+                        <span className="text-2xs text-text-subtle">
+                          {st.villages_here === 0 ? '—' : 'nobody assigned'}
+                        </span>
+                      ) : (
+                        <span className="flex flex-wrap gap-1">
+                          {(st.holders ?? []).map((h) => (
+                            <Badge key={h.name} tone="neutral" size="sm">
+                              {`${h.name} · ${h.villages}`}
+                            </Badge>
+                          ))}
+                          {(st.unassigned ?? 0) > 0 ? (
+                            <Badge tone="warning" size="sm">
+                              {`${num(st.unassigned ?? 0)} with nobody`}
+                            </Badge>
+                          ) : null}
+                        </span>
+                      )}
+                    </TD>
+                  ) : null}
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        </TableWrap>
+      </Card>
+
       {/* --------------------------------------------------- why work is held up */}
       <Card className="p-4">
         <div className="mb-1 flex items-baseline justify-between gap-2">
@@ -497,7 +586,9 @@ export function SurveyDashboard({
                 <TH>{level[0].toUpperCase() + level.slice(1)}</TH>
                 <TH className="text-right">Villages</TH>
                 <TH className="text-right">Extent (Ac)</TH>
+                <TH className="text-right">Extent (km²)</TH>
                 <TH className="text-right">Surveyed (Ac)</TH>
+                <TH className="text-right">Surveyed (km²)</TH>
                 <TH className="text-right">Not started</TH>
                 <TH className="text-right">Finished</TH>
                 <TH className="text-right">Behind plan</TH>
@@ -526,7 +617,9 @@ export function SurveyDashboard({
                   </TD>
                   <TD className="text-right tabular-nums">{num(row.villages)}</TD>
                   <TD className="text-right tabular-nums">{dec(row.extent_ac)}</TD>
+                  <TD className="text-right tabular-nums text-text-muted">{dec(row.extent_sqkm)}</TD>
                   <TD className="text-right tabular-nums">{dec(row.surveyed_ac)}</TD>
+                  <TD className="text-right tabular-nums text-text-muted">{dec(row.surveyed_sqkm)}</TD>
                   <TD className="text-right tabular-nums">{num(row.not_started)}</TD>
                   <TD className="text-right tabular-nums">{num(row.completed)}</TD>
                   <TD className={`text-right tabular-nums ${row.late > 0 ? 'text-danger' : ''}`}>
@@ -551,7 +644,7 @@ export function SurveyDashboard({
                 </TR>
               ))}
               {d.rows.length === 0 ? (
-                <TR><TD colSpan={8} className="py-6 text-center text-sm text-text-muted">
+                <TR><TD colSpan={10} className="py-6 text-center text-sm text-text-muted">
                   No villages match these filters.
                 </TD></TR>
               ) : null}
@@ -574,11 +667,16 @@ export function SurveyDashboard({
                 <TH>District</TH>
                 <TH>Mandal</TH>
                 <TH className="text-right">Extent (Ac)</TH>
+                <TH className="text-right">Extent (km²)</TH>
                 <TH className="text-right">Surveyed (Ac)</TH>
+                <TH className="text-right">Surveyed (km²)</TH>
                 <TH>Status</TH>
+                <TH className="text-right">Days here</TH>
+                {canDrill ? <TH>Sitting with</TH> : null}
                 <TH>Against plan</TH>
                 <TH>GT started</TH>
                 <TH>GT expected end</TH>
+                <TH>GT actual end</TH>
               </TR>
             </THead>
             <TBody>
@@ -599,7 +697,9 @@ export function SurveyDashboard({
                   <TD className="text-text-muted">{v.district ?? '—'}</TD>
                   <TD className="text-text-muted">{v.mandal ?? '—'}</TD>
                   <TD className="text-right tabular-nums">{dec(v.extent_ac)}</TD>
+                  <TD className="text-right tabular-nums text-text-muted">{dec(v.extent_sqkm)}</TD>
                   <TD className="text-right tabular-nums">{dec(v.surveyed_ac)}</TD>
+                  <TD className="text-right tabular-nums text-text-muted">{dec(v.surveyed_sqkm)}</TD>
                   <TD>
                     <span className="flex flex-wrap items-center gap-1">
                       <span className="text-sm text-text">{v.position_label}</span>
@@ -609,6 +709,31 @@ export function SurveyDashboard({
                         ? <Badge tone="danger" size="sm">no GCP</Badge> : null}
                     </span>
                   </TD>
+                  <TD className="text-right tabular-nums">
+                    {v.days_in_stage === null ? '—' : num(v.days_in_stage)}
+                  </TD>
+                  {canDrill ? (
+                    <TD className="text-text-muted">
+                      {(v.holders ?? []).length === 0
+                        ? <span className="text-2xs text-text-subtle">nobody</span>
+                        : (v.holders ?? []).slice(0, 2).join(', ')
+                          + ((v.holders ?? []).length > 2
+                            ? ` +${(v.holders ?? []).length - 2}` : '')}
+                    </TD>
+                  ) : null}
+                  {/* Days in the stage it is at now, counted to today while open. */}
+                  <TD className="text-right tabular-nums">
+                    {v.days_in_stage === null ? '—' : num(v.days_in_stage)}
+                  </TD>
+                  {canDrill ? (
+                    <TD className="text-text-muted">
+                      {(v.holders ?? []).length === 0
+                        ? <span className="text-2xs text-text-subtle">nobody</span>
+                        : (v.holders ?? []).slice(0, 2).join(', ')
+                          + ((v.holders ?? []).length > 2
+                            ? ` +${(v.holders ?? []).length - 2}` : '')}
+                    </TD>
+                  ) : null}
                   <TD>
                     {v.slip_note === null ? (
                       <span className="text-2xs text-text-subtle">no dates set</span>
@@ -635,10 +760,24 @@ export function SurveyDashboard({
                   </TD>
                   <TD className="tabular-nums text-text-muted">{v.gt_started_on ?? '—'}</TD>
                   <TD className="tabular-nums text-text-muted">{v.gt_expected_end_on ?? '—'}</TD>
+                  {/* What actually happened, beside what was promised. */}
+                  <TD className={`tabular-nums ${
+                    v.gt_completed_on && v.gt_expected_end_on
+                      && v.gt_completed_on > v.gt_expected_end_on
+                      ? 'text-danger' : 'text-text-muted'}`}>
+                    {v.gt_completed_on ?? '—'}
+                  </TD>
+                  {/* What actually happened, beside what was promised. */}
+                  <TD className={`tabular-nums ${
+                    v.gt_completed_on && v.gt_expected_end_on
+                      && v.gt_completed_on > v.gt_expected_end_on
+                      ? 'text-danger' : 'text-text-muted'}`}>
+                    {v.gt_completed_on ?? '—'}
+                  </TD>
                 </TR>
               ))}
               {d.villages.length === 0 ? (
-                <TR><TD colSpan={9} className="py-6 text-center text-sm text-text-muted">
+                <TR><TD colSpan={canDrill ? 14 : 12} className="py-6 text-center text-sm text-text-muted">
                   No villages match these filters.
                 </TD></TR>
               ) : null}

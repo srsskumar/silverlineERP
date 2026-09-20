@@ -11,7 +11,7 @@ import {
   outOfSequence, stageBlockedBy,
   VILLAGE_LADDER, villagePosition, tallyByPosition, gtStartSchema,
   DELAY_REASON_CODES,
-  stageVariance, varianceNote, villageVariances,
+  stageVariance, varianceNote, villageVariances, gtReasonRequired, delayReasonLabel as dLabel,
   crewAssignmentSchema, roverAllocationSchema, stageRemarkSchema, STAGE_PIPELINE,
   crewBulkAssignmentSchema, roverBulkAllocationSchema, roverAllocationEditSchema,
   villageMoveSchema,
@@ -1037,6 +1037,27 @@ export async function registerSurveyRoutes(
         }
 
         /*
+         * Signing ground truthing off late must say why (§074).
+         *
+         * The other moment the question can be put, and the last one worth
+         * putting it at: after the stage closes nobody revisits it, and the
+         * explanation that would have cost a sentence today costs a meeting
+         * in three months.
+         */
+        if (input.stage_code === 'GROUND_TRUTHING' && input.state === 'COMPLETED') {
+          const prior = (await db.query(
+            `SELECT expected_end_on, variance_reason FROM survey_village_stages
+              WHERE survey_village_id = $1 AND stage_id = $2`, [id, stage.id])).rows[0];
+          const expected = iso(prior?.expected_end_on) ?? input.expected_end_on ?? null;
+          const reason = input.variance_reason ?? prior?.variance_reason ?? null;
+          if (expected && input.completed_on && input.completed_on > expected && !reason) {
+            fail('GT_VARIANCE_REASON_REQUIRED',
+              `Ground truthing was due on ${expected} and finished on ${input.completed_on}. `
+              + 'Say why before signing it off.', 422);
+          }
+        }
+
+        /*
          * Starting ground truthing means saying how it is staffed (§067).
          *
          * The one moment anybody knows the answer is now — the mandal has
@@ -1984,6 +2005,57 @@ export async function registerSurveyRoutes(
       }
       if (input.low_progress_reason === 'OTHER' && !input.low_progress_remarks?.trim()) {
         fail('VALIDATION_ERROR', 'A low-progress reason of "other" must say what happened', 422);
+      }
+
+      /*
+       * Ground truthing past its date must say why (§074).
+       *
+       * Demanded here because this is the moment somebody who knows the
+       * answer is already typing, and they are exactly the people entitled
+       * to give it: the crew on the village, their team lead, the project
+       * manager, an administrator — everyone who may record a day at all.
+       *
+       * Asked once. Once a reason is on the stage the question stops, because
+       * the point is to get the explanation on file rather than to hold a
+       * crew to ransom every evening for an answer they have already given.
+       */
+      const gt = (await db.query(
+        `SELECT vs.id, vs.state, vs.started_on, vs.completed_on,
+                vs.expected_end_on, vs.variance_reason
+           FROM survey_village_stages vs
+           JOIN survey_stages s ON s.id = vs.stage_id
+          WHERE vs.survey_village_id = $1 AND s.code = 'GROUND_TRUTHING'`,
+        [input.survey_village_id])).rows[0];
+      const gtStage = gt ? {
+        state: gt.state as StageState,
+        startedOn: iso(gt.started_on), completedOn: iso(gt.completed_on),
+        expectedEndOn: iso(gt.expected_end_on), varianceReason: gt.variance_reason,
+      } : null;
+
+      if (gtStage && gtReasonRequired(gtStage, today())) {
+        if (!input.gt_variance_reason) {
+          fail('GT_VARIANCE_REASON_REQUIRED',
+            `Ground truthing on this village was due on ${gtStage.expectedEndOn} and is `
+            + 'still open. Say why before recording another day — the reason is asked '
+            + 'once and goes on the record for the whole stage.', 422);
+        }
+        await db.query(
+          `UPDATE survey_village_stages
+              SET variance_reason = $2, variance_remarks = $3,
+                  updated_at = now(), updated_by = $4
+            WHERE id = $1`,
+          [gt.id, input.gt_variance_reason,
+            input.gt_variance_remarks?.trim() || null, u.id]);
+      } else if (input.gt_variance_reason && gt) {
+        // Volunteered before it was demanded. Recorded all the same.
+        await db.query(
+          `UPDATE survey_village_stages
+              SET variance_reason = COALESCE(variance_reason, $2),
+                  variance_remarks = COALESCE(variance_remarks, $3),
+                  updated_at = now(), updated_by = $4
+            WHERE id = $1`,
+          [gt.id, input.gt_variance_reason,
+            input.gt_variance_remarks?.trim() || null, u.id]);
       }
 
       // The count is derived from the rows when they are given, so the two can
@@ -4414,6 +4486,8 @@ export async function registerSurveyRoutes(
       // governs staff does not apply to them; the permission is the grant.
       const scoped = u.permissions.includes('survey.dashboard')
         && !u.permissions.includes('survey.read');
+      // The department's view: where the work is, never whose desk it is on.
+      const observerView = scoped;
       const project = scoped
         ? await inOrg(pool, 'survey_projects', id, u.orgId)
         : await projectOr404(pool, u.orgId, id, u);
@@ -4461,6 +4535,7 @@ export async function registerSurveyRoutes(
                 gp.id AS grandparent_id, gp.name AS grandparent_name, gp.type AS grandparent_type,
                 (SELECT count(*)::int FROM survey_village_gcps g
                   WHERE g.survey_village_id = sv.id) AS gcp_count,
+                holders.names AS holder_names, holders.people AS holder_count,
                 COALESCE(json_object_agg(st.code, vst.state)
                          FILTER (WHERE st.code IS NOT NULL), '{}'::json) AS stages,
                 -- Each stage's plan and outcome, so lateness is computed from
@@ -4470,7 +4545,13 @@ export async function registerSurveyRoutes(
                     'startedOn', vst.started_on, 'completedOn', vst.completed_on,
                     'expectedStartOn', vst.expected_start_on,
                     'expectedEndOn', vst.expected_end_on,
-                    'varianceReason', vst.variance_reason)
+                    'varianceReason', vst.variance_reason,
+                    -- Days spent in the stage: to its finish, or to today for
+                    -- work still open. Null before it starts, because a stage
+                    -- nobody has begun has not taken any days.
+                    'days', CASE WHEN vst.started_on IS NULL THEN NULL
+                                 ELSE COALESCE(vst.completed_on, CURRENT_DATE)
+                                      - vst.started_on END)
                   ) FILTER (WHERE st.code IS NOT NULL), '[]'::json) AS stage_plan
          FROM survey_villages sv
          JOIN org_units ou ON ou.id = sv.village_id
@@ -4479,13 +4560,32 @@ export async function registerSurveyRoutes(
          LEFT JOIN org_units gp ON gp.id = pu.parent_id
          LEFT JOIN survey_village_stages vst ON vst.survey_village_id = sv.id
          LEFT JOIN survey_stages st ON st.id = vst.stage_id AND st.active
+         LEFT JOIN LATERAL (
+           /*
+            * Who the village is with, at the stage it is at.
+            *
+            * Names rather than ids, and dropped entirely for an observer
+            * below — the department is shown where the work is, never whose
+            * desk it is on.
+            */
+           -- A text array, not json: the outer query groups on this column
+           -- and json has no equality operator to group by.
+           SELECT array_agg(DISTINCT COALESCE(
+                    NULLIF(btrim(concat_ws(' ', emp.first_name, emp.last_name)), ''),
+                    emp.emp_no)) AS names,
+                  count(DISTINCT c.employee_id)::int AS people
+             FROM survey_crew c
+             JOIN employees emp ON emp.id = c.employee_id
+            WHERE c.survey_village_id = sv.id AND c.released_on IS NULL
+         ) holders ON true
          LEFT JOIN survey_village_stages gt ON gt.survey_village_id = sv.id
            AND gt.stage_id = (SELECT id FROM survey_stages
                                WHERE org_id = sv.org_id AND code = 'GROUND_TRUTHING')
          WHERE sv.survey_project_id = $1 AND sv.org_id = $2
          GROUP BY sv.id, ou.name, ou.code, m.id, m.name,
                   pu.id, pu.name, pu.type, gp.id, gp.name, gp.type,
-                  gt.started_on, gt.expected_end_on, gt.completed_on`,
+                  gt.started_on, gt.expected_end_on, gt.completed_on,
+                  holders.names, holders.people`,
         [id, u.orgId])).rows;
 
       const asOf = today();
@@ -4498,9 +4598,17 @@ export async function registerSurveyRoutes(
           state: pl.state, startedOn: pl.startedOn, completedOn: pl.completedOn,
           expectedEndOn: pl.expectedEndOn, varianceReason: pl.varianceReason,
         })), asOf)[0] ?? null;
+        const stageDays: Record<string, number | null> = {};
+        for (const pl of plan) {
+          if (pl.stageCode) stageDays[String(pl.stageCode)] = pl.days === null || pl.days === undefined
+            ? null : Number(pl.days);
+        }
         return {
           row: r,
           worst,
+          stageDays,
+          holderNames: (r.holder_names ?? []) as string[],
+          holderCount: Number(r.holder_count ?? 0),
           villageId: String(r.village_id),
           name: String(r.village_name),
           code: r.village_code ? String(r.village_code) : null,
@@ -4508,6 +4616,7 @@ export async function registerSurveyRoutes(
           gcpCount: Number(r.gcp_count ?? 0),
           gtStartedOn: iso(r.gt_started_on),
           gtExpectedEndOn: iso(r.gt_expected_end_on),
+          gtCompletedOn: iso(r.gt_completed_on),
           stages,
           position: villagePosition(stages),
         };
@@ -4600,6 +4709,8 @@ export async function registerSurveyRoutes(
           extent_ac: row.items.reduce((t, v) => t + (v.extentAc ?? 0), 0),
           extent_sqkm: acresToSqKm(row.items.reduce((t, v) => t + (v.extentAc ?? 0), 0)),
           surveyed_ac: row.items.reduce((t, v) => t + (doneBy.get(v.villageId) ?? 0), 0),
+          surveyed_sqkm: acresToSqKm(
+            row.items.reduce((t, v) => t + (doneBy.get(v.villageId) ?? 0), 0)),
           // Where each village in this group has got to. The chart and the
           // drill-down read the same numbers.
           by_position: tallyByPosition(row.items),
@@ -4734,6 +4845,52 @@ export async function registerSurveyRoutes(
               || v.worst === null).length,
           },
           /*
+           * How long each stage takes, and how many villages are sitting in
+           * it now (§074).
+           *
+           * The median as well as the mean, because a handful of villages
+           * stuck for half a year drags an average somewhere no village
+           * actually is — and "half of them clear in eleven days" is the
+           * sentence somebody can plan around.
+           */
+          stage_days: STAGE_PIPELINE.filter(st => !st.offSequence).map(st => {
+            const spent = matches
+              .map(v => v.stageDays[st.code])
+              .filter((d): d is number => typeof d === 'number');
+            const sorted = [...spent].sort((a, b) => a - b);
+            const here = matches.filter(v => v.position.stage === st.code);
+            return {
+              code: st.code,
+              label: st.label,
+              /* Villages that have reached this stage and recorded time in it. */
+              villages_measured: spent.length,
+              /* Villages whose current position is this stage. */
+              villages_here: here.length,
+              avg_days: spent.length
+                ? Math.round((spent.reduce((a, b) => a + b, 0) / spent.length) * 10) / 10 : null,
+              median_days: sorted.length ? sorted[Math.floor(sorted.length / 2)] : null,
+              max_days: sorted.length ? sorted[sorted.length - 1] : null,
+              /*
+               * Who the villages at this stage are with, biggest load first.
+               * Omitted entirely for the department's view.
+               */
+              ...(observerView ? {} : {
+                holders: (() => {
+                  const load = new Map<string, number>();
+                  for (const v of here) {
+                    for (const name of v.holderNames) {
+                      if (name) load.set(name, (load.get(name) ?? 0) + 1);
+                    }
+                  }
+                  return [...load.entries()]
+                    .sort((a, b) => b[1] - a[1]).slice(0, 8)
+                    .map(([name, villages]) => ({ name, villages }));
+                })(),
+                unassigned: here.filter(v => v.holderCount === 0).length,
+              }),
+            };
+          }),
+          /*
            * Reported per source and never summed across them: a stage, an
            * instrument-day and a short day are three different units, and a
            * single total would be a number with no meaning.
@@ -4773,6 +4930,22 @@ export async function registerSurveyRoutes(
               in_rework: v.position.inRework,
               gt_started_on: v.gtStartedOn,
               gt_expected_end_on: v.gtExpectedEndOn,
+              // What actually happened, beside what was promised (§074).
+              gt_completed_on: v.gtCompletedOn,
+              surveyed_sqkm: acresToSqKm(doneBy.get(v.villageId) ?? 0),
+              // Days spent in each stage it has reached, open stages counted
+              // to today so the figure is current rather than final.
+              stage_days: v.stageDays,
+              days_in_stage: v.position.stage ? v.stageDays[v.position.stage] ?? null : null,
+              /*
+               * Whose desk it is on — and only for a reader entitled to know.
+               * The department is shown where the work is, never who is
+               * holding it.
+               */
+              ...(observerView ? {} : {
+                holders: v.holderNames.filter(Boolean),
+                holder_count: v.holderCount,
+              }),
               gcp_count: v.gcpCount,
               /*
                * How far off plan the village is, and where.

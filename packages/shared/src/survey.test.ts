@@ -21,6 +21,8 @@ import {
   gtStartSchema, milestoneBlockedNote,
   stageVariance, varianceNote, villageVariances, stageUpdateSchema,
   DELAY_REASON_CODES,
+  gtReasonRequired, surveyEntrySchema, surveyEntryPatchSchema,
+  surveyEntryBase,
 } from './survey.js';
 
 const BASIS: Record<string, MeasureBasis> = Object.fromEntries(
@@ -366,7 +368,9 @@ describe('schemas', () => {
   it('has no field for a cumulative figure at all', () => {
     // The typed cumulative is the thing that goes wrong, so there is nowhere
     // to type it.
-    const keys = Object.keys(surveyEntrySchema.shape);
+    // Read off the base object: the exported schema carries a refinement, and
+    // a refined schema is a ZodEffects with no `.shape` to look at.
+    const keys = Object.keys(surveyEntryBase.shape);
     expect(keys.some(k => k.toLowerCase().includes('cumulative'))).toBe(false);
   });
 
@@ -2067,5 +2071,82 @@ describe('a rover nobody reported on', () => {
     expect(r.overUsed).toBe(true);
     expect(r.idle).toBe(0);
     expect(r.unaccounted).toBe(0);
+  });
+});
+
+describe('ground truthing past its date (§074)', () => {
+  const TODAY = '2026-09-20';
+
+  it('demands nothing while the work is inside its window', () => {
+    expect(gtReasonRequired(
+      { state: 'IN_PROGRESS', expectedEndOn: '2026-10-15' }, TODAY)).toBe(false);
+  });
+
+  it('demands a reason once the date has passed and it is still open', () => {
+    expect(gtReasonRequired(
+      { state: 'IN_PROGRESS', expectedEndOn: '2026-09-01' }, TODAY)).toBe(true);
+  });
+
+  it('demands one from a stage that finished late', () => {
+    expect(gtReasonRequired(
+      { state: 'COMPLETED', expectedEndOn: '2026-09-01', completedOn: '2026-09-11' },
+      TODAY)).toBe(true);
+  });
+
+  it('demands nothing of a stage that finished on time or early', () => {
+    expect(gtReasonRequired(
+      { state: 'COMPLETED', expectedEndOn: '2026-09-11', completedOn: '2026-09-11' },
+      TODAY)).toBe(false);
+    expect(gtReasonRequired(
+      { state: 'COMPLETED', expectedEndOn: '2026-09-11', completedOn: '2026-09-02' },
+      TODAY)).toBe(false);
+  });
+
+  it('asks once and then stops', () => {
+    // The point is to get the explanation on file, not to hold a crew to
+    // ransom every evening for an answer they have already given.
+    expect(gtReasonRequired({
+      state: 'IN_PROGRESS', expectedEndOn: '2026-09-01', varianceReason: 'NO_DEPT_STAFF',
+    }, TODAY)).toBe(false);
+  });
+
+  it('cannot ask about a village nobody gave a date', () => {
+    // No expected date is not a missed date. Demanding an explanation for a
+    // deadline nobody set teaches people to type anything.
+    expect(gtReasonRequired({ state: 'IN_PROGRESS' }, TODAY)).toBe(false);
+    expect(gtReasonRequired(null, TODAY)).toBe(false);
+  });
+});
+
+describe("the day's return can carry the reason (§074)", () => {
+  const base = {
+    survey_village_id: '123e4567-e89b-12d3-a456-426614174000',
+    entry_date: '2026-09-19',
+    values: { GOVT_LAND_EXTENT_AC: 4 },
+  };
+
+  it('accepts a reason from whoever is filing the day', () => {
+    const r = surveyEntrySchema.safeParse({ ...base, gt_variance_reason: 'NO_DEPT_STAFF' });
+    expect(r.success, JSON.stringify(r.success ? {} : r.error.issues)).toBe(true);
+  });
+
+  it('refuses "other" with nothing said', () => {
+    expect(surveyEntrySchema.safeParse(
+      { ...base, gt_variance_reason: 'OTHER' }).success).toBe(false);
+    expect(surveyEntrySchema.safeParse({
+      ...base, gt_variance_reason: 'OTHER', gt_variance_remarks: 'Panchayat election',
+    }).success).toBe(true);
+  });
+
+  it('will not take a reason outside the vocabulary', () => {
+    expect(surveyEntrySchema.safeParse(
+      { ...base, gt_variance_reason: 'SLOW' }).success).toBe(false);
+  });
+
+  it('still lets a correction be filed without one', () => {
+    // The patch schema is derived from the same object; a superRefine would
+    // have made it underivable, which is why the base is kept unrefined.
+    expect(surveyEntryPatchSchema.safeParse({ values: { GOVT_LAND_EXTENT_AC: 5 } }).success)
+      .toBe(true);
   });
 });

@@ -573,3 +573,147 @@ describe("why the work is held up (§073)", () => {
     }
   });
 });
+
+describe("ground truthing past its date must say why (§074)", () => {
+  let late = "";
+
+  beforeAll(async () => {
+    late = await makeVillage("KODURU", 110);
+    await post(w.admin, `/api/v1/survey/villages/${late}/start-gt`, {
+      started_on: "2026-01-08", expected_end_on: "2026-02-08",
+      employee_ids: [w.directEmployee], govt_staff_allocated: 2, crew_allocated: 4,
+    });
+  });
+
+  it("refuses another day's return until somebody says why", async () => {
+    const r = await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: late, entry_date: workDate(),
+      teams_deployed: 1, dgps_rovers: 1, values: { GOVT_LAND_EXTENT_AC: 6 },
+    });
+    expect(r.status).toBe(422);
+    expect(r.body.code).toBe("GT_VARIANCE_REASON_REQUIRED");
+    expect(String(r.body.message)).toMatch(/2026-02-08/);
+  });
+
+  it("takes the reason on the return, from whoever is filing it", async () => {
+    /*
+     * The crew on the village can answer this, and so can their team lead, a
+     * project manager or an administrator — everybody who may record a day at
+     * all. It is asked where somebody who knows is already typing.
+     */
+    const r = await post(w.directUser, "/api/v1/survey/entries", {
+      survey_village_id: late, entry_date: workDate(),
+      teams_deployed: 1, dgps_rovers: 1, values: { GOVT_LAND_EXTENT_AC: 6 },
+      gt_variance_reason: "NO_DEPT_STAFF",
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+
+    const on = await w.pool.query(
+      `SELECT vs.variance_reason FROM survey_village_stages vs
+         JOIN survey_stages s ON s.id = vs.stage_id
+        WHERE vs.survey_village_id = $1 AND s.code = 'GROUND_TRUTHING'`, [late]);
+    // Written onto the stage, not onto the day: it explains the stage.
+    expect(on.rows[0].variance_reason).toBe("NO_DEPT_STAFF");
+  });
+
+  it("asks once and then stops asking", async () => {
+    const r = await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: late,
+      entry_date: new Date(Date.parse(`${workDate()}T00:00:00Z`) - 86400000)
+        .toISOString().slice(0, 10),
+      teams_deployed: 1, dgps_rovers: 1, values: { GOVT_LAND_EXTENT_AC: 4 },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+
+  it("refuses to sign a late ground truthing off unexplained", async () => {
+    const other = await makeVillage("LINGAPALEM", 80);
+    await post(w.admin, `/api/v1/survey/villages/${other}/start-gt`, {
+      started_on: "2026-01-08", expected_end_on: "2026-02-08",
+      employee_ids: [w.directEmployee], govt_staff_allocated: 1, crew_allocated: 3,
+    });
+    const bad = await post(w.admin, `/api/v1/survey/villages/${other}/stage`, {
+      stage_code: "GROUND_TRUTHING", state: "COMPLETED", completed_on: "2026-03-01",
+    });
+    expect(bad.status).toBe(422);
+    expect(bad.body.code).toBe("GT_VARIANCE_REASON_REQUIRED");
+
+    const good = await post(w.admin, `/api/v1/survey/villages/${other}/stage`, {
+      stage_code: "GROUND_TRUTHING", state: "COMPLETED", completed_on: "2026-03-01",
+      variance_reason: "ACCESS",
+    });
+    expect(good.status, JSON.stringify(good.body)).toBe(200);
+  });
+
+  it("says nothing to a village that finished on time", async () => {
+    const punctual = await makeVillage("MUDINEPALLI", 70);
+    await post(w.admin, `/api/v1/survey/villages/${punctual}/start-gt`, {
+      started_on: "2026-01-08", expected_end_on: "2026-03-08",
+      employee_ids: [w.directEmployee], govt_staff_allocated: 1, crew_allocated: 2,
+    });
+    const r = await post(w.admin, `/api/v1/survey/villages/${punctual}/stage`, {
+      stage_code: "GROUND_TRUTHING", state: "COMPLETED", completed_on: "2026-03-01",
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+  });
+});
+
+describe("how long, and sitting with whom (§074)", () => {
+  it("reports days in each stage, median beside the mean", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    const gt = (r.data.stage_days as Array<Record<string, any>>)
+      .find(s => s.code === "GROUND_TRUTHING");
+    expect(gt).toBeTruthy();
+    expect(gt!.villages_measured).toBeGreaterThan(0);
+    // A handful stuck for months drags a mean somewhere no village is.
+    expect(gt!.median_days).not.toBeNull();
+    expect(gt!.max_days).toBeGreaterThanOrEqual(gt!.median_days);
+    expect((r.data.stage_days as unknown[]).length).toBe(5);
+  });
+
+  it("names who each village is with, and who has nobody", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    const withCrew = (r.data.villages as Array<Record<string, any>>)
+      .find(v => (v.holders ?? []).length > 0);
+    expect(withCrew, "a village with somebody on it").toBeTruthy();
+    expect(typeof withCrew!.days_in_stage === "number" || withCrew!.days_in_stage === null)
+      .toBe(true);
+  });
+
+  it("tells the department where the work is and never whose desk it is on", async () => {
+    const r = await get(w.role.GOVT_OBSERVER,
+      `/api/v1/survey/projects/${programmeId}/dashboard`);
+    expect(r.status).toBe(200);
+    for (const v of r.data.villages as Array<Record<string, unknown>>) {
+      expect(v).not.toHaveProperty("holders");
+      expect(v).not.toHaveProperty("holder_count");
+    }
+    for (const st of r.data.stage_days as Array<Record<string, unknown>>) {
+      expect(st).not.toHaveProperty("holders");
+      // The durations themselves are progress, and they stay.
+      expect(st).toHaveProperty("median_days");
+    }
+  });
+
+  it("carries the actual completion beside the promised one", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    const done = (r.data.villages as Array<Record<string, any>>)
+      .find(v => v.gt_completed_on !== null);
+    expect(done, "a village whose GT is signed off").toBeTruthy();
+    expect(done!.gt_expected_end_on).toBeTruthy();
+  });
+
+  it("reports surveyed extent in square kilometres as well as acres", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    expect(r.data.totals.surveyed_sqkm).toBeGreaterThanOrEqual(0);
+    // One acre is 0.0040468564224 km², derived and never stored.
+    const expected = Math.round(r.data.totals.surveyed_ac * 0.0040468564224 * 100) / 100;
+    expect(Math.abs(r.data.totals.surveyed_sqkm - expected)).toBeLessThan(0.05);
+    for (const row of r.data.rows as Array<Record<string, number>>) {
+      expect(row).toHaveProperty("surveyed_sqkm");
+    }
+    for (const v of (r.data.villages as Array<Record<string, number>>).slice(0, 5)) {
+      expect(v).toHaveProperty("surveyed_sqkm");
+    }
+  });
+});

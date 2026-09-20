@@ -774,6 +774,35 @@ async function main(): Promise<void> {
    * A released row is history, and the screens that show "who is on this
    * village now" are only correct if there is history for them to exclude.
    */
+  /*
+   * Ground truthing past its date must say why (§074), so the data has to
+   * honour the rule the routes now enforce. Left unexplained on a slice of
+   * them deliberately: the dashboard counts villages slipping with no reason
+   * recorded, and a dataset where that count is always zero never shows it.
+   */
+  const overdueGt = (await pool.query(
+    `SELECT vs.id FROM survey_village_stages vs
+       JOIN survey_stages s ON s.id = vs.stage_id
+       JOIN survey_villages v ON v.id = vs.survey_village_id
+      WHERE v.survey_project_id = $1 AND s.code = 'GROUND_TRUTHING'
+        AND vs.variance_reason IS NULL
+        AND vs.expected_end_on IS NOT NULL
+        AND COALESCE(vs.completed_on, CURRENT_DATE) > vs.expected_end_on
+      ORDER BY vs.id`, [programmeId])).rows;
+  let explained = 0;
+  for (let i = 0; i < overdueGt.length; i += 1) {
+    // Four in five explained; the rest are the chase list.
+    if (i % 5 === 2) continue;
+    const reason = VARIANCE_REASONS[explained % VARIANCE_REASONS.length];
+    await pool.query(
+      `UPDATE survey_village_stages
+          SET variance_reason = $2, variance_remarks = $3 WHERE id = $1`,
+      [overdueGt[i].id, reason, reason === "OTHER" ? pick(OTHER_REMARKS) : null]);
+    explained += 1;
+  }
+  console.log(`  ${explained} overdue ground truthings explained `
+    + `(${overdueGt.length - explained} still to answer for)`);
+
   // GREATEST, because somebody cannot come off a village before they went
   // on to it — and the table says so.
   await pool.query(
