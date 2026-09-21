@@ -1,6 +1,40 @@
 # Operations and release runbook
 
-## Release configuration
+## The live deployment: one VM
+
+Production runs on a single GCP VM, `dev-thor` (34.131.134.217), plain HTTP on port 80. Everything the server needs is in `scripts/vm/` and is installed by the deploy script, so the server can be rebuilt from the repository:
+
+| Piece | How it runs | Source |
+| --- | --- | --- |
+| API | `silverline-api.service`: `node dist/main.js` in `/opt/silverline/apps/api`, listening on 127.0.0.1:3101 only | `scripts/vm/silverline-api.service` |
+| Configuration | `/etc/silverline/api.env`, root-only, outside the tree so `rsync --delete` never touches it | written once by hand |
+| Web | Static export served by nginx from `/opt/silverline-web/current`, a symlink to one of the last five builds in `/opt/silverline-web/releases/` | `scripts/vm/nginx-silverline.conf` |
+| Worker | `silverline-worker.timer`, one pass about every five minutes, calling `/api/v1/jobs/run` with `CRON_SECRET`. Enabled. | `scripts/vm/silverline-worker.*` |
+| Database | Supabase PostgreSQL (`DATABASE_URL` in `api.env`) | — |
+| Uploads | Stored encrypted in the database. `/var/lib/silverline/uploads` is only the read fallback for files from before that change. | — |
+
+nginx is the only public door: it serves the web, proxies `/api/` and `/health`, sets the security headers, and redirects canonical record URLs (`/projects/<id>` and the rest) to `/record?type=&id=`, the one page the static export can serve for any id.
+
+**Deploy** — from a workstation, ship the committed tree (see the header of `scripts/vm/silverline-deploy` for the exact commands, including the Windows form), then `sudo silverline-deploy` on the VM. It builds, refuses to restart while migrations are pending, restarts the API, then switches the web symlink and installs the nginx site (only if `nginx -t` accepts it).
+
+**Migrations** are a deliberate step, never a side effect of a deploy. Back up first — the VM has no PostgreSQL client, so use the image:
+
+```sh
+set -a; . /etc/silverline/api.env; set +a
+docker run --rm -v /var/backups/silverline:/out -e PGURL="$DATABASE_URL" postgres:16 \
+  sh -c 'pg_dump --format=custom --no-owner "$PGURL" > /out/pre-migrate-$(date -u +%Y%m%dT%H%M%SZ).dump'
+cd /opt/silverline/apps/api && sudo -u dev-thor env DATABASE_URL="$DATABASE_URL" npx tsx src/database/migrate.ts
+```
+
+**Roll back the web** by pointing the symlink at the previous release: `sudo ln -sfn /opt/silverline-web/releases/<previous> /opt/silverline-web/current`. The API has no release history on the VM; roll it back by deploying the previous commit.
+
+**Look at it** with `systemctl status silverline-api`, `journalctl -u silverline-api -f`, `systemctl list-timers silverline-worker.timer`, and `curl http://127.0.0.1/health`.
+
+Not done yet, and needed before this is more than a pilot: TLS (it needs a domain), a scheduled off-machine backup of the database, and a second environment to try releases on.
+
+The rest of this document describes the Compose release below, which is the self-hosted alternative, and procedures that apply to both.
+
+## Release configuration (Compose alternative)
 
 `compose.release.yml` supplies PostgreSQL, the API, a migration service, the background worker, ClamAV, and a Caddy web/TLS edge. It is a single-host deployment template, not a highly available production topology. Keep database, ClamAV and private storage ports off the public network.
 

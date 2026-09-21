@@ -1,5 +1,17 @@
 # Silverline ERP — System Architecture
 
+> **Read this first: this document is the original target design, not a description of the code.**
+> What was built differs in ways that matter:
+>
+> | This document says | The code is |
+> | --- | --- |
+> | NestJS API | Fastify 5 with raw `pg`, no ORM (`apps/api`, routes registered in `src/createApp.ts`) |
+> | Kotlin / Jetpack Compose Android app | Expo SDK 57 React Native app (`apps/mobile`) |
+> | Kubernetes, load balancer, TLS 1.3, horizontal scaling | One VM with nginx on plain HTTP, API as a systemd unit, database on Supabase (`docs/OPERATIONS.md`) |
+> | Server-rendered Next.js | A static export (`NEXT_VERIFY_BUILD=1`); records open through `/record?type=&id=` |
+>
+> For how the system actually runs, use `README.md` and `docs/OPERATIONS.md`. The domain model and business rules below remain the intent.
+
 ## 1. Architecture Overview
 
 **Pattern:** Modular Monolith with clear domain boundaries
