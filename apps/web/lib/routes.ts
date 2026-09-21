@@ -11,3 +11,15 @@ export function staticHref(href:string):string {
  }
  return href;
 }
+
+/**
+ * Where the board's view switch goes.
+ *
+ * The list is the project's own page -- there is no /projects/[id]/tasks
+ * route, only /projects/[id]/tasks/[taskId] -- and on the static host a
+ * project page is served through /record, so the address goes through
+ * staticHref like every other link to a record. Built by hand, it was a 404.
+ */
+export function boardViewHref(projectId:string,view:'board'|'list'):string {
+ return staticHref(view==='board'?`/projects/${projectId}/board`:`/projects/${projectId}`);
+}

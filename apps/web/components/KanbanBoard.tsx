@@ -53,6 +53,7 @@ import {
 import type {ListTasksParams} from '@/lib/tasks';
 import {applySavedFilter,normalizeFilterQuery} from '@/lib/filters';
 import { queryKeys } from '@/lib/query-keys';
+import { boardViewHref } from '@/lib/routes';
 import { LabelPill } from './LabelPill';
 import { SlaBadge } from './SlaBadge';
 import { Button } from './ui/Button';
@@ -328,7 +329,7 @@ export function KanbanBoard({
         onChange={setFilters}
         view="board"
         onViewChange={(v) => {
-          if (v === 'list') window.location.assign(`/projects/${projectId}/tasks`);
+          if (v === 'list') window.location.assign(boardViewHref(projectId, 'list'));
         }}
         hideDone={hideDone}
         onHideDoneChange={setHideDone}
