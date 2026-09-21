@@ -1,0 +1,43 @@
+# The Silverline API. Installed by silverline-deploy as
+# /etc/systemd/system/silverline-api.service.
+#
+# This unit lived only on the server, so a change to it could not be reviewed
+# and a rebuilt server could not be made the same as the old one.
+[Unit]
+Description=Silverline ERP API
+After=network-online.target
+Wants=network-online.target
+# A crash loop on a bad config should be visible, not retried for ever.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=dev-thor
+WorkingDirectory=/opt/silverline/apps/api
+# Secrets live in a root-owned 0600 file rather than in this unit, which is
+# world-readable.
+EnvironmentFile=/etc/silverline/api.env
+# Loopback only. nginx is the one public door, on port 80; the API used to
+# listen on every interface too, so the only thing between the internet and
+# a second, header-less route to it was the cloud firewall.
+Environment=HOST=127.0.0.1
+ExecStart=/usr/bin/node dist/main.js
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=silverline-api
+
+# The API needs the network, its own directory and nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/silverline/uploads
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

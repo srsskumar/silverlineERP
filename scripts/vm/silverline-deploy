@@ -6,6 +6,20 @@
 #         ./ dev-thor:/opt/silverline/
 #   ssh dev-thor sudo silverline-deploy
 #
+# From a workstation without rsync (Windows), ship the committed tree and let
+# the VM's rsync do the same job. core.autocrlf=false matters: with it on,
+# git archive writes CRLF, and this script's own `#!/usr/bin/env bash` line
+# then fails as `bash\r`.
+#   git -c core.autocrlf=false archive HEAD | ssh dev-thor \
+#     'rm -rf /tmp/sl-stage && mkdir /tmp/sl-stage && tar -x -C /tmp/sl-stage'
+#   ssh dev-thor 'rsync -a --delete \
+#     --filter="P apps/api/uploads/" --filter="P exports/" --filter="P artifacts/*.apk" \
+#     --exclude-from=/tmp/sl-stage/scripts/vm/rsync-exclude.txt \
+#     /tmp/sl-stage/ /opt/silverline/ && sudo silverline-deploy'
+# The P filters keep what exists only on the VM: files uploaded before
+# UPLOADS_DIR moved to /var/lib/silverline, old encrypted exports, and the
+# Android preview build.
+#
 # The exclusions live in a file rather than in this comment because the list
 # was being retyped by hand each time, and one of them got left off: local
 # tooling state under .gstack rode along to the VM, including a browser
@@ -51,11 +65,27 @@ sudo -u dev-thor npm run build --workspace=api
 echo "==> building web (API origin: $API_ORIGIN)"
 sudo -u dev-thor env NEXT_VERIFY_BUILD=1 NEXT_PUBLIC_API_URL="$API_ORIGIN" npm run build --workspace=web
 
+# Copy the build into a release of its own, but do not put it live yet.
+#
+# nginx used to serve .next-verify directly, and `next build` empties that
+# directory before it writes, so every deploy blanked the site for the length
+# of the build. It goes live below, after the schema check and the API
+# restart, so a deploy that stops early leaves the old web in front of the old
+# API rather than new pages talking to an API that was never restarted.
+WEB_RELEASES=/opt/silverline-web/releases
+RELEASE="$WEB_RELEASES/$(date -u +%Y%m%dT%H%M%SZ)"
+echo "==> staging web release $RELEASE"
+mkdir -p "$WEB_RELEASES"
+cp -a /opt/silverline/apps/web/.next-verify "$RELEASE"
+rm -f "$RELEASE/_headers" "$RELEASE/_redirects"
+
 # The worker units are shipped but deliberately not enabled here: switching
 # the scheduler on for the first time fires every overdue report schedule at
 # once and delivers a backlog of alerts, which is an operator's decision
 # rather than a deploy's. Install with:
 #   sudo systemctl enable --now silverline-worker.timer
+# On dev-thor that decision has been made: the timer is enabled and a pass
+# runs about every five minutes (systemctl list-timers silverline-worker.timer).
 echo "==> installing worker units (not enabled)"
 install -m 644 /opt/silverline/scripts/vm/silverline-worker.service /etc/systemd/system/
 install -m 644 /opt/silverline/scripts/vm/silverline-worker.timer /etc/systemd/system/
@@ -137,9 +167,43 @@ const pg = require("pg");
 fi
 
 echo "==> restarting"
+# The API unit comes from the tree too, so a change to it is reviewed like any
+# other. Only reloaded when it differs, and before the restart that uses it.
+if ! cmp -s /opt/silverline/scripts/vm/silverline-api.service /etc/systemd/system/silverline-api.service; then
+  echo "==> installing the API unit"
+  install -m 644 /opt/silverline/scripts/vm/silverline-api.service /etc/systemd/system/
+  systemctl daemon-reload
+fi
 systemctl restart silverline-api
-systemctl reload nginx
 
 sleep 3
 systemctl is-active --quiet silverline-api || { echo "API did not come back:"; journalctl -u silverline-api -n 30 --no-pager; exit 1; }
+
+# Now the web. A symlink swap by rename, so nginx sees the old release or the
+# new one and never a half-written directory.
+echo "==> web release live: $RELEASE"
+ln -sfn "$RELEASE" /opt/silverline-web/current.next
+mv -T /opt/silverline-web/current.next /opt/silverline-web/current
+
+# Keep five, so a bad web build is one symlink away from the one before it:
+#   ls /opt/silverline-web/releases
+#   sudo ln -sfn /opt/silverline-web/releases/<previous> /opt/silverline-web/current
+ls -1d "$WEB_RELEASES"/*/ | sort | head -n -5 | xargs -r rm -rf
+
+# The nginx site from the tree, and only if nginx accepts it: a config that
+# fails `nginx -t` is put back, so the running server keeps the last good one.
+SITE=/etc/nginx/sites-available/silverline
+if ! cmp -s /opt/silverline/scripts/vm/nginx-silverline.conf "$SITE"; then
+  echo "==> installing the nginx site"
+  cp -a "$SITE" "$SITE.previous" 2>/dev/null || true
+  install -m 644 /opt/silverline/scripts/vm/nginx-silverline.conf "$SITE"
+  ln -sfn "$SITE" /etc/nginx/sites-enabled/silverline
+  if ! nginx -t 2>&1; then
+    echo "!! nginx rejected the new site; putting the previous one back"
+    mv "$SITE.previous" "$SITE"
+    exit 1
+  fi
+fi
+systemctl reload nginx
+
 curl -fsS http://127.0.0.1/health >/dev/null && echo "==> live: $API_ORIGIN"

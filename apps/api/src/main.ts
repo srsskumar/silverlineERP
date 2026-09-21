@@ -7,10 +7,15 @@ const config = getConfig();
 const pool = createPool(config.databaseUrl);
 const app = await buildApp({ pool });
 
+// Every interface unless told otherwise, which is what a container needs. The
+// VM sets HOST=127.0.0.1 in its unit, because there nginx is the public door
+// and a second way in, without its headers, is one too many.
+const host = process.env.HOST?.trim() || "0.0.0.0";
+
 try {
-  await app.listen({ port: config.port, host: "0.0.0.0" });
+  await app.listen({ port: config.port, host });
   app.log.info(
-    { host: "0.0.0.0", port: config.port, node_env: config.nodeEnv },
+    { host, port: config.port, node_env: config.nodeEnv },
     "api listening",
   );
 } catch (err) {
