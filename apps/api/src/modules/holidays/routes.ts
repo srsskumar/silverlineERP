@@ -8,6 +8,7 @@ import {
   decodeCursor,
   encodeCursor,
   holidayCreateSchema,
+  holidayPatchSchema,
   resolveEffectiveHolidays,
   toFieldErrors,
 } from "@silverline/shared";
@@ -255,6 +256,101 @@ export async function registerHolidayRoutes(
       requestId: req.requestId,
     });
     return reply.status(201).send(body);
+  
+});});
+
+  /**
+   * PATCH /api/v1/holidays/:id -- correct a holiday, or withdraw it.
+   *
+   * There was no way to fix a holiday entered on the wrong date: it could
+   * only be added, so the wrong one stayed and paid people a day off that
+   * was not one. Withdrawing sets active = false and the list stops showing
+   * it; the row stays, and the audit trail records who changed what, from
+   * what, and why.
+   */
+  app.patch("/api/v1/holidays/:id", { preHandler: canManage }, async (req, reply) => {return mutationRoute(opts.pool,req,reply,async(db,reply)=>{
+    const parsed = holidayPatchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendError(reply, req.requestId, {
+        status: 422,
+        code: "VALIDATION_ERROR",
+        message: "Validation failed",
+        fieldErrors: toFieldErrors(parsed.error),
+      });
+    }
+    const user = req.authUser;
+    if (!user) {
+      return sendError(reply, req.requestId, {
+        status: 401,
+        code: "UNAUTHENTICATED",
+        message: "Authentication required",
+      });
+    }
+    const { id } = req.params as { id: string };
+    if (!/^[0-9a-f-]{36}$/i.test(id)) {
+      return sendError(reply, req.requestId, {
+        status: 404,
+        code: "NOT_FOUND",
+        message: "Holiday not found",
+      });
+    }
+    const curRes = await db.query(
+      `SELECT id, date, name, type, scope_type, scope_id, created_at, active
+         FROM holidays WHERE id = $1::uuid AND org_id = $2 FOR UPDATE`,
+      [id, user.orgId],
+    );
+    const cur = curRes.rows[0] as (HolidayRow & { active: boolean }) | undefined;
+    if (!cur) {
+      return sendError(reply, req.requestId, {
+        status: 404,
+        code: "NOT_FOUND",
+        message: "Holiday not found",
+      });
+    }
+    const { date, name, type, active, reason } = parsed.data;
+    let row: HolidayRow & { active: boolean };
+    try {
+      const upd = await db.query(
+        `UPDATE holidays SET
+           date = COALESCE($3::date, date),
+           name = COALESCE($4, name),
+           type = COALESCE($5, type),
+           active = COALESCE($6::boolean, active)
+         WHERE id = $1::uuid AND org_id = $2
+         RETURNING id, date, name, type, scope_type, scope_id, created_at, active`,
+        [id, user.orgId, date ?? null, name ?? null, type ?? null, active ?? null],
+      );
+      row = upd.rows[0] as HolidayRow & { active: boolean };
+    } catch (err) {
+      if ((err as { code?: string }).code === "23505") {
+        return sendError(reply, req.requestId, {
+          status: 409,
+          code: "CONFLICT",
+          message: "A holiday already exists for this date and scope",
+          fieldErrors: [{ field: "date", message: "Duplicate holiday for this date and scope" }],
+        });
+      }
+      throw err;
+    }
+    const before = { ...toShape(cur), active: cur.active };
+    const body = { ...toShape(row), active: row.active };
+    await writeAudit(db, {
+      orgId: user.orgId,
+      actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
+      actorIp: req.ip,
+      actorUserAgent:
+        typeof req.headers["user-agent"] === "string"
+          ? (req.headers["user-agent"] as string)
+          : null,
+      action: cur.active && !row.active ? "holiday.deactivate" : "holiday.update",
+      entityType: "holiday",
+      entityId: row.id,
+      beforeState: before,
+      afterState: body,
+      reason,
+      requestId: req.requestId,
+    });
+    return reply.status(200).send(body);
   
 });});
 }
