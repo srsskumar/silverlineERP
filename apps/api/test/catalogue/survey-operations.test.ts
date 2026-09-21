@@ -9,9 +9,14 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  buildWorld, idem, uniq, uniquePhone, workDate, ORG_TIMEZONE,
+  GEO, buildWorld, idem, uniq, uniquePhone, workDate, ORG_TIMEZONE,
   type CatalogueWorld, type Headers,
 } from "./fixture.js";
+
+/** Where directEmployee stands to punch: inside their assigned circle fence. */
+const INSIDE_FENCE = {
+  latitude: GEO.insideCircle.lat, longitude: GEO.insideCircle.lng, gps_accuracy: 8,
+};
 import { runSurveyAlerts } from "../../src/modules/jobs/surveyAlerts.js";
 
 let w: CatalogueWorld;
@@ -543,12 +548,13 @@ describe("project-scoped visibility", () => {
 
 describe("punching in and out against a village", () => {
   /**
-   * A punch, as the mobile app sends one.
+   * A punch, as the mobile app sends one: from inside this employee's fence.
    *
-   * Without coordinates by default. This employee carries a geofence
-   * assignment, and a punch outside it is correctly queued for review rather
-   * than opening the day — which is the fence working, and not what these
-   * tests are about. One test below sends coordinates deliberately.
+   * These tests used to punch without coordinates, because a punch outside
+   * the fence is queued for review rather than opening the day. That only
+   * worked because a punch with no position skipped the fence altogether --
+   * the bypass HR-5 closed. Standing inside the fence is what a crew member
+   * who can open the day actually does, so that is what is sent.
    */
   async function punch(
     type: "CHECK_IN" | "CHECK_OUT", extra: Record<string, unknown> = {},
@@ -557,6 +563,7 @@ describe("punching in and out against a village", () => {
       employee_id: w.directEmployee,
       event_type: type,
       client_timestamp: new Date().toISOString(),
+      ...INSIDE_FENCE,
       ...extra,
     });
   }
@@ -733,6 +740,7 @@ describe("punching in and out against a village", () => {
       event_type: "CHECK_OUT",
       client_timestamp: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
       survey_village_id: unfiled.data.id,
+      ...INSIDE_FENCE,
     });
     expect(r.status, JSON.stringify(r.body)).not.toBe(422);
   });

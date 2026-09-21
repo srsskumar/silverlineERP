@@ -280,6 +280,16 @@ export const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
 // Holidays
 // ---------------------------------------------------------------------------
 
+/**
+ * Every status an employee record can hold -- the database CHECK, the list
+ * filter and every screen that offers a choice read this one list. The web
+ * directory once offered ON_LEAVE and TERMINATED, which are not statuses,
+ * and every pick of either came back 422.
+ */
+export const EMPLOYEE_STATUSES = ["DRAFT", "ACTIVE", "SUSPENDED", "EXITED"] as const;
+
+export type EmployeeStatus = (typeof EMPLOYEE_STATUSES)[number];
+
 export const holidayTypeSchema = z.enum([
   "national",
   "regional",
@@ -300,6 +310,30 @@ export const holidayCreateSchema = z.object({
 });
 
 export type HolidayCreateInput = z.infer<typeof holidayCreateSchema>;
+
+/**
+ * PATCH /api/v1/holidays/:id -- correct or withdraw a holiday.
+ *
+ * Withdrawal is `active: false`, never a delete: payroll and attendance
+ * reports for past periods were computed with the holiday in place, and the
+ * row is how anybody later understands why. A reason is always required,
+ * because a holiday that moves or vanishes changes what a day is worth.
+ */
+export const holidayPatchSchema = z
+  .object({
+    date: dateStringSchema.optional(),
+    name: z.string().trim().min(1, "Name is required").max(255).optional(),
+    type: holidayTypeSchema.optional(),
+    active: z.boolean().optional(),
+    reason: z.string().trim().min(1, "Say why the holiday is being changed").max(2000),
+  })
+  .refine(
+    (v) =>
+      v.date !== undefined || v.name !== undefined || v.type !== undefined || v.active !== undefined,
+    { message: "Nothing to update" },
+  );
+
+export type HolidayPatchInput = z.infer<typeof holidayPatchSchema>;
 
 // ---------------------------------------------------------------------------
 // Holiday precedence (§8.2)

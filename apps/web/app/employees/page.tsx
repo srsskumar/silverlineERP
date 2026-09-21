@@ -15,7 +15,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { BulkEditBar } from '@/components/BulkEditBar';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { PERMISSIONS } from '@/lib/permissions';
-import { listEmployees } from '@/lib/employees';
+import { EMPLOYEE_FILTER_STATUSES, listEmployees } from '@/lib/employees';
 import { listOrgUnits } from '@/lib/org';
 import { queryKeys } from '@/lib/query-keys';
 import { displayMasked, displayEmployeeName } from '@/lib/masking';
@@ -28,10 +28,9 @@ function statusTone(status: string): 'success' | 'neutral' | 'warning' | 'danger
   switch (status) {
     case 'ACTIVE':
       return 'success';
-    case 'ON_LEAVE':
+    case 'SUSPENDED':
       return 'warning';
     case 'EXITED':
-    case 'TERMINATED':
       return 'danger';
     case 'DRAFT':
       return 'info';
@@ -102,7 +101,10 @@ function EmployeesTable() {
             onChange={(e) => setStatus(e.target.value)}
           >
             <option value="">All</option>
-            {['DRAFT', 'ACTIVE', 'ON_LEAVE', 'EXITED', 'TERMINATED'].map((s) => (
+            {/* Exactly the statuses the API filters on. ON_LEAVE and TERMINATED
+                were offered here but are not employee statuses, so picking
+                either was answered with a 422 and an empty list. */}
+            {EMPLOYEE_FILTER_STATUSES.map((s) => (
               <option key={s} value={s}>
                 {s}
               </option>

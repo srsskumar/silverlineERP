@@ -6,7 +6,9 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
+import {
+  buildWorld, createActiveEmployee, idem, uniq, type CatalogueWorld, type Headers,
+} from "./fixture.js";
 
 let w: CatalogueWorld;
 
@@ -64,7 +66,10 @@ describe("allocation capacity", () => {
   });
 
   it("demands a reason even from somebody who holds the override", async () => {
-    const employee = w.exitedEmployee;
+    // A fresh active employee with no allocations of their own. This used to
+    // borrow the baseline's exited employee, which can no longer be
+    // allocated at all (HR-14).
+    const employee = await createActiveEmployee(w.app, w.admin);
     await allocate({ employee_id: employee, percentage: 90 });
     const blind = await allocate({ employee_id: employee, percentage: 30, project_id: w.inactiveProject });
     expect(blind.status).toBe(422);
@@ -222,8 +227,11 @@ describe("roster", () => {
 
   it("pays every hour on a rest day at the premium rate", async () => {
     // There is no "normal" portion of a day somebody was not rostered at all.
+    // Somebody not otherwise rostered that day; the exited baseline employee
+    // this used to borrow can no longer be rostered (HR-14).
+    const employeeId = await createActiveEmployee(w.app, w.admin);
     const entry = await post(w.role.HR_MANAGER, "/api/v1/roster", {
-      employee_id: w.exitedEmployee, shift_id: shiftId, roster_date: "2026-09-20",
+      employee_id: employeeId, shift_id: shiftId, roster_date: "2026-09-20",
     });
     expect(entry.status, JSON.stringify(entry.body)).toBe(201);
     const res = await post(

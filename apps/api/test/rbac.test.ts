@@ -917,17 +917,35 @@ describe("attendance self-decision", () => {
     expect(selfDecide.statusCode).toBe(403);
     expect((selfDecide.json() as { code: string }).code).toBe("SELF_DECISION");
 
-    // HR_MANAGER holds users.manage: emergency override succeeds and the
-    // note is audited as the reason.
+    // HR_MANAGER holds users.manage, which used to override this too. It
+    // cannot any more when the exception is on the manager's own
+    // attendance (HR-7): every HR manager holds users.manage, so the rule
+    // would bind nobody able to decide.
     const hr = await mkUser([{ role: "HR_MANAGER" }], "selfhr");
     const hrEmp = await mkEmployee(adminH);
     await activateEmployee(hrEmp);
     await linkUser(hr.id, hrEmp);
-    const hrExc = await submitAs(hr.headers, hrEmp);
+    const hrOwn = await submitAs(hr.headers, hrEmp);
+    const refused = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/attendance/exceptions/${hrOwn.id}/decision`,
+      headers: { ...hr.headers, "If-Match": String(hrOwn.version) },
+      payload: { decision: "APPROVE", note: "self" },
+    });
+    expect(refused.statusCode).toBe(403);
+    expect((refused.json() as { code: string }).code).toBe("SELF_DECISION");
+
+    // The explicit maker-checker emergency grant (approval.self_approve,
+    // SUPER_ADMIN) still overrides, and the note is audited as the reason.
+    const sa = await mkUser([{ role: "SUPER_ADMIN" }], "selfsa");
+    const saEmp = await mkEmployee(adminH);
+    await activateEmployee(saEmp);
+    await linkUser(sa.id, saEmp);
+    const hrExc = await submitAs(sa.headers, saEmp);
     const override = await app.inject({
       method: "PATCH",
       url: `/api/v1/attendance/exceptions/${hrExc.id}/decision`,
-      headers: { ...hr.headers, "If-Match": String(hrExc.version) },
+      headers: { ...sa.headers, "If-Match": String(hrExc.version) },
       payload: { decision: "APPROVE", note: "emergency cover" },
     });
     expect(override.statusCode).toBe(200);

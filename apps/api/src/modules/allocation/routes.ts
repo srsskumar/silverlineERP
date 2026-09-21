@@ -43,6 +43,23 @@ export async function registerAllocationRoutes(app: FastifyInstance, opts: { poo
       }));
   }
 
+  /**
+   * The employee, refused if they have left.
+   *
+   * Rostering or allocating somebody who has exited plans work around a
+   * person who will not turn up, and the roster is what payroll prices. A
+   * bulk roster refuses the whole batch rather than quietly skipping them,
+   * so the planner learns their list is out of date.
+   */
+  async function workingEmployee(db: Pool | PoolClient, employeeId: string, orgId: string) {
+    const employee = await inOrg(db, 'employees', employeeId, orgId);
+    if (employee.status === 'EXITED') {
+      fail('EMPLOYEE_EXITED',
+        `${String(employee.emp_no ?? 'That employee')} has exited and cannot be rostered or allocated. Remove them from the selection.`);
+    }
+    return employee;
+  }
+
   /* --------------------------------------------------------- allocations */
 
   app.get('/api/v1/allocations', { preHandler: guard('allocation.read') }, async req => {
@@ -70,7 +87,7 @@ export async function registerAllocationRoutes(app: FastifyInstance, opts: { poo
     const u = actor(req), input = parse(resourceAllocationSchema, req.body);
     await employeeAccess(pool, req, input.employee_id);
     const row = await mutate(pool, req, 'allocation.create', 'resource_allocation', async db => {
-      await inOrg(db, 'employees', input.employee_id, u.orgId);
+      await workingEmployee(db, input.employee_id, u.orgId);
       await inOrg(db, 'projects', input.project_id, u.orgId);
 
       const conflict = findCapacityConflict({
@@ -245,7 +262,7 @@ export async function registerAllocationRoutes(app: FastifyInstance, opts: { poo
   app.post('/api/v1/roster', { preHandler: guard('roster.manage') }, async (req, reply) => {
     const u = actor(req), input = parse(rosterEntrySchema, req.body);
     const row = await mutate(pool, req, 'roster.create', 'roster_entry', async db => {
-      await inOrg(db, 'employees', input.employee_id, u.orgId);
+      await workingEmployee(db, input.employee_id, u.orgId);
       await inOrg(db, 'work_shifts', input.shift_id, u.orgId);
       const clash = await db.query(
         'SELECT 1 FROM roster_entries WHERE employee_id = $1 AND roster_date = $2',
@@ -282,7 +299,7 @@ export async function registerAllocationRoutes(app: FastifyInstance, opts: { poo
         const summary = { created: 0, skipped_rest_day: 0, already_rostered: 0 };
 
         for (const employeeId of input.employee_ids) {
-          await inOrg(db, 'employees', employeeId, u.orgId);
+          await workingEmployee(db, employeeId, u.orgId);
           const cursor = new Date(`${input.starts_on}T00:00:00Z`);
           const end = new Date(`${input.ends_on}T00:00:00Z`);
           while (cursor <= end) {

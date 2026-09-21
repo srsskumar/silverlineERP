@@ -935,6 +935,72 @@ export async function registerLeaveRoutes(
     },
   );
 
+  /**
+   * Why an approval cannot go through now, or null when it can.
+   *
+   * Both checks were made only when the request was filed, and a request can
+   * sit pending for weeks while the facts move under it:
+   *
+   *   - Attendance. The person may have worked one of the days after all. A
+   *     day that is both attended and on approved leave is paid twice, so
+   *     the conflict is refused here exactly as it is at filing, naming the
+   *     dates so the approver knows what to regularize.
+   *   - Balance. Two pending requests can each fit the balance on their own
+   *     and overdraw it together. The balance row is locked for the rest of
+   *     the transaction, so two approvals racing for the last days queue
+   *     behind each other instead of both reading the same figure. Checked
+   *     on the step that debits, which is the last one.
+   */
+  async function approvalBlocker(
+    client: import("pg").PoolClient,
+    cur: RequestRow,
+  ): Promise<{ status: number; code: string; message: string; extra?: Record<string, unknown> } | null> {
+    const from = dateOnly(cur.from_date);
+    const to = dateOnly(cur.to_date);
+    const att = await client.query(
+      `SELECT work_date FROM attendance_records
+        WHERE employee_id = $1::uuid AND work_date BETWEEN $2::date AND $3::date
+        ORDER BY work_date ASC`,
+      [cur.employee_id, from, to],
+    );
+    if ((att.rowCount ?? 0) > 0) {
+      const dates = (att.rows as Array<{ work_date: Date | string }>).map((r) => dateOnly(r.work_date));
+      return {
+        status: 422,
+        code: "ATTENDANCE_CONFLICT",
+        message: `Attendance is already recorded on ${dates.join(", ")}; regularize attendance or change the leave dates before approving`,
+        extra: { conflicting_dates: dates },
+      };
+    }
+    const chain = chainOf(cur);
+    const lastStep = chain.filter((s) => s.status === "PENDING").length <= 1;
+    if (!lastStep) return null;
+    const type = (
+      await client.query("SELECT requires_balance FROM leave_types WHERE id = $1::uuid", [
+        cur.leave_type_id,
+      ])
+    ).rows[0] as { requires_balance: boolean } | undefined;
+    if (!type?.requires_balance) return null;
+    const year = Number(from.slice(0, 4));
+    const bal = await client.query(
+      `SELECT (opening_balance + credits - consumed + adjustments) AS available
+         FROM leave_balances
+        WHERE employee_id = $1::uuid AND leave_type_id = $2::uuid AND period_year = $3
+        FOR UPDATE`,
+      [cur.employee_id, cur.leave_type_id, year],
+    );
+    const available = Number((bal.rows[0] as { available: string | number } | undefined)?.available ?? 0);
+    if (Number(cur.total_days) > available) {
+      return {
+        status: 422,
+        code: "INSUFFICIENT_BALANCE",
+        message: `Insufficient leave balance to approve (available: ${available}, requested: ${cur.total_days}). Another request has used the balance since this one was filed.`,
+        extra: { available },
+      };
+    }
+    return null;
+  }
+
   // ------------------------------------------------ POST /leave/requests/:id/decision
   app.post(
     "/api/v1/leave/requests/:id/decision",
@@ -967,7 +1033,12 @@ export async function registerLeaveRoutes(
 
       const client = await opts.pool.connect();
       let finalRow: RequestRow | undefined;
-      let failure: { status: number; code: string; message: string } | null = null;
+      let failure: {
+        status: number;
+        code: string;
+        message: string;
+        extra?: Record<string, unknown>;
+      } | null = null;
       try {
         await client.query("BEGIN");
         const curRes = await client.query(
@@ -1001,6 +1072,8 @@ export async function registerLeaveRoutes(
             code: "NOTE_REQUIRED",
             message: "A note is required when rejecting a leave request",
           };
+        } else if (decision === "APPROVE" && (failure = await approvalBlocker(client, cur))) {
+          // Refused before anything is written; the reason is in `failure`.
         } else {
           const chain = chainOf(cur);
           const nowIso = new Date().toISOString();
@@ -1098,6 +1171,14 @@ export async function registerLeaveRoutes(
           code: "INTERNAL_ERROR",
           message: "Decision failed",
         };
+        if ("extra" in f && f.extra) {
+          return sendRuleError(reply, req.requestId, {
+            status: f.status,
+            code: f.code,
+            message: f.message,
+            extra: f.extra,
+          });
+        }
         return sendError(reply, req.requestId, {
           status: f.status,
           code: f.code,

@@ -10,6 +10,7 @@ import {
   ALLOWED_DOCUMENT_EXTENSIONS,
   ApiError,
   MAX_DOCUMENT_BYTES,
+  EMPLOYEE_STATUSES,
   S1_PERMISSIONS,
   cursorPageQuerySchema,
   decodeCursor,
@@ -58,7 +59,7 @@ export interface EmployeeRoutesOptions {
 const PII_READ = S1_PERMISSIONS.EMPLOYEE_PII_READ;
 
 const listQuerySchema = cursorPageQuerySchema.extend({
-  status: z.enum(["DRAFT", "ACTIVE", "SUSPENDED", "EXITED"]).optional(),
+  status: z.enum(EMPLOYEE_STATUSES).optional(),
   district_id: z.string().uuid().optional(),
   q: z.string().min(1).max(200).optional(),
 });
@@ -559,12 +560,20 @@ export async function registerEmployeeRoutes(
        ORDER BY created_at DESC, id DESC LIMIT $${values.length}`,
       values as string[],
     );
-    const pii = canSeePii(req);
+    /*
+     * The list is always masked (HR-15), whoever is asking.
+     *
+     * It used to return every Aadhaar, PAN and bank account on the page to a
+     * holder of employee.pii.read -- a whole directory of identity numbers in
+     * one response, cached by the browser, with no record that anybody had
+     * looked. The directory needs the last four to tell people apart; the
+     * full number is on the person's own record, where reading it is audited.
+     */
     const hasMore = res.rows.length > limit;
     const page = res.rows.slice(0, limit) as EmployeeRow[];
     const last = page[page.length - 1];
     return reply.status(200).send({
-      data: page.map((r) => toShape(r, pii)),
+      data: page.map((r) => toShape(r, false)),
       next_cursor:
         hasMore && last
           ? encodeCursor({
@@ -1045,7 +1054,34 @@ export async function registerEmployeeRoutes(
         message: "Employee not found",
       });
     }
-    return reply.status(200).send(toShape(row, canSeePii(req)));
+    const pii = canSeePii(req);
+    const body = toShape(row, pii);
+    /*
+     * Reading somebody's full identity and bank numbers is itself an event
+     * worth recording: who looked, at whose, and when. Only a response that
+     * actually carried an unmasked value is logged, and the audit row names
+     * the fields, never their contents.
+     */
+    const revealed = pii
+      ? (["aadhaar", "pan", "bank_account", "phonepe_number", "salary_basic"] as const).filter(
+          (field) => body[field] !== null && body[field] !== undefined,
+        )
+      : [];
+    if (revealed.length > 0) {
+      const meta = metaOf(req);
+      await writeAudit(opts.pool, {
+        orgId: user.orgId,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
+        actorIp: meta.ip,
+        actorUserAgent: meta.userAgent,
+        action: "employee.pii.read",
+        entityType: "employee",
+        entityId: row.id,
+        afterState: { fields: revealed },
+        requestId: req.requestId,
+      });
+    }
+    return reply.status(200).send(body);
   });
 
   // PATCH /api/v1/employees/:id — holders of employee.create (HR/Admin).
@@ -1326,6 +1362,112 @@ export async function registerEmployeeRoutes(
       const row = upd.rows[0] as EmployeeRow;
       const body = toShape(row, canSeePii(req));
       const meta = metaOf(req);
+
+      /*
+       * Offboarding, in the same transaction as the exit (HR-14).
+       *
+       * Marking the employee EXITED used to be the whole of it. Their login
+       * kept working, their pending leave sat in an approver's inbox, and
+       * tasks stayed on a person who would never pick them up. Each of these
+       * is done here or not at all: an exit that half-happened is worse than
+       * one that was refused. (Tasks are flagged, not moved; see below.)
+       *
+       * Logins are disabled rather than deleted -- the account is the actor
+       * on years of audit rows -- and every session is revoked, since a
+       * token already issued would otherwise outlive the decision.
+       */
+      const disabled = (
+        await db.query(
+          `UPDATE users SET auth_status = 'DISABLED', updated_at = NOW()
+            WHERE employee_id = $1::uuid AND org_id = $2 AND auth_status <> 'DISABLED'
+            RETURNING id`,
+          [id, user.orgId],
+        )
+      ).rows.map((r: { id: string }) => r.id);
+      const accountIds = (
+        await db.query("SELECT id FROM users WHERE employee_id = $1::uuid AND org_id = $2", [
+          id,
+          user.orgId,
+        ])
+      ).rows.map((r: { id: string }) => r.id);
+      if (disabled.length > 0) {
+        // The same rule the user admin screen enforces: an organization is
+        // never left without an active administrator to undo a mistake.
+        const admins = await db.query(
+          `SELECT u.id FROM users u
+             JOIN user_roles ur ON ur.user_id = u.id
+             JOIN role_permissions rp ON rp.role_id = ur.role_id
+            WHERE u.org_id = $1 AND u.auth_status = 'ACTIVE'
+              AND ur.scope_type IS NULL AND ur.scope_id IS NULL
+              AND rp.permission_code IN ('users.manage', 'admin.configure')
+            GROUP BY u.id HAVING count(DISTINCT rp.permission_code) = 2
+            LIMIT 1`,
+          [user.orgId],
+        );
+        if ((admins.rowCount ?? 0) === 0) {
+          return sendError(reply, req.requestId, {
+            status: 409,
+            code: "LAST_ADMIN",
+            message:
+              "This employee's login is the organization's last active administrator. Give another account administrator rights before recording the exit.",
+          });
+        }
+        await db.query(
+          "UPDATE sessions SET revoked = true, revoked_at = now() WHERE user_id = ANY($1::uuid[]) AND revoked = false",
+          [disabled],
+        );
+      }
+      // Pending leave is withdrawn: nobody is left to take it, and an
+      // approver acting on it later would debit a closed balance.
+      const cancelledLeave = (
+        await db.query(
+          `UPDATE leave_requests SET status = 'CANCELLED', updated_at = NOW(), version = version + 1
+            WHERE employee_id = $1::uuid AND org_id = $2 AND status = 'PENDING'
+            RETURNING id`,
+          [id, user.orgId],
+        )
+      ).rows.map((r: { id: string }) => r.id);
+      /*
+       * Open tasks stay on the person, and each is flagged on its own audit
+       * trail. The catalogue is explicit (UT-WORK-06): work held by a
+       * departing employee is neither silently reassigned nor deleted -- it
+       * stays visible and attributable so a project manager can decide who
+       * takes it, and the assign route already refuses new work for them.
+       * Forcing BLOCKED instead would break projects whose workflow has no
+       * such status or no edge into it. Whether exit should unassign is a
+       * product decision, not one to make here.
+       */
+      const openTasks =
+        accountIds.length === 0
+          ? []
+          : ((
+              await db.query(
+                `SELECT id, project_id, assignee_id FROM tasks
+                  WHERE org_id = $1 AND assignee_id = ANY($2::uuid[])
+                    AND status NOT IN ('DONE', 'CANCELLED')`,
+                [user.orgId, accountIds],
+              )
+            ).rows as Array<{ id: string; project_id: string; assignee_id: string }>);
+      for (const task of openTasks) {
+        await writeAudit(db, {
+          orgId: user.orgId,
+          actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
+          actorIp: meta.ip,
+          actorUserAgent: meta.userAgent,
+          action: "task.assignee_exited",
+          entityType: "task",
+          entityId: task.id,
+          afterState: {
+            assignee_id: task.assignee_id,
+            project_id: task.project_id,
+            exited_employee_id: id,
+            needs_reassignment: true,
+          },
+          reason: `Assignee exited: ${reason}`,
+          requestId: req.requestId,
+        });
+      }
+
       await writeAudit(db, {
         orgId: user.orgId,
         actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
@@ -1335,7 +1477,14 @@ export async function registerEmployeeRoutes(
         entityType: "employee",
         entityId: row.id,
         beforeState: redactPiiForAudit(toShape(cur, false)),
-        afterState: redactPiiForAudit(body),
+        afterState: {
+          ...(redactPiiForAudit(body) as Record<string, unknown>),
+          offboarding: {
+            disabled_user_ids: disabled,
+            cancelled_leave_request_ids: cancelledLeave,
+            open_task_ids_needing_reassignment: openTasks.map((t) => t.id),
+          },
+        },
         reason,
         requestId: req.requestId,
       });
