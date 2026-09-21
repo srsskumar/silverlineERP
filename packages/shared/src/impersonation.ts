@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { RoleCode } from './rbac.js';
+import { SENSITIVE_PERMISSIONS, type RoleCode } from './rbac.js';
 
 /**
  * §075 -- viewing the application as another user.
@@ -127,12 +127,16 @@ function listGained(gained: string[]): string {
  * it, change its two-factor policy or its roles?
  *
  * Each of those is a way into the account: a password the actor has just
- * set is a password the actor knows. So the rule is the one that governs
- * viewing as somebody: the subject must hold nothing the actor does not,
- * and a super administrator is nobody's business but another super
- * administrator's. Without it, anybody holding users.manage -- which the HR
- * manager role does -- could reset an administrator's password and sign in
- * as them.
+ * set is a password the actor knows. So a super administrator is nobody's
+ * business but another super administrator's, and an account holding any
+ * SENSITIVE_PERMISSIONS the actor lacks is out of reach. Without it, anybody
+ * holding users.manage -- which the HR manager role does -- could reset an
+ * administrator's password and sign in as them.
+ *
+ * Narrower than canImpersonate on purpose. Viewing as somebody hands over
+ * everything they hold at once, so there every permission counts; here the
+ * everyday case is an HR manager resetting a locked-out employee, who holds
+ * task permissions HR does not and never needed to.
  */
 export function canManageAccount(
   actor: Pick<Principal, 'roles' | 'permissions'>,
@@ -140,12 +144,13 @@ export function canManageAccount(
 ): ImpersonationVerdict {
   const beyond = accessBeyond(actor, subject);
   if (beyond.superAdmin) {
-    return { ok: false, reason: 'Only a super administrator can change a super administrator\'s account' };
+    return { ok: false, reason: "Only a super administrator can change a super administrator's account" };
   }
-  if (beyond.gained.length) {
+  const sensitive = beyond.gained.filter((p) => SENSITIVE_PERMISSIONS.includes(p));
+  if (sensitive.length) {
     return {
       ok: false,
-      reason: `That account can do things you cannot (${listGained(beyond.gained)}), so only somebody who holds at least as much can change it`,
+      reason: `That account can do things you cannot (${listGained(sensitive)}), so only somebody who holds at least as much can change it`,
     };
   }
   return { ok: true };

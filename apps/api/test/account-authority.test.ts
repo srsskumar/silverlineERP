@@ -14,8 +14,11 @@ import { ADMIN_PASSWORD, ADMIN_USERNAME, seedDatabase } from "../src/database/se
  *
  * users.manage used to be enough to set anybody's password, and the HR
  * manager role holds it: an HR manager could reset an administrator's
- * password and sign in as them. The rule now is the one view-as already
- * follows -- you may only change an account that can do nothing you cannot.
+ * password and sign in as them. The rule now: a super administrator is
+ * only another super administrator's to change, and an account holding a
+ * sensitive permission (security, accounts, pay, personal data, money) the
+ * caller lacks is out of their reach. Ordinary working permissions do not
+ * count, so HR can still reset the staff who ask them to.
  */
 
 const TEST_DB = testDatabaseUrl();
@@ -128,6 +131,64 @@ describe("changing somebody else's account", () => {
       [superAdminId],
     );
     expect(held.rows.map((r) => r.code)).toContain("SUPER_ADMIN");
+  });
+
+  it("refuses an HR manager resetting a payroll officer or a super administrator", async () => {
+    const hr = await headersFor((await createUser("hr", ["HR_MANAGER"])).username);
+    const payroll = await createUser("pay", ["PAYROLL_OFFICER"]);
+    const before = await passwordHash(payroll.id);
+    const res = await patchUser(hr, payroll.id, { password: "hr-knows-this-one-now" });
+    expect(res.statusCode, res.body).toBe(403);
+    expect((res.json() as { message: string }).message).toMatch(/can do things you cannot/);
+    expect(await passwordHash(payroll.id)).toBe(before);
+
+    const root = await passwordHash(superAdminId);
+    expect((await patchUser(hr, superAdminId, { password: "hr-knows-this-one-now" })).statusCode).toBe(403);
+    expect(await passwordHash(superAdminId)).toBe(root);
+  });
+
+  it("lets an HR manager reset an employee, a team lead and a project manager", async () => {
+    // The everyday case, and the reason HR is told about locked-out staff:
+    // these accounts hold task permissions HR does not, none of them sensitive.
+    const hr = await headersFor((await createUser("hr", ["HR_MANAGER"])).username);
+    for (const role of ["EMPLOYEE", "TEAM_LEAD", "PROJECT_MANAGER"]) {
+      const staff = await createUser(role.toLowerCase(), [role]);
+      const res = await patchUser(hr, staff.id, { password: "a-fresh-password-2026", must_change_password: true });
+      expect(res.statusCode, `${role}: ${res.body}`).toBe(200);
+      const signIn = await app.inject({
+        method: "POST", url: "/api/v1/auth/login",
+        payload: { username: staff.username, password: "a-fresh-password-2026" },
+      });
+      expect(signIn.statusCode, role).toBe(200);
+    }
+  });
+
+  it("applies the same rule to the roles a target already holds", async () => {
+    // A custom administrator with admin.configure but no pay permissions can
+    // take a team lead's roles away, and cannot strip a payroll officer of
+    // theirs.
+    const root = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
+    const roleRes = await app.inject({
+      method: "POST", url: "/api/v1/admin/roles",
+      headers: { ...root, "idempotency-key": randomUUID() },
+      payload: {
+        code: `ROLEADMIN_${randomUUID().slice(0, 6).toUpperCase()}`, name: "Role administrator",
+        permissions: ["auth.login", "admin.configure", "users.read", "task.read", "tasks.read", "project.read"],
+      },
+    });
+    expect(roleRes.statusCode, roleRes.body).toBe(201);
+    const roleAdmin = await createUser("radm", []);
+    await pool.query("INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)", [roleAdmin.id, roleRes.json().id]);
+    const headers = await headersFor(roleAdmin.username);
+    const put = (id: string, roles: Array<{ role_id: string }>) => app.inject({
+      method: "PUT", url: `/api/v1/admin/users/${id}/roles`,
+      headers: { ...headers, "idempotency-key": randomUUID() }, payload: { roles },
+    });
+    const payroll = await createUser("pay", ["PAYROLL_OFFICER"]);
+    expect((await put(payroll.id, [])).statusCode).toBe(403);
+    const lead = await createUser("tl", ["TEAM_LEAD"]);
+    const ok = await put(lead.id, []);
+    expect(ok.statusCode, ok.body).toBe(200);
   });
 
   it("still lets an HR manager reset an account that holds no more than they do", async () => {
