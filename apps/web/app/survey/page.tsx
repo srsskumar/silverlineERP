@@ -95,7 +95,12 @@ export default function SurveyPage() {
    * leak a crew list.
    */
   const canDashboard = hasPermission(perms, 'survey.dashboard');
-  const observerOnly = canDashboard && !canRead;
+  // A client holds survey.read but is shown what the department is shown:
+  // the server refuses them every staff route, so offering those tabs would
+  // only offer errors.
+  const clientOnly = (session?.roles?.length ?? 0) > 0
+    && (session?.roles ?? []).every((r) => r === 'CLIENT_VIEWER');
+  const observerOnly = canDashboard && (!canRead || clientOnly);
   const canEnter = hasPermission(perms, 'survey.enter');
   const canManage = hasPermission(perms, 'survey.manage');
   // Management information. The specification is explicit that a GT user

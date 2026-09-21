@@ -397,8 +397,13 @@ export async function registerSurveyRoutes(
    * exactly where it is.
    */
   async function visibleProgrammes(
-    db: Pool | PoolClient, u: { orgId: string; id: string; permissions: string[] },
+    db: Pool | PoolClient, u: { orgId: string; id: string; permissions: string[]; roles?: string[] },
   ): Promise<string[] | null> {
+    // A client is never on the programme's staff, whatever an enrolment row
+    // says: what they are shown is the observer's view, through the routes
+    // that serve it (see readsAsObserver), and none of the staff routes --
+    // crews, claims, returns, productivity -- is theirs to read.
+    if (clientOnly(u)) return [];
     if (u.permissions.includes('survey.manage')
       || u.permissions.includes('survey.forecast')) return null;
     const rows = (await db.query(
@@ -419,6 +424,60 @@ export async function registerSurveyRoutes(
        WHERE usr.id = $1 AND sc.org_id = $2 AND sc.released_on IS NULL`,
       [u.id, u.orgId])).rows;
     return rows.map(r => String(r.id));
+  }
+
+  /**
+   * Somebody whose only role is CLIENT_VIEWER.
+   *
+   * The client holds survey.read -- the role is granted it so the survey
+   * screen opens for them -- but survey.read is the staff permission and
+   * carries crew names, rover codes and the claim register with it. What the
+   * client is owed is what the department is owed: where the work has got
+   * to. So a client reads as an observer, decided here from the role rather
+   * than by withdrawing survey.read from a role other screens rely on.
+   */
+  function clientOnly(u: { roles?: string[] }): boolean {
+    return Array.isArray(u.roles) && u.roles.length > 0
+      && u.roles.every(r => r === 'CLIENT_VIEWER');
+  }
+
+  /** Whether this reader gets the observer's view: progress only. */
+  function readsAsObserver(u: { permissions: string[]; roles?: string[] }): boolean {
+    return !u.permissions.includes('survey.read') || clientOnly(u);
+  }
+
+  /**
+   * The programmes a client may look at: those run against a project they
+   * are assigned to. A client is scoped to projects everywhere else in the
+   * system, and an observer's "every active programme in the organisation"
+   * would show one client another client's work.
+   */
+  async function clientProgrammes(
+    db: Pool | PoolClient, u: { orgId: string; scopes?: Array<{ scope_type: string | null; scope_id: string | null }> },
+  ): Promise<string[]> {
+    const projects = (u.scopes ?? [])
+      .filter(s => s.scope_type === 'project' && s.scope_id)
+      .map(s => String(s.scope_id));
+    if (!projects.length) return [];
+    return (await db.query(
+      `SELECT id FROM survey_projects WHERE org_id = $1 AND project_id = ANY($2::uuid[])`,
+      [u.orgId, projects])).rows.map(r => String(r.id));
+  }
+
+  /**
+   * A programme, reached the way an observer reaches it: by permission, not
+   * by enrolment -- and, for a client, only if it is one of theirs.
+   */
+  async function observerProgrammeOr404(
+    db: Pool | PoolClient,
+    u: { orgId: string; roles?: string[]; scopes?: Array<{ scope_type: string | null; scope_id: string | null }> },
+    id: string,
+  ) {
+    const row = await inOrg(db, 'survey_projects', id, u.orgId);
+    if (clientOnly(u) && !(await clientProgrammes(db, u)).includes(String(id))) {
+      fail('NOT_FOUND', 'Not found', 404);
+    }
+    return row;
   }
 
   async function projectOr404(
@@ -2267,6 +2326,11 @@ export async function registerSurveyRoutes(
     const u = actor(req), { limit, offset, q } = page(req);
     const values: unknown[] = [u.orgId];
     let where = 'e.org_id = $1';
+    // Only the programmes this reader may see. Unfiltered, every holder of
+    // survey.read -- a client among them -- read every crew's returns in the
+    // organisation, names included.
+    const allowed = await visibleProgrammes(pool, u);
+    if (allowed !== null) { values.push(allowed); where += ` AND e.survey_project_id = ANY($${values.length}::uuid[])`; }
     if (q.survey_project_id) { values.push(q.survey_project_id); where += ` AND e.survey_project_id = $${values.length}`; }
     if (q.survey_village_id) { values.push(q.survey_village_id); where += ` AND e.survey_village_id = $${values.length}`; }
     // Validated like every other window in this module: a value that is not a
@@ -3442,6 +3506,10 @@ export async function registerSurveyRoutes(
         /** Villages with nothing claimed at this milestone yet. */
         outstanding: z.coerce.number().int().min(1).max(9).optional(),
       }).strict(), req.query ?? {});
+      // The claim register, for the programmes this reader may see. It was
+      // read organisation-wide by anybody holding survey.read, which put what
+      // every village is being invoiced for in front of a client.
+      const allowed = await visibleProgrammes(pool, u);
 
       if (q.outstanding !== undefined) {
         const rows = (await pool.query(
@@ -3454,12 +3522,13 @@ export async function registerSurveyRoutes(
              JOIN org_units ou ON ou.id = v.village_id
             WHERE v.org_id = $1
               AND ($2::uuid IS NULL OR v.survey_project_id = $2)
+              AND ($4::uuid[] IS NULL OR v.survey_project_id = ANY($4::uuid[]))
               AND NOT EXISTS (
                 SELECT 1 FROM survey_village_billing b
                  WHERE b.survey_village_id = v.id AND b.milestone = $3
                    AND b.status <> 'REJECTED')
             ORDER BY ou.name`,
-          [u.orgId, q.project_id ?? null, q.outstanding])).rows;
+          [u.orgId, q.project_id ?? null, q.outstanding, allowed])).rows;
         return {
           data: rows.map(r => ({
             ...r, total_extent_ac: num(r.total_extent_ac),
@@ -3480,9 +3549,10 @@ export async function registerSurveyRoutes(
             AND ($4::text IS NULL OR b.status = $4)
             AND ($5::date IS NULL OR b.submitted_on >= $5)
             AND ($6::date IS NULL OR b.submitted_on <= $6)
+            AND ($7::uuid[] IS NULL OR v.survey_project_id = ANY($7::uuid[]))
           ORDER BY b.submitted_on DESC, ou.name`,
         [u.orgId, q.project_id ?? null, q.milestone ?? null, q.status ?? null,
-          q.from ?? null, q.to ?? null])).rows;
+          q.from ?? null, q.to ?? null, allowed])).rows;
       return {
         data: rows.map(r => ({
           ...r, percent: num(r.percent), extent_ac: num(r.extent_ac),
@@ -4613,10 +4683,13 @@ export async function registerSurveyRoutes(
   app.get('/api/v1/survey/dashboard/projects',
     { preHandler: guard('survey.dashboard') }, async req => {
       const u = actor(req);
+      // A client is offered only the programmes run for them.
+      const only = clientOnly(u) ? await clientProgrammes(pool, u) : null;
       const rows = (await pool.query(
         `SELECT id, code, name FROM survey_projects
           WHERE org_id = $1 AND status = 'ACTIVE'
-          ORDER BY name`, [u.orgId])).rows;
+            AND ($2::uuid[] IS NULL OR id = ANY($2::uuid[]))
+          ORDER BY name`, [u.orgId, only])).rows;
       return { data: rows };
     });
 
@@ -4626,12 +4699,11 @@ export async function registerSurveyRoutes(
       const q = (req.query ?? {}) as Record<string, string | undefined>;
       // An observer is not enrolled on the programme, so the scoping that
       // governs staff does not apply to them; the permission is the grant.
-      const scoped = u.permissions.includes('survey.dashboard')
-        && !u.permissions.includes('survey.read');
+      // A client reads as an observer too: progress, no names, no money.
       // The department's view: where the work is, never whose desk it is on.
-      const observerView = scoped;
-      const project = scoped
-        ? await inOrg(pool, 'survey_projects', id, u.orgId)
+      const observerView = readsAsObserver(u);
+      const project = observerView
+        ? await observerProgrammeOr404(pool, u, id)
         : await projectOr404(pool, u.orgId, id, u);
 
       const to = dateParam(req, q.to, 'to', today());
@@ -5307,8 +5379,9 @@ export async function registerSurveyRoutes(
       const q = (req.query ?? {}) as Record<string, string | undefined>;
       // An observer holds no survey.read, so the programme is reached by
       // permission rather than by enrolment — as with the dashboard itself.
-      const scoped = !u.permissions.includes('survey.read');
-      if (scoped) await inOrg(pool, 'survey_projects', id, u.orgId);
+      // A client reaches it the same way, and only for their own programmes.
+      const scoped = readsAsObserver(u);
+      if (scoped) await observerProgrammeOr404(pool, u, id);
       else await projectOr404(pool, u.orgId, id, u);
 
       const side = String(q.side ?? '').trim().toUpperCase();
@@ -5396,8 +5469,8 @@ export async function registerSurveyRoutes(
       const input = parse(surveyQuerySchema, req.body);
       const data = await mutate(pool, req, 'survey.query.raise', 'survey_query',
         async db => {
-          const scoped = !u.permissions.includes('survey.read');
-          if (scoped) await inOrg(db, 'survey_projects', id, u.orgId);
+          const scoped = readsAsObserver(u);
+          if (scoped) await observerProgrammeOr404(db, u, id);
           else await projectOr404(db, u.orgId, id, u);
 
           if (input.org_unit_id) {
@@ -5464,8 +5537,8 @@ export async function registerSurveyRoutes(
     { preHandler: guard('survey.query') }, async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const q = (req.query ?? {}) as Record<string, string | undefined>;
-      const scoped = !u.permissions.includes('survey.read');
-      if (scoped) await inOrg(pool, 'survey_projects', id, u.orgId);
+      const scoped = readsAsObserver(u);
+      if (scoped) await observerProgrammeOr404(pool, u, id);
       else await projectOr404(pool, u.orgId, id, u);
 
       const values: unknown[] = [u.orgId, id];
