@@ -68,7 +68,7 @@ npx tsc -p tsconfig.json && npx tsc -p tsconfig.check.json
 - `POST /api/v1/auth/logout` → idempotent `{ success: true }`
 - `POST /api/v1/auth/mfa/setup|verify` + `POST /api/v1/auth/mfa/disable`
 - `GET /api/v1/auth/me`
-- `GET /api/v1/audit` → needs `audit.read`; cursor pagination, `?action=&entity=&limit=&cursor=`
+- `GET /api/v1/audit` → needs `audit.read`; cursor pagination, `?action=&entity=&actor_id=&entity_id=&from=&to=&limit=&cursor=` (`from`/`to` are inclusive `YYYY-MM-DD` days in the organisation's timezone)
 
 Errors always match `{ code, message, field_errors, request_id, retryable }`;
 every response carries `x-request-id`. CORS allows `http://localhost:3000`.
