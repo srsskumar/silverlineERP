@@ -996,7 +996,7 @@ describe("UT-LP-07 calculate LOP, earnings, deductions and net", () => {
       salary_basic: 30000,
       date_of_joining: PAYROLL_DOJ,
     });
-    // 10 complete days in a 31-day period: 21 unpaid.
+    // 10 complete days at the start of the month, then nothing.
     for (let day = 1; day <= 10; day += 1) {
       await w.pool.query(
         `INSERT INTO attendance_records (employee_id, work_date, status, check_in_at)
@@ -1034,20 +1034,32 @@ describe("UT-LP-07 calculate LOP, earnings, deductions and net", () => {
 
     // Policy divisor is 30, so a day of a ₹30,000 basic is ₹1,000.
     expect(row.earnings.per_day).toBe(1000);
-    expect(row.earnings.present_days).toBe(10);
-    expect(row.earnings.payable_days).toBe(10);
-    expect(Number(row.gross)).toBe(10_000);
 
+    // Sundays are paid days off, not working days, so they are never LOP.
+    // Days 1-10 are all paid: the Sundays among them as days off, the rest
+    // as attendance. Only the working days after the 10th are unpaid -- for
+    // a 30-day month with 3 Sundays in 11-30, that is 20 - 3 = 17.
     const periodDays = daysBetween(start, end);
-    expect(row.deductions.lop_days).toBe(periodDays - 10);
-    expect(row.deductions.lop_amount).toBe((periodDays - 10) * 1000);
-    // PF is 12% of gross.
-    expect(row.deductions.pf).toBe(1200);
+    const tenth = plusDaysFrom(start, 9);
+    const sundaysInFirstTen = sundaysBetween(start, tenth);
+    const sundaysAfter = sundaysBetween(plusDaysFrom(start, 10), end);
+    const unpaid = periodDays - 10 - sundaysAfter;
+    expect(row.earnings.present_days).toBe(10 - sundaysInFirstTen);
+    expect(row.earnings.paid_off_days).toBe(sundaysInFirstTen + sundaysAfter);
+    expect(row.earnings.payable_days).toBe(periodDays - unpaid);
+    expect(row.deductions.lop_days).toBe(unpaid);
+    expect(row.deductions.lop_amount).toBe(unpaid * 1000);
 
-    // Net is gross − deductions, floored at zero, and the arithmetic is exact.
-    const expectedDeductions = row.deductions.lop_amount + row.deductions.pf;
-    expect(Number(row.total_deductions)).toBe(expectedDeductions);
-    expect(Number(row.net_pay)).toBe(Math.max(0, 10_000 - expectedDeductions));
+    // A whole month earns the basic, and LOP comes off it once
+    // (30,000 - 17 x 1,000 = 13,000 in that example). PF is 12% of gross.
+    const gross = 30_000 - unpaid * 1000;
+    expect(Number(row.gross)).toBe(gross);
+    expect(row.deductions.pf).toBe(Math.round(gross * 12) / 100);
+
+    // LOP is already out of gross, so the deductions are PF alone. (It used
+    // to come off a second time here, which drove this slip's net to 0.)
+    expect(Number(row.total_deductions)).toBe(row.deductions.pf);
+    expect(Number(row.net_pay)).toBe(gross - row.deductions.pf);
 
     // Every money value is a clean 2dp decimal, not a binary artefact.
     for (const value of [row.gross, row.total_deductions, row.net_pay]) {
@@ -1062,11 +1074,14 @@ describe("UT-LP-07 calculate LOP, earnings, deductions and net", () => {
       salary_basic: 30000,
       date_of_joining: PAYROLL_DOJ,
     });
+    // Monday to Wednesday of the first full week, so none of the three days
+    // is a Sunday (which would be paid as a day off whatever was recorded).
+    const monday = firstMonday(start);
     await w.pool.query(
       `INSERT INTO attendance_records (employee_id, work_date, status, check_in_at)
        VALUES ($1, $2::date, 'COMPLETE', NOW()),
               ($1, ($2::date + INTERVAL '1 day')::date, 'PARTIAL', NOW())`,
-      [employeeId, start],
+      [employeeId, monday],
     );
     // One approved paid-leave day inside the period.
     await w.pool.query(
@@ -1076,7 +1091,7 @@ describe("UT-LP-07 calculate LOP, earnings, deductions and net", () => {
        VALUES ($1, $2, $3, ($4::date + INTERVAL '2 days')::date,
                ($4::date + INTERVAL '2 days')::date, 1, 'paid leave',
                'APPROVED', '[]'::jsonb, NULL)`,
-      [w.orgId, employeeId, types.CL, start],
+      [w.orgId, employeeId, types.CL, monday],
     );
 
     const created = await w.app.inject({
@@ -1100,7 +1115,10 @@ describe("UT-LP-07 calculate LOP, earnings, deductions and net", () => {
     const earnings = slip.rows[0].earnings as Record<string, number>;
     expect(earnings.present_days).toBe(1.5);
     expect(earnings.paid_leave_days).toBe(1);
-    expect(earnings.payable_days).toBe(2.5);
+    // Every Sunday of the month is paid as a day off on top of the 2.5 days.
+    const sundays = sundaysBetween(start, end);
+    expect(earnings.paid_off_days).toBe(sundays);
+    expect(earnings.payable_days).toBe(2.5 + sundays);
   });
 
   it("warns rather than computing a salary it does not have", async () => {
@@ -1144,8 +1162,9 @@ describe("UT-LP-07 calculate LOP, earnings, deductions and net", () => {
 
   it("never returns a negative net pay", async () => {
     const { start, end } = uniqueMonth();
-    // A single attended day against a full month of LOP drives deductions
-    // above gross; the floor keeps the slip from owing the employer money.
+    // A single attended day against a month of LOP. LOP comes out of gross,
+    // never below zero, and the floor on net keeps the slip from ever owing
+    // the employer money.
     const employeeId = await createActiveEmployee(w.app, w.admin, {
       district_id: w.chainA.district,
       salary_basic: 30000,
@@ -1176,6 +1195,25 @@ describe("UT-LP-07 calculate LOP, earnings, deductions and net", () => {
     expect(Number(slip.rows[0].net_pay)).toBeGreaterThanOrEqual(0);
   });
 });
+
+function plusDaysFrom(date: string, n: number): string {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+}
+
+function sundaysBetween(from: string, to: string): number {
+  let n = 0;
+  for (let d = from; d <= to; d = plusDaysFrom(d, 1)) {
+    if (new Date(`${d}T00:00:00Z`).getUTCDay() === 0) n += 1;
+  }
+  return n;
+}
+
+/** The first Monday on or after a date. */
+function firstMonday(date: string): string {
+  let d = date;
+  while (new Date(`${d}T00:00:00Z`).getUTCDay() !== 1) d = plusDaysFrom(d, 1);
+  return d;
+}
 
 function daysBetween(from: string, to: string): number {
   return (
@@ -1405,10 +1443,12 @@ describe("UT-LP-09 generate payslip revision", () => {
       reason: "A second attended day was confirmed",
     });
 
+    // A Tuesday: a working day whatever the month, so attending it saves a
+    // day of LOP. (A Sunday is paid already and would change nothing.)
     await w.pool.query(
       `INSERT INTO attendance_records (employee_id, work_date, status, check_in_at)
-       VALUES ($1, ($2::date + INTERVAL '1 day')::date, 'COMPLETE', NOW())`,
-      [employeeId, start],
+       VALUES ($1, $2::date, 'COMPLETE', NOW())`,
+      [employeeId, plusDaysFrom(firstMonday(start), 1)],
     );
     await advance(runId, "calculate");
 
@@ -1477,6 +1517,14 @@ describe("UT-LP-09 generate payslip revision", () => {
     ).rows[0].emp_no as string;
     const text = pdf.rawPayload.toString("latin1");
     expect(text).toContain(empNo);
+
+    // Days print as counts, not rupees, and the LOP figure is labelled as
+    // already outside gross rather than listed as a deduction. (PDF text
+    // escapes parentheses.)
+    expect(text).toMatch(/Payable days: [\d.]+ days/);
+    expect(text).not.toMatch(/days: Rs /);
+    expect(text).toContain("Loss of pay \\(already excluded from gross\\)");
+    expect(text).toContain("FOR INFORMATION \\(not deducted again\\)");
   });
 
   it("keeps an earlier revision's PDF intact after a recalculation", async () => {

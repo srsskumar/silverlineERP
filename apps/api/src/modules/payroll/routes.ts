@@ -5,6 +5,7 @@ import type { Pool, PoolClient } from "pg";
 import {
   ATTENDANCE_WEIGHTS,
   P1_PERMISSIONS,
+  type PayslipLeave,
   PAYROLL_MAX_PERIOD_DAYS,
   payrollPolicyPatchSchema,
   payrollRunApproveSchema,
@@ -13,8 +14,10 @@ import {
   payrollRunsQuerySchema,
   payslipListQuerySchema,
   payslipMeQuerySchema,
+  calculatePayslip,
   decodeCursor,
   encodeCursor,
+  resolveEffectiveHolidays,
   toFieldErrors,
 } from "@silverline/shared";
 import { buildAuthenticate, requirePermission } from "../../common/auth.js";
@@ -34,10 +37,14 @@ export interface PayrollRoutesOptions {
  * P1 payroll routes (frozen P1 contract).
  *
  * Money: integer paise internally (see packages/shared/src/p1.ts) — every
- * money field is rounded to 2dp at each derived step. working_days =
- * inclusive calendar days in the period (Sundays/holidays NOT excluded —
- * documented P1 simplification). OVERLAPPING_RUN fires against ANY
- * existing run in the org, including LOCKED (there is no cancelled state).
+ * money field is rounded to 2dp at each derived step. The pay rule itself
+ * (Sundays and holidays paid, loss of pay deducted once, joiners and leavers
+ * paid for their employed days) lives in calculatePayslip in
+ * packages/shared/src/p1.ts; this file only gathers its inputs. It replaced a
+ * P1 simplification that counted every calendar day as a working day and took
+ * loss of pay out twice. Runs already LOCKED keep the figures they were locked
+ * with. OVERLAPPING_RUN fires against ANY existing run in the org, including
+ * LOCKED (there is no cancelled state).
  */
 
 // ---------------------------------------------------------------------------
@@ -71,11 +78,6 @@ function toPaise(v: string | number | null | undefined): number {
 
 function fromPaise(p: number): number {
   return p / 100;
-}
-
-/** Day counts stay on 0.5 steps; normalize any summation dust. */
-function halfRound(x: number): number {
-  return Math.round(x * 2) / 2;
 }
 
 function sendRuleError(
@@ -523,8 +525,6 @@ export async function registerPayrollRoutes(
         const divisor = policyRow ? Number(policyRow.per_day_divisor) : 30;
         const pfPct = policyRow ? Number(policyRow.pf_pct) : 12;
 
-        const workingDays = inclusiveDays(start, end);
-
         interface EmpRow {
           id: string;
           emp_no: string;
@@ -534,12 +534,28 @@ export async function registerPayrollRoutes(
           salary_basic: string | number | null;
           date_of_joining: Date | string;
           date_of_exit: Date | string | null;
+          site_id: string | null;
+          village_id: string | null;
+          mandal_id: string | null;
+          district_id: string | null;
         }
+        // Who is paid is decided by the dates they were employed, not by the
+        // status they hold today: someone who left on the 20th worked twenty
+        // days of this period and is owed them, even though the record now
+        // says EXITED. DRAFT is excluded because a draft record is not yet
+        // anyone's employment (see employeeActivateSchema). SUSPENDED stays in:
+        // suspension is a flag with no dates, so the attendance register is
+        // the only evidence of the days, applied as for anyone else. An EXITED
+        // record without an exit date has no window to pay and would otherwise
+        // match every future period, so it needs its date first.
         const empRes = await client.query(
           `SELECT id, emp_no, first_name, last_name, designation, salary_basic,
-              date_of_joining, date_of_exit
+              date_of_joining, date_of_exit, site_id, village_id, mandal_id,
+              district_id
             FROM employees
-            WHERE org_id = $1 AND status = 'ACTIVE'
+            WHERE org_id = $1
+              AND (status IN ('ACTIVE', 'SUSPENDED')
+                   OR (status = 'EXITED' AND date_of_exit IS NOT NULL))
               AND date_of_joining <= $3::date
               AND (date_of_exit IS NULL OR date_of_exit >= $2::date)
             ORDER BY emp_no ASC`,
@@ -548,33 +564,38 @@ export async function registerPayrollRoutes(
         const employees = empRes.rows as EmpRow[];
 
         const empIds = employees.map((e) => e.id);
-        const presentByEmp = new Map<string, number>();
+        const attendanceByEmp = new Map<string, Map<string, number>>();
         const recordsByEmp = new Map<string, number>();
         if (empIds.length > 0) {
           const recRes = await client.query(
-            `SELECT employee_id, status FROM attendance_records
+            `SELECT employee_id, work_date, status FROM attendance_records
               WHERE employee_id = ANY($1::uuid[])
                 AND work_date BETWEEN $2::date AND $3::date`,
             [empIds, start, end],
           );
           for (const r of recRes.rows as Array<{
             employee_id: string;
+            work_date: Date | string;
             status: string;
           }>) {
             recordsByEmp.set(
               r.employee_id,
               (recordsByEmp.get(r.employee_id) ?? 0) + 1,
             );
-            presentByEmp.set(
-              r.employee_id,
-              (presentByEmp.get(r.employee_id) ?? 0) +
-                (ATTENDANCE_WEIGHTS[r.status] ?? 0),
+            let byDate = attendanceByEmp.get(r.employee_id);
+            if (!byDate) {
+              byDate = new Map();
+              attendanceByEmp.set(r.employee_id, byDate);
+            }
+            const date = dateOnly(r.work_date);
+            byDate.set(
+              date,
+              (byDate.get(date) ?? 0) + (ATTENDANCE_WEIGHTS[r.status] ?? 0),
             );
           }
         }
 
-        const paidLeaveByEmp = new Map<string, number>();
-        const lopLeaveByEmp = new Map<string, number>();
+        const leavesByEmp = new Map<string, PayslipLeave[]>();
         if (empIds.length > 0) {
           const leaveRes = await client.query(
             `SELECT r.employee_id, r.from_date, r.to_date, t.is_paid
@@ -591,26 +612,36 @@ export async function registerPayrollRoutes(
             to_date: Date | string;
             is_paid: boolean;
           }>) {
-            const s =
-              dateOnly(l.from_date) > start ? dateOnly(l.from_date) : start;
-            const e = dateOnly(l.to_date) < end ? dateOnly(l.to_date) : end;
-            const days = s > e ? 0 : inclusiveDays(s, e);
-            if (days <= 0) {
-              continue;
-            }
-            if (l.is_paid) {
-              paidLeaveByEmp.set(
-                l.employee_id,
-                (paidLeaveByEmp.get(l.employee_id) ?? 0) + days,
-              );
-            } else {
-              lopLeaveByEmp.set(
-                l.employee_id,
-                (lopLeaveByEmp.get(l.employee_id) ?? 0) + days,
-              );
-            }
+            const list = leavesByEmp.get(l.employee_id) ?? [];
+            list.push({
+              from: dateOnly(l.from_date),
+              to: dateOnly(l.to_date),
+              paid: l.is_paid,
+            });
+            leavesByEmp.set(l.employee_id, list);
           }
         }
+
+        // Every holiday row in the period. Each employee's own calendar is
+        // resolved from these by location, exactly as GET /holidays does for
+        // them, so the day payroll pays as a holiday is the day the employee
+        // was told was one.
+        const holidayRes = await client.query(
+          `SELECT id, date, name, type, scope_type, scope_id FROM holidays
+            WHERE org_id = $1 AND active = true
+              AND date BETWEEN $2::date AND $3::date`,
+          [user.orgId, start, end],
+        );
+        const holidayCandidates = (
+          holidayRes.rows as Array<{
+            id: string;
+            date: Date | string;
+            name: string;
+            type: string;
+            scope_type: string | null;
+            scope_id: string | null;
+          }>
+        ).map((h) => ({ ...h, date: dateOnly(h.date) }));
 
         const warnings: Array<{
           type: string;
@@ -627,45 +658,52 @@ export async function registerPayrollRoutes(
         await client.query('UPDATE payslips SET is_current=false WHERE payroll_run_id=$1',[id]);
 
         for (const emp of employees) {
-          const basicPaise =
-            emp.salary_basic === null || emp.salary_basic === undefined
-              ? 0
-              : toPaise(emp.salary_basic);
           const hasSalary =
             emp.salary_basic !== null && emp.salary_basic !== undefined;
-          const presentDays = halfRound(presentByEmp.get(emp.id) ?? 0);
-          const paidLeaveDays = paidLeaveByEmp.get(emp.id) ?? 0;
-          const lopLeaveDays = lopLeaveByEmp.get(emp.id) ?? 0;
           const recordCount = recordsByEmp.get(emp.id) ?? 0;
-
-          // Absence with no record and no leave = unpaid LOP absence.
-          const lopAbsence = Math.max(
-            0,
-            halfRound(workingDays - presentDays - paidLeaveDays - lopLeaveDays),
+          const holidays = new Set(
+            resolveEffectiveHolidays(holidayCandidates, [
+              emp.site_id,
+              emp.village_id,
+              emp.mandal_id,
+              emp.district_id,
+            ]).map((h) => h.date),
           );
-          const payableDays = halfRound(presentDays + paidLeaveDays);
-          const unpaidDays = halfRound(lopAbsence + lopLeaveDays);
 
-          const perDayPaise = Math.round(basicPaise / divisor);
-          const grossPaise = Math.round(perDayPaise * payableDays);
-          const lopPaise = Math.round(perDayPaise * unpaidDays);
-          const pfPaise =
-            basicPaise > 0 ? Math.round((grossPaise * pfPct) / 100) : 0;
-          const dedPaise = lopPaise + pfPaise;
-          const netPaise = Math.max(0, grossPaise - dedPaise);
+          const calc = calculatePayslip({
+            periodStart: start,
+            periodEnd: end,
+            dateOfJoining: dateOnly(emp.date_of_joining),
+            dateOfExit: emp.date_of_exit ? dateOnly(emp.date_of_exit) : null,
+            basicPaise: hasSalary ? toPaise(emp.salary_basic) : null,
+            perDayDivisor: divisor,
+            pfPct,
+            holidays,
+            attendance: attendanceByEmp.get(emp.id) ?? new Map(),
+            leaves: leavesByEmp.get(emp.id) ?? [],
+          });
+          const grossPaise = calc.grossPaise;
+          const dedPaise = calc.totalDeductionsPaise;
+          const netPaise = calc.netPaise;
 
+          // payable_days = present + paid leave + paid days off, and gross is
+          // the pay for exactly those days: lop_amount has already been taken
+          // out of it. lop_amount is shown so the employee can see what the
+          // unpaid days cost; it is not part of total_deductions, because
+          // subtracting it again is the double deduction this replaced.
           const earnings = {
-            basic: fromPaise(basicPaise),
-            per_day: fromPaise(perDayPaise),
-            payable_days: payableDays,
-            present_days: presentDays,
-            paid_leave_days: paidLeaveDays,
-            lop_leave_days: lopLeaveDays,
+            basic: fromPaise(hasSalary ? toPaise(emp.salary_basic) : 0),
+            per_day: fromPaise(calc.perDayPaise),
+            payable_days: calc.payableDays,
+            present_days: calc.presentDays,
+            paid_leave_days: calc.paidLeaveDays,
+            paid_off_days: calc.paidOffDays,
+            lop_leave_days: calc.lopLeaveDays,
           };
           const deductions = {
-            lop_days: unpaidDays,
-            lop_amount: fromPaise(lopPaise),
-            pf: fromPaise(pfPaise),
+            lop_days: calc.unpaidDays,
+            lop_amount: fromPaise(calc.lopPaise),
+            pf: fromPaise(calc.pfPaise),
           };
 
           await client.query(
