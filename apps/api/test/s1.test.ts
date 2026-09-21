@@ -459,7 +459,7 @@ describe("employees", () => {
     expect(body["phonepe_number_last4"]).toBe("••••3210");
   });
 
-  it("returns full decrypted PII with pii.read (list + detail)", async () => {
+  it("returns full decrypted PII with pii.read on the detail only (HR-15)", async () => {
     const admin = await adminHeaders();
     const hr = await roleHeaders("HR_MANAGER");
     const created = await createEmployee(admin, {
@@ -481,7 +481,10 @@ describe("employees", () => {
     const list = await app.inject({ method: "GET", url: "/api/v1/employees", headers: hr });
     const page = list.json() as { data: Array<Record<string, unknown>> };
     const found = page.data.find((e) => e["id"] === id);
-    expect(found?.["aadhaar"]).toBe("999988887777");
+    // The list is masked for everybody: a directory page is not the place
+    // to hand out every identity number at once.
+    expect(found?.["aadhaar"]).toBeNull();
+    expect(String(found?.["aadhaar_last4"])).toMatch(/7777$/);
   });
 
   it("encrypts PII at rest and redacts audit payloads", async () => {
