@@ -7,6 +7,7 @@
 
 import * as LocalAuthentication from "expo-local-authentication";
 import * as SecureStore from "expo-secure-store";
+import { unlockWith } from "./unlock";
 
 const ACCESS_KEY = "silverline.access_token";
 const REFRESH_KEY = "silverline.refresh_token";
@@ -71,16 +72,14 @@ export async function setBiometricEnabled(enabled: boolean): Promise<void> {
   await SecureStore.setItemAsync(BIO_KEY, enabled ? "1" : "0");
 }
 
-/** Gate app foreground unlock when the user enabled biometrics. */
+/**
+ * Gate app foreground unlock on the device's own lock -- biometrics when
+ * enrolled, otherwise the PIN, pattern or passcode. See unlock.ts.
+ */
 export async function biometricUnlock(): Promise<boolean> {
-  const state = await getBiometricState();
-  if (!state.enabled) return true;
-  if (!state.hardware || !state.enrolled) return false;
-  const res = await LocalAuthentication.authenticateAsync({
-    promptMessage: "Unlock Silverline",
-    disableDeviceFallback: false,
+  return unlockWith({
+    getEnrolledLevelAsync: () => LocalAuthentication.getEnrolledLevelAsync(),
+    authenticateAsync: (options) => LocalAuthentication.authenticateAsync(options),
+    biometricEnabled: async () => (await getBiometricState()).enabled,
   });
-  return res.success;
 }
-
-// The operating system credential fallback is enabled in authenticateAsync.
