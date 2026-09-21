@@ -64,6 +64,41 @@ export interface QueueDatabase {
  runAsync(sql:string,params:(string|number|null)[]):Promise<unknown>;
 }
 type RequestError=Error&{status:number;retryable:boolean;code:string};
+
+/**
+ * How long a delivered operation stays visible in the sync queue. Long enough
+ * for somebody to check that yesterday's punches went through; short enough
+ * that the outbox does not grow for the life of the install.
+ */
+export const SETTLED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+/** And never more than this many delivered rows, whatever their age. */
+export const SETTLED_KEEP_MAX = 50;
+
+/**
+ * Drops delivered operations older than the retention window, and all but the
+ * newest SETTLED_KEEP_MAX of them. Only SUCCEEDED rows go: a FAILED row is
+ * waiting for the user to retry or discard it, and an active row has not been
+ * sent. The newest rows always survive, so a caller that has just flushed can
+ * still read back the outcome of the operation it submitted.
+ */
+export async function purgeSettledOps(db:QueueDatabase,now=Date.now()):Promise<void> {
+ await db.runAsync(
+  `DELETE FROM pending_ops WHERE state='SUCCEEDED' AND (updated_at < ? OR client_uuid NOT IN (
+     SELECT client_uuid FROM pending_ops WHERE state='SUCCEEDED' ORDER BY updated_at DESC, seq DESC LIMIT ?))`,
+  [now-SETTLED_RETENTION_MS,SETTLED_KEEP_MAX],
+ );
+}
+
+/**
+ * What the sync queue screen shows. Work that needs the user comes first --
+ * failed rows, then rows still waiting to send -- and each group newest first.
+ * Oldest-first put a hundred delivered rows ahead of everything else, so a
+ * failure that happened after them was never on screen to be retried.
+ */
+export const LIST_OPS_SQL = `SELECT * FROM pending_ops
+  ORDER BY CASE state WHEN 'FAILED' THEN 0 WHEN 'SUCCEEDED' THEN 2 ELSE 1 END,
+    created_at DESC, seq DESC
+  LIMIT 100`;
 export function createQueue({getDb,getAccount,seal,unseal,uuid,isApiError}:{getDb:()=>Promise<QueueDatabase>;getAccount:()=>Promise<string|null>;seal:(account:string,value:string)=>Promise<string>;unseal:(account:string,value:string)=>Promise<string>;uuid:()=>string;isApiError:(e:unknown)=>e is RequestError}) {
 const ACTIVE_STATES = ["QUEUED", "SENDING", "BACKOFF"];
 
@@ -125,7 +160,7 @@ async function enqueueOp(args: {
 
 async function setOp(
   clientUuid: string,
-  patch: Partial<Pick<PendingOpRow, "state" | "decision" | "retry_count" | "next_retry_at" | "error">>,
+  patch: Partial<Pick<PendingOpRow, "state" | "decision" | "retry_count" | "next_retry_at" | "error" | "payload">>,
   database?:QueueDatabase,
 ): Promise<void> {
   const db = database??await getDb();
@@ -181,7 +216,10 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
       const outcome = resolveOutcome(decision);
       if (outcome.state === "SUCCEEDED") {
         result.succeeded += 1;
-        await update(op.client_uuid, { state: "SUCCEEDED", decision });
+        // The server has it now, so the sealed body -- a photo can be megabytes
+        // of base64 -- has no further use on the device. The row itself stays
+        // for a while so the queue screen can show that it went.
+        await update(op.client_uuid, { state: "SUCCEEDED", decision, payload: "{}" });
       } else if (outcome.state === "BACKOFF") {
         const retryCount = op.retry_count + 1;
         if (maxRetriesExceeded(retryCount, MAX_QUEUE_RETRIES)) {
@@ -236,6 +274,7 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
       }
     }
   }
+  await purgeSettledOps(db);
   return result;
 }
 
@@ -246,5 +285,23 @@ async function retryOp(clientUuid:string):Promise<void> {
  await db.runAsync("UPDATE pending_ops SET state='QUEUED',retry_count=0,next_retry_at=NULL,error=NULL WHERE client_uuid=? AND state='FAILED'",[clientUuid]);
 }
 
-return {enqueueOp,flushQueue,retryOp};
+/**
+ * Removes a failed operation for good. For a CONFLICT or REJECTED row this is
+ * the only way out: retrying sends the same request the server already refused,
+ * and without it the row sat in the queue as a permanent red item. Only FAILED
+ * rows can go -- a row that is waiting or sending may still be delivered, and
+ * discarding it would lose work the user has not seen fail.
+ */
+async function discardOp(clientUuid:string):Promise<void> {
+ const db=await getDb();
+ const row=await db.getFirstAsync<PendingOpRow>('SELECT * FROM pending_ops WHERE client_uuid=?',[clientUuid]);
+ if(!row||row.state!=='FAILED')throw new Error('Only a failed operation can be discarded.');
+ await db.runAsync("DELETE FROM pending_ops WHERE client_uuid=? AND state='FAILED'",[clientUuid]);
+}
+
+async function listOps():Promise<PendingOpRow[]> {
+ return (await getDb()).getAllAsync<PendingOpRow>(LIST_OPS_SQL,[]);
+}
+
+return {enqueueOp,flushQueue,retryOp,discardOp,listOps};
 }

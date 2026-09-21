@@ -18,6 +18,7 @@ import {
   getRefreshToken,
   saveTokens,
 } from "../device/auth";
+import { DEVICE_REVOKED, isDeviceRevoked } from "./revocation";
 
 function baseUrl(): string {
   const raw =
@@ -147,6 +148,16 @@ export function onAuthLogout(hook: LogoutHook | null): void {
   logoutHook = hook;
 }
 
+/**
+ * The server says this device is revoked: drop the tokens and let the
+ * AuthProvider wipe the account. Tokens go first so nothing sent while the
+ * wipe runs can still authenticate.
+ */
+async function revokeDevice(): Promise<void> {
+  await clearTokens();
+  await logoutHook?.(DEVICE_REVOKED);
+}
+
 let refreshInFlight: Promise<boolean> | null = null;
 
 async function tryRefresh(): Promise<boolean> {
@@ -167,7 +178,7 @@ async function tryRefresh(): Promise<boolean> {
       if (res.status === 429 || res.status >= 500) throw new ApiError({ status: res.status, code: "REFRESH_UNAVAILABLE", message: "Connection unavailable. Retry when online.", retryable: true });
       if (!res.ok) {
         const error=await res.json().catch(()=>({})) as {code?:string};
-        if(error.code==='DEVICE_REVOKED'){await logoutHook?.('DEVICE_REVOKED');await clearTokens();}
+        if(isDeviceRevoked(error))await revokeDevice();
         return false;
       }
       const json = (await res.json().catch(() => null)) as {
@@ -250,7 +261,9 @@ export async function apiFetch<T>(
     });
   }
 
-  if (res.status === 401 && !noAuthRetry) {
+  // A revoked device is not an expired session: refreshing cannot fix it, so
+  // it goes straight to the error path below and its wipe.
+  if (res.status === 401 && !noAuthRetry && !isDeviceRevoked(await res.clone().json().catch(() => null))) {
     const refreshed = await tryRefresh();
     if (refreshed) {
       try {
@@ -284,6 +297,7 @@ export async function apiFetch<T>(
   const json = (await res.json().catch(() => null)) as unknown;
 
   if (!res.ok) {
+    if (isDeviceRevoked(json)) await revokeDevice();
     const env =
       (typeof json === "object" && json !== null ? json : {}) as Record<
         string,
