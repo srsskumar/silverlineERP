@@ -1123,3 +1123,154 @@ describe("a crew can answer what the server asks (§081)", () => {
     expect(v!.stage_dates.GROUND_TRUTHING.varianceReason).toBe("ACCESS");
   });
 });
+
+describe("asking, reaching, and being told (§073)", () => {
+  let raised = "";
+
+  it("lets the department ask a question about what it is shown", async () => {
+    /*
+     * An official holds nothing but survey.dashboard and is the most likely
+     * person in the programme to have a question about a figure on it — and
+     * the one with no other way to put it than a phone call nobody writes
+     * down.
+     */
+    const r = await post(w.role.GOVT_OBSERVER,
+      `/api/v1/survey/projects/${programmeId}/queries`, {
+        kind: "CONCERN",
+        subject: "Why is Adakula still at GT QC?",
+        body: "It has been four months since the check began. What is holding it up?",
+      });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    raised = String(r.data.id);
+    expect(r.data.status).toBe("OPEN");
+  });
+
+  it("captures the position the question was asked against", async () => {
+    // "Why is this still at GT QC" stops making sense the moment the village
+    // moves, and a question whose context cannot be reconstructed is one
+    // nobody answers.
+    const r = await post(w.admin,
+      `/api/v1/survey/projects/${programmeId}/queries`, {
+        kind: "QUESTION", survey_village_id: villageA,
+        subject: "Is the extent right here?",
+        body: "The surveyed figure looks high against the revenue record.",
+      });
+    expect(r.status).toBe(201);
+    expect(r.data.position_key).toBeTruthy();
+  });
+
+  it("tells the people who can answer, without them opening anything", async () => {
+    const n = await w.pool.query(
+      `SELECT count(*)::int AS n FROM notifications
+        WHERE entity_type = 'survey_query' AND entity_id = $1`, [raised]);
+    expect(n.rows[0].n).toBeGreaterThan(0);
+  });
+
+  it("shows an observer their own question and nobody else's", async () => {
+    // They should find their question and its answer; another district's is
+    // none of their business.
+    const mine = await get(w.role.GOVT_OBSERVER,
+      `/api/v1/survey/projects/${programmeId}/queries`);
+    expect(mine.status).toBe(200);
+    const ids = (mine.data as Array<{ id: string }>).map(q => q.id);
+    expect(ids).toContain(raised);
+    expect(ids).toHaveLength(1);
+  });
+
+  it("will not let an observer answer one", async () => {
+    const r = await post(w.role.GOVT_OBSERVER,
+      `/api/v1/survey/queries/${raised}/answer`, { answer: "Because I say so." });
+    expect(r.status).toBe(403);
+  });
+
+  it("lets a team lead answer, and tells whoever asked", async () => {
+    const r = await post(w.role.TEAM_LEAD, `/api/v1/survey/queries/${raised}/answer`,
+      { answer: "The mandal reassigned its staff; we restart on Monday." });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.status).toBe("ANSWERED");
+
+    const told = await w.pool.query(
+      `SELECT count(*)::int AS n FROM notifications
+        WHERE event_key = $1`, [`survey_query_answer:${raised}`]);
+    expect(told.rows[0].n).toBe(1);
+  });
+
+  it("refuses to overwrite an answer somebody already gave", async () => {
+    const r = await post(w.admin, `/api/v1/survey/queries/${raised}/answer`,
+      { answer: "Something else." });
+    expect(r.status).toBe(409);
+  });
+
+  it("keeps a contact list for both sides, readable by the department", async () => {
+    const made = await post(w.admin, `/api/v1/survey/projects/${programmeId}/contacts`, {
+      side: "GOVT", name: "K. Srinivas", designation: "Tahsildar",
+      phone: "+91 98480 11111",
+    });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+
+    const ours = await post(w.admin, `/api/v1/survey/projects/${programmeId}/contacts`, {
+      side: "SILVERLINE", name: "Ravi Kumar", designation: "Project Manager",
+      phone: "+91 98480 22222", email: "ravi@silverline.example",
+    });
+    expect(ours.status).toBe(201);
+
+    // An official looking at a late village needs the surveyor's number as
+    // much as we need the tahsildar's.
+    const seen = await get(w.role.GOVT_OBSERVER,
+      `/api/v1/survey/projects/${programmeId}/contacts`);
+    expect(seen.status).toBe(200);
+    expect((seen.data as Array<{ side: string }>).map(c => c.side).sort())
+      .toEqual(["GOVT", "SILVERLINE"]);
+  });
+
+  it("insists a contact says what they are", async () => {
+    // A name and a number with no role is a number nobody knows when to use.
+    const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/contacts`, {
+      side: "GOVT", name: "Somebody", designation: "", phone: "+91 98480 33333",
+    });
+    expect(r.status).toBe(422);
+  });
+
+  it("will not let the department edit the contact list", async () => {
+    const r = await post(w.role.GOVT_OBSERVER,
+      `/api/v1/survey/projects/${programmeId}/contacts`, {
+        side: "GOVT", name: "Nobody", designation: "Imposter", phone: "+91 90000 00000",
+      });
+    expect(r.status).toBe(403);
+  });
+
+  it("takes an alert subscription with an end date and refuses one without", async () => {
+    const good = await post(w.admin, "/api/v1/survey/alert-subscriptions", {
+      email: "collector@guntur.gov.in", label: "District office",
+      kinds: ["PAST_EXPECTED_COMPLETION"],
+      active_until: "2027-03-31", survey_project_id: programmeId,
+    });
+    expect(good.status, JSON.stringify(good.body)).toBe(201);
+    expect(good.data.active_until).toBe("2027-03-31");
+
+    const missing = await post(w.admin, "/api/v1/survey/alert-subscriptions", {
+      email: "nobody@example.com", survey_project_id: programmeId,
+    });
+    expect(missing.status).toBe(422);
+  });
+
+  it("refuses a subscription that has already stopped", async () => {
+    // A subscription with no end outlives the person who asked for it and
+    // becomes mail nobody can explain; one already past is simply a mistake.
+    const r = await post(w.admin, "/api/v1/survey/alert-subscriptions", {
+      email: "late@example.com", active_until: "2020-01-01",
+      survey_project_id: programmeId,
+    });
+    expect(r.status).toBe(422);
+    expect(String(r.body.message)).toMatch(/already stopped/i);
+  });
+
+  it("offers exactly the alert kinds the job can actually send", async () => {
+    const r = await get(w.admin, "/api/v1/survey/alert-kinds");
+    const codes = (r.data as Array<{ code: string }>).map(k => k.code);
+    expect(codes).toContain("PAST_EXPECTED_COMPLETION");
+    expect(codes).toContain("ROVERS_IDLE");
+    // A list maintained by hand drifts from what the job raises.
+    expect(codes.length).toBeGreaterThanOrEqual(4);
+  });
+});

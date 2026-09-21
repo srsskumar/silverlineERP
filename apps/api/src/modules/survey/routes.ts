@@ -9,10 +9,14 @@ import {
   STAGE_CODES, REPORT_LEVELS, resolveStage, isOutOfScope, plannedTasksFor,
   tallyByStage, roverUtilisation, roverWindow, rankByWaste, pace, currentStage,
   outOfSequence, stageBlockedBy,
-  VILLAGE_LADDER, LADDER_NOTES, villagePosition, tallyByPosition, gtStartSchema,
+  VILLAGE_LADDER, LADDER_NOTES, LADDER_LABELS, villagePosition, tallyByPosition,
+  gtStartSchema,
   DELAY_REASON_CODES,
   stageVariance, varianceNote, villageVariances, gtReasonRequired, delayReasonLabel as dLabel,
   earnedMilestones, stageSignedOff, signOffFor,
+  surveyContactSchema, surveyContactPatchSchema,
+  surveyQuerySchema, surveyAnswerSchema,
+  alertSubscriptionSchema, alertSubscriptionPatchSchema, ALERT_KINDS,
   crewAssignmentSchema, roverAllocationSchema, stageRemarkSchema, STAGE_PIPELINE,
   crewBulkAssignmentSchema, roverBulkAllocationSchema, roverAllocationEditSchema,
   villageMoveSchema,
@@ -5163,6 +5167,346 @@ export async function registerSurveyRoutes(
             }))
             .sort((a, b) => a.name.localeCompare(b.name)),
         },
+      };
+    });
+
+  /* ====================================================== §073 contacts */
+
+  /**
+   * Who to ring, on both sides.
+   *
+   * Readable by anybody who can see the programme, the department included:
+   * an official looking at a village four months late needs the surveyor's
+   * number as much as we need the tahsildar's. Managing the list is
+   * survey.manage, because a wrong number on a shared list is worse than no
+   * number at all.
+   */
+  app.get('/api/v1/survey/projects/:id/contacts',
+    { preHandler: guard('survey.dashboard') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const q = (req.query ?? {}) as Record<string, string | undefined>;
+      // An observer holds no survey.read, so the programme is reached by
+      // permission rather than by enrolment — as with the dashboard itself.
+      const scoped = !u.permissions.includes('survey.read');
+      if (scoped) await inOrg(pool, 'survey_projects', id, u.orgId);
+      else await projectOr404(pool, u.orgId, id, u);
+
+      const side = String(q.side ?? '').trim().toUpperCase();
+      const values: unknown[] = [u.orgId, id];
+      let where = 'c.org_id = $1 AND c.survey_project_id = $2 AND c.active';
+      if (side === 'GOVT' || side === 'SILVERLINE') {
+        values.push(side);
+        where += ` AND c.side = $${values.length}`;
+      }
+      const rows = (await pool.query(
+        `SELECT c.*, ou.name AS covers_name, ou.type AS covers_type
+           FROM survey_contacts c
+           LEFT JOIN org_units ou ON ou.id = c.org_unit_id
+          WHERE ${where}
+          ORDER BY c.side, ou.name NULLS FIRST, c.name`, values)).rows;
+      return { data: rows };
+    });
+
+  app.post('/api/v1/survey/projects/:id/contacts',
+    { preHandler: guard('survey.manage') }, async (req, reply) => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(surveyContactSchema, req.body);
+      const data = await mutate(pool, req, 'survey.contact.create', 'survey_contact',
+        async db => {
+          await projectOr404(db, u.orgId, id, u);
+          if (input.org_unit_id) await inOrg(db, 'org_units', input.org_unit_id, u.orgId);
+          return (await db.query(
+            `INSERT INTO survey_contacts(org_id, survey_project_id, side, name,
+               designation, phone, email, org_unit_id, notes, created_by, updated_by)
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10) RETURNING *`,
+            [u.orgId, id, input.side, input.name, input.designation, input.phone,
+              input.email ?? null, input.org_unit_id ?? null, input.notes ?? null,
+              u.id])).rows[0];
+        });
+      reply.code(201);
+      return { data };
+    });
+
+  app.patch('/api/v1/survey/contacts/:id', { preHandler: guard('survey.manage') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(surveyContactPatchSchema, req.body);
+      return {
+        data: await mutate(pool, req, 'survey.contact.update', 'survey_contact', async db => {
+          const row = await inOrg(db, 'survey_contacts', id, u.orgId, true);
+          version(req, row as { version: number });
+          const sets: string[] = [];
+          const values: unknown[] = [id];
+          for (const [col, val] of Object.entries({
+            side: input.side, name: input.name, designation: input.designation,
+            phone: input.phone, email: input.email, org_unit_id: input.org_unit_id,
+            notes: input.notes, active: input.active,
+          })) {
+            if (val === undefined) continue;
+            values.push(val);
+            sets.push(`${col} = $${values.length}`);
+          }
+          if (!sets.length) return row;
+          values.push(u.id);
+          return (await db.query(
+            `UPDATE survey_contacts SET ${sets.join(', ')},
+                    version = version + 1, updated_at = now(),
+                    updated_by = $${values.length}
+              WHERE id = $1 RETURNING *`, values)).rows[0];
+        }),
+      };
+    });
+
+  /* ======================================================== §073 asking */
+
+  /**
+   * Raise a question, a clarification or a concern on what the dashboard says.
+   *
+   * Open to anybody who may look, the department included. They hold nothing
+   * but the dashboard and are the most likely people in the programme to have
+   * a question about a figure on it — and the ones with no other way to put
+   * it than a telephone call nobody writes down.
+   *
+   * The village's position is captured with the question. "Why is this still
+   * at GT QC" stops making sense the moment the village moves.
+   */
+  app.post('/api/v1/survey/projects/:id/queries',
+    { preHandler: guard('survey.query') }, async (req, reply) => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(surveyQuerySchema, req.body);
+      const data = await mutate(pool, req, 'survey.query.raise', 'survey_query',
+        async db => {
+          const scoped = !u.permissions.includes('survey.read');
+          if (scoped) await inOrg(db, 'survey_projects', id, u.orgId);
+          else await projectOr404(db, u.orgId, id, u);
+
+          let position = input.position_key ?? null;
+          if (input.survey_village_id) {
+            // Checked against the programme, so a question cannot be filed
+            // against a village in somebody else's contract.
+            const village = (await db.query(
+              `SELECT id FROM survey_villages
+                WHERE id = $1 AND org_id = $2 AND survey_project_id = $3`,
+              [input.survey_village_id, u.orgId, id])).rows[0];
+            if (!village) {
+              fail('NOT_FOUND', 'That village is not in this programme.', 404);
+            }
+            if (!position) {
+              position = villagePosition(await stageStatesOf(db, input.survey_village_id)).key;
+            }
+          }
+
+          const row = (await db.query(
+            `INSERT INTO survey_queries(org_id, survey_project_id, survey_village_id,
+               kind, subject, body, position_key, raised_by)
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+            [u.orgId, id, input.survey_village_id ?? null, input.kind,
+              input.subject, input.body, position, u.id])).rows[0];
+
+          /*
+           * Told to the people who can answer, now, rather than found later.
+           *
+           * A question that waits for somebody to open a screen is a question
+           * answered next week. The event key is the query itself, so the
+           * unique index keeps it to one notice per person however many times
+           * anything re-runs.
+           */
+          const answerers = (await db.query(
+            `SELECT DISTINCT u2.id FROM users u2
+               JOIN user_roles ur ON ur.user_id = u2.id
+               JOIN role_permissions rp ON rp.role_id = ur.role_id
+              WHERE u2.org_id = $1 AND u2.auth_status = 'ACTIVE'
+                AND rp.permission_code = 'survey.answer'`, [u.orgId])).rows;
+          for (const a of answerers) {
+            await db.query(
+              `INSERT INTO notifications
+                 (org_id, recipient_id, type, title, body, entity_type, entity_id, event_key)
+               VALUES ($1,$2,'SURVEY_QUERY',$3,$4,'survey_query',$5,$6)
+               ON CONFLICT DO NOTHING`,
+              [u.orgId, a.id,
+                `${input.kind === 'CONCERN' ? 'Concern' : 'Question'} raised: ${input.subject}`,
+                input.body.slice(0, 500), row.id, `survey_query:${row.id}`]);
+          }
+          return row;
+        });
+      reply.code(201);
+      return { data };
+    });
+
+  app.get('/api/v1/survey/projects/:id/queries',
+    { preHandler: guard('survey.query') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const q = (req.query ?? {}) as Record<string, string | undefined>;
+      const scoped = !u.permissions.includes('survey.read');
+      if (scoped) await inOrg(pool, 'survey_projects', id, u.orgId);
+      else await projectOr404(pool, u.orgId, id, u);
+
+      const values: unknown[] = [u.orgId, id];
+      let where = 'q.org_id = $1 AND q.survey_project_id = $2';
+      const status = String(q.status ?? '').trim().toUpperCase();
+      if (status) { values.push(status); where += ` AND q.status = $${values.length}`; }
+      if (q.village_id) {
+        values.push(q.village_id);
+        where += ` AND q.survey_village_id = $${values.length}`;
+      }
+      /*
+       * Somebody who can only raise questions sees their own.
+       *
+       * An official reading the dashboard should find their question and its
+       * answer; they have no business reading what another district asked.
+       */
+      if (scoped) { values.push(u.id); where += ` AND q.raised_by = $${values.length}`; }
+
+      const rows = (await pool.query(
+        `SELECT q.*, ou.name AS village_name,
+                COALESCE(NULLIF(btrim(concat_ws(' ', ra.first_name, ra.last_name)), ''),
+                         rb.username) AS raised_by_name,
+                COALESCE(NULLIF(btrim(concat_ws(' ', aa.first_name, aa.last_name)), ''),
+                         ab.username) AS answered_by_name
+           FROM survey_queries q
+           LEFT JOIN survey_villages sv ON sv.id = q.survey_village_id
+           LEFT JOIN org_units ou ON ou.id = sv.village_id
+           LEFT JOIN users rb ON rb.id = q.raised_by
+           LEFT JOIN employees ra ON ra.id = rb.employee_id
+           LEFT JOIN users ab ON ab.id = q.answered_by
+           LEFT JOIN employees aa ON aa.id = ab.employee_id
+          WHERE ${where}
+          ORDER BY q.status = 'OPEN' DESC, q.raised_at DESC
+          LIMIT 300`, values)).rows;
+      return {
+        data: rows.map(r => ({
+          ...r,
+          position_label: r.position_key ? LADDER_LABELS[String(r.position_key)] ?? null : null,
+        })),
+      };
+    });
+
+  app.post('/api/v1/survey/queries/:id/answer',
+    { preHandler: guard('survey.answer') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(surveyAnswerSchema, req.body);
+      return {
+        data: await mutate(pool, req, 'survey.query.answer', 'survey_query', async db => {
+          // Locked and checked on status rather than gated on If-Match.
+          // Two people answering at once is a real race, and "somebody has
+          // already answered this" is a better thing to tell the loser than
+          // "the record changed" — it says what happened and what to do.
+          const row = await inOrg(db, 'survey_queries', id, u.orgId, true);
+          if (row.status !== 'OPEN') {
+            fail('QUERY_NOT_OPEN',
+              'That question has already been dealt with. Raise a new one rather than '
+              + 'overwriting the answer somebody gave.', 409);
+          }
+          // Closing without answering is a real outcome — asked, then
+          // overtaken by events — and it is not the same as an answer.
+          const status = input.close_without_answer ? 'CLOSED' : 'ANSWERED';
+          const answered = (await db.query(
+            `UPDATE survey_queries
+                SET status = $2, answer = $3, answered_by = $4, answered_at = now(),
+                    version = version + 1
+              WHERE id = $1 RETURNING *`,
+            [id, status, input.answer, u.id])).rows[0];
+
+          // Told back to whoever asked, so an answer is not something they
+          // have to go looking for.
+          await db.query(
+            `INSERT INTO notifications
+               (org_id, recipient_id, type, title, body, entity_type, entity_id, event_key)
+             VALUES ($1,$2,'SURVEY_QUERY',$3,$4,'survey_query',$5,$6)
+             ON CONFLICT DO NOTHING`,
+            [u.orgId, row.raised_by, `Answered: ${row.subject}`,
+              input.answer.slice(0, 500), id, `survey_query_answer:${id}`]);
+          return answered;
+        }),
+      };
+    });
+
+  /* ======================================================== §073 alerts */
+
+  /** The alert kinds a subscription may choose between. */
+  app.get('/api/v1/survey/alert-kinds', { preHandler: guard('survey.read') },
+    async () => ({ data: ALERT_KINDS }));
+
+  app.get('/api/v1/survey/alert-subscriptions',
+    { preHandler: guard('survey.manage') }, async req => {
+      const u = actor(req);
+      const q = (req.query ?? {}) as Record<string, string | undefined>;
+      const values: unknown[] = [u.orgId];
+      let where = 's.org_id = $1';
+      if (q.project_id) {
+        values.push(q.project_id);
+        where += ` AND (s.survey_project_id = $${values.length}`
+          + ' OR s.survey_project_id IS NULL)';
+      }
+      const rows = (await pool.query(
+        `SELECT s.*, p.name AS project_name,
+                (s.active AND s.active_until >= CURRENT_DATE) AS live
+           FROM survey_alert_subscriptions s
+           LEFT JOIN survey_projects p ON p.id = s.survey_project_id
+          WHERE ${where}
+          ORDER BY live DESC, s.email`, values)).rows;
+      return { data: rows.map(r => ({ ...r, active_until: iso(r.active_until) })) };
+    });
+
+  app.post('/api/v1/survey/alert-subscriptions',
+    { preHandler: guard('survey.manage') }, async (req, reply) => {
+      const u = actor(req);
+      const input = parse(alertSubscriptionSchema, req.body);
+      if (input.active_until < today()) {
+        fail('VALIDATION_ERROR',
+          `An alert that stops on ${input.active_until} has already stopped. `
+          + 'Pick a date in the future.', 422);
+      }
+      const data = await mutate(pool, req, 'survey.alert.subscribe',
+        'survey_alert_subscription', async db => {
+          if (input.survey_project_id) {
+            await projectOr404(db, u.orgId, input.survey_project_id, u);
+          }
+          return (await db.query(
+            `INSERT INTO survey_alert_subscriptions(org_id, survey_project_id, email,
+               label, kinds, active_until, created_by, updated_by)
+             VALUES($1,$2,$3,$4,$5,$6::date,$7,$7)
+             ON CONFLICT (org_id, survey_project_id, email) DO UPDATE
+               SET kinds = EXCLUDED.kinds, label = EXCLUDED.label,
+                   active_until = EXCLUDED.active_until, active = true,
+                   version = survey_alert_subscriptions.version + 1,
+                   updated_at = now(), updated_by = EXCLUDED.updated_by
+             RETURNING *`,
+            [u.orgId, input.survey_project_id ?? null, input.email.toLowerCase(),
+              input.label ?? null, input.kinds ?? [], input.active_until, u.id])).rows[0];
+        });
+      reply.code(201);
+      return { data: { ...data, active_until: iso(data.active_until) } };
+    });
+
+  app.patch('/api/v1/survey/alert-subscriptions/:id',
+    { preHandler: guard('survey.manage') }, async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      const input = parse(alertSubscriptionPatchSchema, req.body);
+      return {
+        data: await mutate(pool, req, 'survey.alert.update',
+          'survey_alert_subscription', async db => {
+            const row = await inOrg(db, 'survey_alert_subscriptions', id, u.orgId, true);
+            version(req, row as { version: number });
+            const sets: string[] = [];
+            const values: unknown[] = [id];
+            for (const [col, val] of Object.entries({
+              email: input.email?.toLowerCase(), label: input.label,
+              kinds: input.kinds, active_until: input.active_until, active: input.active,
+            })) {
+              if (val === undefined) continue;
+              values.push(val);
+              sets.push(`${col} = $${values.length}`);
+            }
+            if (!sets.length) return { ...row, active_until: iso(row.active_until) };
+            values.push(u.id);
+            const updated = (await db.query(
+              `UPDATE survey_alert_subscriptions SET ${sets.join(', ')},
+                      version = version + 1, updated_at = now(),
+                      updated_by = $${values.length}
+                WHERE id = $1 RETURNING *`, values)).rows[0];
+            return { ...updated, active_until: iso(updated.active_until) };
+          }),
       };
     });
 

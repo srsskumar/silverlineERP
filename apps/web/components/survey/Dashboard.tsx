@@ -23,6 +23,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from '@/components/ui/Table';
 import { Stat } from '@/components/finance/Primitives';
 import { ExportMenu } from '@/components/ui/ExportMenu';
+import {
+  SurveyAlertSettings, SurveyContacts, SurveyQueries,
+} from '@/components/survey/DashboardActions';
 
 interface Rung { key: string; label: string; note?: string | null }
 interface Unit { id: string; name: string }
@@ -97,6 +100,7 @@ interface DashboardData {
   filter: {
     district: string | null; mandal: string | null; position: string | null;
     reason: string | null; reason_source: string | null;
+    village_id?: string | null;
     villages: number; of_villages: number;
   };
   options: { districts: Unit[]; mandals: Unit[] };
@@ -256,12 +260,25 @@ function RollUp({
   );
 }
 
+/*
+ * A reading screen, and nothing else (§073).
+ *
+ * Nothing here writes to a village, a stage or a claim: the dashboard is what
+ * somebody is shown, including people outside this company, and a screen that
+ * reports and edits in the same breath is one where a filter and a change look
+ * alike. The only things it lets anybody do are ask a question, look up a
+ * telephone number, and — if they run the programme — say where the alerts go.
+ */
 export function SurveyDashboard({
-  projectId, canDrill, onOpenVillage,
+  projectId, canDrill, canAnswer = false, canManage = false, onOpenVillage,
 }: {
   projectId: string;
   /** Whether this reader may leave the dashboard for the detailed screens. */
   canDrill: boolean;
+  /** Team leads, project managers and administrators answer what is raised. */
+  canAnswer?: boolean;
+  /** Only they decide where alerts go. */
+  canManage?: boolean;
   onOpenVillage?: (villageId: string) => void;
 }) {
   const [from, setFrom] = React.useState('');
@@ -876,6 +893,19 @@ export function SurveyDashboard({
           onSelect={(row) => setMandal(row.id!)}
         />
       ) : null}
+
+      {/* ------------------------------------------ asking, reaching, alerting */}
+      <SurveyQueries
+        projectId={projectId}
+        villageId={d.filter.village_id ?? null}
+        villageName={null}
+        position={position
+          ? ladder.find((r: Rung) => r.key === position)?.label ?? null
+          : null}
+        canAnswer={canAnswer}
+      />
+      <SurveyContacts projectId={projectId} />
+      {canManage ? <SurveyAlertSettings projectId={projectId} /> : null}
 
       {/* ------------------------------------------------------- the villages */}
       <Card className="p-0">

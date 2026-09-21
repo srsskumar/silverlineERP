@@ -20,6 +20,7 @@ export const VOLATILE_TABLES = `
   role_scope_policies,
   password_reset_requests,
   task_collaborators,
+  survey_alert_sent, survey_alert_subscriptions, survey_queries, survey_contacts,
   survey_boq_links, survey_village_billing, survey_village_finals, survey_village_gcps,
   survey_entry_rovers, survey_entry_values, survey_stage_history,
   survey_project_employees, survey_entries, survey_targets, survey_crew,

@@ -344,6 +344,8 @@ export default function SurveyPage() {
              * offering no link.
              */
             canDrill={canRead}
+            canAnswer={hasPermission(perms, 'survey.answer')}
+            canManage={canManage}
             onOpenVillage={(id) => { setOpenVillage(id); setTab('villages'); }}
           />
         ) : null}

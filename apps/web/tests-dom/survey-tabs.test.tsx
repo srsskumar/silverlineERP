@@ -177,6 +177,21 @@ const ROUTES: Array<[string, unknown]> = [
   // Before /progress: both match a path containing "/progress"? No — but the
   // dashboard path must be matched ahead of the generic /villages fragment.
   ['/dashboard', DASHBOARD],
+  ['/contacts', [
+    { id: 'c1', side: 'GOVT', name: 'K. Srinivas', designation: 'Tahsildar',
+      phone: '+91 98480 11111', email: null, covers_name: 'Koyyuru', active: true },
+    { id: 'c2', side: 'SILVERLINE', name: 'Ravi Kumar', designation: 'Project Manager',
+      phone: '+91 98480 22222', email: 'ravi@silverline.example', covers_name: null,
+      active: true },
+  ]],
+  ['/queries', [
+    { id: 'q1', kind: 'CONCERN', subject: 'Why is Adakula still at GT QC?',
+      body: 'It has been four months.', status: 'OPEN', village_name: 'Adakula',
+      position_label: 'GT QC completed', raised_by_name: 'District Collector',
+      raised_at: '2026-09-18T10:00:00Z', answer: null, answered_by_name: null,
+      version: 1 },
+  ]],
+  ['/alert-subscriptions', []],
   ['/progress', PROGRESS],
   ['/report', REPORT],
   ['/villages', [VILLAGE, {
@@ -534,6 +549,48 @@ describe('the land survey screen', () => {
     within(bars).getByRole('button', { name: /GT completed/ }).click();
     await waitFor(() =>
       expect(screen.getByText(/none of it can be billed/)).toBeInTheDocument());
+  });
+
+  it('offers a way to ask, and never a way to edit', async () => {
+    /*
+     * The dashboard is what somebody outside this company is shown. A screen
+     * that reports and edits in the same breath is one where a filter and a
+     * change look alike — so the only thing it lets anybody do is respond.
+     */
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() =>
+      expect(screen.getByText('Questions and concerns')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Raise a question' })).toBeInTheDocument();
+    // What has been asked already, with the status it was asked against.
+    // Waited for, not asserted straight away: the list is its own request and
+    // the card's heading renders before it lands.
+    await waitFor(() =>
+      expect(screen.getByText('Why is Adakula still at GT QC?')).toBeInTheDocument());
+    expect(screen.getByText('Waiting for an answer')).toBeInTheDocument();
+  });
+
+  it('shows who to ring on both sides, with a dialable number', async () => {
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() => expect(screen.getByText('Revenue department')).toBeInTheDocument());
+    expect(screen.getByText('Silverline')).toBeInTheDocument();
+    expect(screen.getByText('K. Srinivas')).toBeInTheDocument();
+    expect(screen.getByText('Tahsildar')).toBeInTheDocument();
+    // A number on a screen somebody reads on a phone should dial.
+    const tel = screen.getByText('+91 98480 11111');
+    expect(tel.getAttribute('href')).toBe('tel:+919848011111');
+  });
+
+  it('lets whoever runs the programme say where alerts go, and until when', async () => {
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() => expect(screen.getByText('Alerts by email')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/every alert goes/)).toBeInTheDocument());
+    // Nothing ticked is every alert, said out loud — an empty list otherwise
+    // reads as "none" and somebody signs up for silence.
+    expect(screen.getByText(/every alert goes/)).toBeInTheDocument();
+    expect(screen.getByText(/Delivery needs a mail server/)).toBeInTheDocument();
   });
 
   it('opens on the dashboard', async () => {

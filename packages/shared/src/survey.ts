@@ -1218,6 +1218,16 @@ export const SURVEY_PERMISSIONS = [
    * them what the work cost us.
    */
   'survey.dashboard',
+  /*
+   * Asking, and answering (§073).
+   *
+   * Anybody who may look may ask — the department included, since they hold
+   * nothing but the dashboard and are the most likely people to have a
+   * question about a figure on it. Answering is separate and narrower: it
+   * belongs to the people who can actually answer.
+   */
+  'survey.query',
+  'survey.answer',
 ] as const;
 
 export const SURVEY_ROLE_GRANTS: Record<RoleCode, string[]> = {
@@ -1227,21 +1237,22 @@ export const SURVEY_ROLE_GRANTS: Record<RoleCode, string[]> = {
   // is the first role the specification lets see a forecast.
   PROJECT_MANAGER: ['survey.read', 'survey.enter', 'survey.manage', 'survey.target',
     'survey.forecast', 'survey.assign', 'survey.qc', 'survey.vectorize', 'survey.certify',
-    'survey.dashboard'],
+    'survey.dashboard', 'survey.query', 'survey.answer'],
   // Records what the crew did and puts people on villages. Deliberately
   // cannot set the target its own completion is measured against, and does
   // not see the forecast.
-  TEAM_LEAD: ['survey.read', 'survey.enter', 'survey.assign', 'survey.certify', 'survey.dashboard'],
-  EMPLOYEE: ['survey.read', 'survey.enter', 'survey.dashboard'],
-  AUDITOR: ['survey.read', 'survey.forecast', 'survey.dashboard'],
-  HR_MANAGER: ['survey.read', 'survey.dashboard'],
+  TEAM_LEAD: ['survey.read', 'survey.enter', 'survey.assign', 'survey.certify',
+    'survey.dashboard', 'survey.query', 'survey.answer'],
+  EMPLOYEE: ['survey.read', 'survey.enter', 'survey.dashboard', 'survey.query'],
+  AUDITOR: ['survey.read', 'survey.forecast', 'survey.dashboard', 'survey.query'],
+  HR_MANAGER: ['survey.read', 'survey.dashboard', 'survey.query'],
   PAYROLL_OFFICER: [],
-  INVENTORY_MANAGER: ['survey.read', 'survey.dashboard'],
-  BID_TENDER_MANAGER: ['survey.read', 'survey.dashboard'],
+  INVENTORY_MANAGER: ['survey.read', 'survey.dashboard', 'survey.query'],
+  BID_TENDER_MANAGER: ['survey.read', 'survey.dashboard', 'survey.query'],
   // The whole of the observer's access, in this module and in every other.
-  GOVT_OBSERVER: ['survey.dashboard'],
-  SALES_BD_EXECUTIVE: ['survey.read', 'survey.dashboard'],
-  CLIENT_VIEWER: ['survey.read', 'survey.dashboard'],
+  GOVT_OBSERVER: ['survey.dashboard', 'survey.query'],
+  SALES_BD_EXECUTIVE: ['survey.read', 'survey.dashboard', 'survey.query'],
+  CLIENT_VIEWER: ['survey.read', 'survey.dashboard', 'survey.query'],
 };
 
 /* ------------------------------------------------- tasks drive the state */
@@ -2794,4 +2805,150 @@ export function extentVaries(
 ): boolean {
   const v = extentVariancePct(plannedAc, actualAc);
   return v !== null && Math.abs(v) >= Math.abs(thresholdPct);
+}
+
+/* ============================================================ §073 asking,
+ * reaching, and being told
+ * ========================================================================= */
+
+/* ------------------------------------------------------------- contacts */
+
+export const CONTACT_SIDES = ['GOVT', 'SILVERLINE'] as const;
+export type ContactSide = (typeof CONTACT_SIDES)[number];
+
+export const CONTACT_SIDE_LABELS: Record<ContactSide, string> = {
+  GOVT: 'Revenue department',
+  SILVERLINE: 'Silverline',
+};
+
+/**
+ * Somebody to ring, on one side or the other.
+ *
+ * A phone number rather than an employee id. The department's tahsildar is
+ * not in our register and never will be, and the number a crew actually
+ * rings at eight in the morning is rarely the one in anybody's HR record.
+ */
+export const surveyContactSchema = z.object({
+  side: z.enum(CONTACT_SIDES),
+  name: z.string().trim().min(2, 'A contact needs a name').max(160),
+  designation: z.string().trim().min(2,
+    'Say what they are — "Tahsildar", "Deputy Surveyor". A name with no role '
+    + 'is a number nobody knows when to use').max(160),
+  phone: z.string().trim()
+    // Deliberately loose: a department office number, an extension and a
+    // mobile are all legitimate, and a pattern that refuses one of them is a
+    // pattern somebody works around by typing it in the notes.
+    .min(6, 'That is too short to be a telephone number')
+    .max(32, 'That is longer than any telephone number'),
+  email: z.string().trim().email('That is not an email address').max(255)
+    .nullable().optional(),
+  /** A district or mandal, when the contact covers part of the programme. */
+  org_unit_id: z.string().uuid().nullable().optional(),
+  notes: z.string().trim().max(2000).nullable().optional(),
+  active: z.boolean().optional(),
+}).strict();
+
+export const surveyContactPatchSchema = surveyContactSchema.partial();
+
+/* --------------------------------------------------------------- asking */
+
+export const QUERY_KINDS = ['QUESTION', 'CLARIFICATION', 'CONCERN'] as const;
+export type QueryKind = (typeof QUERY_KINDS)[number];
+
+export const QUERY_KIND_LABELS: Record<QueryKind, string> = {
+  QUESTION: 'Question',
+  CLARIFICATION: 'Clarification',
+  CONCERN: 'Concern',
+};
+
+export const QUERY_STATUSES = ['OPEN', 'ANSWERED', 'CLOSED'] as const;
+export type QueryStatus = (typeof QUERY_STATUSES)[number];
+
+export const QUERY_STATUS_LABELS: Record<QueryStatus, string> = {
+  OPEN: 'Waiting for an answer',
+  ANSWERED: 'Answered',
+  CLOSED: 'Closed',
+};
+
+/**
+ * A question about what the dashboard says.
+ *
+ * The position is captured with it because "why is this still at GT QC"
+ * stops making sense the moment the village moves, and a question whose
+ * context cannot be reconstructed is one nobody answers.
+ */
+export const surveyQuerySchema = z.object({
+  survey_village_id: z.string().uuid().nullable().optional(),
+  kind: z.enum(QUERY_KINDS),
+  subject: z.string().trim().min(4, 'Give it a subject somebody can scan').max(200),
+  body: z.string().trim().min(10,
+    'Say enough that somebody can answer without asking what you meant').max(4000),
+  position_key: z.string().trim().max(40).nullable().optional(),
+}).strict();
+
+export const surveyAnswerSchema = z.object({
+  answer: z.string().trim().min(2, 'An answer needs words').max(4000),
+  /* Closing without answering is a real outcome — asked and overtaken by
+     events — and it is not the same as answering. */
+  close_without_answer: z.boolean().optional(),
+}).strict();
+
+/* ---------------------------------------------------------------- alerts */
+
+/**
+ * The alert kinds a subscriber can choose between.
+ *
+ * The same four the in-app alerts already raise, plus the two this section
+ * adds. Named here so the subscription screen offers exactly what the job
+ * can send rather than a list somebody maintains by hand.
+ */
+export const ALERT_KINDS = [
+  { code: 'PAST_EXPECTED_COMPLETION', label: 'A village past the date it was due' },
+  { code: 'STAGE_OVERDUE', label: 'A stage sitting longer than the programme allows' },
+  { code: 'NO_PROGRESS_RECORDED', label: 'A village with crew on it and nothing filed' },
+  { code: 'ROVERS_IDLE', label: 'Instruments allocated and standing idle' },
+  { code: 'QUERY_RAISED', label: 'Somebody raised a question or a concern' },
+  { code: 'GT_UNEXPLAINED', label: 'Ground truthing past its date with no reason given' },
+] as const;
+
+export const ALERT_KIND_CODES = ALERT_KINDS.map(k => k.code);
+export type AlertKind = (typeof ALERT_KINDS)[number]['code'];
+
+export function alertKindLabel(code: string): string {
+  return ALERT_KINDS.find(k => k.code === code)?.label ?? code;
+}
+
+/**
+ * Where alerts go, which ones, and until when.
+ *
+ * `active_until` is required. A subscription with no end outlives the person
+ * who asked for it and becomes mail nobody can explain or stop — and the one
+ * thing worse than an alert nobody reads is an alert nobody can turn off.
+ */
+export const alertSubscriptionSchema = z.object({
+  email: z.string().trim().email('That is not an email address').max(255),
+  label: z.string().trim().max(160).nullable().optional(),
+  /** Empty means every kind, so nobody goes silent when a kind is added. */
+  kinds: z.array(z.enum(ALERT_KIND_CODES as unknown as [string, ...string[]]))
+    .max(ALERT_KINDS.length).optional(),
+  active_until: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD'),
+  /** Null follows every programme in the organisation. */
+  survey_project_id: z.string().uuid().nullable().optional(),
+  active: z.boolean().optional(),
+}).strict();
+
+export const alertSubscriptionPatchSchema = alertSubscriptionSchema.partial();
+
+/** Whether a subscription should receive a given alert today. */
+export function alertWanted(
+  sub: { kinds?: string[] | null; active?: boolean; active_until?: string | null },
+  kind: string,
+  today: string,
+): boolean {
+  if (sub.active === false) return false;
+  if (sub.active_until && sub.active_until < today) return false;
+  const kinds = sub.kinds ?? [];
+  // Empty is every kind: a subscriber must not go quiet because somebody
+  // added an alert type after they signed up.
+  return kinds.length === 0 || kinds.includes(kind);
 }

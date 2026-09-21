@@ -35,9 +35,20 @@ interface Finding {
   event_key: string;
   title: string;
   body: string;
+  /**
+   * Which alert this is, so a subscriber can choose between them (§073).
+   *
+   * The in-app notice never needed it — everybody with survey.manage gets
+   * everything — but an email that cannot be narrowed is an email that gets
+   * a rule in Outlook, and then none of them are read.
+   */
+  kind: string;
 }
 
-export async function runSurveyAlerts(pool: Pool): Promise<{ alerts: number }> {
+export async function runSurveyAlerts(
+  pool: Pool,
+): Promise<{ alerts: number; mailed: number }> {
+  let mailed = 0;
   const findings: Finding[] = [];
 
   // 1. Past the date somebody committed to.
@@ -66,7 +77,7 @@ export async function runSurveyAlerts(pool: Pool): Promise<{ alerts: number }> {
            AND COALESCE(vs.state, 'TO_DO') <> 'COMPLETED')
      ORDER BY sv.expected_completion_on LIMIT 100`)).rows.map(r => ({
     org_id: r.org_id, village_id: r.village_id, project_id: r.project_id,
-    event_key: r.event_key,
+    event_key: r.event_key, kind: 'PAST_EXPECTED_COMPLETION',
     title: `${r.village_name} is past its completion date`,
     body: `It was due on ${r.due instanceof Date ? r.due.toISOString().slice(0, 10) : r.due}`
       + `, ${r.days_over} day${Number(r.days_over) === 1 ? '' : 's'} ago, and is not finished.`,
@@ -93,7 +104,7 @@ export async function runSurveyAlerts(pool: Pool): Promise<{ alerts: number }> {
        AND (CURRENT_DATE - vs.started_on) > p.stage_sla_days
      ORDER BY vs.started_on LIMIT 100`)).rows.map(r => ({
     org_id: r.org_id, village_id: r.village_id, project_id: r.project_id,
-    event_key: r.event_key,
+    event_key: r.event_key, kind: 'STAGE_OVERDUE',
     title: `${r.stage_label} has stalled at ${r.village_name}`,
     body: `It has been in progress for ${r.days_in_stage} days; this programme allows `
       + `${r.stage_sla_days}.`,
@@ -123,7 +134,7 @@ export async function runSurveyAlerts(pool: Pool): Promise<{ alerts: number }> {
              CURRENT_DATE - ($1::int + 1)) < CURRENT_DATE - $1::int
      LIMIT 100`, [SILENT_DAYS])).rows.map(r => ({
     org_id: r.org_id, village_id: r.village_id, project_id: r.project_id,
-    event_key: r.event_key,
+    event_key: r.event_key, kind: 'NO_PROGRESS_RECORDED',
     title: `Nothing recorded at ${r.village_name}`,
     body: r.last_entry
       ? `Crew are assigned but the last return was on `
@@ -152,7 +163,7 @@ export async function runSurveyAlerts(pool: Pool): Promise<{ alerts: number }> {
      GROUP BY sv.org_id, sv.id, sv.survey_project_id, ou.name, e.entry_date
      LIMIT 100`)).rows.map(r => ({
     org_id: r.org_id, village_id: r.village_id, project_id: r.project_id,
-    event_key: r.event_key,
+    event_key: r.event_key, kind: 'ROVERS_IDLE',
     title: `${r.idle_count} rover${Number(r.idle_count) === 1 ? '' : 's'} idle at ${r.village_name}`,
     body: `Recorded idle on the return for `
       + `${r.entry_date instanceof Date ? r.entry_date.toISOString().slice(0, 10) : r.entry_date}.`,
@@ -198,6 +209,35 @@ export async function runSurveyAlerts(pool: Pool): Promise<{ alerts: number }> {
           [f.org_id, r.id, f.title, f.body, f.village_id, f.event_key]);
         sent += done.rowCount ?? 0;
       }
+
+      /*
+       * And to the addresses that asked to be told (§073).
+       *
+       * An address rather than a user, because the people who most need this
+       * are not users: a district office inbox, a joint collector, a list
+       * somebody maintains in Outlook. Queued rather than sent from here —
+       * the job's business is finding what is wrong, and a mail server
+       * having a bad afternoon must not stop it.
+       *
+       * The same idempotency as the in-app notice: one row per subscription
+       * per occasion, and the unique index does the work. A condition
+       * persisting is not news.
+       */
+      const subscribers = (await db.query(
+        `SELECT id, kinds FROM survey_alert_subscriptions
+          WHERE org_id = $1 AND active AND active_until >= CURRENT_DATE
+            AND (survey_project_id IS NULL OR survey_project_id = $2)
+            -- Empty means every kind, so nobody goes quiet when a new one is
+            -- added after they signed up.
+            AND (cardinality(kinds) = 0 OR $3 = ANY(kinds))`,
+        [f.org_id, f.project_id, f.kind])).rows;
+      for (const sub of subscribers) {
+        const queued = await db.query(
+          `INSERT INTO survey_alert_sent(org_id, subscription_id, event_key, subject, body)
+           VALUES ($1,$2,$3,$4,$5) ON CONFLICT (subscription_id, event_key) DO NOTHING`,
+          [f.org_id, sub.id, f.event_key, f.title, f.body]);
+        mailed += queued.rowCount ?? 0;
+      }
       await db.query('COMMIT');
     } catch (error) {
       await db.query('ROLLBACK');
@@ -208,5 +248,5 @@ export async function runSurveyAlerts(pool: Pool): Promise<{ alerts: number }> {
       db.release();
     }
   }
-  return { alerts: sent };
+  return { alerts: sent, mailed };
 }
