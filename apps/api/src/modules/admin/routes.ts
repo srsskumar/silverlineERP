@@ -4,10 +4,24 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { buildAuthenticate,requirePermission } from '../../common/auth.js';
 import { actor,parse,page,mutate,inOrg,fail } from '../../common/domain.js';
-import { isIndianMobile,formatIndianMobile,MFA_POLICIES,mfaFloorRole,GST_STATE_CODES } from '@silverline/shared';
+import { isIndianMobile,formatIndianMobile,MFA_POLICIES,mfaFloorRole,GST_STATE_CODES,canManageAccount } from '@silverline/shared';
 
 export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jwtSecret:string}) {
  const {pool}=opts,auth=buildAuthenticate(opts),guard=(p:string)=>requirePermission(auth,p);
+ /*
+  * Whether the caller may administer this account at all (AUTH-1).
+  *
+  * users.manage says somebody may look after accounts, not which ones. A
+  * password set here is a password the caller knows, so resetting one on an
+  * account that can do more than you is signing in as somebody bigger than
+  * you. Read inside the caller's transaction, after the row lock, so a role
+  * granted a moment ago is counted.
+  */
+ async function mayManage(db:import('pg').PoolClient,req:import('fastify').FastifyRequest,id:string){
+  const u=actor(req),held=(await db.query("SELECT COALESCE(array_agg(DISTINCT r.code) FILTER (WHERE r.code IS NOT NULL),'{}') AS roles,COALESCE(array_agg(DISTINCT rp.permission_code) FILTER (WHERE rp.permission_code IS NOT NULL),'{}') AS permissions FROM user_roles ur JOIN roles r ON r.id=ur.role_id LEFT JOIN role_permissions rp ON rp.role_id=ur.role_id WHERE ur.user_id=$1",[id])).rows[0] as {roles:string[];permissions:string[]};
+  const verdict=canManageAccount({roles:u.roles,permissions:u.permissions},held);
+  if(!verdict.ok)fail('FORBIDDEN',verdict.reason??'You cannot change that account',403);
+ }
  async function keepAdministrator(db:import('pg').PoolClient,org:string){const admins=await db.query("SELECT u.id FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN role_permissions rp ON rp.role_id=ur.role_id WHERE u.org_id=$1 AND u.auth_status='ACTIVE' AND ur.scope_type IS NULL AND ur.scope_id IS NULL AND rp.permission_code IN('users.manage','admin.configure') GROUP BY u.id HAVING count(DISTINCT rp.permission_code)=2 LIMIT 1",[org]);if(!admins.rowCount)fail('LAST_ADMIN','Keep at least one active organization administrator',409);}
 
  app.get('/api/v1/admin/users',{preHandler:guard('users.read')},async req=>{const {limit,offset}=page(req),rows=(await pool.query("SELECT u.id,u.username,u.email,u.phone,u.auth_status,u.employee_id,u.mfa_enabled,u.mfa_policy,u.must_change_password,u.password_set_at,u.last_login_at,COALESCE((SELECT json_agg(json_build_object('role_id',r.id,'code',r.code,'scope_type',ur.scope_type,'scope_id',ur.scope_id)) FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id),'[]') AS roles FROM users u WHERE org_id=$1 ORDER BY username LIMIT $2 OFFSET $3",[actor(req).orgId,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
@@ -43,7 +57,7 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
   if(i.phone&&!isIndianMobile(i.phone))fail('VALIDATION_ERROR','Enter a ten-digit Indian mobile number',422);
   const phone=i.phone===undefined?undefined:(i.phone===null?null:formatIndianMobile(i.phone));
   const hash=i.password?await bcrypt.hash(i.password,12):null;
-  return mutate(pool,req,'user.security_update','user',async db=>{await db.query('SELECT id FROM organizations WHERE id=$1 FOR UPDATE',[u.orgId]);await inOrg(db,'users',id,u.orgId,true);
+  return mutate(pool,req,'user.security_update','user',async db=>{await db.query('SELECT id FROM organizations WHERE id=$1 FOR UPDATE',[u.orgId]);await inOrg(db,'users',id,u.orgId,true);await mayManage(db,req,id);
    if(phone&&(await db.query('SELECT 1 FROM users WHERE org_id=$1 AND mobile_digits=$2 AND id<>$3',[u.orgId,phone.slice(3),id])).rowCount)fail('MOBILE_IN_USE','Another account already signs in with that mobile number',409);
    // A password set here is one the administrator knows, so asking the person
    // to replace it is worth offering -- but only when it is asked for. Left
@@ -109,6 +123,9 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
   if(id===u.id)fail('SELF_ROLE_CHANGE','Use another administrator to change your own permissions');
   return mutate(pool,req,'user.roles','user',async db=>{
    await db.query('SELECT id FROM organizations WHERE id=$1 FOR UPDATE',[u.orgId]);await inOrg(db,'users',id,u.orgId,true);
+   // The roles they hold now, not only the ones being handed out: stripping
+   // an administrator of theirs is as far beyond the caller as granting.
+   await mayManage(db,req,id);
    for(const r of i.roles){const role=await db.query('SELECT id,code FROM roles WHERE id=$1 AND (org_id IS NULL OR org_id=$2)',[r.role_id,u.orgId]);if(!role.rowCount)fail('NOT_FOUND','Role not found',404);if(role.rows[0].code==='CLIENT_VIEWER'&&r.scope_type!=='project')fail('INVALID_SCOPE','Client viewers require an explicit project scope');const grants=await db.query('SELECT permission_code FROM role_permissions WHERE role_id=$1',[r.role_id]);if(grants.rows.some(g=>!u.permissions.includes(g.permission_code)))fail('FORBIDDEN','Cannot grant permissions you do not hold',403);if(u.scopes.some(s=>s.scope_type)&&!u.scopes.some(s=>!s.scope_type)&&!u.scopes.some(s=>s.scope_type===r.scope_type&&s.scope_id===r.scope_id))fail('FORBIDDEN','Cannot grant a scope you do not hold',403);if(Boolean(r.scope_type)!==Boolean(r.scope_id))fail('INVALID_SCOPE','Scope type and record are required together');
     if(r.scope_id){const table=r.scope_type==='project'?'projects':r.scope_type==='team'?'employees':'org_units';const found=await db.query(`SELECT 1 FROM ${table} WHERE id=$1 AND org_id=$2`,[r.scope_id,u.orgId]);if(!found.rowCount)fail('INVALID_SCOPE','Scope record does not belong to this organization');}
    }

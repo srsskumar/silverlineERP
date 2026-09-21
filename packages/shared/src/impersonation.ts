@@ -79,21 +79,73 @@ export function canImpersonate(actor: Principal, subject: Principal): Impersonat
   if (actor.id === subject.id) {
     return { ok: false, reason: 'You are already yourself' };
   }
+  const beyond = accessBeyond(actor, subject);
   /*
    * Named separately from the subset rule even though the subset rule would
    * catch it, because this is the case somebody will actually hit and
    * "SUPER_ADMIN cannot be impersonated" is a better sentence to read than
    * a list of nineteen permissions you are missing.
    */
-  if (subject.roles.includes('SUPER_ADMIN') && !actor.roles.includes('SUPER_ADMIN')) {
+  if (beyond.superAdmin) {
     return { ok: false, reason: 'A super administrator cannot be viewed as by anybody else' };
   }
-  const held = new Set(actor.permissions);
-  const gained = subject.permissions.filter((p) => !held.has(p));
-  if (gained.length) {
+  if (beyond.gained.length) {
     return {
       ok: false,
-      reason: `That account can do things you cannot (${gained.slice(0, 3).join(', ')}${gained.length > 3 ? `, and ${gained.length - 3} more` : ''}), so viewing as them would give you access you do not have`,
+      reason: `That account can do things you cannot (${listGained(beyond.gained)}), so viewing as them would give you access you do not have`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * What `subject` can do that `actor` cannot.
+ *
+ * The one comparison behind every "may this person act on that account"
+ * question: viewing as somebody, and setting their password, switching them
+ * off or changing their roles. Each of those hands the actor, directly or
+ * one step later, whatever the subject holds -- so each has to ask whether
+ * the subject holds anything the actor does not.
+ */
+export function accessBeyond(
+  actor: Pick<Principal, 'roles' | 'permissions'>,
+  subject: Pick<Principal, 'roles' | 'permissions'>,
+): { superAdmin: boolean; gained: string[] } {
+  const held = new Set(actor.permissions);
+  return {
+    superAdmin: subject.roles.includes('SUPER_ADMIN') && !actor.roles.includes('SUPER_ADMIN'),
+    gained: [...new Set(subject.permissions)].filter((p) => !held.has(p)),
+  };
+}
+
+function listGained(gained: string[]): string {
+  return `${gained.slice(0, 3).join(', ')}${gained.length > 3 ? `, and ${gained.length - 3} more` : ''}`;
+}
+
+/**
+ * May `actor` administer `subject`'s account -- set its password, disable
+ * it, change its two-factor policy or its roles?
+ *
+ * Each of those is a way into the account: a password the actor has just
+ * set is a password the actor knows. So the rule is the one that governs
+ * viewing as somebody: the subject must hold nothing the actor does not,
+ * and a super administrator is nobody's business but another super
+ * administrator's. Without it, anybody holding users.manage -- which the HR
+ * manager role does -- could reset an administrator's password and sign in
+ * as them.
+ */
+export function canManageAccount(
+  actor: Pick<Principal, 'roles' | 'permissions'>,
+  subject: Pick<Principal, 'roles' | 'permissions'>,
+): ImpersonationVerdict {
+  const beyond = accessBeyond(actor, subject);
+  if (beyond.superAdmin) {
+    return { ok: false, reason: 'Only a super administrator can change a super administrator\'s account' };
+  }
+  if (beyond.gained.length) {
+    return {
+      ok: false,
+      reason: `That account can do things you cannot (${listGained(beyond.gained)}), so only somebody who holds at least as much can change it`,
     };
   }
   return { ok: true };
