@@ -3,7 +3,9 @@
  * Catalogue traceability report.
  *
  * Reads SILVERLINE_BUSINESS_TEST_CATALOGUE.md as the source of truth, then
- * scans every test file in the workspace for the catalogue IDs. A catalogue is
+ * scans every test file in the workspace for the catalogue IDs in the titles
+ * of tests that will run -- not in comments, not in skipped placeholders. A
+ * catalogue is
  * only useful if you can tell, mechanically, which of its rows are actually
  * executed — otherwise "we implemented the catalogue" is an unverifiable claim.
  *
@@ -18,6 +20,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runnableIds } from "./catalogue-ids.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("../", import.meta.url)));
 const CATALOGUE = join(ROOT, "SILVERLINE_BUSINESS_TEST_CATALOGUE.md");
@@ -76,13 +79,16 @@ function* walk(dir) {
 }
 
 function collectReferences() {
-  /** id → Set of repo-relative files naming it. */
+  /**
+   * id → Set of repo-relative files running a test titled with it.
+   *
+   * Only titles of tests that run count (see catalogue-ids.mjs). A mention
+   * in a comment or a skipped placeholder used to count as coverage.
+   */
   const found = new Map();
   for (const testRoot of TEST_ROOTS) {
     for (const file of walk(join(ROOT, testRoot))) {
-      const source = readFileSync(file, "utf8");
-      for (const match of source.matchAll(/\b((?:UT|E2E)-[A-Z0-9]+(?:-\d+)?)\b/g)) {
-        const id = match[1];
+      for (const id of runnableIds(readFileSync(file, "utf8"))) {
         if (!found.has(id)) found.set(id, new Set());
         found.get(id).add(relative(ROOT, file));
       }
