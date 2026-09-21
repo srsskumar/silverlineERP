@@ -13,7 +13,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 const stopViewAs = vi.fn(async () => undefined);
-const viewAs = vi.fn(async () => [] as string[]);
+const viewAs = vi.fn(async (_input: { user_id: string; reason: string; minutes?: number }) => [] as string[]);
 let sessionValue: unknown = null;
 
 vi.mock('@/components/AuthProvider', () => ({
@@ -63,13 +63,13 @@ beforeEach(() => {
 describe('the banner', () => {
   it('is absent on an ordinary session -- it must not become wallpaper', () => {
     wrap(<ViewAsBanner />);
-    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByRole('region', { name: /viewing as another user/i })).toBeNull();
   });
 
   it('names whose session this is, and says the work is recorded against both', () => {
     sessionValue = BORROWED;
     wrap(<ViewAsBanner />);
-    const banner = screen.getByRole('status');
+    const banner = screen.getByRole('region', { name: /viewing as another user/i });
     expect(banner.textContent).toContain('r.kumar');
     expect(banner.textContent).toMatch(/recorded against them, and against you/i);
   });

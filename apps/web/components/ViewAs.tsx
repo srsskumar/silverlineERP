@@ -47,7 +47,16 @@ export function ViewAsBanner() {
 
   return (
     <div
-      role="status"
+      /*
+       * A landmark, not a live region. role="status" announces once and is
+       * meant for transient messages -- which is what the toasts use it
+       * for, and having two of them meant a screen reader heard "you are
+       * yourself again" and "you are viewing as..." in the same breath.
+       * This banner is permanent while it applies, so it is a region a
+       * reader can navigate back to.
+       */
+      role="region"
+      aria-label="Viewing as another user"
       className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-warning/40 bg-warning-subtle px-3 py-2 text-xs text-warning"
     >
       <Eye className="size-4 shrink-0" aria-hidden />

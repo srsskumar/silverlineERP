@@ -183,12 +183,26 @@ export function beginImpersonation(state: ImpersonationState, borrowedAccessToke
   setTokens(borrowedAccessToken, null);
 }
 
+/**
+ * Fired when a borrowed session ends, by any route.
+ *
+ * A view-as session can end without anybody pressing the button: it expires,
+ * or it is stopped from another tab. The api client notices that on the next
+ * 401 and puts the administrator back -- but React has no way to know, so the
+ * banner sat there claiming an identity that had already lapsed. This is how
+ * the token store tells the session provider to catch up.
+ */
+export const IMPERSONATION_ENDED_EVENT = 'silverline:impersonation-ended';
+
 /** Put the administrator back. Returns false if they were never away. */
 export function restoreOwnSession(): boolean {
   const state = getImpersonation();
   if (!state) return false;
-  if (isBrowser()) window.localStorage.removeItem(IMPERSONATION_KEY);
+  if (isBrowser()) {
+    window.localStorage.removeItem(IMPERSONATION_KEY);
+  }
   setTokens(state.original_access, state.original_refresh);
+  if (isBrowser()) window.dispatchEvent(new CustomEvent(IMPERSONATION_ENDED_EVENT));
   return true;
 }
 

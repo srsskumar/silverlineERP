@@ -13,6 +13,7 @@ import {
   logout as apiLogout,
   restoreOwnSession,
   setTokens,
+  IMPERSONATION_ENDED_EVENT,
   startImpersonationRequest,
   stopImpersonationRequest,
   getAccessToken,
@@ -177,6 +178,40 @@ function AuthInner({ children }: { children: React.ReactNode }) {
     void apiLogout();
   }, [queryClient]);
 
+  /*
+   * Swap whose session this is, and make the screen agree.
+   *
+   * Everything cached was fetched as somebody else, so none of it may
+   * survive the switch -- but the session query itself must, because an
+   * observer is mounted on it. queryClient.clear() destroys that query
+   * along with the rest, and since neither `hasTokens` nor `mfaPending`
+   * changes here, nothing forces a re-render: the observer goes on serving
+   * the identity that has just stopped being true. That is what shipped --
+   * pressing "stop" left the banner up, and pressing "start" left the
+   * administrator's own name on screen until something else happened to
+   * re-render.
+   *
+   * So: drop everything else, and refetch this one in place.
+   */
+  const swapIdentity = React.useCallback(async () => {
+    const sessionKey = JSON.stringify(queryKeys.session.me());
+    queryClient.removeQueries({
+      predicate: (q) => JSON.stringify(q.queryKey) !== sessionKey,
+    });
+    await queryClient.refetchQueries({ queryKey: queryKeys.session.me() });
+  }, [queryClient]);
+
+  /*
+   * The borrowed session can end without this tab asking: it expires, or it
+   * is stopped elsewhere. The api client puts the administrator back on the
+   * next 401 and says so; this is what takes the banner down when it does.
+   */
+  React.useEffect(() => {
+    const onEnded = () => { void swapIdentity(); };
+    window.addEventListener(IMPERSONATION_ENDED_EVENT, onEnded);
+    return () => window.removeEventListener(IMPERSONATION_ENDED_EVENT, onEnded);
+  }, [swapIdentity]);
+
   const viewAs = React.useCallback(
     async (input: { user_id: string; reason: string; minutes?: number }) => {
       const own = getAccessToken();
@@ -194,28 +229,29 @@ function AuthInner({ children }: { children: React.ReactNode }) {
         },
         started.access_token,
       );
-      /*
-       * Everything cached was fetched as the administrator. Keeping any of
-       * it would show the borrowed session data it is not entitled to --
-       * which is precisely the bug this feature exists to find.
-       */
-      queryClient.clear();
       setHasTokens(true);
-      await queryClient.refetchQueries({ queryKey: queryKeys.session.me() });
+      await swapIdentity();
       return started.notices;
     },
-    [queryClient],
+    [swapIdentity],
   );
 
   const stopViewAs = React.useCallback(async () => {
-    if (!getImpersonation()) return;
-    // Tell the server first, so the borrowed token is revoked and not merely dropped.
-    await stopImpersonationRequest().catch(() => undefined);
-    restoreOwnSession();
-    queryClient.clear();
+    if (getImpersonation()) {
+      // Tell the server first, so the borrowed token is revoked and not merely dropped.
+      await stopImpersonationRequest().catch(() => undefined);
+      restoreOwnSession();
+    }
+    /*
+     * Refetch even when there was nothing stored locally. The borrowed
+     * session can end without this button -- it expires, or an
+     * administrator stops it from their other tab -- and the api client
+     * puts the session back on the next 401. The banner has to come down
+     * then too.
+     */
     setHasTokens(true);
-    await queryClient.refetchQueries({ queryKey: queryKeys.session.me() });
-  }, [queryClient]);
+    await swapIdentity();
+  }, [swapIdentity]);
 
   const refetchSession = React.useCallback(async () => {
     await sessionQuery.refetch();
