@@ -288,7 +288,7 @@ export async function registerOrgUnitRoutes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "org_unit.create",
@@ -457,7 +457,7 @@ export async function registerOrgUnitRoutes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "org_unit.update",

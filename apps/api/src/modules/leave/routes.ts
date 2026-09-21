@@ -494,7 +494,7 @@ export async function registerLeaveRoutes(
     const body = toBalanceShape(row);
     await writeAudit(db, {
       orgId: user.orgId,
-      actorId: user.id,
+      actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
       actorIp: req.ip,
       actorUserAgent:
         typeof req.headers["user-agent"] === "string"
@@ -765,7 +765,7 @@ export async function registerLeaveRoutes(
     }
     await writeAudit(db, {
       orgId: user.orgId,
-      actorId: user.id,
+      actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
       actorIp: req.ip,
       actorUserAgent:
         typeof req.headers["user-agent"] === "string"
@@ -1134,7 +1134,7 @@ export async function registerLeaveRoutes(
       }
       await writeAudit(opts.pool, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: req.ip,
         actorUserAgent:
           typeof req.headers["user-agent"] === "string"
@@ -1221,7 +1221,7 @@ export async function registerLeaveRoutes(
         : null;
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: req.ip,
         actorUserAgent:
           typeof req.headers["user-agent"] === "string"

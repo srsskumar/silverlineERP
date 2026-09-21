@@ -13,6 +13,12 @@ export interface AuditWrite {
   reason?: string | null;
   requestId?: string | null;
   idempotencyKey?: string | null;
+  /*
+   * §075: set only when an administrator was viewing the application as the
+   * actor. actorId stays the subject so that ownership and every existing
+   * report keep working; this says who was really at the keyboard.
+   */
+  impersonatorId?: string | null;
 }
 
 /** Audit failure aborts the caller; pass the mutation transaction for atomicity. */
@@ -21,8 +27,9 @@ export async function writeAudit(pool: Pick<Pool, "query">, entry: AuditWrite): 
     await pool.query(
       `INSERT INTO audit_events
          (org_id, actor_id, actor_ip, actor_user_agent, action, entity_type,
-          entity_id, before_state, after_state, reason, request_id, idempotency_key)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+          entity_id, before_state, after_state, reason, request_id, idempotency_key,
+          impersonator_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
       [
         entry.orgId,
         entry.actorId,
@@ -36,6 +43,7 @@ export async function writeAudit(pool: Pick<Pool, "query">, entry: AuditWrite): 
         entry.reason ?? null,
         entry.requestId ?? null,
         entry.idempotencyKey ?? null,
+        entry.impersonatorId ?? null,
       ],
     );
   } catch (err) {

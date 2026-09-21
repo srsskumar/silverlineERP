@@ -681,7 +681,7 @@ export async function registerEmployeeRoutes(
     const meta = metaOf(req);
     await writeAudit(db, {
       orgId: user.orgId,
-      actorId: user.id,
+      actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
       actorIp: meta.ip,
       actorUserAgent: meta.userAgent,
       action: "employee.create",
@@ -915,7 +915,7 @@ export async function registerEmployeeRoutes(
               const newId = (ins.rows[0] as { id: string }).id;
               await writeAudit(client as unknown as Pool, {
                 orgId: user.orgId,
-                actorId: user.id,
+                actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
                 actorIp: req.ip,
                 actorUserAgent:
                   typeof req.headers["user-agent"] === "string"
@@ -1233,7 +1233,7 @@ export async function registerEmployeeRoutes(
     const meta = metaOf(req);
     await writeAudit(db, {
       orgId: user.orgId,
-      actorId: user.id,
+      actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
       actorIp: meta.ip,
       actorUserAgent: meta.userAgent,
       action: "employee.update",
@@ -1324,7 +1324,7 @@ export async function registerEmployeeRoutes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "employee.exit",
@@ -1410,7 +1410,7 @@ export async function registerEmployeeRoutes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "employee.activate",
@@ -1499,7 +1499,7 @@ export async function registerEmployeeRoutes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "employee.suspend",
@@ -1570,7 +1570,7 @@ export async function registerEmployeeRoutes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "employee.reactivate",
@@ -1791,7 +1791,7 @@ export async function registerEmployeeRoutes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "document.upload",
@@ -1902,7 +1902,7 @@ export async function registerEmployeeRoutes(
       )).rows[0];
       await client.query("COMMIT");
       await writeAudit(opts.pool, {
-        orgId: user.orgId, actorId: user.id, action: "designation.create",
+        orgId: user.orgId, actorId: user.id, impersonatorId: user.impersonator?.id ?? null, action: "designation.create",
         entityType: "designation", entityId: String(row.id), afterState: row,
       });
       return reply.status(201).send({ data: row });
@@ -2044,7 +2044,7 @@ export async function registerEmployeeRoutes(
       const meta = metaOf(req);
       for (const p of planned) {
         await writeAudit(opts.pool, {
-          orgId: user.orgId, actorId: user.id,
+          orgId: user.orgId, actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
           actorIp: meta.ip, actorUserAgent: meta.userAgent,
           action: "employee.bulk_update", entityType: "employee", entityId: p.id,
           afterState: changes, requestId: req.requestId,

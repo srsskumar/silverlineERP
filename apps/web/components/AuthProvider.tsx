@@ -5,11 +5,17 @@ import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tan
 import { ToastProvider } from './ui/Toast';
 import {
   ApiClientError,
+  beginImpersonation,
   fetchMe,
+  getImpersonation,
   getRefreshToken,
   loginRequest,
   logout as apiLogout,
+  restoreOwnSession,
   setTokens,
+  startImpersonationRequest,
+  stopImpersonationRequest,
+  getAccessToken,
   type MeResponse,
 } from '@/lib/apiClient';
 import { queryKeys } from '@/lib/query-keys';
@@ -18,6 +24,8 @@ export interface Session {
   user: MeResponse['user'];
   roles: string[];
   permissions: string[];
+  /** §075: who is really at the keyboard, when it is not this user. */
+  impersonation: MeResponse['impersonation'];
 }
 
 type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated';
@@ -33,6 +41,10 @@ export interface AuthContextValue {
   verifyMfa: (token: string) => Promise<void>;
   logout: () => void;
   refetchSession: () => Promise<void>;
+  /** §075. Start holding another user's session; returns anything worth warning about. */
+  viewAs: (input: { user_id: string; reason: string; minutes?: number }) => Promise<string[]>;
+  /** Put the administrator back where they were. Safe to call when not impersonating. */
+  stopViewAs: () => Promise<void>;
 }
 
 const AuthContext = React.createContext<AuthContextValue | null>(null);
@@ -74,7 +86,13 @@ function AuthInner({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => {
     setMounted(true);
-    setHasTokens(getRefreshToken() !== null);
+    /*
+     * A borrowed session has no refresh token by design (§075), so asking
+     * only about that one would decide, on every reload, that an
+     * impersonating administrator is signed out and bounce them to the
+     * login screen.
+     */
+    setHasTokens(getRefreshToken() !== null || getImpersonation() !== null);
   }, []);
 
   const sessionQuery = useQuery({
@@ -90,7 +108,12 @@ function AuthInner({ children }: { children: React.ReactNode }) {
   });
 
   const session: Session | null = sessionQuery.data
-    ? { user: sessionQuery.data.user, roles: sessionQuery.data.roles, permissions: sessionQuery.data.permissions }
+    ? {
+        user: sessionQuery.data.user,
+        roles: sessionQuery.data.roles,
+        permissions: sessionQuery.data.permissions,
+        impersonation: sessionQuery.data.impersonation ?? null,
+      }
     : null;
 
   const status: AuthStatus = !mounted ? 'loading' : mfaPending
@@ -154,6 +177,46 @@ function AuthInner({ children }: { children: React.ReactNode }) {
     void apiLogout();
   }, [queryClient]);
 
+  const viewAs = React.useCallback(
+    async (input: { user_id: string; reason: string; minutes?: number }) => {
+      const own = getAccessToken();
+      if (!own) throw new Error('Sign in again before viewing as somebody else.');
+      const started = await startImpersonationRequest(input);
+      beginImpersonation(
+        {
+          subject_id: started.subject.id,
+          subject_username: started.subject.username,
+          subject_name: null,
+          actor_username: '',
+          expires_at: started.expires_at,
+          original_access: own,
+          original_refresh: getRefreshToken(),
+        },
+        started.access_token,
+      );
+      /*
+       * Everything cached was fetched as the administrator. Keeping any of
+       * it would show the borrowed session data it is not entitled to --
+       * which is precisely the bug this feature exists to find.
+       */
+      queryClient.clear();
+      setHasTokens(true);
+      await queryClient.refetchQueries({ queryKey: queryKeys.session.me() });
+      return started.notices;
+    },
+    [queryClient],
+  );
+
+  const stopViewAs = React.useCallback(async () => {
+    if (!getImpersonation()) return;
+    // Tell the server first, so the borrowed token is revoked and not merely dropped.
+    await stopImpersonationRequest().catch(() => undefined);
+    restoreOwnSession();
+    queryClient.clear();
+    setHasTokens(true);
+    await queryClient.refetchQueries({ queryKey: queryKeys.session.me() });
+  }, [queryClient]);
+
   const refetchSession = React.useCallback(async () => {
     await sessionQuery.refetch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -169,8 +232,10 @@ function AuthInner({ children }: { children: React.ReactNode }) {
       verifyMfa,
       logout,
       refetchSession,
+      viewAs,
+      stopViewAs,
     }),
-    [status, session, sessionQuery.error, login, verifyMfa, logout, refetchSession],
+    [status, session, sessionQuery.error, login, verifyMfa, logout, refetchSession, viewAs, stopViewAs],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

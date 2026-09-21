@@ -195,7 +195,7 @@ export async function registerInventoryImport(
       if (input.dry_run) await db.query('ROLLBACK TO SAVEPOINT preview');
       else {
         await writeAudit(db, {
-          orgId: u.orgId, actorId: u.id, action: 'asset.import',
+          orgId: u.orgId, actorId: u.id, impersonatorId: u.impersonator?.id ?? null, action: 'asset.import',
           entityType: 'asset_import', afterState: { rows: input.rows.length, created, updated },
           requestId: (req as { requestId?: string }).requestId,
         });
@@ -323,7 +323,7 @@ export async function registerInventoryImport(
         if (input.dry_run) await db.query('ROLLBACK TO SAVEPOINT preview');
         else {
           await writeAudit(db, {
-            orgId: u.orgId, actorId: u.id, action: 'asset.allocation.import',
+            orgId: u.orgId, actorId: u.id, impersonatorId: u.impersonator?.id ?? null, action: 'asset.allocation.import',
             entityType: 'asset_allocation_import',
             afterState: { rows: input.rows.length, allocated: created },
             requestId: (req as { requestId?: string }).requestId,
@@ -404,7 +404,7 @@ export async function registerInventoryImport(
         if (input.dry_run) await db.query('ROLLBACK TO SAVEPOINT preview');
         else {
           await writeAudit(db, {
-            orgId: u.orgId, actorId: u.id, action: 'inventory.import',
+            orgId: u.orgId, actorId: u.id, impersonatorId: u.impersonator?.id ?? null, action: 'inventory.import',
             entityType: 'inventory_import',
             afterState: { rows: input.rows.length, created, updated },
             requestId: (req as { requestId?: string }).requestId,

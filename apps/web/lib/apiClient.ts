@@ -134,6 +134,62 @@ export function setTokens(accessToken: string | null, refreshToken: string | nul
 
 export function clearTokens(): void {
   setTokens(null, null);
+  if (isBrowser()) window.localStorage.removeItem(IMPERSONATION_KEY);
+}
+
+/* ------------------------------------------------------------------ §075
+ * Viewing the application as another user.
+ *
+ * The borrowed token is put where every request already looks for one, so
+ * nothing else in the application has to know this feature exists. What
+ * needs care is the administrator's own session: it is set aside here
+ * rather than thrown away, and -- critically -- the refresh cycle is
+ * switched off while borrowed. Without that, the first 401 would quietly
+ * refresh the *administrator* back into place, and they would carry on
+ * testing while believing they were still somebody else.
+ */
+
+const IMPERSONATION_KEY = 'silverline.impersonation';
+
+export interface ImpersonationState {
+  subject_id: string;
+  subject_username: string;
+  subject_name: string | null;
+  actor_username: string;
+  expires_at: string;
+  /** The administrator's own session, set aside until they stop. */
+  original_access: string;
+  original_refresh: string | null;
+}
+
+export function getImpersonation(): ImpersonationState | null {
+  if (!isBrowser()) return null;
+  const raw = window.localStorage.getItem(IMPERSONATION_KEY);
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isRecord(parsed) && typeof parsed.original_access === 'string'
+      ? (parsed as unknown as ImpersonationState)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function beginImpersonation(state: ImpersonationState, borrowedAccessToken: string): void {
+  if (!isBrowser()) return;
+  window.localStorage.setItem(IMPERSONATION_KEY, JSON.stringify(state));
+  // No refresh token: a borrowed session lasts exactly as long as it was granted.
+  setTokens(borrowedAccessToken, null);
+}
+
+/** Put the administrator back. Returns false if they were never away. */
+export function restoreOwnSession(): boolean {
+  const state = getImpersonation();
+  if (!state) return false;
+  if (isBrowser()) window.localStorage.removeItem(IMPERSONATION_KEY);
+  setTokens(state.original_access, state.original_refresh);
+  return true;
 }
 
 function redirectToLogin(): void {
@@ -228,6 +284,12 @@ let refreshPromise: Promise<boolean> | null = null;
 async function tryRefresh(): Promise<boolean> {
   if (refreshPromise) return refreshPromise;
   refreshPromise = (async () => {
+    /*
+     * Never refresh a borrowed session. The stored refresh token belongs to
+     * the administrator, and using it here would silently hand them their
+     * own identity back mid-test.
+     */
+    if (getImpersonation()) return false;
     const refreshToken = getRefreshToken();
     if (!refreshToken) return false;
     try {
@@ -331,6 +393,16 @@ export async function apiRequestRaw(
     const refreshed = await tryRefresh();
     if (refreshed) {
       res = await doFetch();
+    } else if (restoreOwnSession()) {
+      /*
+       * The view-as session ran out or was stopped elsewhere. The
+       * administrator is not logged out -- they are put back where they
+       * were, and told why the screen changed under them.
+       */
+      throw new ApiClientError(401, {
+        code: 'IMPERSONATION_ENDED',
+        message: 'That view-as session has ended. You are yourself again.',
+      });
     } else {
       clearTokens();
       redirectToLogin();
@@ -370,6 +442,60 @@ export interface MeResponse {
   user: SessionUser;
   roles: string[];
   permissions: string[];
+  /** §075: null unless an administrator is holding this session. */
+  impersonation: {
+    session_id: string | null;
+    actor_id: string;
+    actor_username: string;
+  } | null;
+}
+
+/* ------------------------------------------------------------------ §075 */
+
+export interface ImpersonationTarget {
+  id: string;
+  username: string;
+  full_name: string | null;
+  designation: string | null;
+  roles: string[];
+  permission_count: number;
+  allowed: boolean;
+  blocked_reason: string | null;
+}
+
+export async function fetchImpersonationTargets(q: string): Promise<ImpersonationTarget[]> {
+  const { data } = await apiRequest<ImpersonationTarget[]>(
+    `/api/v1/auth/impersonate/targets${q ? `?q=${encodeURIComponent(q)}` : ''}`,
+    { method: 'GET' },
+  );
+  return data;
+}
+
+export interface ImpersonationStarted {
+  access_token: string;
+  expires_at: string;
+  session_id: string;
+  subject: { id: string; username: string; roles: string[] };
+  notices: string[];
+}
+
+export async function startImpersonationRequest(
+  body: { user_id: string; reason: string; minutes?: number },
+): Promise<ImpersonationStarted> {
+  const { data } = await apiRequest<ImpersonationStarted>('/api/v1/auth/impersonate', {
+    method: 'POST', body,
+  });
+  return data;
+}
+
+export async function stopImpersonationRequest(): Promise<{ ended: boolean }> {
+  const { data } = await apiRequest<{ ended: boolean }>('/api/v1/auth/impersonate/stop', {
+    method: 'POST',
+    // If the borrowed token has already lapsed there is nothing to put back;
+    // the caller restores the administrator's session either way.
+    skipAuthRetry: true,
+  });
+  return data;
 }
 
 export async function loginRequest(username: string, password: string, totpCode?: string): Promise<LoginResponse> {

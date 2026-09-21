@@ -17,6 +17,7 @@
  * seeded reference data the suites are built on.
  */
 export const VOLATILE_TABLES = `
+  impersonation_sessions,
   role_scope_policies,
   password_reset_requests,
   task_collaborators,

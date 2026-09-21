@@ -156,7 +156,13 @@ export async function mutate<T>(pool:Pool,req:FastifyRequest,action:string,entit
   const id=typeof object?.id==='string'?object.id:null;
   // Secrets and personal records are never copied into event payloads.
   const safe=entity==='user'||entity==='webhook'||entity==='settings'?{id}:value;
-  await db.query('INSERT INTO audit_events(org_id,actor_id,action,entity_type,entity_id,after_state,request_id,idempotency_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[u.orgId,u.id,action,entity,id,JSON.stringify(safe),req.requestId,key||null]);
+  /*
+   * actor_id stays whoever the system believed was acting, so ownership and
+   * every report already written against it keep working; impersonator_id
+   * (§075) names who was actually at the keyboard, and is null for the
+   * overwhelming majority of rows where those are the same person.
+   */
+  await db.query('INSERT INTO audit_events(org_id,actor_id,action,entity_type,entity_id,after_state,request_id,idempotency_key,impersonator_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',[u.orgId,u.id,action,entity,id,JSON.stringify(safe),req.requestId,key||null,u.impersonator?.id??null]);
   if(key)await db.query('INSERT INTO v2_operations(key,user_id,path,request_hash,response) VALUES($1,$2,$3,$4,$5)',[key,u.id,req.url,hash,JSON.stringify(value)]);
   await db.query('COMMIT');return value;
  }catch(e){await db.query('ROLLBACK');throw e;}finally{db.release();}

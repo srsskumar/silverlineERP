@@ -26,7 +26,8 @@ import {
 } from './ui/DropdownMenu';
 import { cn } from '@/lib/cn';
 import { NAV_GROUPS, QUICK_CREATE, type NavGroup, type NavItem } from '@/lib/nav';
-import { LogOut, Menu, Plus, Shield } from 'lucide-react';
+import { Eye, LogOut, Menu, Plus, Shield } from 'lucide-react';
+import { ViewAsBanner, ViewAsDialog } from './ViewAs';
 
 /** Unread dot for the Inbox nav item (probe limit=1&unread=true, 60s poll). */
 function InboxDot() {
@@ -105,7 +106,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { session, status, logout } = useAuth();
   const pathname = usePathname();
   const [navOpen,setNavOpen]=React.useState(false);
+  const [viewAsOpen, setViewAsOpen] = React.useState(false);
   const router = useRouter();
+  /*
+   * §075. Hidden without the permission, and hidden again while already
+   * viewing as somebody -- the server refuses to chain sessions, so
+   * offering it would be an invitation to an error message.
+   */
+  const canViewAs = !!session && hasPermission({ permissions: session.permissions }, 'admin.impersonate');
+  const impersonating = !!session?.impersonation;
 
   React.useEffect(() => {
     if (status === 'unauthenticated') router.replace('/login');
@@ -181,6 +190,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </Sheet>
 
         <div className="flex min-w-0 flex-1 flex-col">
+          {/* Above the sticky header, so it scrolls away rather than eating
+              a strip of every screen -- but it is the first thing on the
+              page, which is where a warning belongs. */}
+          <ViewAsBanner />
           <header className="sticky top-0 z-30 flex h-topbar shrink-0 items-center gap-2 border-b border-border bg-surface/85 px-3 backdrop-blur">
             <Button
               variant="ghost"
@@ -247,6 +260,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     Account security
                   </Link>
                 </DropdownMenuItem>
+                {canViewAs && !impersonating ? (
+                  <DropdownMenuItem onSelect={() => setViewAsOpen(true)}>
+                    <Eye />
+                    View as another user
+                  </DropdownMenuItem>
+                ) : null}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem destructive onSelect={logout}>
                   <LogOut />
@@ -257,6 +276,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </header>
 
           <main className="min-w-0 flex-1 px-3 py-4 md:px-5 md:py-5">{children}</main>
+          {canViewAs ? <ViewAsDialog open={viewAsOpen} onOpenChange={setViewAsOpen} /> : null}
         </div>
       </div>
     </TooltipProvider>

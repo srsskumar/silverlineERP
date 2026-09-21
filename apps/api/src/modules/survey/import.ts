@@ -284,7 +284,7 @@ export async function registerSurveyImport(
           created = { districts: 0, divisions: 0, mandals: 0, villages: 0 };
         } else {
           await writeAudit(db, {
-            orgId: u.orgId, actorId: u.id, action: 'survey.villages.import',
+            orgId: u.orgId, actorId: u.id, impersonatorId: u.impersonator?.id ?? null, action: 'survey.villages.import',
             entityType: 'survey_project', entityId: projectId,
             afterState: {
               rows: input.rows.length,

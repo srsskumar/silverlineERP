@@ -803,7 +803,7 @@ export async function registerWorkRoutes(
     const meta = metaOf(req);
     await writeAudit(db, {
       orgId: user.orgId,
-      actorId: user.id,
+      actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
       actorIp: meta.ip,
       actorUserAgent: meta.userAgent,
       action: "workspace.create",
@@ -1005,7 +1005,7 @@ export async function registerWorkRoutes(
       const row = ins.rows[0];
       const meta = metaOf(req);
       await writeAudit(db, {
-        orgId: user.orgId, actorId: user.id, actorIp: meta.ip,
+        orgId: user.orgId, actorId: user.id, impersonatorId: user.impersonator?.id ?? null, actorIp: meta.ip,
         actorUserAgent: meta.userAgent, action: "project_category.create",
         entityType: "project_category", entityId: row.id,
         afterState: row, requestId: req.requestId,
@@ -1185,7 +1185,7 @@ export async function registerWorkRoutes(
     const meta = metaOf(req);
     await writeAudit(db, {
       orgId: user.orgId,
-      actorId: user.id,
+      actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
       actorIp: meta.ip,
       actorUserAgent: meta.userAgent,
       action: "project.create",
@@ -1439,7 +1439,7 @@ export async function registerWorkRoutes(
     const meta = metaOf(req);
     await writeAudit(db, {
       orgId: user.orgId,
-      actorId: user.id,
+      actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
       actorIp: meta.ip,
       actorUserAgent: meta.userAgent,
       action: "project.update",
@@ -1515,7 +1515,7 @@ export async function registerWorkRoutes(
     const reason = parsed.data.reason?.trim() ? parsed.data.reason.trim() : null;
     await writeAudit(db, {
       orgId: user.orgId,
-      actorId: user.id,
+      actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
       actorIp: meta.ip,
       actorUserAgent: meta.userAgent,
       action: "project.close",
@@ -1617,7 +1617,7 @@ export async function registerWorkRoutes(
     const meta = metaOf(req);
     await writeAudit(db, {
       orgId: user.orgId,
-      actorId: user.id,
+      actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
       actorIp: meta.ip,
       actorUserAgent: meta.userAgent,
       action: "task.create",
@@ -1901,7 +1901,7 @@ export async function registerWorkRoutes(
         return reply.status(200).send({ data: { already: true } });
       }
       await writeAudit(opts.pool, {
-        orgId: user.orgId, actorId: user.id,
+        orgId: user.orgId, actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         action: "task.collaborator.add", entityType: "task", entityId: id,
         afterState: { user_id: body.user_id }, requestId: req.requestId,
       });
@@ -1929,7 +1929,7 @@ export async function registerWorkRoutes(
         });
       }
       await writeAudit(opts.pool, {
-        orgId: user.orgId, actorId: user.id,
+        orgId: user.orgId, actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         action: "task.collaborator.remove", entityType: "task", entityId: id,
         beforeState: gone.rows[0], requestId: req.requestId,
       });
@@ -2085,7 +2085,7 @@ export async function registerWorkRoutes(
     const meta = metaOf(req);
     await writeAudit(db, {
       orgId: user.orgId,
-      actorId: user.id,
+      actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
       actorIp: meta.ip,
       actorUserAgent: meta.userAgent,
       action: "task.update",
@@ -2259,7 +2259,7 @@ export async function registerWorkRoutes(
       const reason = override_reason?.trim() ? override_reason.trim() : null;
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: overridden ? "task.status.override" : "task.status.change",
@@ -2335,7 +2335,7 @@ export async function registerWorkRoutes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "task.reorder",
@@ -2404,7 +2404,7 @@ export async function registerWorkRoutes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "task.assign",
@@ -2569,7 +2569,7 @@ export async function registerWorkRoutes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "task.dependency.add",
@@ -2624,7 +2624,7 @@ export async function registerWorkRoutes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "task.dependency.remove",
@@ -2725,7 +2725,7 @@ export async function registerWorkRoutes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "task.evidence.upload",
@@ -2876,7 +2876,7 @@ export async function registerWorkRoutes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "task.comment.create",

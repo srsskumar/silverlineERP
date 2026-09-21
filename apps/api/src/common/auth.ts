@@ -2,7 +2,7 @@ import {enforceRecordScope} from "./recordScope.js";
 import type { FastifyRequest } from "fastify";
 import jwt from "jsonwebtoken";
 import type { Pool } from "pg";
-import { ApiError, mfaRequired, type MfaPolicy } from "@silverline/shared";
+import { ApiError, mfaRequired, impersonationBlocks, type MfaPolicy } from "@silverline/shared";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -16,6 +16,14 @@ declare module "fastify" {
       permissions: string[];
       /** Raw `user_roles` scope assignments (nullScope = global). */
       scopes: Array<{ scope_type: string | null; scope_id: string | null }>;
+      /*
+       * Set only while an administrator is viewing the application as this
+       * user (§075). Everything else on this object describes the subject --
+       * that is the point -- so this is the one field that remembers who is
+       * actually at the keyboard, and it is what the audit trail records.
+       */
+      impersonator?: { id: string; username: string };
+      impersonationId?: string;
     };
   }
 }
@@ -25,6 +33,9 @@ interface AccessClaims {
   org_id: string;
   type: string;
   family?: string;
+  /** §075: the real actor behind an impersonated session, and the register row. */
+  act?: string;
+  imp?: string;
   worker?:boolean;
   iat?:number;
   exp?:number;
@@ -148,6 +159,46 @@ export function buildAuthenticate(ctx: AuthContext) {
       mfaEnrollmentRequired,
       worker:claims.worker===true&&!claims.family,
     };
+    /*
+     * §075 -- an administrator looking through somebody else's eyes.
+     *
+     * Everything above deliberately ran against the subject: the roles, the
+     * permissions, the scopes, the gates. A token that says "act" changes
+     * nothing about what may be done, only who we say did it -- which is the
+     * only honest way to test whether the scoping rules work.
+     *
+     * The register row is checked on every request, not just at the start,
+     * so revoking an impersonation ends it now rather than whenever the
+     * token happens to expire.
+     */
+    if (claims.act && claims.imp) {
+      const live = await ctx.pool.query(
+        `SELECT s.id, u.username
+           FROM impersonation_sessions s
+           JOIN users u ON u.id = s.actor_id
+          WHERE s.id = $1 AND s.actor_id = $2 AND s.subject_id = $3
+            AND s.ended_at IS NULL AND s.expires_at > now()
+            AND u.auth_status = 'ACTIVE'`,
+        [claims.imp, claims.act, row.id],
+      );
+      if (!live.rowCount) {
+        throw new ApiError({ status: 401, code: 'INVALID_TOKEN', message: 'That view-as session has ended' });
+      }
+      req.authUser.impersonator = { id: claims.act, username: live.rows[0].username as string };
+      req.authUser.impersonationId = claims.imp;
+      /*
+       * Borrowing somebody's screen is not permission to change the locks on
+       * it. Their password, their authenticator, and anything that would let
+       * the borrowed session outlive the impersonation stay theirs.
+       */
+      if (impersonationBlocks(req.url)) {
+        throw new ApiError({
+          status: 403,
+          code: 'IMPERSONATION_FORBIDDEN',
+          message: 'That is the account holder\'s own to change. Stop viewing as them first.',
+        });
+      }
+    }
     /*
      * Background work is exempt, as it is from the password gate below.
      *

@@ -265,7 +265,7 @@ export async function registerPayrollRoutes(
       );
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: req.ip,
         actorUserAgent:
           typeof req.headers["user-agent"] === "string"
@@ -738,7 +738,7 @@ export async function registerPayrollRoutes(
       requestId: string;
     },
     reply: FastifyReply,
-    user: { id: string; orgId: string },
+    user: { id: string; orgId: string; impersonator?: { id: string } },
     args: {
       from: string;
       to: string;
@@ -782,7 +782,7 @@ export async function registerPayrollRoutes(
     const body = toRunShape(row);
     await writeAudit(db, {
       orgId: user.orgId,
-      actorId: user.id,
+      actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
       actorIp: ctx.ip,
       actorUserAgent:
         typeof ctx.headers["user-agent"] === "string"

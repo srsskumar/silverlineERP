@@ -506,7 +506,7 @@ export async function registerS5Routes(
     const meta = metaOf(req);
     await writeAudit(opts.pool, {
       orgId: user.orgId,
-      actorId: user.id,
+      actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
       actorIp: meta.ip,
       actorUserAgent: meta.userAgent,
       action: "board.create",
@@ -649,7 +649,7 @@ export async function registerS5Routes(
     const meta = metaOf(req);
     await writeAudit(db, {
       orgId: user.orgId,
-      actorId: user.id,
+      actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
       actorIp: meta.ip,
       actorUserAgent: meta.userAgent,
       action: "board.update",
@@ -780,7 +780,7 @@ export async function registerS5Routes(
       const meta = metaOf(req);
       await writeAudit(opts.pool, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "board.columns.update",
@@ -826,7 +826,7 @@ export async function registerS5Routes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "board.delete",
@@ -894,7 +894,7 @@ export async function registerS5Routes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "filter.create",
@@ -1018,7 +1018,7 @@ export async function registerS5Routes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "filter.update",
@@ -1062,7 +1062,7 @@ export async function registerS5Routes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "filter.delete",
@@ -1135,7 +1135,7 @@ export async function registerS5Routes(
     const meta = metaOf(req);
     await writeAudit(db, {
       orgId: user.orgId,
-      actorId: user.id,
+      actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
       actorIp: meta.ip,
       actorUserAgent: meta.userAgent,
       action: "label.create",
@@ -1252,7 +1252,7 @@ export async function registerS5Routes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "task.label.attach",
@@ -1298,7 +1298,7 @@ export async function registerS5Routes(
       const meta = metaOf(req);
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
         action: "task.label.detach",

@@ -82,6 +82,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "072_stage_dates", file: "072_stage_dates.sql" },
   { version: "073_survey_queries_contacts_alerts", file: "073_survey_queries_contacts_alerts.sql" },
   { version: "074_query_scope", file: "074_query_scope.sql" },
+  { version: "075_impersonation", file: "075_impersonation.sql" },
 ];
 
 /**

@@ -10,9 +10,12 @@ import {
   mfaVerifySchema,
   refreshSchema,
   toFieldErrors,
+  canImpersonate,
+  impersonateSchema,
+  IMPERSONATION_DEFAULT_MINUTES,
 } from "@silverline/shared";
 import { writeAudit } from "../../common/audit.js";
-import { buildAuthenticate } from "../../common/auth.js";
+import { buildAuthenticate, requirePermission } from "../../common/auth.js";
 import { sendError } from "../../common/httpErrors.js";
 import { createLoginRateLimiter } from "../../common/rateLimit.js";
 import {
@@ -22,6 +25,8 @@ import {
   logout,
   refresh,
   setupMfa,
+  startImpersonation,
+  endImpersonation,
   UnknownUserError,
   verifyMfa,
   type ServiceContext,
@@ -385,6 +390,18 @@ export async function registerAuthRoutes(
         },
         roles: user.roles,
         permissions: user.permissions,
+        /*
+         * §075. Null for everybody nearly all of the time; when it is not,
+         * the web application has everything it needs to put a banner up
+         * and offer the way out of it.
+         */
+        impersonation: user.impersonator
+          ? {
+              session_id: user.impersonationId ?? null,
+              actor_id: user.impersonator.id,
+              actor_username: user.impersonator.username,
+            }
+          : null,
       });
     },
   );
@@ -514,6 +531,142 @@ export async function registerAuthRoutes(
       });
 
       return reply.status(202).send(said);
+    },
+  );
+
+  /* =============================================================== §075
+   * Viewing the application as another user.
+   *
+   * Built because there was no honest way to answer "what can a team lead
+   * on that programme actually see?" short of making an account, giving it
+   * the roles, and logging in as it -- which nobody does, so the scoping
+   * rules went untested until somebody in a mandal found the hole.
+   *
+   * It is deliberately not a read-only preview. A preview would answer the
+   * easy half of the question (what is on the screen) and none of the hard
+   * half (what happens when they press the button).
+   */
+
+  app.get(
+    "/api/v1/auth/impersonate/targets",
+    { preHandler: requirePermission(authenticate, "admin.impersonate") },
+    async (req, reply) => {
+      const me = req.authUser!;
+      const q = String((req.query as { q?: string } | undefined)?.q ?? "").trim();
+      const rows = await opts.pool.query(
+        `SELECT u.id, u.username, u.email, u.auth_status,
+                COALESCE(array_agg(DISTINCT r.code) FILTER (WHERE r.code IS NOT NULL), '{}') AS roles,
+                COALESCE(array_agg(DISTINCT rp.permission_code) FILTER (WHERE rp.permission_code IS NOT NULL), '{}') AS permissions,
+                TRIM(CONCAT_WS(' ', e.first_name, e.last_name)) AS full_name,
+                e.designation
+           FROM users u
+           LEFT JOIN user_roles ur ON ur.user_id = u.id
+           LEFT JOIN roles r ON r.id = ur.role_id
+           LEFT JOIN role_permissions rp ON rp.role_id = ur.role_id
+           LEFT JOIN employees e ON e.id = u.employee_id
+          WHERE u.org_id = $1 AND u.id <> $2 AND u.auth_status = 'ACTIVE'
+            AND ($3 = '' OR u.username ILIKE '%' || $3 || '%'
+                 OR CONCAT_WS(' ', e.first_name, e.last_name) ILIKE '%' || $3 || '%')
+          GROUP BY u.id, u.username, u.email, u.auth_status, e.first_name, e.last_name, e.designation
+          ORDER BY COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name, e.last_name)), ''), u.username)
+          LIMIT 200`,
+        [me.orgId, me.id, q],
+      );
+      /*
+       * Every candidate is returned, allowed or not, each carrying the
+       * reason. A picker that silently omits the accounts you may not hold
+       * teaches nobody anything; one that shows them greyed out with "that
+       * account can do things you cannot" explains the rule in the place
+       * where the question is being asked.
+       */
+      return reply.status(200).send({
+        data: rows.rows.map((r) => {
+          const verdict = canImpersonate(
+            { id: me.id, roles: me.roles, permissions: me.permissions },
+            { id: r.id as string, roles: r.roles as string[], permissions: r.permissions as string[] },
+          );
+          return {
+            id: r.id,
+            username: r.username,
+            full_name: r.full_name,
+            designation: r.designation,
+            roles: r.roles,
+            permission_count: (r.permissions as string[]).length,
+            allowed: verdict.ok,
+            blocked_reason: verdict.ok ? null : verdict.reason,
+          };
+        }),
+      });
+    },
+  );
+
+  app.post(
+    "/api/v1/auth/impersonate",
+    { preHandler: requirePermission(authenticate, "admin.impersonate") },
+    async (req, reply) => {
+      const me = req.authUser!;
+      const parsed = impersonateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return sendError(reply, req.requestId, {
+          status: 422,
+          code: "VALIDATION_ERROR",
+          message: "Validation failed",
+          fieldErrors: toFieldErrors(parsed.error),
+        });
+      }
+      const out = await startImpersonation(ctx, {
+        actor: { id: me.id, orgId: me.orgId, roles: me.roles, permissions: me.permissions },
+        subjectId: parsed.data.user_id,
+        reason: parsed.data.reason,
+        minutes: parsed.data.minutes ?? IMPERSONATION_DEFAULT_MINUTES,
+        ip: req.ip,
+        userAgent: metaOf(req).userAgent,
+        requestId: req.requestId,
+      });
+      await writeAudit(opts.pool, {
+        orgId: me.orgId,
+        actorId: me.id,
+        actorIp: req.ip,
+        actorUserAgent: metaOf(req).userAgent,
+        action: "auth.impersonation_started",
+        entityType: "user",
+        entityId: out.subject.id,
+        reason: parsed.data.reason,
+        afterState: { session_id: out.session_id, expires_at: out.expires_at, subject: out.subject.username },
+        requestId: req.requestId,
+      });
+      return reply.status(201).send(out);
+    },
+  );
+
+  /*
+   * Stopping works from either side, because either token may be the one in
+   * the browser's hand: the borrowed one (the ordinary case -- the button
+   * is on the banner) or the administrator's own (they closed the tab and
+   * came back). Notably it does NOT require admin.impersonate, since while
+   * impersonating an employee the session does not hold it -- requiring it
+   * would trap the administrator inside the session they asked to leave.
+   */
+  app.post(
+    "/api/v1/auth/impersonate/stop",
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const me = req.authUser!;
+      const actorId = me.impersonator?.id ?? me.id;
+      const out = await endImpersonation(ctx, { actorId });
+      if (out.ended) {
+        await writeAudit(opts.pool, {
+          orgId: me.orgId,
+          actorId,
+          actorIp: req.ip,
+          actorUserAgent: metaOf(req).userAgent,
+          action: "auth.impersonation_ended",
+          entityType: "user",
+          entityId: out.subject_id,
+          requestId: req.requestId,
+        });
+      }
+      return reply.status(200).send(out);
     },
   );
 }

@@ -4,7 +4,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { authenticator } from "otplib";
 import type { Pool, PoolClient } from "pg";
-import { ApiError, indianMobile } from "@silverline/shared";
+import { ApiError, indianMobile, canImpersonate } from "@silverline/shared";
 
 export const ACCESS_TOKEN_TTL_SECONDS = 900; // 15 minutes
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -564,4 +564,174 @@ async function consumeTotp(
 async function recordFailedAttempt(ctx:ServiceContext,id:string):Promise<void> {
  const result=await ctx.pool.query("UPDATE users SET failed_login_attempts=CASE WHEN locked_until<now() THEN 1 ELSE failed_login_attempts+1 END,locked_until=CASE WHEN (CASE WHEN locked_until<now() THEN 1 ELSE failed_login_attempts+1 END)>=$2 THEN now()+($3||' milliseconds')::interval ELSE NULL END,updated_at=now() WHERE id=$1 RETURNING failed_login_attempts",[id,MAX_FAILED_ATTEMPTS,String(LOCKOUT_MS)]);
  if(result.rows[0].failed_login_attempts>=MAX_FAILED_ATTEMPTS)throw new ApiError({status:423,code:'ACCOUNT_LOCKED',message:'Account is temporarily locked due to failed login attempts',retryable:true});
+}
+
+/* ==================================================================== §075
+ * Viewing the application as another user.
+ *
+ * The token minted here is an ordinary access token with an ordinary
+ * sessions row behind it. Two extra claims ride along -- `act`, the
+ * administrator who asked for it, and `imp`, the register row -- and
+ * `authenticate` checks that row on every request, so ending the session
+ * ends the access on the spot rather than whenever the token would expire.
+ *
+ * Note what is NOT different: the subject's roles, permissions and scopes
+ * are recomputed from the database on every request exactly as they are for
+ * anybody else. That is the whole value of the feature. If the
+ * administrator could see more than the subject, it would not be a test of
+ * anything.
+ */
+
+export interface ImpersonationStart {
+  access_token: string;
+  expires_at: string;
+  session_id: string;
+  subject: { id: string; username: string; roles: string[] };
+  /** Anything about the borrowed account that will get in the administrator's way. */
+  notices: string[];
+}
+
+export async function startImpersonation(
+  ctx: ServiceContext,
+  input: {
+    actor: { id: string; orgId: string; roles: string[]; permissions: string[] };
+    subjectId: string;
+    reason: string;
+    minutes: number;
+    ip?: string | null;
+    userAgent?: string | null;
+    requestId?: string | null;
+  },
+): Promise<ImpersonationStart> {
+  const subjectRes = await ctx.pool.query(
+    `SELECT id, org_id, username, auth_status, mfa_enabled, must_change_password
+       FROM users WHERE id = $1`,
+    [input.subjectId],
+  );
+  const subject = subjectRes.rows[0] as
+    | { id: string; org_id: string; username: string; auth_status: string;
+        mfa_enabled: boolean; must_change_password: boolean }
+    | undefined;
+  /*
+   * Same answer for "no such person" and "somebody else's organisation":
+   * this endpoint is not a way to find out who exists elsewhere.
+   */
+  if (!subject || subject.org_id !== input.actor.orgId) {
+    throw new ApiError({ status: 404, code: 'NOT_FOUND', message: 'No such user' });
+  }
+  if (subject.auth_status !== 'ACTIVE') {
+    throw new ApiError({
+      status: 409, code: 'USER_INACTIVE',
+      message: 'That account is not active, so there is nothing to view as',
+    });
+  }
+
+  const subjectAccess = await rolesAndPermissions(ctx.pool, subject.id);
+  const verdict = canImpersonate(
+    { id: input.actor.id, roles: input.actor.roles, permissions: input.actor.permissions },
+    { id: subject.id, roles: subjectAccess.roles, permissions: subjectAccess.permissions },
+  );
+  if (!verdict.ok) {
+    throw new ApiError({ status: 403, code: 'IMPERSONATION_FORBIDDEN', message: verdict.reason ?? 'Not allowed' });
+  }
+
+  const family = randomUUID();
+  const expiresAt = new Date(Date.now() + input.minutes * 60_000);
+
+  /*
+   * One live session per administrator (the unique index enforces it), so
+   * starting a second one closes the first. Better than refusing: the
+   * common case is an administrator who closed the tab and came back.
+   */
+  await endImpersonation(ctx, { actorId: input.actor.id });
+
+  const sessionRes = await ctx.pool.query(
+    `INSERT INTO impersonation_sessions
+       (org_id, actor_id, subject_id, reason, session_family, expires_at,
+        actor_ip, actor_user_agent, request_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+    [input.actor.orgId, input.actor.id, subject.id, input.reason, family,
+     expiresAt.toISOString(), input.ip ?? null, input.userAgent ?? null, input.requestId ?? null],
+  );
+  const sessionId = sessionRes.rows[0].id as string;
+
+  /*
+   * A real sessions row, so the ordinary revocation path works -- but with a
+   * refresh secret that is generated, hashed and thrown away. Nobody holds
+   * it, so this session can never be refreshed into a longer one; it lives
+   * exactly as long as it was granted.
+   */
+  await ctx.pool.query(
+    `INSERT INTO sessions (user_id, refresh_hash, family, device, ip, expires_at)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [subject.id, sha256Hex(randomBytes(32).toString('hex')), family,
+     'View-as session', input.ip ?? null, expiresAt.toISOString()],
+  );
+
+  const access_token = jwt.sign(
+    {
+      sub: subject.id,
+      org_id: subject.org_id,
+      roles: subjectAccess.roles,
+      permissions: subjectAccess.permissions,
+      type: 'access',
+      family,
+      act: input.actor.id,
+      imp: sessionId,
+    },
+    ctx.jwtSecret,
+    { expiresIn: Math.floor(input.minutes * 60) },
+  );
+
+  /*
+   * Say up front what will happen, rather than letting the administrator
+   * discover it as a wall. These gates are the subject's real experience --
+   * bypassing them would make the view-as a lie -- so they are reported,
+   * not removed.
+   */
+  const notices: string[] = [];
+  if (subject.must_change_password) {
+    notices.push('This account must change its password before it can do anything, so that is the screen you will land on.');
+  }
+  if (!subject.mfa_enabled) {
+    notices.push('This account has not set up an authenticator. In production it will be held at the enrolment screen.');
+  }
+  if (!subjectAccess.roles.length) {
+    notices.push('This account holds no roles at all, so almost every screen will be empty.');
+  }
+
+  return {
+    access_token,
+    expires_at: expiresAt.toISOString(),
+    session_id: sessionId,
+    subject: { id: subject.id, username: subject.username, roles: subjectAccess.roles },
+    notices,
+  };
+}
+
+/** End the administrator's live view-as session, if they have one. Idempotent. */
+export async function endImpersonation(
+  ctx: ServiceContext,
+  input: { actorId: string; sessionId?: string },
+): Promise<{ ended: boolean; subject_id: string | null }> {
+  const ended = await ctx.pool.query(
+    `UPDATE impersonation_sessions
+        SET ended_at = now()
+      WHERE actor_id = $1 AND ended_at IS NULL
+        AND ($2::uuid IS NULL OR id = $2::uuid)
+      RETURNING id, subject_id, session_family`,
+    [input.actorId, input.sessionId ?? null],
+  );
+  for (const row of ended.rows as Array<{ subject_id: string; session_family: string }>) {
+    // Revoke the borrowed session too, or the token stays good until it expires.
+    await ctx.pool.query(
+      `UPDATE sessions SET revoked = true, revoked_at = now()
+        WHERE family = $1 AND user_id = $2 AND revoked = false`,
+      [row.session_family, row.subject_id],
+    );
+  }
+  return {
+    ended: (ended.rowCount ?? 0) > 0,
+    subject_id: (ended.rows[0] as { subject_id: string } | undefined)?.subject_id ?? null,
+  };
 }

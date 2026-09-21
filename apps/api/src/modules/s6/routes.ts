@@ -47,6 +47,8 @@ interface AuthUser {
   roles: string[];
   permissions: string[];
   scopes?:Array<{scope_type:string|null;scope_id:string|null}>;
+  /** §075: present when an administrator is viewing as this user. */
+  impersonator?: { id: string };
 }
 
 /** IST calendar day for "today" scoping (single source for S6 widgets). */
@@ -817,7 +819,7 @@ export async function registerS6Routes(
     reportRegistry.set(id, entry);
     await writeAudit(db, {
       orgId: user.orgId,
-      actorId: user.id,
+      actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
       actorIp: req.ip,
       actorUserAgent:
         typeof req.headers["user-agent"] === "string"

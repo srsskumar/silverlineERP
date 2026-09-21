@@ -242,7 +242,7 @@ export async function registerHolidayRoutes(
     const body = toShape(row);
     await writeAudit(db, {
       orgId: user.orgId,
-      actorId: user.id,
+      actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
       actorIp: req.ip,
       actorUserAgent:
         typeof req.headers["user-agent"] === "string"

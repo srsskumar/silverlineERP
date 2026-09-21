@@ -816,7 +816,7 @@ export async function registerAttendanceRoutes(
     if (locked && d.payroll_override_reason) {
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: req.ip,
         actorUserAgent:
           typeof req.headers["user-agent"] === "string"
@@ -1539,7 +1539,7 @@ export async function registerAttendanceRoutes(
       }
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: req.ip,
         actorUserAgent:
           typeof req.headers["user-agent"] === "string"
@@ -1611,7 +1611,7 @@ export async function registerAttendanceRoutes(
     if (lockedRun && d.payroll_override_reason) {
       await writeAudit(db, {
         orgId: user.orgId,
-        actorId: user.id,
+        actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: req.ip,
         actorUserAgent:
           typeof req.headers["user-agent"] === "string"
