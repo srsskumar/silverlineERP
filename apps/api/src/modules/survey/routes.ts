@@ -3298,6 +3298,34 @@ export async function registerSurveyRoutes(
       };
     });
 
+  /**
+   * A village's claims may not release more than all of it.
+   *
+   * Each claim's percent was checked on its own, so three claims of sixty
+   * each were all acceptable and the village was billed at 180%. The total is
+   * checked here, under a lock on the village row: two claims raised at the
+   * same moment would otherwise each read the other's absence and both pass.
+   *
+   * Returned claims release nothing (claimedPercent says the same), and the
+   * claim being amended is left out so that it is counted once, at its new
+   * figure.
+   */
+  async function withinHundredOr422(
+    db: PoolClient, villageId: string, adding: number, excludeClaimId: string | null,
+  ): Promise<void> {
+    await db.query('SELECT id FROM survey_villages WHERE id = $1 FOR UPDATE', [villageId]);
+    const standing = Number((await db.query(
+      `SELECT COALESCE(sum(percent), 0) AS total FROM survey_village_billing
+        WHERE survey_village_id = $1 AND status <> 'REJECTED'
+          AND ($2::uuid IS NULL OR id <> $2::uuid)`,
+      [villageId, excludeClaimId])).rows[0].total);
+    if (Math.round((standing + adding) * 100) > 100 * 100) {
+      fail('CLAIMED_OVER_100',
+        `This village already has ${standing}% claimed, and ${adding}% more would take it past 100%. `
+        + 'Check the percentage, or amend the claim that is already standing.', 422);
+    }
+  }
+
   app.post('/api/v1/survey/villages/:id/billing', { preHandler: guard('survey.manage') },
     async (req, reply) => {
       const u = actor(req), id = (req.params as { id: string }).id;
@@ -3320,6 +3348,10 @@ export async function registerSurveyRoutes(
             fail('MILESTONE_ALREADY_CLAIMED',
               'Milestone ' + input.milestone + ' has already been submitted for this village. ' +
               'Open the claim to change its status or reference number.', 409);
+          }
+          if (status !== 'REJECTED') {
+            await withinHundredOr422(db, id,
+              Number(input.percent ?? MILESTONE_PERCENT[input.milestone] ?? 0), null);
           }
           const row = (await db.query(
             `INSERT INTO survey_village_billing(org_id, survey_village_id, milestone,
@@ -3356,6 +3388,12 @@ export async function registerSurveyRoutes(
             fail('DECISION_DATE_REQUIRED',
               'A claim recorded as ' + status.toLowerCase() +
               ' needs the date the department decided it.', 422);
+          }
+          // Checked whenever the claim will be standing afterwards: a new
+          // percent, or a returned claim put back in, both change the total.
+          if (status !== 'REJECTED') {
+            await withinHundredOr422(db, String(row.survey_village_id),
+              Number(input.percent ?? row.percent ?? 0), id);
           }
           const sets: string[] = [], values: unknown[] = [id];
           for (const key of ['percent', 'status', 'submitted_on', 'decided_on',
@@ -3531,6 +3569,29 @@ export async function registerSurveyRoutes(
             const found = new Set(rows.map(r => String(r.id)));
             const notFound = ids.filter(id => !found.has(id));
 
+            /*
+             * What already stands on each village, read under a lock, so a
+             * batch cannot take a village past 100% any more than a single
+             * claim can (see withinHundredOr422). Locked in id order, the
+             * same order every batch uses, so two batches cannot deadlock.
+             * The claim this batch would amend is left out of its own total.
+             */
+            const standingBy = new Map<string, number>();
+            if (input.action === 'SUBMIT' && rows.length) {
+              await db.query(
+                `SELECT id FROM survey_villages WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE`,
+                [rows.map(r => r.id)]);
+              const sums = (await db.query(
+                `SELECT survey_village_id AS vid, COALESCE(sum(percent), 0) AS total
+                   FROM survey_village_billing
+                  WHERE survey_village_id = ANY($1::uuid[]) AND status <> 'REJECTED'
+                    AND milestone <> $2
+                  GROUP BY 1`,
+                [rows.map(r => r.id), input.milestone])).rows;
+              for (const s of sums) standingBy.set(String(s.vid), Number(s.total));
+            }
+            const adding = Number(input.percent ?? MILESTONE_PERCENT[input.milestone] ?? 0);
+
             const eligible: typeof rows = [];
             const skipped: Array<{ village_name: string; reason: string }> = [];
 
@@ -3553,6 +3614,10 @@ export async function registerSurveyRoutes(
                  */
                 if (MILESTONE_REQUIRES[input.milestone] && !r.earned) {
                   skipped.push({ village_name: String(r.village_name), reason: 'NOT_EARNED' });
+                  continue;
+                }
+                if (Math.round(((standingBy.get(String(r.id)) ?? 0) + adding) * 100) > 100 * 100) {
+                  skipped.push({ village_name: String(r.village_name), reason: 'CLAIMED_OVER_100' });
                   continue;
                 }
               } else {

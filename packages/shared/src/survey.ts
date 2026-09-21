@@ -2270,7 +2270,8 @@ export type BillingSkipReason =
   | 'ALREADY_CLAIMED'
   | 'NOTHING_TO_DECIDE'
   | 'ALREADY_IN_THAT_STATE'
-  | 'NOT_EARNED';
+  | 'NOT_EARNED'
+  | 'CLAIMED_OVER_100';
 
 export const BILLING_SKIP_LABELS: Record<BillingSkipReason, string> = {
   ALREADY_CLAIMED: 'already submitted at this milestone',
@@ -2279,6 +2280,7 @@ export const BILLING_SKIP_LABELS: Record<BillingSkipReason, string> = {
   // Named for the stage, because "not earned" alone sends somebody looking
   // for a setting rather than for the QC that has not been signed off.
   NOT_EARNED: 'the stage this milestone falls due at is not signed off yet',
+  CLAIMED_OVER_100: 'this claim would take the village past 100% claimed',
 };
 
 /* ----------------------------------------------- ground-truthing staffing */
