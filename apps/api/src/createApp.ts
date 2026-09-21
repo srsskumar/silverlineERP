@@ -74,6 +74,9 @@ export async function buildApp(
     // Fastify's deprecated top-level disableRequestLogging option.
     logController: new LogController({ disableRequestLogging: true }),
     bodyLimit: 8 * 1024 * 1024,
+    // Who may say where a request came from: see ApiConfig.trustProxy. Every
+    // per-address limit and every audit row's actor_ip depends on it.
+    trustProxy: config.trustProxy,
   });
   await registerRequestId(app);
   await registerErrorHandler(app);

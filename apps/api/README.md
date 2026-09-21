@@ -53,7 +53,8 @@ npx tsc -p tsconfig.json && npx tsc -p tsconfig.check.json
 | `JWT_SECRET` | `dev-secret-change-me` | sign access JWTs (15 min) |
 | `PORT` | `3001` | |
 | `BCRYPT_ROUNDS` | `10` | bcryptjs cost |
-| `LOGIN_RATE_LIMIT_MAX` | `10` | logins per IP per minute |
+| `LOGIN_RATE_LIMIT_MAX` | `10` | sign-in attempts per minute, counted separately per client address and per account name; MFA codes, password changes, reset requests, MFA setup and view-as use the same number in their own buckets, refresh six times it per address. In memory: correct for the single API process, not across several |
+| `TRUST_PROXY` | `127.0.0.1,::1` | peers whose `X-Forwarded-For` is believed (Fastify `trustProxy`); a comma list of addresses/CIDRs, or `true`/`false` |
 | `ENCRYPTION_KEY` | `0123456789abcdef…abcdef` (dev only) | 32-byte hex for AES-256-GCM PII encryption (aadhaar/pan/bank_account). Dev default is `0123…abcdef` repeated (64 hex chars, see `src/common/crypto.ts`); set a real secret everywhere else. Never logged. |
 | `UPLOADS_DIR` | `./uploads` | local document storage root (S1 driver; files under `<dir>/<employee_id>/`) |
 | `REPORTS_DIR` | `./exports` | local CSV report storage root (S6; files `<dir>/<report_id>.csv`, created at runtime) |

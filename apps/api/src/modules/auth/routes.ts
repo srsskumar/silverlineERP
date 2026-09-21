@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Pool } from "pg";
 import {
   ApiError,
@@ -17,7 +17,7 @@ import {
 import { writeAudit } from "../../common/audit.js";
 import { buildAuthenticate, requirePermission } from "../../common/auth.js";
 import { sendError } from "../../common/httpErrors.js";
-import { createLoginRateLimiter } from "../../common/rateLimit.js";
+import { createAuthRateLimit, typedAccount } from "../../common/rateLimit.js";
 import {
   changePassword,
   disableMfa,
@@ -45,10 +45,43 @@ export async function registerAuthRoutes(
 ): Promise<void> {
   const ctx: ServiceContext = { pool: opts.pool, jwtSecret: opts.jwtSecret };
   const authenticate = buildAuthenticate({ pool: opts.pool, jwtSecret: opts.jwtSecret });
-  const loginRateLimit = createLoginRateLimiter({
-    max: opts.loginRateLimitMax,
-    windowMs: opts.loginRateLimitWindowMs,
-  });
+  /*
+   * One limiter per class of endpoint (AUTH-3), each counting by client
+   * address and by account in separate buckets -- see createAuthRateLimit.
+   * All in memory: the API is one process on one box, and that is what
+   * makes a Map an honest count. A second process would need these moved
+   * into the database.
+   */
+  const limit = (
+    max: number,
+    keys: Parameters<typeof createAuthRateLimit>[0]["keys"],
+    message?: string,
+  ) => createAuthRateLimit({ max, windowMs: opts.loginRateLimitWindowMs, keys, message });
+  const byUser = (req: FastifyRequest) => ({ ip: req.ip, account: req.authUser?.id });
+  // Guessing a password: by the name being guessed at, as well as by address.
+  const loginRateLimit = limit(opts.loginRateLimitMax,
+    (req) => ({ ip: req.ip, account: typedAccount(req) }),
+    "Too many sign-in attempts, try again later");
+  // Guessing a six-digit code, or a current password, from inside a session.
+  const mfaRateLimit = limit(opts.loginRateLimitMax, byUser,
+    "Too many authentication codes, try again later");
+  const passwordRateLimit = limit(opts.loginRateLimitMax, byUser,
+    "Too many password attempts, try again later");
+  // Each request notifies people; the ten-minute rule below stops repeats
+  // for one account, this stops one address walking through all of them.
+  const resetRequestRateLimit = limit(opts.loginRateLimitMax,
+    (req) => ({ ip: req.ip, account: typedAccount(req) }));
+  /*
+   * Refresh runs itself: every open tab and every phone refreshes every
+   * fifteen minutes, and an office on one connection shares an address. So
+   * it is looser than sign-in and counts by address only -- what it guards
+   * against is somebody replaying guesses at a 256-bit token, which a limit
+   * cannot make harder, and a loop hammering the database, which it can.
+   */
+  const refreshRateLimit = limit(opts.loginRateLimitMax * 6, (req) => ({ ip: req.ip }));
+  // Each call writes a new secret or mints a token: nobody needs many.
+  const mfaSetupRateLimit = limit(opts.loginRateLimitMax, byUser);
+  const impersonateRateLimit = limit(opts.loginRateLimitMax, byUser);
 
   const metaOf = (req: {
     ip: string;
@@ -129,7 +162,7 @@ export async function registerAuthRoutes(
     },
   );
 
-  app.post("/api/v1/auth/refresh", async (req, reply) => {
+  app.post("/api/v1/auth/refresh", { preHandler: refreshRateLimit }, async (req, reply) => {
     const parsed = refreshSchema.safeParse(req.body);
     if (!parsed.success) {
       return sendError(reply, req.requestId, {
@@ -195,7 +228,7 @@ export async function registerAuthRoutes(
 
   app.post(
     "/api/v1/auth/mfa/setup",
-    { preHandler: authenticate },
+    { preHandler: [authenticate, mfaSetupRateLimit] },
     async (req, reply) => {
       const user = req.authUser;
       if (!user) {
@@ -222,7 +255,7 @@ export async function registerAuthRoutes(
 
   app.post(
     "/api/v1/auth/mfa/verify",
-    { preHandler: [authenticate,loginRateLimit] },
+    { preHandler: [authenticate, mfaRateLimit] },
     async (req, reply) => {
       const user = req.authUser;
       if (!user) {
@@ -258,7 +291,7 @@ export async function registerAuthRoutes(
 
   app.post(
     "/api/v1/auth/mfa/disable",
-    { preHandler: [authenticate,loginRateLimit] },
+    { preHandler: [authenticate, mfaRateLimit] },
     async (req, reply) => {
       const user = req.authUser;
       if (!user) {
@@ -315,13 +348,13 @@ export async function registerAuthRoutes(
   /**
    * Setting your own password (§34).
    *
-   * Rate limited with the login limiter: guessing the current password here
-   * is the same attack as guessing it at the login form, and leaving this
-   * door unlimited would simply move it.
+   * Rate limited like the login form: guessing the current password here is
+   * the same attack as guessing it there, and leaving this door unlimited
+   * would simply move it.
    */
   app.post(
     "/api/v1/auth/password",
-    { preHandler: [authenticate, loginRateLimit] },
+    { preHandler: [authenticate, passwordRateLimit] },
     async (req, reply) => {
       const user = req.authUser;
       if (!user) {
@@ -425,7 +458,7 @@ export async function registerAuthRoutes(
    */
   app.post(
     "/api/v1/auth/password-reset-request",
-    { preHandler: loginRateLimit },
+    { preHandler: resetRequestRateLimit },
     async (req, reply) => {
       const body = (req.body ?? {}) as { username?: string };
       const typed = String(body.username ?? "").trim();
@@ -602,7 +635,7 @@ export async function registerAuthRoutes(
 
   app.post(
     "/api/v1/auth/impersonate",
-    { preHandler: requirePermission(authenticate, "admin.impersonate") },
+    { preHandler: [requirePermission(authenticate, "admin.impersonate"), impersonateRateLimit] },
     async (req, reply) => {
       const me = req.authUser!;
       const parsed = impersonateSchema.safeParse(req.body);
