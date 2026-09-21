@@ -1355,3 +1355,54 @@ describe("project close", () => {
     expect((audit.rows[0] as { reason: string }).reason).toBe("all done");
   });
 });
+
+// ------------------------------------------------------------------ BR-02 / WORK-18
+
+describe("assigning on a finished project (BR-02)", () => {
+  it("refuses to reassign a task on a closed or cancelled project", async () => {
+    // Creating a task there was refused; handing an existing one to somebody
+    // reopened it by the side door.
+    const h = await adminHeaders();
+    const worker = await mkUser(["EMPLOYEE"], "late");
+    for (const status of ["CLOSED", "CANCELLED"]) {
+      const p = await mkProject(h);
+      const t = await mkTask(h, p.id);
+      await pool.query("UPDATE projects SET status = $2 WHERE id = $1", [p.id, status]);
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/tasks/${t.id}/assign`,
+        headers: h,
+        payload: { assignee_id: worker.id, reason: "after the close" },
+      });
+      expect(res.statusCode, status).toBe(409);
+      expect((res.json() as { code: string }).code).toBe("PROJECT_INACTIVE");
+      const after = await pool.query("SELECT assignee_id FROM tasks WHERE id = $1", [t.id]);
+      expect(after.rows[0].assignee_id).not.toBe(worker.id);
+    }
+  });
+});
+
+describe("dependency cycles under concurrency (WORK-18)", () => {
+  it("lets only one of A->B and B->A through when both arrive at once", async () => {
+    // Each read the graph without the other's edge, found no cycle, and both
+    // committed one.
+    const h = await adminHeaders();
+    for (let round = 0; round < 5; round += 1) {
+      const p = await mkProject(h);
+      const a = await mkTask(h, p.id, { title: "A" });
+      const b = await mkTask(h, p.id, { title: "B" });
+      const [x, y] = await Promise.all([
+        app.inject({ method: "POST", url: `/api/v1/tasks/${b.id}/dependencies`,
+          headers: h, payload: { predecessor_id: a.id } }),
+        app.inject({ method: "POST", url: `/api/v1/tasks/${a.id}/dependencies`,
+          headers: h, payload: { predecessor_id: b.id } }),
+      ]);
+      expect([x.statusCode, y.statusCode].sort()).toEqual([201, 422]);
+      const edges = await pool.query(
+        `SELECT count(*)::int AS n FROM task_dependencies
+          WHERE (predecessor_id = $1 AND successor_id = $2) OR (predecessor_id = $2 AND successor_id = $1)`,
+        [a.id, b.id]);
+      expect(edges.rows[0].n).toBe(1);
+    }
+  });
+});
