@@ -30,15 +30,23 @@ describe('day()', () => {
     expect(day('2026-04-03')).not.toMatch(/^\d\d-\d\d-/);
   });
 
-  it('does not shift a bare date into the reader\'s timezone', () => {
+  it('puts a bare date through the same clock as everything else', () => {
     /*
-     * "2026-09-21" is a calendar date, not an instant. Parsing it as UTC and
-     * printing it locally shows the day before for anybody west of
-     * Greenwich — which is how a return filed on the 21st appears on the
-     * 20th to somebody in London.
+     * There is one path, not two. A bare date parses as UTC midnight and IST
+     * is five and a half hours ahead, so it lands at 05:30 on the same day
+     * and cannot slip backwards — the special case that used to sit here was
+     * guarding against a reader west of Greenwich, and there is no such
+     * reader.
      */
     expect(day('2026-09-21')).toBe('21-Sep-2026');
     expect(day('2026-01-01')).toBe('01-Jan-2026');
+    expect(day('2026-12-31')).toBe('31-Dec-2026');
+  });
+
+  it('does not render a day that does not exist', () => {
+    // The old special case read the string straight through and printed
+    // "29-Feb-2026" for a year with no 29th of February.
+    expect(day('2026-02-29')).toBe('01-Mar-2026');
   });
 
   it('reads a full timestamp, in IST', () => {
@@ -85,6 +93,54 @@ describe('dayTime()', () => {
   });
 });
 
+function sources(dir: string, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir)) {
+    if (['node_modules', '.next', '.next-verify', 'dist', 'android', 'ios',
+      'tests', 'tests-dom'].includes(entry) || entry.startsWith('.')) continue;
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) sources(full, out);
+    else if (full.endsWith('.tsx') || full.endsWith('.ts')) out.push(full);
+  }
+  return out;
+}
+
+describe('one clock, no settings', () => {
+  it('has no per-user timezone anywhere', () => {
+    /*
+     * The phone's home screen used to compute "today" from the account's own
+     * timezone, falling back to Asia/Kolkata. A profile set to anything else
+     * gave that person a different today from the crew standing in the
+     * village — and the day a return is filed against is the crew's.
+     */
+    const offenders: string[] = [];
+    const roots = [
+      fileURLToPath(new URL('../', import.meta.url)),
+      fileURLToPath(new URL('../../mobile/', import.meta.url)),
+    ];
+    for (const root of roots) {
+      for (const file of sources(root)) {
+        if (file.includes('/tests')) continue;
+        const body = readFileSync(file, 'utf8');
+        /*
+         * Captured and compared, not matched with a negative lookahead. The
+         * lookahead version passed every file: `\s*` backtracks to a
+         * position where the thing it was told to reject is no longer
+         * directly ahead of it, and the assertion quietly became "does this
+         * file contain the word timeZone".
+         */
+        for (const m of body.matchAll(/timeZone\s*:\s*([^,\n}]+)/g)) {
+          const value = m[1].trim().replace(/['"]/g, '');
+          if (value !== 'Asia/Kolkata' && value !== 'DISPLAY_TIME_ZONE') {
+            offenders.push(`${file.split(root)[1] ?? file}: ${value.slice(0, 40)}`);
+          }
+        }
+      }
+    }
+    expect(offenders, 'every timeZone must be Asia/Kolkata:\n'
+      + offenders.join('\n')).toEqual([]);
+  });
+});
+
 describe('one formatter, not three', () => {
   /*
    * The application rendered dates three ways at once and nobody noticed,
@@ -95,17 +151,6 @@ describe('one formatter, not three', () => {
   // fileURLToPath, not URL.pathname: this repository's own directory has a
   // space in its name, and a percent-encoded path fails to stat.
   const SOURCE = fileURLToPath(new URL('../', import.meta.url));
-
-  function sources(dir: string, out: string[] = []): string[] {
-    for (const entry of readdirSync(dir)) {
-      if (['node_modules', '.next', '.next-verify', 'tests', 'tests-dom'].includes(entry)
-        || entry.startsWith('.')) continue;
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) sources(full, out);
-      else if (full.endsWith('.tsx') || full.endsWith('.ts')) out.push(full);
-    }
-    return out;
-  }
 
   it('formats dates in exactly one place', () => {
     const offenders: string[] = [];

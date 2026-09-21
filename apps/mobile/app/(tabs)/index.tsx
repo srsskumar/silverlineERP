@@ -29,14 +29,23 @@ import {
   Title,
 } from "../../src/ui/primitives";
 import { space, useTheme } from "../../src/theme";
-import { day } from "@silverline/shared";
+import { day, DISPLAY_TIME_ZONE } from "@silverline/shared";
 
 function HomeScreen() {
   const t = useTheme();
   const sync = useSyncEngine();
   const { user } = useAuth();
+  /*
+   * The programme's day, not the account's.
+   *
+   * This used to read the user's own timezone with Asia/Kolkata as a
+   * fallback, which meant a profile set to anything else gave that person a
+   * different "today" from the crew standing in the village — and the day a
+   * return is filed against is the crew's. Everybody here works Indian days;
+   * there is one clock and no setting that can move it.
+   */
   const today = new Intl.DateTimeFormat("en-CA", {
-    timeZone: user?.timezone ?? "Asia/Kolkata",
+    timeZone: DISPLAY_TIME_ZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",

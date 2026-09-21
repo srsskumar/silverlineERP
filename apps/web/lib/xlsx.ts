@@ -1,3 +1,4 @@
+import { dayTime } from '@silverline/shared';
 /**
  * A very small XLSX writer.
  *
@@ -142,9 +143,10 @@ export function titleLines(t: ReportTitle): Array<[string, string]> {
   // its absence is what makes a reader wonder what was left out.
   lines.push(['Filters', t.filters && t.filters.trim() ? t.filters : 'None — everything included']);
   for (const e of t.extra ?? []) lines.push(e);
-  lines.push(['Downloaded', new Intl.DateTimeFormat('en-GB', {
-    dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata',
-  }).format(new Date()) + ' IST']);
+  // The same spelling as every date on the screen this came from. A
+  // spreadsheet that dates itself differently from the report is a
+  // spreadsheet somebody has to reconcile by hand.
+  lines.push(['Downloaded', dayTime(new Date())]);
   return lines;
 }
 

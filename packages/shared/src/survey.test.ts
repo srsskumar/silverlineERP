@@ -2274,11 +2274,13 @@ describe('one date format, one clock (§082)', () => {
     expect(day('2026-04-03')).not.toMatch(/^\d\d-\d\d-\d{4}$/);
   });
 
-  it('reads a bare date as a calendar date, not an instant', () => {
-    // Putting "2026-09-21" through a timezone shows the day before to
-    // anybody west of Greenwich — a return filed on the 21st appearing on
-    // the 20th.
+  it('puts every date through the one clock, with no special cases', () => {
+    // IST is ahead of UTC, so a bare date parsed as UTC midnight lands at
+    // 05:30 the same day and never slips back. One path, not two.
     expect(day('2026-09-21')).toBe('21-Sep-2026');
+    expect(day('2026-12-31')).toBe('31-Dec-2026');
+    // And an impossible date normalises rather than being printed as real.
+    expect(day('2026-02-29')).toBe('01-Mar-2026');
   });
 
   it('renders timestamps on the clock the work runs on', () => {

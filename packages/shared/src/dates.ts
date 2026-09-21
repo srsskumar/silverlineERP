@@ -14,17 +14,16 @@ const MONTHS = [
 ] as const;
 
 /**
- * The clock this business runs on.
+ * The clock this business runs on. The only one.
  *
  * Every date in this system is an Indian working day: a return is filed on
  * the day the crew walked the village, a claim goes out on the date on the
- * covering letter, attendance is a punch in a mandal office. Rendering those
- * in the reader's own timezone puts a project manager in London five and a
- * half hours behind the work, and shows a return filed at nine in the
- * morning as the previous evening.
+ * covering letter, attendance is a punch in a mandal office. Every reader is
+ * in the same country as the work.
  *
- * So the clock is fixed, not local. The server already computes the business
- * day in Asia/Kolkata; this is the same decision on the way back out.
+ * So there is one clock and no local fallback anywhere — the server computes
+ * the business day in Asia/Kolkata and this renders it in Asia/Kolkata, and
+ * nothing in between asks the machine what time it thinks it is.
  */
 export const DISPLAY_TIME_ZONE = 'Asia/Kolkata';
 
@@ -58,19 +57,23 @@ function istParts(d: Date): { day: string; month: number; year: string; hour: st
  * programme run between an Indian department and anybody's software is
  * exactly where that costs a day.
  *
- * A bare date — "2026-09-21" — is taken at face value and never put through
- * a timezone at all. It is a calendar date, not an instant, and converting
- * it would print the day before for anybody west of Greenwich.
+ * Everything goes through the same clock — a bare "2026-09-21" as much as a
+ * full timestamp. There used to be a special case here that took a bare date
+ * at face value, guarding against a reader west of Greenwich seeing the day
+ * before. Nobody here is west of Greenwich: this is an Indian programme read
+ * by Indian offices, and IST is five and a half hours *ahead* of UTC, so a
+ * bare date parsed as UTC midnight lands at 05:30 on the same day and can
+ * never slip backwards. The branch defended against nothing and cost a
+ * second code path.
+ *
+ * Removing it also stopped an impossible date being rendered as though it
+ * were real: the old branch read "2026-02-29" straight out of the string and
+ * printed "29-Feb-2026" for a day that does not exist. The single path
+ * normalises it the way the rest of the system does.
  */
 export function day(value: unknown): string {
   if (!value) return '—';
-  const raw = String(value);
-  const plain = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
-  if (plain) {
-    const month = MONTHS[Number(plain[2]) - 1];
-    return month ? `${plain[3]}-${month}-${plain[1]}` : '—';
-  }
-  const d = new Date(raw);
+  const d = new Date(String(value));
   if (Number.isNaN(d.getTime())) return '—';
   const p = istParts(d);
   const month = MONTHS[p.month - 1];
