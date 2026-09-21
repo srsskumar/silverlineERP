@@ -51,13 +51,13 @@ export function moneyIndian(value: unknown): string {
   return INR_COMPACT.format(n);
 }
 
-export function day(value: unknown): string {
-  if (!value) return '—';
-  const d = new Date(String(value));
-  return Number.isNaN(d.getTime())
-    ? '—'
-    : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
-}
+/*
+ * Dates are formatted in @silverline/shared, so the phone and the desk spell
+ * them the same way. Re-exported here because every screen in this app
+ * already reaches for them through lib/finance.
+ */
+export { day, dayTime, DISPLAY_TIME_ZONE } from '@silverline/shared';
+
 
 /**
  * A percentage, or a dash when there is none.

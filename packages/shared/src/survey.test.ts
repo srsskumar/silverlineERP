@@ -27,6 +27,7 @@ import {
   SIGN_OFF_STAGES, earnedMilestones, MILESTONE_REQUIRES, MILESTONE_EARNED_AT,
   LADDER_NOTES,
 } from './survey.js';
+import { day, dayTime } from './dates.js';
 
 const BASIS: Record<string, MeasureBasis> = Object.fromEntries(
   MEASURE_SEEDS.map(m => [m.code, m.basis]));
@@ -435,7 +436,7 @@ describe('role grants', () => {
     // An auditor reads management information including the projection; what
     // they must not have is any of the write permissions.
     expect(SURVEY_ROLE_GRANTS.AUDITOR)
-      .toEqual(['survey.read', 'survey.forecast', 'survey.dashboard']);
+      .toEqual(['survey.read', 'survey.forecast', 'survey.dashboard', 'survey.query']);
     for (const write of ['survey.enter', 'survey.manage', 'survey.target', 'survey.assign']) {
       expect(SURVEY_ROLE_GRANTS.AUDITOR, write).not.toContain(write);
     }
@@ -2256,5 +2257,48 @@ describe('the ladder explains itself (§079)', () => {
     // The distinction §078 turns on, said where somebody reads the figure.
     expect(LADDER_NOTES.GT_COMPLETED).toMatch(/cannot be billed|none of it/i);
     expect(LADDER_NOTES.DATA_SUBMITTED).toMatch(/not being paid|waiting/i);
+  });
+});
+
+describe('one date format, one clock (§082)', () => {
+  it('writes every date as DD-MMM-YYYY', () => {
+    expect(day('2026-09-21')).toBe('21-Sep-2026');
+    expect(day('2026-04-03')).toBe('03-Apr-2026');
+    // Padded, so a column of them lines up.
+    expect(day('2026-09-05')).toHaveLength(11);
+  });
+
+  it('never numbers the month', () => {
+    // 03-04-2026 is the third of April to half the world and the fourth of
+    // March to the other half.
+    expect(day('2026-04-03')).not.toMatch(/^\d\d-\d\d-\d{4}$/);
+  });
+
+  it('reads a bare date as a calendar date, not an instant', () => {
+    // Putting "2026-09-21" through a timezone shows the day before to
+    // anybody west of Greenwich — a return filed on the 21st appearing on
+    // the 20th.
+    expect(day('2026-09-21')).toBe('21-Sep-2026');
+  });
+
+  it('renders timestamps on the clock the work runs on', () => {
+    /*
+     * Every date in this system is an Indian working day. Rendering in the
+     * reader's own timezone puts a project manager in London five and a half
+     * hours behind the crew.
+     */
+    expect(dayTime('2026-09-21T11:00:00.000Z')).toBe('21-Sep-2026 16:30 IST');
+    // 20:00 UTC is already tomorrow in India, and the date must say so.
+    expect(dayTime('2026-09-21T20:00:00.000Z')).toBe('22-Sep-2026 01:30 IST');
+    expect(day('2026-09-21T20:00:00.000Z')).toBe('22-Sep-2026');
+  });
+
+  it('gives a dash for nothing rather than inventing a date', () => {
+    // An absent date is not the epoch: "01-Jan-1970" is how a null comes to
+    // be read as a very old record.
+    for (const empty of [null, undefined, '', 'rubbish']) {
+      expect(day(empty), String(empty)).toBe('—');
+      expect(dayTime(empty), String(empty)).toBe('—');
+    }
   });
 });

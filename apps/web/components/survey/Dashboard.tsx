@@ -22,6 +22,7 @@ import { ErrorCard } from '@/components/ui/ErrorCard';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from '@/components/ui/Table';
 import { Stat } from '@/components/finance/Primitives';
+import { day, dayTime } from '@/lib/finance';
 import { ExportMenu } from '@/components/ui/ExportMenu';
 import {
   SurveyAlertSettings, SurveyContacts, SurveyQueries, type QueryScope,
@@ -459,22 +460,17 @@ export function SurveyDashboard({
           <span>
             Refreshed{' '}
             <time dateTime={d.refreshed.generated_at}>
-              {new Date(d.refreshed.generated_at).toLocaleString('en-IN', {
-                dateStyle: 'medium', timeStyle: 'short',
-              })}
+              {dayTime(d.refreshed.generated_at)}
             </time>
           </span>
           <span>
             {d.refreshed.last_return
-              ? `Latest return ${d.refreshed.last_return}`
+              ? `Latest return ${day(d.refreshed.last_return)}`
               : 'No returns filed yet'}
           </span>
           {d.refreshed.last_stage_change ? (
             <span>
-              Last stage change{' '}
-              {new Date(d.refreshed.last_stage_change).toLocaleDateString('en-IN', {
-                dateStyle: 'medium',
-              })}
+              Last stage change {day(d.refreshed.last_stage_change)}
             </span>
           ) : null}
           <Button variant="ghost" onClick={() => query.refetch()}
@@ -1070,14 +1066,14 @@ export function SurveyDashboard({
                       </span>
                     )}
                   </TD>
-                  <TD className="tabular-nums text-text-muted">{v.gt_started_on ?? '—'}</TD>
-                  <TD className="tabular-nums text-text-muted">{v.gt_expected_end_on ?? '—'}</TD>
+                  <TD className="tabular-nums text-text-muted">{day(v.gt_started_on)}</TD>
+                  <TD className="tabular-nums text-text-muted">{day(v.gt_expected_end_on)}</TD>
                   {/* What actually happened, beside what was promised. */}
                   <TD className={`tabular-nums ${
                     v.gt_completed_on && v.gt_expected_end_on
                       && v.gt_completed_on > v.gt_expected_end_on
                       ? 'text-danger' : 'text-text-muted'}`}>
-                    {v.gt_completed_on ?? '—'}
+                    {day(v.gt_completed_on)}
                   </TD>
                   {/* Asked from the village's own row, carrying the position
                       it was sitting at when the question occurred to somebody. */}
@@ -1094,7 +1090,7 @@ export function SurveyDashboard({
                     v.gt_completed_on && v.gt_expected_end_on
                       && v.gt_completed_on > v.gt_expected_end_on
                       ? 'text-danger' : 'text-text-muted'}`}>
-                    {v.gt_completed_on ?? '—'}
+                    {day(v.gt_completed_on)}
                   </TD>
                   {/* Asked from the village's own row, carrying the position
                       it was sitting at when the question occurred to somebody. */}

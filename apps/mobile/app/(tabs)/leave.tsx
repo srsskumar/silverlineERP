@@ -35,6 +35,7 @@ import {
   Title,
 } from "../../src/ui/primitives";
 import { radius, space, useTheme } from "../../src/theme";
+import { day } from "@silverline/shared";
 
 function statusTone(status: string): "success" | "warning" | "danger" | "neutral" {
   if (status === "APPROVED") return "success";
@@ -228,7 +229,7 @@ function LeaveScreen() {
             <ListRow
               key={r.id}
               title={
-                r.from_date && r.to_date ? `${r.from_date} → ${r.to_date}` : r.id.slice(0, 8)
+                r.from_date && r.to_date ? `${day(r.from_date)} → ${day(r.to_date)}` : r.id.slice(0, 8)
               }
               subtitle={r.reason ? String(r.reason) : undefined}
               right={<Badge text={r.status} tone={statusTone(r.status)} />}
@@ -255,7 +256,7 @@ function LeaveScreen() {
             <View key={r.id} style={{ paddingVertical: space.sm }}>
               <Muted style={{ color: t.text, fontWeight: "600" }}>
                 {r.from_date && r.to_date
-                  ? `${r.from_date} → ${r.to_date}`
+                  ? `${day(r.from_date)} → ${day(r.to_date)}`
                   : r.id.slice(0, 8)}
               </Muted>
               {r.reason ? <Subtle>{String(r.reason)}</Subtle> : null}

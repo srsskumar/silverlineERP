@@ -29,6 +29,7 @@ import {
   Title,
 } from "../../src/ui/primitives";
 import { space, useTheme } from "../../src/theme";
+import { day } from "@silverline/shared";
 
 function HomeScreen() {
   const t = useTheme();
@@ -166,7 +167,7 @@ function HomeScreen() {
             <ListRow
               key={task.id}
               title={task.title}
-              subtitle={typeof task.due_date === "string" ? `Due ${task.due_date}` : undefined}
+              subtitle={typeof task.due_date === "string" ? `Due ${day(task.due_date)}` : undefined}
               right={<Badge text={String(task.status)} tone={taskTone(String(task.status))} />}
               onPress={() => router.push(`/(tabs)/tasks?taskId=${task.id}`)}
               last={i === arr.length - 1}

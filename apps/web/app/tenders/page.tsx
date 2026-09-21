@@ -12,13 +12,12 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { statusLabel } from '@/lib/board-visuals';
+import { day } from '@/lib/finance';
 
 type Row = Record<string, any>;
 
 const inr = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
 const money = (v: unknown) => (Number.isFinite(Number(v)) && Number(v) > 0 ? inr.format(Number(v)) : '—');
-const day = (v: unknown) =>
-  v ? new Date(String(v)).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
 
 /** Status → tone. Only the outcomes get colour; the working states stay quiet. */
 function statusTone(status: string): string {

@@ -8,7 +8,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ScrollView, View } from "react-native";
-import { DELAY_REASONS } from "@silverline/shared";
+import { DELAY_REASONS, day } from "@silverline/shared";
 import {
   getSurveyMeasures,
   getVillageRovers,
@@ -145,7 +145,7 @@ export function DailyReturn({
         entity: "survey_entry",
         // One return per village per day is the rule the server enforces, so
         // it is also the dedupe key: a double tap cannot queue two.
-        op: `${village.id}:${workDate}`,
+        op: `${village.id}:${day(workDate)}`,
         payload: built.entry as unknown as Record<string, unknown>,
       });
       onFiled(message);
@@ -172,7 +172,7 @@ export function DailyReturn({
       </Muted>
       <Row style={{ marginTop: space.sm, marginBottom: space.md }}>
         <Badge text={village.stage_label} tone="info" />
-        <Subtle>Return for {workDate}</Subtle>
+        <Subtle>Return for {day(workDate)}</Subtle>
       </Row>
 
       {catalogue.isError || kit.isError ? (

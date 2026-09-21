@@ -412,7 +412,8 @@ describe('the land survey screen', () => {
       expect(screen.getByText('GT actual end')).toBeInTheDocument());
     // Appears in the village row and again in the export preview, so count
     // rather than insist on one.
-    expect(screen.getAllByText('2026-10-09').length).toBeGreaterThan(0);
+    // DD-MMM-YYYY everywhere now, not the raw ISO the API sends.
+    expect(screen.getAllByText('09-Oct-2026').length).toBeGreaterThan(0);
     expect(screen.getByText('GT expected end')).toBeInTheDocument();
     // Surveyed extent carries km² as well as acres.
     expect(screen.getAllByText(/0\.49/).length).toBeGreaterThan(0);
@@ -643,7 +644,7 @@ describe('the land survey screen', () => {
     const { default: SurveyPage } = await import('@/app/survey/page');
     wrap(React.createElement(SurveyPage));
     await waitFor(() => expect(screen.getByText(/^Refreshed/)).toBeInTheDocument());
-    expect(screen.getByText('Latest return 2026-09-19')).toBeInTheDocument();
+    expect(screen.getByText('Latest return 19-Sep-2026')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Refresh' })).toBeInTheDocument();
   });
 

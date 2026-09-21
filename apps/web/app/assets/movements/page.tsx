@@ -17,6 +17,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { apiRequestRaw } from '@/lib/apiClient';
 import { ASSET_CONDITIONS } from '@silverline/shared';
+import { dayTime } from '@/lib/finance';
 
 /**
  * Where equipment has been (§note 7).
@@ -240,7 +241,6 @@ function when(value: unknown): string {
   if (!value) return '—';
   const d = new Date(String(value));
   if (Number.isNaN(d.getTime())) return String(value);
-  return d.toLocaleString(undefined, {
-    year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit',
-  });
+  // One format across the application (lib/finance): DD-MMM-YYYY HH:MM.
+  return dayTime(d);
 }

@@ -1,3 +1,4 @@
+import { day } from './finance';
 /**
  * Presentation helpers for the Kanban board.
  *
@@ -159,7 +160,9 @@ export function dueState(
   if (!plannedEndDate) return null;
   const due = new Date(plannedEndDate);
   if (!Number.isFinite(due.getTime())) return null;
-  const label = due.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  // One format across the application, and the same one on a task chip as
+  // on a survey row: a due date the reader recognises at a glance.
+  const label = day(plannedEndDate);
   if (isDoneLike(statusCode)) return { label, overdue: false };
   // Compare dates, not instants: a task due today is not overdue at 09:00.
   const endOfDue = Date.UTC(due.getUTCFullYear(), due.getUTCMonth(), due.getUTCDate(), 23, 59, 59);

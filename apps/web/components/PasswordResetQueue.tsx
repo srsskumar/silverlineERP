@@ -11,6 +11,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { useToast } from '@/components/ui/Toast';
 import { messageOf } from '@/lib/form-errors';
+import { dayTime } from '@/lib/finance';
 
 /**
  * Who is locked out, and one place to let them back in (§note 16).
@@ -182,7 +183,6 @@ export function PasswordResetQueue() {
 function when(value: unknown): string {
   const d = new Date(String(value));
   if (Number.isNaN(d.getTime())) return String(value);
-  return d.toLocaleString(undefined, {
-    month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit',
-  });
+  // One format across the application (lib/finance): DD-MMM-YYYY HH:MM.
+  return dayTime(d);
 }

@@ -10,6 +10,7 @@ import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { statusLabel } from '@/lib/board-visuals';
+import { day } from '@/lib/finance';
 
 type Row = Record<string, any>;
 
@@ -163,7 +164,7 @@ function LeadCard({ lead, onOpen }: { lead: Row; onOpen: () => void }) {
           {lead.next_follow_up_date ? (
             <span className={overdue ? 'font-medium text-danger' : ''}>
               {overdue ? 'Follow-up due ' : 'Follow up '}
-              {new Date(String(lead.next_follow_up_date)).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+              {day(lead.next_follow_up_date)}
             </span>
           ) : null}
         </div>

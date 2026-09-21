@@ -16,6 +16,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { apiRequestRaw } from '@/lib/apiClient';
 import { peopleIndex, personLabel, listPeople } from '@/lib/people';
+import { dayTime } from '@/lib/finance';
 
 /**
  * The audit trail (§note 6).
@@ -254,8 +255,6 @@ function when(value: unknown): string {
   const d = new Date(String(value));
   if (Number.isNaN(d.getTime())) return String(value);
   // The reader's own clock, which is the one they are comparing against.
-  return d.toLocaleString(undefined, {
-    year: 'numeric', month: 'short', day: '2-digit',
-    hour: '2-digit', minute: '2-digit',
-  });
+  // One format across the application (lib/finance): DD-MMM-YYYY HH:MM.
+  return dayTime(d);
 }

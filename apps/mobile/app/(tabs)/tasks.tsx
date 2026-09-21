@@ -40,6 +40,7 @@ import {
   Title,
 } from "../../src/ui/primitives";
 import { radius, space, useTheme } from "../../src/theme";
+import { day } from "@silverline/shared";
 
 function statusTone(status: string): "success" | "warning" | "info" | "neutral" {
   if (status === "DONE") return "success";
@@ -207,7 +208,7 @@ function TasksScreen() {
             <ListRow
               key={t.id}
               title={t.title}
-              subtitle={typeof t.due_date === "string" ? `Due ${t.due_date}` : undefined}
+              subtitle={typeof t.due_date === "string" ? `Due ${day(t.due_date)}` : undefined}
               right={<Badge text={t.status} tone={statusTone(t.status)} />}
               onPress={() => setSelectedId(t.id)}
               last={i === arr.length - 1}

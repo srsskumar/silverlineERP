@@ -18,6 +18,7 @@ import { EmptyState } from './ui/EmptyState';
 import { ErrorCard } from './ui/ErrorCard';
 import { Skeleton } from './ui/Skeleton';
 import { Spinner } from './ui/Spinner';
+import { dayTime } from '@/lib/finance';
 
 const PAGE_LIMIT = 20;
 
@@ -150,9 +151,8 @@ function InboxRow({
 function when(value: unknown): string {
   const d = new Date(String(value));
   if (Number.isNaN(d.getTime())) return String(value);
-  return d.toLocaleString(undefined, {
-    year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit',
-  });
+  // One format across the application (lib/finance): DD-MMM-YYYY HH:MM.
+  return dayTime(d);
 }
 
 /**

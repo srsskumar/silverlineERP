@@ -31,6 +31,7 @@ import {
   Title,
 } from "../../src/ui/primitives";
 import { space, useTheme } from "../../src/theme";
+import { day } from "@silverline/shared";
 
 type Sheet = { village: MyVillage; kind: "return" | "point" } | null;
 
@@ -56,7 +57,7 @@ function SurveyScreen() {
   return (
     <Screen>
       <Title>Survey</Title>
-      {workDate ? <Muted>Day of {workDate}</Muted> : null}
+      {workDate ? <Muted>Day of {day(workDate)}</Muted> : null}
 
       {message ? (
         <Banner tone="success" icon="checkmark-circle-outline" title={message} />
@@ -158,9 +159,9 @@ function SurveyScreen() {
             <Button title="Close" variant="ghost" onPress={() => close()} />
           </Row>
           {sheet?.kind === "return" ? (
-            <DailyReturn village={sheet.village} workDate={workDate} onFiled={close} />
+            <DailyReturn village={sheet.village} workDate={day(workDate)} onFiled={close} />
           ) : sheet?.kind === "point" ? (
-            <ControlPointForm village={sheet.village} workDate={workDate} onRecorded={close} />
+            <ControlPointForm village={sheet.village} workDate={day(workDate)} onRecorded={close} />
           ) : null}
         </View>
       </Modal>

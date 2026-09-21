@@ -24,6 +24,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { Notice } from '@/components/finance/Primitives';
 import { useToast } from '@/components/ui/Toast';
 import { messageOf } from '@/lib/form-errors';
+import { day } from '@/lib/finance';
 import {
   QUERY_KINDS, QUERY_KIND_LABELS, QUERY_STATUS_LABELS,
   CONTACT_SIDE_LABELS, ALERT_KINDS,
@@ -328,7 +329,7 @@ export function SurveyQueries({
               </div>
               <p className="mt-1 whitespace-pre-wrap text-xs text-text-muted">{q.body}</p>
               <p className="mt-1 text-2xs text-text-subtle">
-                {q.raised_by_name ?? 'Somebody'} · {String(q.raised_at).slice(0, 10)}
+                {q.raised_by_name ?? 'Somebody'} · {day(q.raised_at)}
               </p>
               {q.answer ? (
                 <p className="mt-1.5 border-l-2 border-success/50 pl-2 text-xs text-text">
@@ -433,7 +434,7 @@ export function SurveyAlertSettings({ projectId }: { projectId: string }) {
                 <span className="text-2xs text-text-subtle">{r.label}</span>
               ) : null}
               <Badge tone={r.live ? 'success' : 'neutral'} size="sm">
-                {r.live ? `until ${r.active_until}` : 'stopped'}
+                {r.live ? `until ${day(r.active_until)}` : 'stopped'}
               </Badge>
               <span className="text-2xs text-text-subtle">
                 {(r.kinds ?? []).length === 0
