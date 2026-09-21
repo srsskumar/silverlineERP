@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ageingBucket, daysBetween, ageOutstanding, payableDue, msmeInterestOn,
-  creditExposure, daysSalesOutstanding, selectForRun, PAYMENT_RUN_TRANSITIONS,
+  creditExposure, daysSalesOutstanding, selectForRun, matchAllowsPayment, PAYMENT_RUN_TRANSITIONS,
   LEDGER_ROLE_GRANTS, LEDGER_PERMISSIONS,
   paymentRunSchema, runDecisionSchema, payableHoldSchema,
   type PayableCandidate,
@@ -231,10 +231,46 @@ describe('selectForRun', () => {
     expect(r.included).toHaveLength(1);
   });
 
-  it('lets the match override through', () => {
+  it('lets the match override through with a reason for that invoice', () => {
     const r = selectForRun([base({ matchStatus: 'EXCEPTION' })],
-      { asOf: '2026-09-15', hasMatchOverride: true });
+      { asOf: '2026-09-15', hasMatchOverride: true, matchOverrides: { d1: 'Short delivery credited' } });
     expect(r.included).toHaveLength(1);
+    expect(r.included[0].overrideReason).toBe('Short delivery credited');
+  });
+
+  it('does not let the override permission alone release an unmatched invoice', () => {
+    // An override nobody can explain later is not a control.
+    const bare = selectForRun([base({ matchStatus: 'EXCEPTION' })],
+      { asOf: '2026-09-15', hasMatchOverride: true });
+    expect(bare.excluded[0].code).toBe('NOT_MATCHED');
+    const otherDoc = selectForRun([base({ matchStatus: 'EXCEPTION' })],
+      { asOf: '2026-09-15', hasMatchOverride: true, matchOverrides: { d2: 'Wrong invoice' } });
+    expect(otherDoc.excluded[0].code).toBe('NOT_MATCHED');
+    const noPermission = selectForRun([base({ matchStatus: 'EXCEPTION' })],
+      { asOf: '2026-09-15', matchOverrides: { d1: 'Accepted' } });
+    expect(noPermission.excluded[0].code).toBe('NOT_MATCHED');
+  });
+
+  it('treats a never-matched invoice with a purchase order as unmatched', () => {
+    // "Never checked" is not "passed".
+    const r = selectForRun([base({ matchStatus: null, hasPurchaseOrder: true })], { asOf: '2026-09-15' });
+    expect(r.excluded[0].code).toBe('NOT_MATCHED');
+    expect(matchAllowsPayment({ matchStatus: null, hasPurchaseOrder: true })).toBe(false);
+    expect(matchAllowsPayment({ matchStatus: 'MATCHED', hasPurchaseOrder: true })).toBe(true);
+    expect(matchAllowsPayment({ matchStatus: 'OVERRIDDEN', hasPurchaseOrder: true })).toBe(true);
+  });
+
+  it('pays an invoice with no purchase order and no match status', () => {
+    // Nothing to match it against, so there is no match to fail.
+    const r = selectForRun([base({ matchStatus: null, hasPurchaseOrder: false })], { asOf: '2026-09-15' });
+    expect(r.included).toHaveLength(1);
+  });
+
+  it('excludes an invoice already on an open run', () => {
+    const r = selectForRun([base({ openRunNo: 'PR-7' })], { asOf: '2026-09-15' });
+    expect(r.included).toHaveLength(0);
+    expect(r.excluded[0].code).toBe('IN_OPEN_RUN');
+    expect(r.excluded[0].reason).toContain('PR-7');
   });
 
   it('excludes a held payable but says so', () => {

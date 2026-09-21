@@ -280,11 +280,35 @@ export interface PayableCandidate {
   onHold?: boolean;
   /** Whether the three-way match passed (§13.2). */
   matchStatus?: string | null;
+  /**
+   * Whether the invoice was raised against a purchase order. Only an invoice
+   * with an order behind it has anything to be matched against, so only for
+   * one without an order does a missing match status mean "nothing to check".
+   */
+  hasPurchaseOrder?: boolean;
+  /** The open run (DRAFT or APPROVED) this document already sits on, if any. */
+  openRunNo?: string | null;
 }
 
 export interface RunSelection {
-  included: PayableCandidate[];
+  /** `overrideReason` is set where a failed match was released by override. */
+  included: Array<PayableCandidate & { overrideReason?: string }>;
   excluded: Array<{ documentId: string; code: string; reason: string }>;
+}
+
+/**
+ * Whether an invoice's three-way match lets it be paid.
+ *
+ * OVERRIDDEN is payable: somebody has already formally accepted the
+ * difference, and blocking it a second time would make the override
+ * meaningless. A missing status is only acceptable where there is no order to
+ * match against — for an invoice raised against an order it means the match
+ * was never run, and treating "never checked" as "passed" is exactly how an
+ * invoice for goods that never arrived gets paid.
+ */
+export function matchAllowsPayment(c: Pick<PayableCandidate, 'matchStatus' | 'hasPurchaseOrder'>): boolean {
+  if (c.matchStatus === 'MATCHED' || c.matchStatus === 'OVERRIDDEN') return true;
+  return !c.matchStatus && !c.hasPurchaseOrder;
 }
 
 /**
@@ -299,9 +323,20 @@ export interface RunSelection {
  */
 export function selectForRun(
   candidates: PayableCandidate[],
-  opts: { asOf: string; hasMatchOverride?: boolean; includeNotYetDue?: boolean } = { asOf: '' },
+  opts: {
+    asOf: string;
+    hasMatchOverride?: boolean;
+    /**
+     * The reason given for each document the override releases, by id. The
+     * permission alone releases nothing: an override with no stated reason is
+     * one nobody can later explain to an auditor, so each unmatched invoice
+     * needs its own.
+     */
+    matchOverrides?: Record<string, string>;
+    includeNotYetDue?: boolean;
+  } = { asOf: '' },
 ): RunSelection {
-  const included: PayableCandidate[] = [];
+  const included: RunSelection['included'] = [];
   const excluded: RunSelection['excluded'] = [];
 
   for (const c of candidates) {
@@ -317,23 +352,38 @@ export function selectForRun(
       excluded.push({ documentId: c.documentId, code: 'ON_HOLD', reason: 'On hold' });
       continue;
     }
-    // Paying a bill that does not agree with the order and the receipt is the
-    // failure the three-way match exists to prevent. OVERRIDDEN is payable:
-    // somebody has already formally accepted the difference, and blocking it a
-    // second time would make the override meaningless.
-    const matchOk = !c.matchStatus || c.matchStatus === 'MATCHED' || c.matchStatus === 'OVERRIDDEN';
-    if (!matchOk && !opts.hasMatchOverride) {
+    // Already on a run that has not been cancelled. Putting it on a second one
+    // is how the same invoice gets paid twice.
+    if (c.openRunNo) {
       excluded.push({
-        documentId: c.documentId, code: 'NOT_MATCHED',
-        reason: `Three-way match is ${String(c.matchStatus).toLowerCase()}`,
+        documentId: c.documentId, code: 'IN_OPEN_RUN',
+        reason: `Already on payment run ${c.openRunNo}`,
       });
       continue;
+    }
+    // Paying a bill that does not agree with the order and the receipt is the
+    // failure the three-way match exists to prevent.
+    let overrideReason: string | undefined;
+    if (!matchAllowsPayment(c)) {
+      const reason = opts.matchOverrides?.[c.documentId]?.trim();
+      if (!opts.hasMatchOverride || !reason) {
+        excluded.push({
+          documentId: c.documentId, code: 'NOT_MATCHED',
+          reason: c.matchStatus && c.matchStatus !== 'UNMATCHED'
+            ? `Three-way match is ${String(c.matchStatus).toLowerCase()}`
+            : c.hasPurchaseOrder
+              ? 'Three-way match has not been run against the purchase order'
+              : 'Three-way match has not been recorded',
+        });
+        continue;
+      }
+      overrideReason = reason;
     }
     if (!opts.includeNotYetDue && c.due.effectiveDueDate && opts.asOf < c.due.effectiveDueDate) {
       excluded.push({ documentId: c.documentId, code: 'NOT_DUE', reason: 'Not yet due' });
       continue;
     }
-    included.push(c);
+    included.push(overrideReason ? { ...c, overrideReason } : c);
   }
 
   // A statutory obligation already past its date comes first, whatever else is
@@ -393,6 +443,15 @@ export const paymentRunSchema = z.object({
   bank_account: z.string().trim().max(50).optional(),
   include_not_yet_due: z.boolean().default(false),
   notes: z.string().trim().max(1000).optional(),
+  /**
+   * Invoices to release despite a failed or missing three-way match, each
+   * with the reason. Needs the match.override permission; the reason is
+   * stored on the run line it releases.
+   */
+  match_overrides: z.array(z.object({
+    document_id: uuid,
+    reason: text.max(1000),
+  })).max(500).default([]),
 });
 
 export const runDecisionSchema = z.object({

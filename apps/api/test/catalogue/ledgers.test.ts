@@ -42,11 +42,30 @@ async function msmeVendor(over: Record<string, unknown> = {}) {
 async function invoice(over: Record<string, unknown> = {}) {
   const r = await w.pool.query(
     `INSERT INTO invoices(org_id, serial_number, vendor_id, hsn, gst_enabled, gst_rate,
-       subtotal, tax, total, payment_mode, reference, due_date, accepted_on, match_status)
-     VALUES($1,$2,$3,'9954',false,0,$4,0,$4,'NEFT','ref',$5,$6,$7) RETURNING *`,
+       subtotal, tax, total, payment_mode, reference, due_date, accepted_on, match_status,
+       purchase_order_id)
+     VALUES($1,$2,$3,'9954',false,0,$4,0,$4,'NEFT','ref',$5,$6,$7,$8) RETURNING *`,
     [w.orgId, uniq("INV"), over.vendor_id ?? w.vendorId, over.total ?? 100000,
-     over.due_date ?? null, over.accepted_on ?? null, over.match_status ?? 'MATCHED']);
+     over.due_date ?? null, over.accepted_on ?? null,
+     "match_status" in over ? over.match_status : 'MATCHED',
+     over.purchase_order_id ?? null]);
   return r.rows[0];
+}
+
+/** Build a run as the payments clerk; returns the run and the ids it took. */
+async function buildRun(headers: Headers = w.role.PAYROLL_OFFICER, extra: Record<string, unknown> = {}) {
+  const run = await post(headers, "/api/v1/payment-runs", {
+    run_no: uniq("PR"), run_date: "2026-09-15", due_through: "2026-09-15", ...extra,
+  });
+  expect(run.status, JSON.stringify(run.body)).toBe(201);
+  const lines = await w.pool.query(
+    "SELECT document_id, match_override_reason FROM payment_run_lines WHERE run_id = $1", [run.data.id]);
+  return {
+    run: run.data,
+    ids: lines.rows.map(l => String(l.document_id)),
+    lines: lines.rows,
+    excluded: Object.fromEntries(run.data.excluded.map((e: any) => [e.documentId, e.code])) as Record<string, string>,
+  };
 }
 
 beforeAll(async () => { w = await buildWorld(); }, 180_000);
@@ -183,6 +202,101 @@ describe("payment run", () => {
     const res = await post(
       { ...w.role.PAYROLL_OFFICER, ...(await ver("payment_runs", runs.data[0].id)) },
       `/api/v1/payment-runs/${runs.data[0].id}/decision`, { action: "APPROVE" });
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("one invoice, one payment", () => {
+  it("keeps an invoice on an open run out of the next run", async () => {
+    // Two runs a day apart each took every unpaid invoice, and both were paid.
+    const inv = await invoice({ total: 12345, due_date: "2026-02-01" });
+    const first = await buildRun();
+    expect(first.ids).toContain(inv.id);
+
+    const second = await buildRun();
+    expect(second.ids).not.toContain(inv.id);
+    expect(second.excluded[inv.id]).toBe("IN_OPEN_RUN");
+
+    // Cancelling the first run puts it back in the pool.
+    const cancel = await post({ ...w.admin, ...(await ver("payment_runs", first.run.id)) },
+      `/api/v1/payment-runs/${first.run.id}/decision`, { action: "CANCEL", reason: "Rebuilt" });
+    expect(cancel.status, JSON.stringify(cancel.body)).toBe(200);
+    const third = await buildRun();
+    expect(third.ids).toContain(inv.id);
+  });
+
+  it("refuses the same invoice on two open runs at the database", async () => {
+    const inv = await invoice({ total: 5000, due_date: "2026-02-01" });
+    const first = await buildRun();
+    expect(first.ids).toContain(inv.id);
+    const other = await buildRun();
+    const sneak = () => w.pool.query(
+      `INSERT INTO payment_run_lines(org_id, run_id, document_type, document_id, amount)
+       VALUES($1,$2,'VENDOR_INVOICE',$3,5000)`, [w.orgId, other.run.id, inv.id]);
+    await expect(sneak()).rejects.toMatchObject({ code: "23505" });
+
+    // A cancelled run no longer holds it.
+    await post({ ...w.admin, ...(await ver("payment_runs", first.run.id)) },
+      `/api/v1/payment-runs/${first.run.id}/decision`, { action: "CANCEL", reason: "Superseded" });
+    await expect(sneak()).resolves.toBeTruthy();
+  });
+
+  it("will not approve a run whose invoice was put on hold after it was built", async () => {
+    const inv = await invoice({ total: 7000, due_date: "2026-02-01" });
+    const built = await buildRun();
+    expect(built.ids).toContain(inv.id);
+    await post(w.admin, `/api/v1/ap/invoices/${inv.id}/hold`, { on_hold: true, reason: "Supplier query" });
+    const res = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/decision`, { action: "APPROVE" });
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body.code).toBe("RUN_OUT_OF_DATE");
+    expect(res.body.message).toContain(inv.serial_number);
+  });
+
+  it("will not approve a run whose invoice was disputed or part-paid since", async () => {
+    const disputed = await invoice({ total: 8000, due_date: "2026-02-01" });
+    const built = await buildRun();
+    expect(built.ids).toContain(disputed.id);
+    await post(w.admin, `/api/v1/invoices/${disputed.id}/dispute`, { disputed: true, reason: "Short supply" });
+    const res = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/decision`, { action: "APPROVE" });
+    expect(res.status).toBe(409);
+
+    const partPaid = await invoice({ total: 9000, due_date: "2026-02-01" });
+    const run2 = await buildRun();
+    expect(run2.ids).toContain(partPaid.id);
+    const payment = await post(w.admin, "/api/v1/payments", {
+      direction: "PAYABLE", payment_no: uniq("PAY"), paid_on: "2026-09-10", amount: 1000, mode: "NEFT",
+    });
+    expect((await post(w.admin, `/api/v1/payments/${payment.data.id}/allocations`, {
+      document_type: "VENDOR_INVOICE", document_id: partPaid.id, amount: 1000,
+    })).status).toBe(201);
+    const res2 = await post({ ...w.admin, ...(await ver("payment_runs", run2.run.id)) },
+      `/api/v1/payment-runs/${run2.run.id}/decision`, { action: "APPROVE" });
+    expect(res2.status).toBe(409);
+    expect(res2.body.message).toContain("8000.00 outstanding");
+  });
+});
+
+describe("three-way match on the run", () => {
+  it("releases an unmatched invoice only with a reason for it, kept on the line", async () => {
+    const unmatched = await invoice({ total: 6100, due_date: "2026-02-01", match_status: "EXCEPTION" });
+    const bare = await buildRun(w.role.SUPER_ADMIN);
+    expect(bare.excluded[unmatched.id]).toBe("NOT_MATCHED");
+
+    const reasoned = await buildRun(w.role.SUPER_ADMIN, {
+      match_overrides: [{ document_id: unmatched.id, reason: "Rate difference credited on next bill" }],
+    });
+    const line = reasoned.lines.find(l => String(l.document_id) === unmatched.id);
+    expect(line?.match_override_reason).toBe("Rate difference credited on next bill");
+  });
+
+  it("refuses match overrides from somebody without the permission", async () => {
+    const unmatched = await invoice({ total: 6200, due_date: "2026-02-01", match_status: "EXCEPTION" });
+    const res = await post(w.role.PAYROLL_OFFICER, "/api/v1/payment-runs", {
+      run_no: uniq("PR"), run_date: "2026-09-15", due_through: "2026-09-15",
+      match_overrides: [{ document_id: unmatched.id, reason: "Looks fine" }],
+    });
     expect(res.status).toBe(403);
   });
 });

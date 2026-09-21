@@ -64,30 +64,38 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
     }));
   }
 
-  /** What a document was billed at, whichever kind of document it is. */
+  /**
+   * What a document was billed at, whichever kind of document it is.
+   *
+   * `lock` takes the document row for the rest of the transaction. Allocating
+   * reads what is outstanding and then writes against it; without the lock
+   * two receipts applied to one bill at the same moment each see the whole
+   * balance free and together settle it more than once.
+   */
   async function documentValue(
-    db: Pool | PoolClient, orgId: string, type: string, id: string,
+    db: Pool | PoolClient, orgId: string, type: string, id: string, lock = false,
   ): Promise<{ invoiced: number; dueDate: string | null }> {
+    const forUpdate = lock ? ' FOR UPDATE' : '';
     if (type === 'RA_BILL') {
       const row = (await db.query(
-        'SELECT certified_amount, gross_value FROM ra_bills WHERE id = $1 AND org_id = $2', [id, orgId])).rows[0];
+        `SELECT certified_amount, gross_value FROM ra_bills WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
       if (!row) fail('NOT_FOUND', 'RA bill not found', 404);
       return { invoiced: Number(row.certified_amount ?? row.gross_value), dueDate: null };
     }
     if (type === 'VENDOR_INVOICE') {
       const row = (await db.query(
-        'SELECT total, due_date FROM invoices WHERE id = $1 AND org_id = $2', [id, orgId])).rows[0];
+        `SELECT total, due_date FROM invoices WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
       if (!row) fail('NOT_FOUND', 'Invoice not found', 404);
       return { invoiced: Number(row.total), dueDate: row.due_date ? iso(row.due_date) : null };
     }
     if (type === 'EXPENSE_CLAIM') {
       const row = (await db.query(
-        'SELECT approved_amount, total_allowed FROM expense_claims WHERE id = $1 AND org_id = $2', [id, orgId])).rows[0];
+        `SELECT approved_amount, total_allowed FROM expense_claims WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
       if (!row) fail('NOT_FOUND', 'Expense claim not found', 404);
       return { invoiced: Number(row.approved_amount ?? row.total_allowed), dueDate: null };
     }
     const row = (await db.query(
-      'SELECT amount FROM project_advances WHERE id = $1 AND org_id = $2', [id, orgId])).rows[0];
+      `SELECT amount FROM project_advances WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
     if (!row) fail('NOT_FOUND', 'Advance not found', 404);
     return { invoiced: Number(row.amount), dueDate: null };
   }
@@ -270,7 +278,7 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
           otherDeduction: Number(r.other_deduction),
         }));
 
-      const doc = await documentValue(db, u.orgId, input.document_type, input.document_id);
+      const doc = await documentValue(db, u.orgId, input.document_type, input.document_id, true);
       const position = settlementPosition({
         invoiced: doc.invoiced,
         allocations: await allocationsFor(db, input.document_type, input.document_id),

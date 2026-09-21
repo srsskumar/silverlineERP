@@ -49,6 +49,21 @@ async function makePayment(amount: number, over: Record<string, unknown> = {}) {
   return res.data;
 }
 
+/** A certified RA bill whose net payable is `amount`. */
+async function makeCertifiedBill(amount: number): Promise<string> {
+  const ws = await w.pool.query("SELECT id FROM workspaces WHERE org_id=$1 LIMIT 1", [w.orgId]);
+  const project = await w.pool.query(
+    `INSERT INTO projects(org_id, workspace_id, code, name, status)
+     VALUES($1,$2,$3,'Receipt project','ACTIVE') RETURNING id`,
+    [w.orgId, ws.rows[0].id, uniq("PRJ")]);
+  const bill = await w.pool.query(
+    `INSERT INTO ra_bills(org_id, project_id, bill_no, period_from, period_to, gross_value,
+       net_payable, status, certified_at, certified_by, certified_amount)
+     VALUES($1,$2,1,'2026-08-01','2026-08-31',$3,$3,'CERTIFIED',now(),$4,$3) RETURNING id`,
+    [w.orgId, project.rows[0].id, amount, w.adminId]);
+  return String(bill.rows[0].id);
+}
+
 beforeAll(async () => { w = await buildWorld(); }, 180_000);
 afterAll(async () => { await w.app.close(); await w.pool.end(); });
 
@@ -170,6 +185,21 @@ describe("payment allocation", () => {
     const s = await get(w.admin, `/api/v1/documents/vendor-invoice/${invoice}/settlement`);
     expect(s.data.state).toBe("PAID");
     expect(s.data.settledNonCash).toBe(2);
+  });
+
+  it("does not let two receipts settle the same bill at once", async () => {
+    // Each read the whole balance as free; without a lock on the document both
+    // were accepted and the invoice was settled twice over.
+    const invoice = await makeInvoice(1000);
+    const [p1, p2] = [await makePayment(1000), await makePayment(1000)];
+    const results = await Promise.all([p1, p2].map(p =>
+      post(w.admin, `/api/v1/payments/${p.id}/allocations`, {
+        document_type: "VENDOR_INVOICE", document_id: invoice, amount: 1000,
+      })));
+    expect(results.map(r => r.status).sort()).toEqual([201, 422]);
+    const s = await get(w.admin, `/api/v1/documents/vendor-invoice/${invoice}/settlement`);
+    expect(s.data.outstanding).toBe(0);
+    expect(s.data.payments).toHaveLength(1);
   });
 
   it("does not treat retention as settling the invoice", async () => {
