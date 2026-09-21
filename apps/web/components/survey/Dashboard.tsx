@@ -1017,18 +1017,6 @@ export function SurveyDashboard({
                         ? <Badge tone="danger" size="sm">no GCP</Badge> : null}
                     </span>
                   </TD>
-                  <TD className="text-right tabular-nums">
-                    {v.days_in_stage === null ? '—' : num(v.days_in_stage)}
-                  </TD>
-                  {canDrill ? (
-                    <TD className="text-text-muted">
-                      {(v.holders ?? []).length === 0
-                        ? <span className="text-2xs text-text-subtle">nobody</span>
-                        : (v.holders ?? []).slice(0, 2).join(', ')
-                          + ((v.holders ?? []).length > 2
-                            ? ` +${(v.holders ?? []).length - 2}` : '')}
-                    </TD>
-                  ) : null}
                   {/* Days in the stage it is at now, counted to today while open. */}
                   <TD className="text-right tabular-nums">
                     {v.days_in_stage === null ? '—' : num(v.days_in_stage)}
@@ -1085,27 +1073,10 @@ export function SurveyDashboard({
                       Ask
                     </Button>
                   </TD>
-                  {/* What actually happened, beside what was promised. */}
-                  <TD className={`tabular-nums ${
-                    v.gt_completed_on && v.gt_expected_end_on
-                      && v.gt_completed_on > v.gt_expected_end_on
-                      ? 'text-danger' : 'text-text-muted'}`}>
-                    {day(v.gt_completed_on)}
-                  </TD>
-                  {/* Asked from the village's own row, carrying the position
-                      it was sitting at when the question occurred to somebody. */}
-                  <TD>
-                    <Button variant="ghost" aria-label={`Ask about ${v.name}`}
-                      onClick={() => setScope({
-                        villageId: v.id, label: v.name, position: v.position_label,
-                      })}>
-                      Ask
-                    </Button>
-                  </TD>
                 </TR>
               ))}
               {d.villages.length === 0 ? (
-                <TR><TD colSpan={canDrill ? 15 : 13} className="py-6 text-center text-sm text-text-muted">
+                <TR><TD colSpan={canDrill ? 15 : 14} className="py-6 text-center text-sm text-text-muted">
                   No villages match these filters.
                 </TD></TR>
               ) : null}
