@@ -317,8 +317,26 @@ describe('schemas', () => {
 
   it('does not demand a reason for TDS, which the law sets', () => {
     expect(allocationSchema.safeParse({
-      document_type: 'RA_BILL', document_id: '11111111-1111-4111-8111-111111111111',
+      document_type: 'VENDOR_INVOICE', document_id: '11111111-1111-4111-8111-111111111111',
       amount: 98, tds_amount: 2,
+    }).success).toBe(true);
+  });
+
+  it('refuses TDS or an advance adjustment against an RA bill', () => {
+    // The bill's net payable already deducted both; a receipt settles cash.
+    const id = '11111111-1111-4111-8111-111111111111';
+    expect(allocationSchema.safeParse({
+      document_type: 'RA_BILL', document_id: id, amount: 98, tds_amount: 2,
+    }).success).toBe(false);
+    expect(allocationSchema.safeParse({
+      document_type: 'RA_BILL', document_id: id, amount: 98, advance_adjusted: 2,
+    }).success).toBe(false);
+    expect(allocationSchema.safeParse({
+      document_type: 'RA_BILL', document_id: id, amount: 98, tds_amount: 0, advance_adjusted: 0,
+    }).success).toBe(true);
+    // Every other document keeps them.
+    expect(allocationSchema.safeParse({
+      document_type: 'EXPENSE_CLAIM', document_id: id, amount: 98, advance_adjusted: 2,
     }).success).toBe(true);
   });
 

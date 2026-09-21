@@ -187,6 +187,27 @@ describe("payment allocation", () => {
     expect(s.data.settledNonCash).toBe(2);
   });
 
+  it("refuses TDS or an advance adjustment on a receipt against an RA bill", async () => {
+    // The bill's net payable already deducted both when it was certified.
+    // Taking them again on the receipt closes the bill with money that never
+    // arrived.
+    const bill = await makeCertifiedBill(1000);
+    const payment = await makePayment(1000, { direction: "RECEIVABLE" });
+    for (const extra of [{ tds_amount: 20 }, { advance_adjusted: 50 }]) {
+      const res = await post(w.admin, `/api/v1/payments/${payment.id}/allocations`, {
+        document_type: "RA_BILL", document_id: bill, amount: 900, ...extra,
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(422);
+      expect(JSON.stringify(res.body)).toContain("cash received");
+    }
+    const cash = await post(w.admin, `/api/v1/payments/${payment.id}/allocations`, {
+      document_type: "RA_BILL", document_id: bill, amount: 1000,
+    });
+    expect(cash.status, JSON.stringify(cash.body)).toBe(201);
+    const s = await get(w.admin, `/api/v1/documents/ra-bill/${bill}/settlement`);
+    expect(s.data.outstanding).toBe(0);
+  });
+
   it("does not let two receipts settle the same bill at once", async () => {
     // Each read the whole balance as free; without a lock on the document both
     // were accepted and the invoice was settled twice over.
