@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Pool } from "pg";
+import jwt from "jsonwebtoken";
 import {
   ApiError,
   changePasswordSchema,
@@ -200,18 +201,26 @@ export async function registerAuthRoutes(
     // Best-effort actor attribution: logout stays idempotent even anonymously.
     let actorId: string | null = null;
     let orgId: string | null = null;
+    let bearer: { userId: string; family: string } | null = null;
     const header = req.headers.authorization;
     if (header?.startsWith("Bearer ")) {
       try {
-        const probe = { ...req };
-        await authenticate(probe as typeof req);
+        // Object.create, not a spread: a spread drops the getters on the
+        // request's prototype (req.server among them), so authenticate threw
+        // on every probe and a sign-out was never attributed to anybody.
+        const probe = Object.create(req) as typeof req;
+        await authenticate(probe);
         actorId = (probe as typeof req).authUser?.id ?? null;
         orgId = (probe as typeof req).authUser?.orgId ?? null;
+        // Verified just now by authenticate, so decoding is enough; the
+        // family is the session this access token was issued under.
+        const family = (jwt.decode(header.slice("Bearer ".length).trim()) as { family?: unknown } | null)?.family;
+        if (actorId && typeof family === "string") bearer = { userId: actorId, family };
       } catch {
         actorId = null;
       }
     }
-    const { revoked } = await logout(ctx, parsed.data.refresh_token);
+    const { revoked } = await logout(ctx, parsed.data.refresh_token, bearer);
     if (revoked || parsed.data.refresh_token) {
       await writeAudit(opts.pool, {
         orgId,
