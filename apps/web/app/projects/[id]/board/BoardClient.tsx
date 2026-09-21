@@ -498,7 +498,7 @@ function ManageColumnsDialog({
             variant="danger"
             loading={deleteMutation.isPending}
             onClick={() => {
-              if (window.confirm('Delete this board? Tasks are kept; only the board config is removed.')) {
+              if (window.confirm('Remove this board? Its tasks are kept, and the board is archived rather than destroyed.')) {
                 deleteMutation.mutate();
               }
             }}

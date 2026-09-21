@@ -62,6 +62,10 @@ export function DependencyManager({
       setActionError(new Error('Could not determine the dependency id for removal.'));
       return;
     }
+    // Asked first: one mis-tap unblocks work that was waiting for a reason,
+    // and nothing on the screen would show it had happened.
+    const name = edge.title ? `“${edge.title}”` : 'this task';
+    if (!window.confirm(`Remove the dependency on ${name}? Work waiting on it will no longer be held back.`)) return;
     setRemoving(key);
     setActionError(null);
     try {
