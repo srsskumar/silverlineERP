@@ -904,7 +904,7 @@ export function SurveyDashboard({
           : null}
         canAnswer={canAnswer}
       />
-      <SurveyContacts projectId={projectId} />
+      <SurveyContacts projectId={projectId} canManage={canManage} />
       {canManage ? <SurveyAlertSettings projectId={projectId} /> : null}
 
       {/* ------------------------------------------------------- the villages */}

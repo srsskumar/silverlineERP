@@ -35,7 +35,37 @@ const field = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm te
 
 /* ------------------------------------------------------------- contacts */
 
-export function SurveyContacts({ projectId }: { projectId: string }) {
+export function SurveyContacts({
+  projectId, canManage = false,
+}: { projectId: string; canManage?: boolean }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [adding, setAdding] = React.useState(false);
+  const [side, setSide] = React.useState<'GOVT' | 'SILVERLINE'>('GOVT');
+  const [name, setName] = React.useState('');
+  const [designation, setDesignation] = React.useState('');
+  const [phone, setPhone] = React.useState('');
+  const [contactEmail, setContactEmail] = React.useState('');
+
+  const add = useMutation({
+    mutationFn: async () => apiRequest(
+      `/api/v1/survey/projects/${projectId}/contacts`, {
+        method: 'POST',
+        body: {
+          side, name: name.trim(), designation: designation.trim(),
+          phone: phone.trim(),
+          ...(contactEmail.trim() ? { email: contactEmail.trim() } : {}),
+        },
+      }),
+    onError: (e) => toast.error('Nothing was added', messageOf(e)),
+    onSuccess: () => {
+      toast.success('Added');
+      setName(''); setDesignation(''); setPhone(''); setContactEmail('');
+      setAdding(false);
+      qc.invalidateQueries({ queryKey: ['survey-contacts', projectId] });
+    },
+  });
+
   const contacts = useQuery({
     queryKey: ['survey-contacts', projectId],
     enabled: Boolean(projectId),
@@ -49,16 +79,55 @@ export function SurveyContacts({ projectId }: { projectId: string }) {
 
   return (
     <Card className="p-4">
-      <div className="mb-2 flex items-baseline justify-between gap-2">
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="text-sm font-semibold text-text">Who to contact</h3>
-        <span className="text-2xs text-text-subtle">
-          Both sides of the programme
-        </span>
+        {canManage ? (
+          <Button variant="secondary" onClick={() => setAdding((v) => !v)}>
+            {adding ? 'Cancel' : 'Add a contact'}
+          </Button>
+        ) : (
+          <span className="text-2xs text-text-subtle">Both sides of the programme</span>
+        )}
       </div>
+
+      {/*
+        * Managed here rather than on a screen somewhere else.
+        *
+        * This card used to tell people to add contacts "from the Villages
+        * tab", which was not true — there was nothing there. A pointer to a
+        * screen that does not exist is worse than no pointer.
+        */}
+      {adding ? (
+        <div className="mb-3 space-y-2 rounded-md border border-border bg-surface-sunken p-3">
+          <div className="flex flex-wrap gap-2">
+            <select className={field} value={side}
+              onChange={(e) => setSide(e.target.value as 'GOVT' | 'SILVERLINE')}>
+              <option value="GOVT">{CONTACT_SIDE_LABELS.GOVT}</option>
+              <option value="SILVERLINE">{CONTACT_SIDE_LABELS.SILVERLINE}</option>
+            </select>
+            <input className={field} value={name} placeholder="Name"
+              onChange={(e) => setName(e.target.value)} />
+            <input className={field} value={designation}
+              placeholder="Designation — Tahsildar, Deputy Surveyor…"
+              onChange={(e) => setDesignation(e.target.value)} />
+            <input className={field} value={phone} placeholder="Telephone"
+              onChange={(e) => setPhone(e.target.value)} />
+            <input className={field} value={contactEmail} placeholder="Email (optional)"
+              onChange={(e) => setContactEmail(e.target.value)} />
+          </div>
+          <Button onClick={() => add.mutate()}
+            disabled={add.isPending || name.trim().length < 2
+              || designation.trim().length < 2 || phone.trim().length < 6}>
+            {add.isPending ? 'Adding…' : 'Add'}
+          </Button>
+        </div>
+      ) : null}
       {rows.length === 0 ? (
         <p className="text-xs text-text-muted">
-          No contacts recorded for this programme yet. An administrator can add
-          them from the Villages tab.
+          {canManage
+            ? 'No contacts recorded yet. Add the people worth ringing on both sides.'
+            : 'No contacts recorded for this programme yet. Ask the project manager '
+              + 'to add them.'}
         </p>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
