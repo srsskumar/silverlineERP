@@ -429,10 +429,26 @@ export interface RollUp {
   /** Total extent of the villages in scope, in acres. */
   extentAc: number;
   extentSqKm: number;
-  /** Extent actually surveyed, in acres — government plus private. */
+  /**
+   * Extent actually surveyed, in acres — government plus private — in the
+   * villages that carry an extent, so it is always a share of `extentAc`.
+   */
   surveyedAc: number;
+  /**
+   * Extent surveyed in villages with no extent recorded. Real work, reported
+   * so it is not lost, but outside every percentage: it has nothing to be a
+   * percentage of.
+   */
+  unweightedSurveyedAc: number;
   /** Per measure: the weighted position across the villages in scope. */
-  measures: Record<string, Completion>;
+  measures: Record<string, Completion & {
+    /**
+     * Work recorded in villages that have no denominator for this measure,
+     * left out of `done` and `pct`. Zero when no village has one, because
+     * then nothing is being weighed and `done` is simply the total.
+     */
+    unweightedDone: number;
+  }>;
   /**
    * Extent-weighted completion across every extent-based measure.
    *
@@ -464,7 +480,7 @@ export function rollUp(
   const out: RollUp = {
     villages: villages.length,
     notStarted: 0, inProgress: 0, completed: 0,
-    extentAc: 0, extentSqKm: 0, surveyedAc: 0,
+    extentAc: 0, extentSqKm: 0, surveyedAc: 0, unweightedSurveyedAc: 0,
     measures: {}, overallPct: null, unweighted: 0,
   };
 
@@ -475,23 +491,39 @@ export function rollUp(
     if (state === 'COMPLETED') out.completed += 1;
     if (v.extentAc === null || v.extentAc === undefined) out.unweighted += 1;
     else out.extentAc += v.extentAc;
-    for (const code of EXTENT_MEASURES) out.surveyedAc += v.done[code] ?? 0;
+    // Work only counts towards the headline where the village has an extent
+    // to count it against. Adding a village's work to the numerator while
+    // leaving its extent out of the denominator is how a programme reads
+    // 140% complete.
+    const surveyed = EXTENT_MEASURES.reduce((t, code) => t + (v.done[code] ?? 0), 0);
+    if (v.extentAc !== null && v.extentAc !== undefined && v.extentAc > 0) out.surveyedAc += surveyed;
+    else out.unweightedSurveyedAc += surveyed;
   }
 
   out.extentAc = round(out.extentAc);
   out.extentSqKm = acresToSqKm(out.extentAc);
   out.surveyedAc = round(out.surveyedAc);
+  out.unweightedSurveyedAc = round(out.unweightedSurveyedAc);
 
   for (const code of measureCodes) {
-    let done = 0, target = 0, anyTarget = false;
+    let done = 0, outside = 0, target = 0, anyTarget = false;
     for (const v of villages) {
-      done += v.done[code] ?? 0;
       // An extent-based measure is divided by the village's own extent; a
       // target-based one by whatever was recorded for it.
       const t = basisByCode[code] === 'EXTENT' ? v.extentAc : v.targets?.[code];
-      if (t !== null && t !== undefined && t > 0) { target += t; anyTarget = true; }
+      // Numerator and denominator from the same villages, or the percentage
+      // is of nothing in particular.
+      if (t !== null && t !== undefined && t > 0) {
+        target += t; anyTarget = true; done += v.done[code] ?? 0;
+      } else {
+        outside += v.done[code] ?? 0;
+      }
     }
-    out.measures[code] = completion(done, anyTarget ? target : null);
+    // With no denominator anywhere there is nothing to weigh, and the whole
+    // quantity is the figure: a count of points is still worth reporting.
+    out.measures[code] = anyTarget
+      ? { ...completion(done, target), unweightedDone: round(outside) }
+      : { ...completion(outside, null), unweightedDone: 0 };
   }
 
   // The headline: total extent surveyed over total extent to survey. It uses

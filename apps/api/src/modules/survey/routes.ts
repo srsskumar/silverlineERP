@@ -4182,7 +4182,9 @@ export async function registerSurveyRoutes(
         (Date.parse(`${asOf}T00:00:00Z`) - Date.parse(`${firstDay}T00:00:00Z`)) / 86_400_000) + 1);
 
       const paceFigures = pace({
-        surveyedAc: whole.surveyedAc,
+        // The rate is of all the work done, measured village or not; only
+        // the share of the extent is confined to villages that have one.
+        surveyedAc: whole.surveyedAc + whole.unweightedSurveyedAc,
         remainingAc: Math.max(0, whole.extentAc - whole.surveyedAc),
         villagesCompleted: whole.completed,
         activeDays: Number(window.active_days),
@@ -4368,7 +4370,9 @@ export async function registerSurveyRoutes(
         (Date.parse(`${asOf}T00:00:00Z`) - Date.parse(`${firstDay}T00:00:00Z`)) / 86_400_000) + 1);
       const whole = rollUp(pos, m.codes, codes, m.basis);
       const paceFigures = pace({
-        surveyedAc: whole.surveyedAc,
+        // The rate is of all the work done, measured village or not; only
+        // the share of the extent is confined to villages that have one.
+        surveyedAc: whole.surveyedAc + whole.unweightedSurveyedAc,
         remainingAc: Math.max(0, whole.extentAc - whole.surveyedAc),
         villagesCompleted: whole.completed,
         activeDays: Number(paceWindow.active_days),
@@ -4762,6 +4766,23 @@ export async function registerSurveyRoutes(
          GROUP BY 1`,
         [id, u.orgId, from, to])).rows;
       const doneBy = new Map(doneRows.map(r => [String(r.vid), Number(r.ac)]));
+      /*
+       * Surveyed extent, split by whether it can be weighed.
+       *
+       * A village with no extent recorded contributes nothing to "extent to
+       * survey", so its work cannot go into "surveyed" either: adding one
+       * without the other is how a district read 140% of its extent. The work
+       * is still reported, apart, because it happened.
+       */
+      const weighed = (items: typeof villages) => {
+        let surveyed = 0, unweighted = 0;
+        for (const v of items) {
+          const done = doneBy.get(v.villageId) ?? 0;
+          if (v.extentAc !== null && v.extentAc !== undefined && v.extentAc > 0) surveyed += done;
+          else unweighted += done;
+        }
+        return { surveyed, unweighted };
+      };
 
       /*
        * Which milestones have been claimed on each village.
@@ -4798,9 +4819,9 @@ export async function registerSurveyRoutes(
           villages: row.items.length,
           extent_ac: row.items.reduce((t, v) => t + (v.extentAc ?? 0), 0),
           extent_sqkm: acresToSqKm(row.items.reduce((t, v) => t + (v.extentAc ?? 0), 0)),
-          surveyed_ac: row.items.reduce((t, v) => t + (doneBy.get(v.villageId) ?? 0), 0),
-          surveyed_sqkm: acresToSqKm(
-            row.items.reduce((t, v) => t + (doneBy.get(v.villageId) ?? 0), 0)),
+          surveyed_ac: weighed(row.items).surveyed,
+          surveyed_sqkm: acresToSqKm(weighed(row.items).surveyed),
+          unweighted_surveyed_ac: weighed(row.items).unweighted,
           // Where each village in this group has got to. The chart and the
           // drill-down read the same numbers.
           by_position: tallyByPosition(row.items),
@@ -4811,7 +4832,7 @@ export async function registerSurveyRoutes(
       };
 
       const totalExtent = matches.reduce((t, v) => t + (v.extentAc ?? 0), 0);
-      const surveyed = matches.reduce((t, v) => t + (doneBy.get(v.villageId) ?? 0), 0);
+      const { surveyed, unweighted: unweightedSurveyed } = weighed(matches);
 
       /*
        * Why the work is held up, counted three ways (§073).
@@ -4945,6 +4966,11 @@ export async function registerSurveyRoutes(
             extent_sqkm: acresToSqKm(totalExtent),
             surveyed_ac: surveyed,
             surveyed_sqkm: acresToSqKm(surveyed),
+            // Surveyed in villages with no extent recorded: outside the
+            // percentage, which has nothing to divide it by, but not lost.
+            unweighted_surveyed_ac: unweightedSurveyed,
+            unweighted_villages: matches.filter(
+              v => v.extentAc === null || v.extentAc === undefined || !(v.extentAc > 0)).length,
             by_position: tallyByPosition(matches),
             /*
              * The same eleven rungs with their extent, for the table beside
@@ -4959,7 +4985,7 @@ export async function registerSurveyRoutes(
             positions: VILLAGE_LADDER.map(rung => {
               const at = matches.filter(v => v.position.key === rung.key);
               const extent = at.reduce((t, v) => t + (v.extentAc ?? 0), 0);
-              const done = at.reduce((t, v) => t + (doneBy.get(v.villageId) ?? 0), 0);
+              const { surveyed: done, unweighted } = weighed(at);
               return {
                 key: rung.key,
                 label: rung.label,
@@ -4968,6 +4994,7 @@ export async function registerSurveyRoutes(
                 extent_sqkm: acresToSqKm(extent),
                 surveyed_ac: done,
                 surveyed_sqkm: acresToSqKm(done),
+                unweighted_surveyed_ac: unweighted,
                 /* Of the villages on screen, not of the programme. */
                 share_pct: matches.length
                   ? Math.round((at.length / matches.length) * 1000) / 10 : 0,

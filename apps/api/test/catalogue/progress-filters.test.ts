@@ -207,3 +207,69 @@ describe("the equipment and pace figures", () => {
     expect(idle.data.pace.activeDays).toBe(0);
   });
 });
+
+describe("work in a village with no extent recorded", () => {
+  /*
+   * The numerator took every village's work and the denominator only the
+   * villages with an extent, so a programme with one unmeasured village read
+   * past a hundred percent. The work is real and is reported, apart; it just
+   * has nothing to be a percentage of.
+   */
+  let pid = "";
+  beforeAll(async () => {
+    const p = await post(w.admin, "/api/v1/survey/projects",
+      { code: uniq("SP"), name: "Half-measured programme" });
+    pid = String(p.data.id);
+    const d = String((await w.pool.query(
+      `INSERT INTO org_units(org_id,type,code,name) VALUES($1,'district',$2,$3) RETURNING id`,
+      [w.orgId, uniq("D"), "UNMEASURED"])).rows[0].id);
+    const m = String((await w.pool.query(
+      `INSERT INTO org_units(org_id,type,code,name,parent_id) VALUES($1,'mandal',$2,$3,$4) RETURNING id`,
+      [w.orgId, uniq("M"), "UNMEASURED MANDAL", d])).rows[0].id);
+    const ids: string[] = [];
+    for (const name of ["MEASURED", "UNMEASURED"]) {
+      const unit = String((await w.pool.query(
+        `INSERT INTO org_units(org_id,type,code,name,parent_id) VALUES($1,'village',$2,$3,$4) RETURNING id`,
+        [w.orgId, uniq("V"), name, m])).rows[0].id);
+      const sv = await post(w.admin, `/api/v1/survey/projects/${pid}/villages`,
+        { village_id: unit, total_extent_ac: 100 });
+      expect(sv.status, JSON.stringify(sv.body)).toBe(201);
+      ids.push(String(sv.data.id));
+    }
+    // The second village's extent was never recorded.
+    await w.pool.query("UPDATE survey_villages SET total_extent_ac = NULL WHERE id = $1", [ids[1]]);
+    for (const [vid, ac] of [[ids[0], 40], [ids[1], 80]] as const) {
+      const r = await post(w.admin, "/api/v1/survey/entries", {
+        survey_village_id: vid, entry_date: workDate(), teams_deployed: 1,
+        values: { GOVT_LAND_EXTENT_AC: ac },
+      });
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+    }
+  });
+
+  it("keeps the progress headline to the villages it can weigh", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${pid}/progress`);
+    expect(r.status).toBe(200);
+    // 40 of 100, not 120 of 100.
+    expect(r.data.total.overallPct).toBe(40);
+    expect(r.data.total.surveyedAc).toBe(40);
+    expect(r.data.total.unweightedSurveyedAc).toBe(80);
+    expect(r.data.total.unweighted).toBe(1);
+    const m = r.data.total.measures.GOVT_LAND_EXTENT_AC;
+    expect(m.pct).toBe(40);
+    expect(m.done).toBe(40);
+    expect(m.unweightedDone).toBe(80);
+  });
+
+  it("keeps the dashboard's surveyed figure inside its extent", async () => {
+    const r = await get(w.admin, `/api/v1/survey/projects/${pid}/dashboard`);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.totals.extent_ac).toBe(100);
+    expect(r.data.totals.surveyed_ac).toBe(40);
+    expect(r.data.totals.unweighted_surveyed_ac).toBe(80);
+    expect(r.data.totals.unweighted_villages).toBe(1);
+    for (const row of r.data.rows as Array<{ surveyed_ac: number; extent_ac: number }>) {
+      expect(row.surveyed_ac).toBeLessThanOrEqual(row.extent_ac);
+    }
+  });
+});

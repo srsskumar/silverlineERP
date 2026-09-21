@@ -115,6 +115,8 @@ interface DashboardData {
     villages: number;
     extent_ac: number; extent_sqkm: number;
     surveyed_ac: number; surveyed_sqkm: number;
+    /* Surveyed in villages with no extent recorded, so outside the percentage. */
+    unweighted_surveyed_ac?: number; unweighted_villages?: number;
     by_position: Record<string, number>;
     on_hold: number; in_rework: number; gcp_missing: number;
     late: number; late_unexplained: number; unplanned: number;
@@ -506,9 +508,12 @@ export function SurveyDashboard({
         <Stat label="Surveyed" value={`${dec(totals.surveyed_ac)} Ac`}
           hint={`${dec(totals.surveyed_sqkm)} km²${
             surveyedPct === null ? '' : ` · ${surveyedPct}% of extent`}`}
-          explain={d.period.from
+          explain={`${d.period.from
             ? 'Extent recorded between the two dates above.'
-            : 'Extent recorded up to the date above.'} />
+            : 'Extent recorded up to the date above.'}${
+            (totals.unweighted_surveyed_ac ?? 0) > 0
+              ? ` A further ${dec(totals.unweighted_surveyed_ac)} Ac was surveyed in ${num(totals.unweighted_villages ?? 0)} village(s) with no extent recorded, and is left out of the percentage: it has nothing to be a percentage of.`
+              : ''}`} />
         <Stat label="Villages finished" value={`${num(finished)} of ${num(totals.villages)}`}
           tone={finished > 0 ? 'success' : 'default'}
           explain="Final deliverables approved by the department." />
