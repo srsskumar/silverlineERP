@@ -25,10 +25,14 @@ import {
   designationCode,
   employeeBulkUpdateSchema,
   bulkChangeAffects,
+  assignmentsSchema,
+  plannedRoleRows,
+  describeAccess,
   encodeCursor,
   toFieldErrors,
 } from "@silverline/shared";
 import { buildAuthenticate, requirePermission } from "../../common/auth.js";
+import { mutate } from "../../common/domain.js";
 import { resolveScopes, employeeScopeClause } from "../../common/scopes.js";
 import { writeAudit } from "../../common/audit.js";
 import {
@@ -2068,4 +2072,250 @@ export async function registerEmployeeRoutes(
       client.release();
     }
   });
+
+  /* =============================================================== §076
+   * What work this person is on, and therefore what data they see.
+   *
+   * The role decides the screens; this decides the data. Nothing here
+   * grants or removes a permission -- an employee who is put on three
+   * programmes still sees only the employee's screens, and sees them for
+   * those three programmes.
+   *
+   * Both mechanisms already existed. Survey programmes scope themselves
+   * through survey_project_employees, which seventy people rely on.
+   * Ordinary projects scope through user_roles, which worked and which
+   * nobody had ever used, because setting one meant pasting a UUID into a
+   * box marked "Scope record ID".
+   */
+
+  async function employeeOr404(db: Pool | PoolClient, orgId: string, id: string) {
+    const row = await db.query(
+      `SELECT e.id, e.org_id,
+              COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), e.emp_no) AS name,
+              u.id AS user_id, u.username
+         FROM employees e
+         LEFT JOIN users u ON u.employee_id = e.id
+        WHERE e.id = $1 AND e.org_id = $2`,
+      [id, orgId],
+    );
+    if (!row.rowCount) {
+      throw new ApiError({ status: 404, code: 'NOT_FOUND', message: 'No such employee' });
+    }
+    return row.rows[0] as {
+      id: string; name: string; user_id: string | null; username: string | null;
+    };
+  }
+
+  app.get(
+    '/api/v1/employees/:id/assignments',
+    { preHandler: requirePermission(authenticate, 'users.read') },
+    async (req) => {
+      const user = req.authUser!;
+      const id = (req.params as { id: string }).id;
+      const employee = await employeeOr404(opts.pool, user.orgId, id);
+
+      const roleRows = employee.user_id
+        ? (await opts.pool.query(
+            `SELECT ur.role_id, ur.scope_type, ur.scope_id, r.code
+               FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+              WHERE ur.user_id = $1`, [employee.user_id])).rows
+        : [];
+      const projectIds = [...new Set(
+        roleRows.filter((r) => r.scope_type === 'project' && r.scope_id).map((r) => r.scope_id as string),
+      )];
+      /*
+       * Unscoped means the whole organisation -- that is what resolveScopes
+       * makes of it -- so the screen has to say so rather than showing an
+       * empty list that looks like "nothing".
+       */
+      const access = roleRows.some((r) => !r.scope_type) || roleRows.length === 0
+        ? 'ORGANISATION' : 'ASSIGNED';
+
+      /*
+       * Programme enrolment hangs off the employee, not the login, so
+       * somebody with no account can still be on a programme -- and often
+       * is: a chainman files nothing and is on the crew all the same.
+       */
+      const programmes = (await opts.pool.query(
+            `SELECT pe.survey_project_id, pe.project_role, pe.assigned_on,
+                    sp.code, sp.name, sp.status
+               FROM survey_project_employees pe
+               JOIN survey_projects sp ON sp.id = pe.survey_project_id
+              WHERE pe.employee_id = $1 AND pe.org_id = $2 AND pe.released_on IS NULL
+              ORDER BY sp.name`, [id, user.orgId])).rows;
+
+      const [projectChoices, programmeChoices, otherScopes] = await Promise.all([
+        opts.pool.query(
+          `SELECT id, code, name, status FROM projects
+            WHERE org_id = $1 AND status <> 'CANCELLED' ORDER BY name LIMIT 500`, [user.orgId]),
+        opts.pool.query(
+          `SELECT id, code, name, status FROM survey_projects
+            WHERE org_id = $1 AND status <> 'CLOSED' ORDER BY name LIMIT 500`, [user.orgId]),
+        opts.pool.query(
+          `SELECT DISTINCT ur.scope_type, COALESCE(ou.name, e.emp_no) AS label
+             FROM user_roles ur
+             LEFT JOIN org_units ou ON ou.id = ur.scope_id
+             LEFT JOIN employees e ON e.id = ur.scope_id
+            WHERE ur.user_id = $1 AND ur.scope_type IS NOT NULL AND ur.scope_type <> 'project'`,
+          [employee.user_id ?? null]),
+      ]);
+
+      return {
+        data: {
+          employee: { id: employee.id, name: employee.name },
+          /*
+           * A project scope is carried on the user account, so an employee
+           * with no login cannot have one. Said plainly here rather than
+           * letting the screen offer a control that would do nothing.
+           */
+          user: employee.user_id
+            ? { id: employee.user_id, username: employee.username }
+            : null,
+          roles: [...new Set(roleRows.map((r) => r.code as string))],
+          project_access: access,
+          project_ids: projectIds,
+          programmes: programmes.map((p) => ({
+            ...p, assigned_on: p.assigned_on ? String(p.assigned_on).slice(0, 10) : null,
+          })),
+          /* Limits set elsewhere, so the screen can say it is not the whole story. */
+          other_scopes: otherScopes.rows,
+          choices: {
+            projects: projectChoices.rows,
+            programmes: programmeChoices.rows,
+          },
+          summary: describeAccess(access as 'ORGANISATION' | 'ASSIGNED',
+            projectIds.length, programmes.length),
+        },
+      };
+    },
+  );
+
+  app.put(
+    '/api/v1/employees/:id/assignments',
+    { preHandler: requirePermission(authenticate, 'users.manage') },
+    async (req) => {
+      const user = req.authUser!;
+      const id = (req.params as { id: string }).id;
+      const parsed = assignmentsSchema.safeParse(req.body);
+      if (!parsed.success) {
+        throw new ApiError({
+          status: 422, code: 'VALIDATION_ERROR', message: 'Validation failed',
+          fieldErrors: toFieldErrors(parsed.error),
+        });
+      }
+      const input = parsed.data;
+
+      return mutate(opts.pool, req, 'employee.assignments', 'employee', async (db) => {
+        const employee = await employeeOr404(db, user.orgId, id);
+
+        /*
+         * Changing your own data scope is how an administrator locks
+         * themselves out of the screen they would need to undo it. Refused:
+         * somebody else can do it, and the refusal costs nothing.
+         */
+        if (employee.user_id === user.id) {
+          throw new ApiError({
+            status: 409, code: 'SELF_SCOPE',
+            message: 'Ask another administrator to change your own access',
+          });
+        }
+
+        /* ------------------------------------------- survey programmes */
+        {
+          const current = (await db.query(
+            `SELECT survey_project_id, project_role FROM survey_project_employees
+              WHERE employee_id = $1 AND org_id = $2 AND released_on IS NULL`,
+            [id, user.orgId])).rows as Array<{ survey_project_id: string; project_role: string }>;
+          const wanted = new Map(input.programmes.map((p) => [p.survey_project_id, p.project_role]));
+          const changing =
+            current.length !== wanted.size
+            || current.some((c) => wanted.get(c.survey_project_id) !== c.project_role);
+          if (changing && !user.permissions.includes('survey.assign')) {
+            throw new ApiError({
+              status: 403, code: 'FORBIDDEN',
+              message: 'Changing survey programme assignments needs the survey.assign permission',
+            });
+          }
+          for (const p of input.programmes) {
+            const found = await db.query(
+              'SELECT 1 FROM survey_projects WHERE id = $1 AND org_id = $2',
+              [p.survey_project_id, user.orgId]);
+            if (!found.rowCount) {
+              throw new ApiError({
+                status: 422, code: 'INVALID_SCOPE', message: 'No such survey programme',
+              });
+            }
+            await db.query(
+              `INSERT INTO survey_project_employees(org_id, survey_project_id, employee_id,
+                 project_role, assigned_on, created_by)
+               VALUES($1,$2,$3,$4,CURRENT_DATE,$5)
+               ON CONFLICT (survey_project_id, employee_id)
+               DO UPDATE SET project_role = EXCLUDED.project_role, released_on = NULL`,
+              [user.orgId, p.survey_project_id, id, p.project_role, user.id]);
+          }
+          /*
+           * Released, not deleted. Somebody worked those days and the
+           * entries point at the enrolment; removing the row would orphan
+           * the history of who was on the programme when.
+           */
+          const keep = input.programmes.map((p) => p.survey_project_id);
+          await db.query(
+            `UPDATE survey_project_employees SET released_on = CURRENT_DATE
+              WHERE employee_id = $1 AND org_id = $2 AND released_on IS NULL
+                AND NOT (survey_project_id = ANY($3::uuid[]))`,
+            [id, user.orgId, keep]);
+        }
+
+        /* ------------------------------------------- ordinary projects */
+        if (!employee.user_id) {
+          if (input.project_access === 'ASSIGNED') {
+            throw new ApiError({
+              status: 409, code: 'NO_ACCOUNT',
+              message: 'This employee has no login, so there is no project access to limit',
+            });
+          }
+        } else {
+          const existing = (await db.query(
+            'SELECT role_id, scope_type, scope_id FROM user_roles WHERE user_id = $1',
+            [employee.user_id])).rows as Array<{ role_id: string; scope_type: string | null; scope_id: string | null }>;
+
+          for (const projectId of input.project_ids) {
+            const found = await db.query(
+              'SELECT 1 FROM projects WHERE id = $1 AND org_id = $2', [projectId, user.orgId]);
+            if (!found.rowCount) {
+              throw new ApiError({
+                status: 422, code: 'INVALID_SCOPE', message: 'No such project',
+              });
+            }
+          }
+
+          const planned = plannedRoleRows(existing, input.project_access, input.project_ids);
+          await db.query('DELETE FROM user_roles WHERE user_id = $1', [employee.user_id]);
+          for (const row of planned) {
+            await db.query(
+              `INSERT INTO user_roles(user_id, role_id, scope_type, scope_id)
+               VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+              [employee.user_id, row.role_id, row.scope_type, row.scope_id]);
+          }
+          /*
+           * What a session may see is decided when its token is minted, so
+           * a narrowed scope would not bite until the token lapsed. Sign
+           * them out: the change is only worth making if it applies now.
+           */
+          await db.query(
+            'UPDATE sessions SET revoked = true, revoked_at = now() WHERE user_id = $1 AND revoked = false',
+            [employee.user_id]);
+        }
+
+        return {
+          id,
+          project_access: input.project_access,
+          project_ids: input.project_ids,
+          programmes: input.programmes,
+          summary: describeAccess(input.project_access,
+            input.project_ids.length, input.programmes.length),
+        };
+      });
+    },
+  );
 }

@@ -16,6 +16,7 @@ import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmployeeForm } from '@/components/EmployeeForm';
 import { DocumentList } from '@/components/DocumentList';
+import { EmployeeAssignments } from '@/components/EmployeeAssignments';
 import { ExitDialog } from '@/components/ExitDialog';
 import { ReactivateDialog } from '@/components/ReactivateDialog';
 
@@ -35,6 +36,8 @@ export function EmployeeDetailView({ id }: { id: string }) {
   const canExit = hasPermission(holder, PERMISSIONS.EMPLOYEE_EXIT);
   const canReactivate = hasPermission(holder, PERMISSIONS.EMPLOYEE_REACTIVATE);
   const canUpload = hasPermission(holder, PERMISSIONS.DOCUMENT_UPLOAD);
+  const canReadAssignments = hasPermission(holder, PERMISSIONS.USERS_READ);
+  const canAssign = hasPermission(holder, PERMISSIONS.USERS_MANAGE);
   const queryClient = useQueryClient();
   const [exitOpen, setExitOpen] = React.useState(false);
   const [reactivateOpen, setReactivateOpen] = React.useState(false);
@@ -132,6 +135,12 @@ export function EmployeeDetailView({ id }: { id: string }) {
               />
             </div>
           )}
+
+          {/* §076. Above the documents: what somebody is working on is
+              asked far more often than what is filed against them. */}
+          {canReadAssignments ? (
+            <EmployeeAssignments employeeId={id} canEdit={canAssign} />
+          ) : null}
 
           <DocumentList employeeId={id} canUpload={canUpload} />
 

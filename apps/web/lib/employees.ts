@@ -191,3 +191,50 @@ export async function getMyEmployee(): Promise<EmployeeDetail> {
   const { data } = await apiRequest<EmployeeDetail>('/api/v1/employees/me', { method: 'GET' });
   return data;
 }
+
+/* ------------------------------------------------------------------ §076
+ * What work a person is on, and therefore what data they see.
+ */
+
+export interface AssignmentChoice {
+  id: string;
+  code: string;
+  name: string;
+  status: string;
+}
+
+export interface EmployeeAssignments {
+  employee: { id: string; name: string };
+  /** Null when the employee has no login -- a project scope hangs off the account. */
+  user: { id: string; username: string } | null;
+  roles: string[];
+  project_access: 'ORGANISATION' | 'ASSIGNED';
+  project_ids: string[];
+  programmes: Array<{
+    survey_project_id: string; project_role: string; assigned_on: string | null;
+    code: string; name: string; status: string;
+  }>;
+  other_scopes: Array<{ scope_type: string; label: string | null }>;
+  choices: { projects: AssignmentChoice[]; programmes: AssignmentChoice[] };
+  summary: string;
+}
+
+export interface AssignmentsPayload {
+  project_access: 'ORGANISATION' | 'ASSIGNED';
+  project_ids: string[];
+  programmes: Array<{ survey_project_id: string; project_role: string }>;
+}
+
+export async function getAssignments(employeeId: string): Promise<EmployeeAssignments> {
+  const { data } = await apiRequest<EmployeeAssignments>(
+    `/api/v1/employees/${employeeId}/assignments`, { method: 'GET' });
+  return data;
+}
+
+export async function putAssignments(
+  employeeId: string, body: AssignmentsPayload,
+): Promise<{ summary: string }> {
+  const { data } = await apiRequest<{ summary: string }>(
+    `/api/v1/employees/${employeeId}/assignments`, { method: 'PUT', body });
+  return data;
+}

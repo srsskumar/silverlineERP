@@ -10,6 +10,7 @@ export const PERMISSIONS = {
   // item is auth-only (see AppShell). Do not re-add colon-style codes here;
   // they never match server-issued permissions and fail closed (hidden UI).
   AUTH_LOGIN: 'auth.login',
+  USERS_READ: 'users.read',
   USERS_MANAGE: 'users.manage',
   ROLES_MANAGE: 'roles.manage',
   AUDIT_READ: 'audit.read',
