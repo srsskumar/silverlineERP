@@ -24,7 +24,7 @@ import { Table, TBody, TD, TH, THead, TR, TableWrap } from '@/components/ui/Tabl
 import { Stat } from '@/components/finance/Primitives';
 import { ExportMenu } from '@/components/ui/ExportMenu';
 import {
-  SurveyAlertSettings, SurveyContacts, SurveyQueries,
+  SurveyAlertSettings, SurveyContacts, SurveyQueries, type QueryScope,
 } from '@/components/survey/DashboardActions';
 
 interface Rung { key: string; label: string; note?: string | null }
@@ -96,6 +96,11 @@ interface ReasonGroup {
 interface DashboardData {
   project: { id: string; name: string; code: string | null };
   period: { from: string | null; to: string };
+  refreshed: {
+    generated_at: string;
+    last_return: string | null;
+    last_stage_change: string | null;
+  };
   level: string;
   filter: {
     district: string | null; mandal: string | null; position: string | null;
@@ -169,7 +174,7 @@ function rungTone(index: number, total: number): string {
  * is how one of them quietly stops matching the other.
  */
 function RollUp({
-  title, unitHeading, note, rows, ladder, onSelect,
+  title, unitHeading, note, rows, ladder, onSelect, onAsk,
 }: {
   title: string;
   unitHeading: string;
@@ -177,6 +182,8 @@ function RollUp({
   rows: Array<DashboardRow & { district?: string | null }>;
   ladder: Rung[];
   onSelect: (row: DashboardRow) => void;
+  /** Raise a question about this district or mandal (§074). */
+  onAsk?: (row: DashboardRow) => void;
 }) {
   const showsParent = rows.some(r => r.district);
   return (
@@ -193,6 +200,7 @@ function RollUp({
               {/* Mandal names repeat across districts; thirty bare ones read
                   as a list of nothing. */}
               {showsParent ? <TH>District</TH> : null}
+              {onAsk ? <TH className="w-10" aria-label="Ask" /> : null}
               <TH className="text-right">Villages</TH>
               <TH className="text-right">Extent (Ac)</TH>
               <TH className="text-right">Extent (km²)</TH>
@@ -218,6 +226,18 @@ function RollUp({
                 </TD>
                 {showsParent ? (
                   <TD className="text-text-muted">{row.district ?? '—'}</TD>
+                ) : null}
+                {/* A question about a district is asked from the district's
+                    own row, not by describing it in a free-text box. */}
+                {onAsk ? (
+                  <TD>
+                    {row.id ? (
+                      <Button variant="ghost" onClick={() => onAsk(row)}
+                        aria-label={`Ask about ${row.name}`}>
+                        Ask
+                      </Button>
+                    ) : null}
+                  </TD>
                 ) : null}
                 <TD className="text-right tabular-nums">{num(row.villages)}</TD>
                 <TD className="text-right tabular-nums">{dec(row.extent_ac)}</TD>
@@ -248,7 +268,7 @@ function RollUp({
               </TR>
             ))}
             {rows.length === 0 ? (
-              <TR><TD colSpan={showsParent ? 11 : 10}
+              <TR><TD colSpan={(showsParent ? 11 : 10) + (onAsk ? 1 : 0)}
                 className="py-6 text-center text-sm text-text-muted">
                 No villages match these filters.
               </TD></TR>
@@ -288,6 +308,8 @@ export function SurveyDashboard({
   const [mandal, setMandal] = React.useState('');
   const [position, setPosition] = React.useState('');
   const [reason, setReason] = React.useState<{ code: string; source: string } | null>(null);
+  /* What a question is about, set by whichever row the reader pressed Ask on. */
+  const [scope, setScope] = React.useState<QueryScope>({});
   const sel = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
 
   const query = useQuery({
@@ -425,6 +447,42 @@ export function SurveyDashboard({
               note={`${num(d.villages.length)} villages`} />
           </div>
         </div>
+        {/*
+          * When this was drawn, and how current what it was drawn from is.
+          *
+          * A dashboard left open on a wall looks identical at nine in the
+          * morning and at six in the evening. And one drawn at six from
+          * returns that stop on Tuesday is not current either — both facts,
+          * because either one alone misleads.
+          */}
+        <p className="mt-2 flex flex-wrap items-center gap-x-3 text-2xs text-text-subtle">
+          <span>
+            Refreshed{' '}
+            <time dateTime={d.refreshed.generated_at}>
+              {new Date(d.refreshed.generated_at).toLocaleString('en-IN', {
+                dateStyle: 'medium', timeStyle: 'short',
+              })}
+            </time>
+          </span>
+          <span>
+            {d.refreshed.last_return
+              ? `Latest return ${d.refreshed.last_return}`
+              : 'No returns filed yet'}
+          </span>
+          {d.refreshed.last_stage_change ? (
+            <span>
+              Last stage change{' '}
+              {new Date(d.refreshed.last_stage_change).toLocaleDateString('en-IN', {
+                dateStyle: 'medium',
+              })}
+            </span>
+          ) : null}
+          <Button variant="ghost" onClick={() => query.refetch()}
+            disabled={query.isFetching}>
+            {query.isFetching ? 'Refreshing…' : 'Refresh'}
+          </Button>
+        </p>
+
         {d.filter.villages !== d.filter.of_villages ? (
           <p className="mt-2 text-xs text-text-muted">
             Showing {num(d.filter.villages)} of {num(d.filter.of_villages)} villages.
@@ -872,6 +930,7 @@ export function SurveyDashboard({
           if (level === 'district') { setDistrict(row.id!); setLevel('mandal'); return; }
           if (level === 'mandal') setMandal(row.id!);
         }}
+        onAsk={(row) => setScope({ orgUnitId: row.id!, label: `${row.name} ${level}` })}
       />
 
       {/*
@@ -891,17 +950,15 @@ export function SurveyDashboard({
           rows={d.by_mandal}
           ladder={ladder}
           onSelect={(row) => setMandal(row.id!)}
+          onAsk={(row) => setScope({ orgUnitId: row.id!, label: `${row.name} mandal` })}
         />
       ) : null}
 
       {/* ------------------------------------------ asking, reaching, alerting */}
       <SurveyQueries
         projectId={projectId}
-        villageId={d.filter.village_id ?? null}
-        villageName={null}
-        position={position
-          ? ladder.find((r: Rung) => r.key === position)?.label ?? null
-          : null}
+        scope={scope}
+        onScopeChange={setScope}
         canAnswer={canAnswer}
       />
       <SurveyContacts projectId={projectId} canManage={canManage} />
@@ -931,6 +988,7 @@ export function SurveyDashboard({
                 <TH>GT started</TH>
                 <TH>GT expected end</TH>
                 <TH>GT actual end</TH>
+                <TH className="w-10" aria-label="Ask" />
               </TR>
             </THead>
             <TBody>
@@ -1021,6 +1079,16 @@ export function SurveyDashboard({
                       ? 'text-danger' : 'text-text-muted'}`}>
                     {v.gt_completed_on ?? '—'}
                   </TD>
+                  {/* Asked from the village's own row, carrying the position
+                      it was sitting at when the question occurred to somebody. */}
+                  <TD>
+                    <Button variant="ghost" aria-label={`Ask about ${v.name}`}
+                      onClick={() => setScope({
+                        villageId: v.id, label: v.name, position: v.position_label,
+                      })}>
+                      Ask
+                    </Button>
+                  </TD>
                   {/* What actually happened, beside what was promised. */}
                   <TD className={`tabular-nums ${
                     v.gt_completed_on && v.gt_expected_end_on
@@ -1028,10 +1096,20 @@ export function SurveyDashboard({
                       ? 'text-danger' : 'text-text-muted'}`}>
                     {v.gt_completed_on ?? '—'}
                   </TD>
+                  {/* Asked from the village's own row, carrying the position
+                      it was sitting at when the question occurred to somebody. */}
+                  <TD>
+                    <Button variant="ghost" aria-label={`Ask about ${v.name}`}
+                      onClick={() => setScope({
+                        villageId: v.id, label: v.name, position: v.position_label,
+                      })}>
+                      Ask
+                    </Button>
+                  </TD>
                 </TR>
               ))}
               {d.villages.length === 0 ? (
-                <TR><TD colSpan={canDrill ? 14 : 12} className="py-6 text-center text-sm text-text-muted">
+                <TR><TD colSpan={canDrill ? 15 : 13} className="py-6 text-center text-sm text-text-muted">
                   No villages match these filters.
                 </TD></TR>
               ) : null}

@@ -4892,10 +4892,38 @@ export async function registerSurveyRoutes(
         .map(v => unitAt(v.row, 'mandal')).filter(Boolean)
         .map(d => [d!.id, d!])).values()].sort((a, b) => a.name.localeCompare(b.name));
 
+      /*
+       * When this was built, and how current what it was built from is (§074).
+       *
+       * Two different facts and both matter. A dashboard left open on a wall
+       * looks identical at nine in the morning and at six in the evening, so
+       * it has to say when it was drawn. And a screen drawn at six from
+       * returns that stop on Tuesday is not current either — the freshest
+       * thing in the programme is what the figures actually reach.
+       */
+      const currency = (await pool.query(
+        `SELECT (SELECT max(entry_date)::text FROM survey_entries
+                  WHERE survey_project_id = $1) AS last_return,
+                -- Qualified: survey_villages has an updated_at too, and an
+                -- unqualified one here is ambiguous.
+                (SELECT max(vs.updated_at) FROM survey_village_stages vs
+                   JOIN survey_villages sv ON sv.id = vs.survey_village_id
+                  WHERE sv.survey_project_id = $1) AS last_stage_change`,
+        [id])).rows[0];
+
       return {
         data: {
           project: { id: String(project.id), name: String(project.name), code: project.code },
           period: { from: from || null, to },
+          refreshed: {
+            /* When the server built this answer. */
+            generated_at: new Date().toISOString(),
+            /* The most recent day any crew has filed for. */
+            last_return: currency.last_return ?? null,
+            /* The last time anybody moved a stage. */
+            last_stage_change: currency.last_stage_change
+              ? new Date(currency.last_stage_change).toISOString() : null,
+          },
           level,
           filter: {
             district: fDistrict || null, mandal: fMandal || null,
@@ -5280,6 +5308,13 @@ export async function registerSurveyRoutes(
           if (scoped) await inOrg(db, 'survey_projects', id, u.orgId);
           else await projectOr404(db, u.orgId, id, u);
 
+          if (input.org_unit_id) {
+            // The unit has to be ours and has to be somewhere this programme
+            // actually reaches, or the question files against a district in
+            // somebody else's contract.
+            await inOrg(db, 'org_units', input.org_unit_id, u.orgId);
+          }
+
           let position = input.position_key ?? null;
           if (input.survey_village_id) {
             // Checked against the programme, so a question cannot be filed
@@ -5298,10 +5333,10 @@ export async function registerSurveyRoutes(
 
           const row = (await db.query(
             `INSERT INTO survey_queries(org_id, survey_project_id, survey_village_id,
-               kind, subject, body, position_key, raised_by)
-             VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-            [u.orgId, id, input.survey_village_id ?? null, input.kind,
-              input.subject, input.body, position, u.id])).rows[0];
+               org_unit_id, kind, subject, body, position_key, raised_by)
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+            [u.orgId, id, input.survey_village_id ?? null, input.org_unit_id ?? null,
+              input.kind, input.subject, input.body, position, u.id])).rows[0];
 
           /*
            * Told to the people who can answer, now, rather than found later.
@@ -5349,6 +5384,10 @@ export async function registerSurveyRoutes(
         values.push(q.village_id);
         where += ` AND q.survey_village_id = $${values.length}`;
       }
+      if (q.org_unit_id) {
+        values.push(q.org_unit_id);
+        where += ` AND q.org_unit_id = $${values.length}`;
+      }
       /*
        * Somebody who can only raise questions sees their own.
        *
@@ -5359,6 +5398,7 @@ export async function registerSurveyRoutes(
 
       const rows = (await pool.query(
         `SELECT q.*, ou.name AS village_name,
+                unit.name AS unit_name, unit.type AS unit_type,
                 COALESCE(NULLIF(btrim(concat_ws(' ', ra.first_name, ra.last_name)), ''),
                          rb.username) AS raised_by_name,
                 COALESCE(NULLIF(btrim(concat_ws(' ', aa.first_name, aa.last_name)), ''),
@@ -5366,6 +5406,7 @@ export async function registerSurveyRoutes(
            FROM survey_queries q
            LEFT JOIN survey_villages sv ON sv.id = q.survey_village_id
            LEFT JOIN org_units ou ON ou.id = sv.village_id
+           LEFT JOIN org_units unit ON unit.id = q.org_unit_id
            LEFT JOIN users rb ON rb.id = q.raised_by
            LEFT JOIN employees ra ON ra.id = rb.employee_id
            LEFT JOIN users ab ON ab.id = q.answered_by

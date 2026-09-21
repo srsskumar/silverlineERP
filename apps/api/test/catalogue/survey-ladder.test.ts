@@ -1304,3 +1304,57 @@ describe("the alerts that were advertised are the alerts that are raised (§073)
     expect(r.body.meta).toHaveProperty("queued");
   });
 });
+
+describe("a question about a district (§074)", () => {
+  it("files against the district rather than one of its villages", async () => {
+    /*
+     * "Why is Bapatla behind" is not a question about any one of its four
+     * hundred villages. Filing it against one picked to satisfy a foreign key
+     * puts it in front of the wrong person and loses the question asked.
+     */
+    const district = (await w.pool.query(
+      "SELECT id, name FROM org_units WHERE org_id = $1 AND type = 'district' LIMIT 1",
+      [w.orgId])).rows[0];
+    const r = await post(w.role.GOVT_OBSERVER,
+      `/api/v1/survey/projects/${programmeId}/queries`, {
+        kind: "QUESTION", org_unit_id: String(district.id),
+        subject: "Why is this district behind the others?",
+        body: "Two of the three are at sixty per cent and this one is at forty.",
+      });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.data.org_unit_id).toBe(String(district.id));
+    expect(r.data.survey_village_id).toBeNull();
+
+    const list = await get(w.role.GOVT_OBSERVER,
+      `/api/v1/survey/projects/${programmeId}/queries`);
+    const found = (list.data as Array<Record<string, any>>)
+      .find(q => q.id === r.data.id);
+    expect(found!.unit_name).toBe(district.name);
+    expect(found!.unit_type).toBe("district");
+  });
+
+  it("refuses a question about a village and a district at once", async () => {
+    // Whichever the screen chose to show it under would be wrong half the time.
+    const district = (await w.pool.query(
+      "SELECT id FROM org_units WHERE org_id = $1 AND type = 'district' LIMIT 1",
+      [w.orgId])).rows[0];
+    const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/queries`, {
+      kind: "QUESTION", org_unit_id: String(district.id), survey_village_id: villageA,
+      subject: "Two scopes at once", body: "This should not be accepted at all.",
+    });
+    expect(r.status).toBe(422);
+  });
+
+  it("says when the dashboard was drawn and how current its figures are", async () => {
+    /*
+     * A dashboard left open on a wall looks identical at nine in the morning
+     * and at six in the evening; one drawn at six from returns that stop on
+     * Tuesday is not current either.
+     */
+    const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    expect(r.data.refreshed.generated_at).toBeTruthy();
+    expect(Date.now() - Date.parse(r.data.refreshed.generated_at)).toBeLessThan(60_000);
+    expect(r.data.refreshed).toHaveProperty("last_return");
+    expect(r.data.refreshed).toHaveProperty("last_stage_change");
+  });
+});

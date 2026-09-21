@@ -2879,12 +2879,24 @@ export const QUERY_STATUS_LABELS: Record<QueryStatus, string> = {
  */
 export const surveyQuerySchema = z.object({
   survey_village_id: z.string().uuid().nullable().optional(),
+  /**
+   * A district or a mandal, when the question is about neither one village
+   * nor the whole programme (§074).
+   *
+   * "Why is Bapatla behind" is not a question about any one of its four
+   * hundred villages, and filing it against one picked to satisfy a foreign
+   * key puts it in front of the wrong person.
+   */
+  org_unit_id: z.string().uuid().nullable().optional(),
   kind: z.enum(QUERY_KINDS),
   subject: z.string().trim().min(4, 'Give it a subject somebody can scan').max(200),
   body: z.string().trim().min(10,
     'Say enough that somebody can answer without asking what you meant').max(4000),
   position_key: z.string().trim().max(40).nullable().optional(),
-}).strict();
+}).strict().refine(v => !(v.survey_village_id && v.org_unit_id), {
+  message: 'A question is about one thing: a village, a district or a mandal — not two',
+  path: ['org_unit_id'],
+});
 
 export const surveyAnswerSchema = z.object({
   answer: z.string().trim().min(2, 'An answer needs words').max(4000),

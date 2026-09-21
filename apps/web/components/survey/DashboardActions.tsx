@@ -183,19 +183,31 @@ export function SurveyContacts({
 
 /* --------------------------------------------------------------- asking */
 
+/** What a question is about: a village, a district or mandal, or neither. */
+export interface QueryScope {
+  villageId?: string | null;
+  orgUnitId?: string | null;
+  /** What to call it on screen — "Bapatla", "Tenali mandal", "Adakula". */
+  label?: string | null;
+  position?: string | null;
+}
+
 export function SurveyQueries({
-  projectId, villageId, villageName, position, canAnswer,
+  projectId, scope, onScopeChange, canAnswer,
 }: {
   projectId: string;
-  /** The village the question is about, when one is selected. */
-  villageId?: string | null;
-  villageName?: string | null;
-  position?: string | null;
+  /** Set by whatever row the reader pressed "Ask" on. */
+  scope: QueryScope;
+  onScopeChange: (scope: QueryScope) => void;
   canAnswer: boolean;
 }) {
   const qc = useQueryClient();
   const toast = useToast();
   const [open, setOpen] = React.useState(false);
+  /* A scope arriving from a row press opens the form with it. */
+  React.useEffect(() => {
+    if (scope.villageId || scope.orgUnitId) setOpen(true);
+  }, [scope.villageId, scope.orgUnitId]);
   const [kind, setKind] = React.useState<string>('QUESTION');
   const [subject, setSubject] = React.useState('');
   const [body, setBody] = React.useState('');
@@ -215,8 +227,9 @@ export function SurveyQueries({
         method: 'POST',
         body: {
           kind, subject: subject.trim(), body: body.trim(),
-          ...(villageId ? { survey_village_id: villageId } : {}),
-          ...(position ? { position_key: position } : {}),
+          ...(scope.villageId ? { survey_village_id: scope.villageId } : {}),
+          ...(scope.orgUnitId ? { org_unit_id: scope.orgUnitId } : {}),
+          ...(scope.position ? { position_key: scope.position } : {}),
         },
       }),
     onError: (e) => toast.error('Nothing was sent', messageOf(e)),
@@ -224,6 +237,7 @@ export function SurveyQueries({
       toast.success('Sent to the team running this programme',
         'You will be told here when somebody answers.');
       setSubject(''); setBody(''); setOpen(false);
+      onScopeChange({});
       qc.invalidateQueries({ queryKey: ['survey-queries', projectId] });
     },
   });
@@ -257,11 +271,16 @@ export function SurveyQueries({
           {/* What it is about, said plainly, so nobody has to guess whether
               the question travelled with its context. */}
           <p className="text-xs text-text-muted">
-            {villageName
-              ? `About ${villageName}${position ? ` — currently ${position}` : ''}.`
+            {scope.label
+              ? `About ${scope.label}${scope.position ? ` — currently ${scope.position}` : ''}.`
               : 'About this programme as a whole.'}
             {' '}It goes to the team lead, the project manager and the
             administrators.
+            {scope.label ? (
+              <Button variant="ghost" onClick={() => onScopeChange({})}>
+                Ask about the programme instead
+              </Button>
+            ) : null}
           </p>
           <div className="flex flex-wrap gap-2">
             <select className={field} value={kind} onChange={(e) => setKind(e.target.value)}>
@@ -294,8 +313,10 @@ export function SurveyQueries({
                   {QUERY_KIND_LABELS[q.kind as keyof typeof QUERY_KIND_LABELS] ?? q.kind}
                 </Badge>
                 <span className="text-sm font-medium text-text">{q.subject}</span>
-                {q.village_name ? (
-                  <span className="text-2xs text-text-subtle">{q.village_name}</span>
+                {q.village_name || q.unit_name ? (
+                  <span className="text-2xs text-text-subtle">
+                    {q.village_name ?? `${q.unit_name} ${q.unit_type ?? ''}`.trim()}
+                  </span>
                 ) : null}
                 {q.position_label ? (
                   <span className="text-2xs text-text-subtle">· {q.position_label}</span>

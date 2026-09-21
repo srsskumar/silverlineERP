@@ -109,6 +109,8 @@ export async function inOrg(db:Pool|PoolClient,table:string,id:string,orgId:stri
   // §073: questions raised on the status, the contact list on both sides, and
   // where the alerts go.
   'survey_queries','survey_contacts','survey_alert_subscriptions',
+  // The geography a contact covers or a question is asked about (§073, §074).
+  'org_units',
   // Correcting one allocation by id (§note 6).
   'asset_assignments'];
  // The allow-list is the injection guard for the interpolated table name

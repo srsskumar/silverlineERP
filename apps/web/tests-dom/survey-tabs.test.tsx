@@ -106,6 +106,11 @@ const REASONS = [
 const DASHBOARD = {
   project: { id: 'p1', name: 'Krishna', code: 'KR1' },
   period: { from: null, to: '2026-09-19' },
+  refreshed: {
+    generated_at: '2026-09-21T09:15:00.000Z',
+    last_return: '2026-09-19',
+    last_stage_change: '2026-09-20T06:00:00.000Z',
+  },
   level: 'district',
   filter: { district: null, mandal: null, position: null, reason: null,
     reason_source: null, villages: 1, of_villages: 1 },
@@ -626,6 +631,43 @@ describe('the land survey screen', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Setup' })).toBeInTheDocument());
     expect(screen.getByRole('button', { name: /Record today/ })).toBeInTheDocument();
+  });
+
+  it('says when it was drawn and how current the figures are', async () => {
+    /*
+     * A dashboard left open on a wall looks identical at nine in the morning
+     * and at six in the evening; one drawn at six from returns that stop on
+     * Tuesday is not current either. Both facts, because either alone
+     * misleads.
+     */
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() => expect(screen.getByText(/^Refreshed/)).toBeInTheDocument());
+    expect(screen.getByText('Latest return 2026-09-19')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeInTheDocument();
+  });
+
+  it('lets a question be raised from a district, a mandal or a village', async () => {
+    // "Why is Bapatla behind" is not a question about any one of its four
+    // hundred villages, and describing the district in a free-text box is how
+    // it reaches the wrong person.
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() => expect(screen.getByText('By district')).toBeInTheDocument());
+
+    expect(screen.getByRole('button', { name: 'Ask about Krishna' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Ask about Koyyuru' })).toBeInTheDocument();
+    // getAllBy: the export menu renders a print copy of the same table into
+    // a portal, so every row's controls appear twice in the document.
+    expect(screen.getAllByRole('button', { name: 'Ask about Adakula' }).length)
+      .toBeGreaterThan(0);
+
+    // Pressing one opens the form already scoped to it.
+    screen.getByRole('button', { name: 'Ask about Koyyuru' }).click();
+    await waitFor(() =>
+      expect(screen.getByText(/About Koyyuru mandal/)).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /Ask about the programme instead/ }))
+      .toBeInTheDocument();
   });
 
   it('opens on the dashboard', async () => {
