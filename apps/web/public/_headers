@@ -12,6 +12,11 @@
 # img-src additionally allows tile.openstreetmap.org: the geo-fence and punch
 # maps are raster tiles fetched as images. Point this at your own tile host if
 # you self-host; MapLibre also needs blob: for its web workers.
+#
+# Permissions-Policy allows geolocation for this origin only: the punch clock
+# reads the position at the moment of each punch. geolocation=() refused it
+# outright, so every web punch was filed with no location at all. Embedded
+# frames still get none.
 
 /*
   Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
@@ -19,7 +24,7 @@
   X-Frame-Options: DENY
   Referrer-Policy: strict-origin-when-cross-origin
   Cross-Origin-Opener-Policy: same-origin
-  Permissions-Policy: geolocation=(), camera=(), microphone=(), payment=(), usb=(), interest-cohort=()
+  Permissions-Policy: geolocation=(self), camera=(), microphone=(), payment=(), usb=(), interest-cohort=()
   Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://tile.openstreetmap.org; font-src 'self' data:; connect-src 'self' https:; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests
 
 # Hashed build assets are immutable; HTML must always revalidate so a deploy
