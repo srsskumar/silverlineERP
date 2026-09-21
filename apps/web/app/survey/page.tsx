@@ -311,18 +311,33 @@ export default function SurveyPage() {
             This financial year
           </Button>
 
-          <div className="ml-auto flex gap-2">
-            {canManage ? (
-              <Link href="/survey/setup">
-                <Button type="button" variant="secondary">Setup</Button>
-              </Link>
-            ) : null}
-            {canEnter ? (
-              <Link href="/survey/entry">
-                <Button type="button" variant="primary">Record today’s progress</Button>
-              </Link>
-            ) : null}
-          </div>
+          {/*
+            * Not on the dashboard.
+            *
+            * The dashboard is a reading screen and is what people outside
+            * this company are shown. Setup loads the village master and
+            * "record today's progress" writes a return — neither belongs
+            * beside a figure somebody is reading, and a screen that reports
+            * and writes in the same breath is one where looking and changing
+            * look alike.
+            *
+            * They are unchanged on every other tab, which is where the
+            * people who do those things already are.
+            */}
+          {tab === 'dashboard' ? null : (
+            <div className="ml-auto flex gap-2">
+              {canManage ? (
+                <Link href="/survey/setup">
+                  <Button type="button" variant="secondary">Setup</Button>
+                </Link>
+              ) : null}
+              {canEnter ? (
+                <Link href="/survey/entry">
+                  <Button type="button" variant="primary">Record today’s progress</Button>
+                </Link>
+              ) : null}
+            </div>
+          )}
         </Toolbar>
 
         {projects.isLoading ? <Skeleton className="h-64" /> : null}

@@ -607,6 +607,27 @@ describe('the land survey screen', () => {
     expect(screen.getByText(/7 are waiting now/)).toBeInTheDocument();
   });
 
+  it('keeps Setup and the day\'s return off the dashboard, and nowhere else', async () => {
+    /*
+     * The dashboard is a reading screen and is what people outside this
+     * company are shown. Setup loads the village master; "record today's
+     * progress" writes a return. Neither belongs beside a figure somebody is
+     * reading — but both belong on the tabs where that work is done.
+     */
+    const { default: SurveyPage } = await import('@/app/survey/page');
+    wrap(React.createElement(SurveyPage));
+    await waitFor(() =>
+      expect(screen.getByText('Where every village has got to')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Setup' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Record today/ })).toBeNull();
+
+    // Still there the moment somebody leaves the dashboard.
+    (await reveal('Villages')).click();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Setup' })).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /Record today/ })).toBeInTheDocument();
+  });
+
   it('opens on the dashboard', async () => {
     // The question almost everybody arrives with, so it is the first thing
     // they see rather than the fifth tab along.
