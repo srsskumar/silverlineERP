@@ -435,14 +435,42 @@ describe("three-way match", () => {
     expect(res.data.exceptions[0].code).toBe("RATE_EXCEEDS_ORDER");
   });
 
-  it("honours a configured tolerance", async () => {
+  it("honours the organisation's configured tolerance, not the caller's", async () => {
     const { invoiceId } = await orderReceivedAndInvoiced({
       ordered: 100, rate: 400, received: 100, invoiced: 100, invoiceRate: 406,
     });
     const strict = await post(w.admin, `/api/v1/invoices/${invoiceId}/match`, {});
     expect(strict.data.matched).toBe(false);
-    const tolerant = await post(w.admin, `/api/v1/invoices/${invoiceId}/match`, { tolerance: { ratePct: 2 } });
-    expect(tolerant.data.matched).toBe(true);
+    // A tolerance sent with the request is ignored: whoever runs the match
+    // does not get to decide how close is close enough.
+    const asked = await post(w.admin, `/api/v1/invoices/${invoiceId}/match`, { tolerance: { ratePct: 2 } });
+    expect(asked.data.matched).toBe(false);
+
+    const set = await w.app.inject({
+      method: "PATCH", url: "/api/v1/admin/settings",
+      headers: { ...w.admin, ...idem() },
+      payload: { settings: { match_tolerance: { rate_pct: 2 } } },
+    });
+    expect(set.statusCode, set.body).toBe(200);
+    try {
+      const tolerant = await post(w.admin, `/api/v1/invoices/${invoiceId}/match`, {});
+      expect(tolerant.data.matched).toBe(true);
+    } finally {
+      await w.pool.query(
+        "UPDATE organizations SET settings = settings - 'match_tolerance' WHERE id = $1", [w.orgId]);
+    }
+  });
+
+  it("does not let somebody who can only read matches record one", async () => {
+    // Recording a match decides whether the invoice can be paid.
+    const { invoiceId } = await orderReceivedAndInvoiced({
+      ordered: 100, rate: 400, received: 100, invoiced: 100, invoiceRate: 400,
+    });
+    for (const role of ["AUDITOR", "INVENTORY_MANAGER", "PROJECT_MANAGER"] as const) {
+      const res = await post(w.role[role], `/api/v1/invoices/${invoiceId}/match`, {});
+      expect(res.status, role).toBe(403);
+    }
+    expect((await get(w.role.AUDITOR, `/api/v1/invoices/${invoiceId}/match`)).status).toBe(200);
   });
 
   it("refuses the override to a role that raises orders", async () => {
