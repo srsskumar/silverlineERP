@@ -2,7 +2,8 @@ import {registerDevice} from "../device/registration";
 import { useQueryClient } from "@tanstack/react-query";
 import * as SecureStore from "expo-secure-store";
 import { AppState,View,Text,Pressable } from "react-native";
-import { setActiveAccount, wipeAccount } from "../sync/db";
+import { setActiveAccount, wipeAccount, wipeUsername } from "../sync/db";
+import { DEVICE_REVOKED, isDeviceRevoked } from "../api/revocation";
 import { biometricUnlock } from "../device/auth";
 /**
  * AuthProvider: login / MFA / refresh / logout + user/roles/permissions.
@@ -59,6 +60,24 @@ async function loadSession(): Promise<MeResponse | null> {
   return null;
 }
 
+/**
+ * Login, and the login-time half of a remote wipe. A revoked device is refused
+ * at the door, before there is a session or an account id to wipe by, so the
+ * username is what identifies whose data on this device has to go.
+ */
+async function postLoginOrWipe(
+  username: string,
+  password: string,
+  totpCode?: string,
+): ReturnType<typeof postLogin> {
+  try {
+    return await postLogin(username, password, totpCode);
+  } catch (error) {
+    if (isDeviceRevoked(error)) await wipeUsername(username).catch(() => undefined);
+    throw error;
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [ready, setReady] = useState(false);
@@ -79,7 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     onAuthLogout(async reason => {
       pendingCreds = null;
       queryClient.clear();
-      if(reason==='DEVICE_REVOKED')await wipeAccount().catch(()=>undefined);
+      if(reason===DEVICE_REVOKED)await wipeAccount().catch(()=>undefined);
       // Ordinary expiry retains the encrypted outbox for the same account.
       await SecureStore.deleteItemAsync('silverline.session');
       await setActiveAccount(null);
@@ -100,7 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const me = await getMe();
       queryClient.clear();
       await Promise.all([
-        setActiveAccount(me.user.id),
+        setActiveAccount(me.user.id, me.user.username),
         SecureStore.setItemAsync('silverline.session', JSON.stringify(me)),
         SecureStore.setItemAsync('silverline.session_at', String(Date.now())),
       ]);
@@ -118,7 +137,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [queryClient]);
 
   const login = useCallback(async (username: string, password: string) => {
-    const res = await postLogin(username, password);
+    const res = await postLoginOrWipe(username, password);
     if (res.mfa_required) {
       pendingCreds = { username, password };
       setMfaPending(true);
@@ -138,7 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const verifyMfa = useCallback(async (code: string) => {
     if (!pendingCreds) throw new Error("MFA session expired — sign in again");
-    const res = await postLogin(
+    const res = await postLoginOrWipe(
       pendingCreds.username,
       pendingCreds.password,
       code,

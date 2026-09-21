@@ -7,49 +7,6 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS tasks_cache (
-  id TEXT PRIMARY KEY,
-  project_id TEXT,
-  title TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'TO_DO',
-  version INTEGER NOT NULL DEFAULT 0,
-  assignee_id TEXT,
-  body TEXT NOT NULL DEFAULT '{}',
-  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  synced_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_tasks_cache_status ON tasks_cache(status);
-
-CREATE TABLE IF NOT EXISTS attendance_cache (
-  id TEXT PRIMARY KEY,
-  work_date TEXT,
-  status TEXT,
-  body TEXT NOT NULL DEFAULT '{}',
-  synced_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS projects_cache (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL DEFAULT '',
-  body TEXT NOT NULL DEFAULT '{}',
-  synced_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS leave_cache (
-  id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL DEFAULT 'request',
-  status TEXT,
-  body TEXT NOT NULL DEFAULT '{}',
-  synced_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS notifications_cache (
-  id TEXT PRIMARY KEY,
-  read_at TEXT,
-  body TEXT NOT NULL DEFAULT '{}',
-  synced_at TEXT
-);
-
 CREATE TABLE IF NOT EXISTS pending_ops (
   client_uuid TEXT PRIMARY KEY,
   seq INTEGER NOT NULL DEFAULT 0,
@@ -77,13 +34,22 @@ CREATE INDEX IF NOT EXISTS idx_pending_ops_seq ON pending_ops(seq);
  *
  * SQLite has no `ADD COLUMN IF NOT EXISTS`, so a statement that has already
  * been applied throws "duplicate column name" — expected, and swallowed by the
- * caller. Keep each one idempotent-by-failure and never destructive.
+ * caller. Keep each one idempotent, and never destructive of data the app
+ * wrote.
  */
 export const MIGRATIONS_SQL: readonly string[] = [
   // Ordering used to fall back to client_uuid when two operations landed in the
   // same millisecond, which is random. A check-out could then be sent before
   // its own check-in and be rejected as CHECKOUT_WITHOUT_CHECKIN.
   "ALTER TABLE pending_ops ADD COLUMN seq INTEGER NOT NULL DEFAULT 0",
+  // Per-entity caches from the first design. Nothing ever wrote to them --
+  // reads are cached as sealed rows in snapshots -- so dropping them loses
+  // nothing, and a table that is never filled is one a wipe can forget.
+  "DROP TABLE IF EXISTS tasks_cache",
+  "DROP TABLE IF EXISTS attendance_cache",
+  "DROP TABLE IF EXISTS projects_cache",
+  "DROP TABLE IF EXISTS leave_cache",
+  "DROP TABLE IF EXISTS notifications_cache",
 ];
 
 /** Applies MIGRATIONS_SQL, ignoring statements already applied. */

@@ -23,6 +23,9 @@ import {
   maxRetriesExceeded,
 } from "../src/sync/policy";
 import { buildWatermarkLines, renderWatermarkText } from "../src/device/camera";
+import { createAccountStore } from "../src/sync/dbCore";
+import { isDeviceRevoked } from "../src/api/revocation";
+import { deviceStorage, type TestDatabase } from "./support/deviceStorage";
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -90,14 +93,51 @@ function device(initialAccount = "alice"): Fixture {
   };
 }
 
-/** The local half of a remote wipe, mirroring sync/db.ts wipeAccount(). */
-function wipeAccountLocally(fx: Fixture, account: string): void {
-  fx.destroyVault(account);
-  fx.db.exec(
-    "DELETE FROM pending_ops; DELETE FROM tasks_cache; DELETE FROM attendance_cache;" +
-      " DELETE FROM projects_cache; DELETE FROM leave_cache;" +
-      " DELETE FROM notifications_cache; DELETE FROM snapshots; DELETE FROM meta;",
-  );
+/**
+ * A device whose outbox lives in the production account store, on disk, so a
+ * remote wipe runs the real wipeAccount() -- key, rows and file.
+ */
+function wipeableDevice(account = "alice") {
+  const storage = deviceStorage();
+  const keys = new Map<string, Buffer>();
+  const key = (id: string) => {
+    if (!keys.has(id)) keys.set(id, randomBytes(32));
+    return keys.get(id)!;
+  };
+  const accounts = createAccountStore<TestDatabase>({
+    openDatabase: storage.openDatabase,
+    deleteDatabase: storage.deleteDatabase,
+    store: storage.store,
+    destroyVault: async (id) => {
+      keys.delete(id);
+    },
+  });
+  const queue = createQueue({
+    getDb: accounts.getDb,
+    getAccount: accounts.getAccount,
+    uuid: randomUUID,
+    isApiError: (e): e is Error & { status: number; retryable: boolean; code: string } =>
+      e instanceof Error && "status" in e,
+    seal: async (id, value) => {
+      const iv = randomBytes(12);
+      const c = createCipheriv("aes-256-gcm", key(id), iv);
+      const data = Buffer.concat([c.update(value), c.final()]);
+      return Buffer.concat([iv, c.getAuthTag(), data]).toString("base64");
+    },
+    unseal: async (id, value) => {
+      const b = Buffer.from(value, "base64");
+      const d = createDecipheriv("aes-256-gcm", key(id), b.subarray(0, 12));
+      d.setAuthTag(b.subarray(12, 28));
+      return Buffer.concat([d.update(b.subarray(28)), d.final()]).toString();
+    },
+  });
+  return {
+    storage,
+    accounts,
+    queue,
+    vaultHasKey: (id: string) => keys.has(id),
+    signIn: () => accounts.setActiveAccount(account, account),
+  };
 }
 
 function opRows(fx: Fixture): Array<Record<string, unknown>> {
@@ -573,66 +613,60 @@ describe("UT-OFF-05 switch accounts with queued data", () => {
 // ---------------------------------------------------------------------------
 
 describe("UT-OFF-06 receive remote wipe", () => {
-  it("destroys the local business cache and the account's keys", async () => {
-    const fx = device("alice");
+  it("destroys the local business cache, its file and the account's keys", async () => {
+    const fx = wipeableDevice("alice");
+    await fx.signIn();
     await fx.queue.enqueueOp({
       entity: "attendance_event",
       op: "check-in",
       payload: { kind: "CHECK_IN" },
     });
-    fx.db
-      .prepare("INSERT INTO tasks_cache (id, title) VALUES (?, ?)")
-      .run("task-1", "Pour the foundation");
-    fx.db.prepare("INSERT INTO snapshots (key, body) VALUES (?, ?)").run("me", "cached");
+    const db = await fx.accounts.getDb();
+    await db.runAsync("INSERT INTO snapshots (key, body) VALUES (?, ?)", ["me", "cached"]);
 
-    wipeAccountLocally(fx, "alice");
+    await fx.accounts.wipeAccount();
 
-    for (const table of [
-      "pending_ops",
-      "tasks_cache",
-      "attendance_cache",
-      "projects_cache",
-      "leave_cache",
-      "notifications_cache",
-      "snapshots",
-      "meta",
-    ]) {
-      const row = fx.db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number };
-      assert.equal(row.n, 0, `${table} still holds rows after a wipe`);
-    }
+    assert.equal(fx.storage.fileExists("silverline-alice.db"), false, "the database file survived a wipe");
     assert.equal(fx.vaultHasKey("alice"), false, "the account key must be destroyed");
-    fx.db.close();
+    fx.storage.cleanup();
   });
 
   it("leaves anything written after the wipe unreadable with the old key", async () => {
-    const fx = device("alice");
+    const fx = wipeableDevice("alice");
+    await fx.signIn();
     await fx.queue.enqueueOp({
       entity: "task_comment",
       op: "c",
       payload: { body: "Before the wipe" },
     });
-    const sealedBefore = String(opRows(fx)[0]!.payload);
+    const before = await fx.accounts.getDb();
+    const sealedBefore = String(
+      (await before.getFirstAsync<{ payload: string }>("SELECT payload FROM pending_ops", []))!.payload,
+    );
 
-    wipeAccountLocally(fx, "alice");
+    await fx.accounts.wipeAccount();
     // Re-enrolling mints a fresh key, so an attacker holding a copy of the old
     // ciphertext gains nothing from the device's new state.
+    await fx.signIn();
     await fx.queue.enqueueOp({
       entity: "task_comment",
       op: "c",
       payload: { body: "After the wipe" },
     });
-    const sealedAfter = String(opRows(fx)[0]!.payload);
-    assert.notEqual(sealedBefore, sealedAfter);
-    fx.db.close();
+    const after = await fx.accounts.getDb();
+    const rows = await after.getAllAsync<{ payload: string }>("SELECT payload FROM pending_ops", []);
+    assert.equal(rows.length, 1, "nothing from before the wipe came back");
+    assert.notEqual(sealedBefore, rows[0]!.payload);
+    await after.closeAsync();
+    fx.storage.cleanup();
   });
 
   it("treats DEVICE_REVOKED as the signal to wipe", () => {
     // The server answers a revoked device's login and refresh with this code;
     // AuthContext wipes on exactly this reason and retains the outbox for an
     // ordinary session expiry.
-    const wipeReasons = new Set(["DEVICE_REVOKED"]);
-    assert.equal(wipeReasons.has("DEVICE_REVOKED"), true);
-    assert.equal(wipeReasons.has("TOKEN_EXPIRED"), false);
+    assert.equal(isDeviceRevoked({ code: "DEVICE_REVOKED" }), true);
+    assert.equal(isDeviceRevoked({ code: "TOKEN_EXPIRED" }), false);
   });
 });
 
@@ -832,18 +866,9 @@ describe("E2E-28 revoke employee device while it has a session and cached data",
   it("clears the account key so cached ciphertext cannot be read again", () => {
     const db = readSource("src/sync/db.ts");
     assert.match(db, /destroyVault/);
-    // Every business cache is emptied, not just the outbox.
-    for (const table of [
-      "pending_ops",
-      "tasks_cache",
-      "attendance_cache",
-      "projects_cache",
-      "leave_cache",
-      "notifications_cache",
-      "snapshots",
-    ]) {
-      assert.match(db, new RegExp(`DELETE FROM ${table}`), `${table} must be wiped`);
-    }
+    // The wipe itself runs for real in UT-OFF-06 and remote-wipe.test.ts; on
+    // a device the file goes through expo-sqlite's own delete.
+    assert.match(db, /SQLite\.deleteDatabaseAsync/);
   });
 
   it("keeps tokens out of the business database entirely", () => {

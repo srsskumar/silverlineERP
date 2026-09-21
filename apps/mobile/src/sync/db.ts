@@ -1,49 +1,27 @@
-import {SCHEMA_SQL,RECOVER_INTERRUPTED_SQL,applyMigrations} from "./schema";
 import {seal,unseal,destroyVault} from "../device/vault";
-import {purgeSettledOps} from "./queueCore";
 /**
  * expo-sqlite schema for the offline-first MVP.
  *
- * - Caches are read-through snapshots keyed by server id; `synced_at` marks
- *   freshness. Tokens NEVER go here (SecureStore only — see device/auth.ts).
+ * - snapshots holds sealed read-through copies of API responses, keyed by
+ *   request. Tokens NEVER go here (SecureStore only — see device/auth.ts).
+ * - The account store itself -- which file, opening, the remote wipe -- is in
+ *   dbCore.ts, where it can be tested without a device.
  * - pending_ops is the outbox: client_uuid PK, idempotency_key UNIQUE,
  *   dedupe_key = "<entity>::<op>" enforced in queue.ts (one active op per
  *   entity+op), base_version for If-Match guarded writes.
  */
 
-import { getRefreshToken } from "../device/auth";
 import * as SecureStore from "expo-secure-store";
 import * as SQLite from "expo-sqlite";
+import { createAccountStore } from "./dbCore";
 
-export const DB_NAME = "silverline.db";
-
-let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
-let activeAccount: string | null = null;
-export async function setActiveAccount(id: string | null): Promise<void> {
-  if (activeAccount !== id) { dbPromise = null; activeAccount = id; }
-  if (id) await SecureStore.setItemAsync('silverline.account', id);
-  else await SecureStore.deleteItemAsync('silverline.account');
-}
-export async function getAccount(): Promise<string | null> { return activeAccount ?? SecureStore.getItemAsync('silverline.account'); }
-export async function getDb(): Promise<SQLite.SQLiteDatabase> {
-  const account = await getAccount();
-  if (!account) throw new Error('Sign in to access offline records');
-  if (!dbPromise) dbPromise = (async () => {
-    const db = await SQLite.openDatabaseAsync(`silverline-${account}.db`);
-    await db.execAsync(SCHEMA_SQL);
-    await applyMigrations(async (sql) => db.execAsync(sql));
-    await db.runAsync(RECOVER_INTERRUPTED_SQL);
-    await purgeSettledOps(db);
-    return db;
-  })().catch(error => { dbPromise=null; throw error; });
-  return dbPromise;
-}
-export async function wipeAccount(): Promise<void> {
- const db=await getDb();
- const account=await getAccount();
- if(account)await destroyVault(account);
- await db.execAsync("DELETE FROM pending_ops; DELETE FROM tasks_cache; DELETE FROM attendance_cache; DELETE FROM projects_cache; DELETE FROM leave_cache; DELETE FROM notifications_cache; DELETE FROM snapshots; DELETE FROM meta;");
-}
+export const { setActiveAccount, getAccount, getDb, wipeAccount, wipeUsername } =
+  createAccountStore<SQLite.SQLiteDatabase>({
+    openDatabase: (name) => SQLite.openDatabaseAsync(name),
+    deleteDatabase: (name) => SQLite.deleteDatabaseAsync(name),
+    store: SecureStore,
+    destroyVault,
+  });
 export async function cachedRead<T>(key:string,fetcher:()=>Promise<T>):Promise<T> {
  const account=await getAccount();if(!account)throw new Error('Sign in first');
  const db=await getDb();
