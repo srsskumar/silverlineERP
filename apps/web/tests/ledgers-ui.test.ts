@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AGEING_BUCKETS, BUCKET_LABELS, bucketBars, bucketTone, dsoNote,
-  exclusionReason, msmeNote, type AgeingSummary,
+  exclusionReason, msmeNote, statementQuery, type AgeingSummary,
 } from '../lib/ledgers';
 import { NAV_GROUPS } from '../lib/nav';
 import { ageOutstanding, creditExposure, daysSalesOutstanding } from '@silverline/shared';
@@ -99,7 +99,8 @@ describe('msmeNote', () => {
 
 describe('exclusionReason', () => {
   it('explains every reason the API can give', () => {
-    for (const code of ['DISPUTED', 'ON_HOLD', 'MATCH_FAILED', 'NOT_DUE', 'NOTHING_OUTSTANDING']) {
+    for (const code of ['DISPUTED', 'ON_HOLD', 'MATCH_FAILED', 'NOT_MATCHED', 'NOT_DUE',
+      'NOTHING_OUTSTANDING', 'SETTLED', 'IN_OPEN_RUN']) {
       expect(exclusionReason(code), code).not.toBe(code);
     }
   });
@@ -108,6 +109,19 @@ describe('exclusionReason', () => {
     // A silently dropped invoice is how a supplier goes unpaid for a month
     // with nobody able to say why.
     expect(exclusionReason('SOMETHING_NEW')).toBe('SOMETHING_NEW');
+  });
+});
+
+describe('statementQuery', () => {
+  it('sends the start of the window as well as the end', () => {
+    // With only `to`, the balance brought forward was always zero.
+    expect(statementQuery('2026-04-01', '2026-06-30')).toBe('from=2026-04-01&to=2026-06-30');
+  });
+
+  it('leaves out a start that is empty or not a date', () => {
+    expect(statementQuery('', '2026-06-30')).toBe('to=2026-06-30');
+    expect(statementQuery(null, '2026-06-30')).toBe('to=2026-06-30');
+    expect(statementQuery('01/04/2026', '2026-06-30')).toBe('to=2026-06-30');
   });
 });
 

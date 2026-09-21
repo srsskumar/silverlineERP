@@ -38,6 +38,15 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
      WHERE a.document_type = $DOCTYPE AND a.document_id = $DOCID
        AND a.reversed_at IS NULL AND p.reversed_at IS NULL), 0)`;
 
+  /**
+   * The calendar day a timestamp fell on where the organisation works.
+   * Certification is stamped with the instant; the ledgers talk in days, and
+   * for five and a half hours of every Indian day UTC is still yesterday.
+   */
+  const localDay = (column: string, orgColumn: string) =>
+    `(${column} AT TIME ZONE COALESCE((SELECT o.settings->>'timezone' FROM organizations o
+       WHERE o.id = ${orgColumn}), 'Asia/Kolkata'))::date`;
+
   /* ------------------------------------------------------- receivables */
 
   /**
@@ -51,25 +60,37 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
     const u = actor(req), { q } = page(req);
     const asOf = String(q.as_of ?? today());
 
+    // Everything as it stood at the end of as_of: bills certified by then,
+    // receipts dated by then, retention entries made by then. Reading today's
+    // ledger under last quarter's date reports a position that never existed
+    // -- later bills inflate it and later receipts shrink it.
     const rows = (await pool.query(
       `SELECT b.id, b.bill_no, b.bill_type, b.due_date, b.certified_at,
+              b.disputed, b.dispute_reason,
               COALESCE(b.certified_amount, b.gross_value) AS billed,
               p.id AS project_id, p.code AS project_code, p.name AS project_name,
               c.id AS client_id, c.name AS client_name, c.credit_limit,
-              ${SETTLED.replace('$DOCTYPE', "'RA_BILL'").replace('$DOCID', 'b.id')} AS settled,
+              COALESCE((SELECT sum(a.amount + a.tds_amount + a.advance_adjusted)
+                 FROM payment_allocations a JOIN payments pm ON pm.id = a.payment_id
+                 WHERE a.document_type = 'RA_BILL' AND a.document_id = b.id
+                   AND a.reversed_at IS NULL AND pm.reversed_at IS NULL
+                   AND pm.paid_on <= $2::date), 0) AS settled,
               COALESCE((SELECT sum(CASE WHEN r.entry_type='WITHHELD' THEN r.amount ELSE -r.amount END)
-                        FROM retention_ledger r WHERE r.project_id = p.id), 0) AS retention_held
+                        FROM retention_ledger r WHERE r.project_id = p.id
+                          AND ${localDay('r.created_at', 'r.org_id')} <= $2::date), 0) AS retention_held
        FROM ra_bills b
        JOIN projects p ON p.id = b.project_id
        LEFT JOIN clients c ON c.id = p.client_id
-       WHERE b.org_id = $1 AND b.status IN ('CERTIFIED','PAID')`, [u.orgId])).rows;
+       WHERE b.org_id = $1 AND b.status IN ('CERTIFIED','PAID')
+         AND ${localDay('b.certified_at', 'b.org_id')} <= $2::date`, [u.orgId, asOf])).rows;
 
     const byClient = new Map<string, { name: string; creditLimit: number | null; items: AgeingItem[]; rows: unknown[] }>();
     const seenProjects = new Set<string>();
 
     for (const r of rows) {
       const billed = Number(r.billed);
-      const outstanding = Math.round((billed - Number(r.settled)) * 100) / 100;
+      // In paise, so a bill settled to the rupee does not linger as dust.
+      const outstanding = (Math.round(billed * 100) - Math.round(Number(r.settled) * 100)) / 100;
       const key = r.client_id ? String(r.client_id) : 'UNASSIGNED';
       if (!byClient.has(key)) {
         byClient.set(key, {
@@ -83,13 +104,14 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
       // would multiply it by the number of bills raised.
       const retention = seenProjects.has(String(r.project_id)) ? 0 : Number(r.retention_held);
       seenProjects.add(String(r.project_id));
-      bucket.items.push({ outstanding, dueDate: iso(r.due_date), retention });
+      bucket.items.push({ outstanding, dueDate: iso(r.due_date), retention, disputed: Boolean(r.disputed) });
       if (outstanding > 0.005 || retention > 0.005) {
         bucket.rows.push({
           bill_id: r.id, bill_no: r.bill_no, bill_type: r.bill_type,
           project_code: r.project_code, project_name: r.project_name,
           billed, settled: Number(r.settled), outstanding,
           retention, due_date: iso(r.due_date), certified_at: r.certified_at,
+          disputed: Boolean(r.disputed), dispute_reason: r.dispute_reason ?? null,
         });
       }
     }
@@ -114,8 +136,9 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
     const periodDays = Math.max(1, Number(q.period_days) || 90);
     const sales = (await pool.query(
       `SELECT COALESCE(sum(COALESCE(certified_amount, gross_value)), 0) AS total
-       FROM ra_bills WHERE org_id = $1 AND status IN ('CERTIFIED','PAID')
-         AND certified_at >= $2::date - $3::int`, [u.orgId, asOf, periodDays])).rows[0];
+       FROM ra_bills b WHERE b.org_id = $1 AND b.status IN ('CERTIFIED','PAID')
+         AND ${localDay('b.certified_at', 'b.org_id')} >= $2::date - $3::int
+         AND ${localDay('b.certified_at', 'b.org_id')} <= $2::date`, [u.orgId, asOf, periodDays])).rows[0];
 
     return {
       data: {
@@ -139,7 +162,7 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
     const client = await inOrg(pool, 'clients', clientId, u.orgId);
 
     const bills = (await pool.query(
-      `SELECT b.id, b.bill_no, b.certified_at::date AS on_date, b.due_date,
+      `SELECT b.id, b.bill_no, ${localDay('b.certified_at', 'b.org_id')} AS on_date, b.due_date,
               COALESCE(b.certified_amount, b.gross_value) AS amount, p.code AS project_code
        FROM ra_bills b JOIN projects p ON p.id = b.project_id
        WHERE b.org_id = $1 AND p.client_id = $2 AND b.status IN ('CERTIFIED','PAID')
@@ -152,9 +175,13 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
        JOIN payments p ON p.id = a.payment_id
        JOIN ra_bills b ON b.id = a.document_id
        JOIN projects pr ON pr.id = b.project_id
-       WHERE a.document_type = 'RA_BILL' AND pr.client_id = $1
+       WHERE a.document_type = 'RA_BILL' AND pr.client_id = $1 AND b.org_id = $2
+         -- Only receipts against bills that are on the statement. A receipt
+         -- still allocated to a bill since cancelled would otherwise credit
+         -- the client for a debit the statement never shows.
+         AND b.status IN ('CERTIFIED','PAID')
          AND a.reversed_at IS NULL AND p.reversed_at IS NULL
-       ORDER BY p.paid_on`, [clientId])).rows;
+       ORDER BY p.paid_on`, [clientId, u.orgId])).rows;
 
     const entries = [
       ...bills.map(b => ({ ...b, kind: 'BILL' as const, debit: Number(b.amount), credit: 0 })),
@@ -168,9 +195,12 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
     const inPeriod: unknown[] = [];
     for (const e of entries) {
       const date = iso(e.on_date)!;
+      // Nothing after the window counts, not even towards the closing
+      // balance: a statement to 30 June that closes on today's figure does
+      // not reconcile to anything the client can check.
+      if (date > to) continue;
       running += e.debit - e.credit;
       if (date < from) { opening = running; continue; }
-      if (date > to) continue;
       inPeriod.push({ ...e, balance: Math.round(running * 100) / 100 });
     }
 

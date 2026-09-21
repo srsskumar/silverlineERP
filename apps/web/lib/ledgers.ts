@@ -81,9 +81,28 @@ export const EXCLUSION_REASONS: Record<string, string> = {
   DISPUTED: 'Under dispute',
   ON_HOLD: 'On hold',
   MATCH_FAILED: 'Three-way match has not passed',
+  NOT_MATCHED: 'Three-way match has not passed',
   NOT_DUE: 'Not due within the window',
   NOTHING_OUTSTANDING: 'Nothing left outstanding',
+  SETTLED: 'Nothing left outstanding',
+  IN_OPEN_RUN: 'Already on another payment run',
 };
+
+/**
+ * The query string for a client's statement of account.
+ *
+ * Both ends of the window are sent. With only the end, every statement ran
+ * from the first bill ever raised, and the balance brought forward -- the
+ * line that makes a statement reconcile -- was always zero. An empty or
+ * malformed start is left off, so the server's own default applies rather
+ * than a date the server would refuse.
+ */
+export function statementQuery(from: string | null | undefined, to: string): string {
+  const params = new URLSearchParams();
+  if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) params.set('from', from);
+  params.set('to', to);
+  return params.toString();
+}
 
 export function exclusionReason(code: string | null | undefined): string {
   return EXCLUSION_REASONS[String(code)] ?? String(code ?? 'Excluded');

@@ -5,6 +5,7 @@ import {
   raBillLine, computeRaBill, recoverAdvance, retentionReleaseStatus,
   RA_BILL_TRANSITIONS, type RaBillStatus, type RaBillLine, type DeductionPolicy,
   surveyBoqLinkSchema, measuredLine, proposalHasWork, dateStringSchema,
+  receivableDueDate, raBillDisputeSchema, businessDay,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail, projectAccess } from '../../common/domain.js';
@@ -113,7 +114,8 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
         }
         const keys = Object.keys(input);
         const cols = ['retention_pct','retention_cap_pct_of_contract','security_deposit_pct',
-          'labour_cess_pct','tds_income_tax_pct','tds_gst_pct','gst_rate_pct'].filter(c => keys.includes(c));
+          'labour_cess_pct','tds_income_tax_pct','tds_gst_pct','gst_rate_pct',
+          'payment_terms_days'].filter(c => keys.includes(c));
         const sets = cols.map(c => `${c} = EXCLUDED.${c}`).join(', ');
         return (await db.query(
           `INSERT INTO project_billing_policies(project_id, org_id, created_by, ${cols.join(',')})
@@ -367,6 +369,21 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
         // is a 500 rather than a helpful error.
         const now = new Date();
         const certifying = next === 'CERTIFIED';
+        // The receivable falls due on the project's agreed terms, counted
+        // from the day it was certified where the organisation works. No
+        // terms on file leaves it undated rather than guessed.
+        let dueDate: string | null = null;
+        if (certifying) {
+          const ctx = (await db.query(
+            `SELECT p.payment_terms_days, o.settings->>'timezone' AS tz
+             FROM organizations o
+             LEFT JOIN project_billing_policies p ON p.project_id = $2
+             WHERE o.id = $1`, [u.orgId, bill.project_id])).rows[0];
+          dueDate = receivableDueDate(
+            businessDay(now, ctx?.tz || undefined),
+            ctx?.payment_terms_days === null || ctx?.payment_terms_days === undefined
+              ? null : Number(ctx.payment_terms_days));
+        }
         return (await db.query(
           `UPDATE ra_bills SET status = $3,
              submitted_at     = COALESCE($4, submitted_at),
@@ -375,6 +392,7 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
              certified_amount = COALESCE($7, certified_amount),
              paid_at          = COALESCE($8, paid_at),
              cancelled_reason = COALESCE($9, cancelled_reason),
+             due_date         = COALESCE($10::date, due_date),
              version = version + 1, updated_at = now(), updated_by = $2
            WHERE id = $1 RETURNING *`,
           [id, u.id, next,
@@ -386,7 +404,35 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
            // than a CASE, which needed $3 to be two types at once.
            certifying ? (body.certified_amount ?? Number(bill.net_payable)) : null,
            next === 'PAID' ? now : null,
-           body.reason ?? null])).rows[0];
+           body.reason ?? null,
+           dueDate])).rows[0];
+      }),
+    };
+  });
+
+  /**
+   * Mark a certified bill as disputed by the client, or clear it (§58.2).
+   *
+   * A flag, not a status: the bill a client disputes is exactly the one that
+   * also goes overdue, and both have to be visible. The receivables ageing
+   * reports it in its own column, because a dispute is a different problem
+   * from slow payment and goes to a different person.
+   */
+  app.patch('/api/v1/ra-bills/:id/dispute', { preHandler: guard('rabill.manage') }, async req => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const input = parse(raBillDisputeSchema, req.body);
+    await projectAccess(pool, req, String((await inOrg(pool, 'ra_bills', id, u.orgId)).project_id));
+    return {
+      data: await mutate(pool, req, 'rabill.dispute', 'ra_bill', async db => {
+        const bill = await inOrg(db, 'ra_bills', id, u.orgId, true);
+        if (bill.status === 'CANCELLED') {
+          fail('BILL_CANCELLED', 'A cancelled bill is not owed, so there is nothing to dispute');
+        }
+        return (await db.query(
+          `UPDATE ra_bills SET disputed = $2, dispute_reason = $3,
+             version = version + 1, updated_at = now(), updated_by = $4
+           WHERE id = $1 RETURNING *`,
+          [id, input.disputed, input.disputed ? input.reason : null, u.id])).rows[0];
       }),
     };
   });
