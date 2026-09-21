@@ -175,6 +175,11 @@ export const attendanceReviewCodeSchema = z.enum([
   "POOR_ACCURACY",
   "MOCK_LOCATION",
   "OUTSIDE_GEOFENCE",
+  "DEVICE_SIGNAL",
+  /** A fenced employee punched with no position (or no accuracy to check). */
+  "NO_LOCATION",
+  /** The punch falls on a day of approved leave. */
+  "ON_APPROVED_LEAVE",
 ]);
 
 export type AttendanceReviewCode = z.infer<typeof attendanceReviewCodeSchema>;

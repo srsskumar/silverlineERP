@@ -110,6 +110,10 @@ interface ExceptionRow {
   reviewed_by: string | null;
   reviewed_at: Date | string | null;
   review_note: string | null;
+  attendance_event_id: string | null;
+  work_date: Date | string | null;
+  claimed_check_in: Date | string | null;
+  claimed_check_out: Date | string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -176,6 +180,15 @@ function toExceptionShape(row: ExceptionRow) {
     reviewed_by: row.reviewed_by,
     reviewed_at: iso(row.reviewed_at),
     review_note: row.review_note,
+    attendance_event_id: row.attendance_event_id,
+    work_date:
+      row.work_date === null || row.work_date === undefined
+        ? null
+        : row.work_date instanceof Date
+          ? row.work_date.toISOString().slice(0, 10)
+          : String(row.work_date).slice(0, 10),
+    claimed_check_in: iso(row.claimed_check_in),
+    claimed_check_out: iso(row.claimed_check_out),
     created_at: iso(row.created_at) as string,
     updated_at: iso(row.updated_at) as string,
   };
@@ -192,7 +205,8 @@ const RECORD_COLS = `id, employee_id, work_date, check_in_event_id,
 
 const EXCEPTION_COLS = `id, employee_id, attendance_record_id, exception_type,
   reason, document_id, source, status, version, submitted_by, reviewed_by,
-  reviewed_at, review_note, created_at, updated_at`;
+  reviewed_at, review_note, attendance_event_id, work_date, claimed_check_in,
+  claimed_check_out, created_at, updated_at`;
 
 
 function idemKeyOr422(
@@ -408,6 +422,209 @@ function payrollLockDecision(
   };
 }
 
+/**
+ * The organization's zone and settings.
+ *
+ * The zone lives in two places: the `timezone` column set when the tenant is
+ * created, and a `settings.timezone` override an admin can edit. Reading only
+ * the override ignored the column entirely, so a tenant outside IST had its
+ * work dates computed in IST.
+ */
+async function orgClock(
+  db: Pool,
+  orgId: string,
+): Promise<{ timeZone: string; settings: Record<string, any> }> {
+  const orgRow = (await db.query("SELECT timezone, settings FROM organizations WHERE id=$1", [orgId]))
+    .rows[0];
+  const settings = orgRow?.settings ?? {};
+  return { timeZone: settings.timezone ?? orgRow?.timezone ?? "Asia/Kolkata", settings };
+}
+
+/**
+ * Put one punch onto its day's attendance record.
+ *
+ * This is the single place a punch becomes attendance, whether it was
+ * accepted as it arrived or held for review and approved later. Keeping one
+ * copy matters because payroll reads the record, not the event: an approved
+ * punch that took a different path to the table would be paid differently.
+ *
+ * With no record for the day one is opened. With a record already there:
+ *
+ *   - `keepExisting` hands it back untouched. A live check-in uses this: the
+ *     route has already refused a second check-in, so an existing row here
+ *     can only be a concurrent twin of this same punch, and the UNIQUE
+ *     (employee_id, work_date) arbiter has picked the winner.
+ *   - otherwise the punch is merged. An approved check-in earlier than the
+ *     one on file becomes the day's start and a later check-out its end. That
+ *     is what makes approval order-free: a reviewer may approve the flagged
+ *     check-out before the flagged check-in, or approve a morning punch after
+ *     the person punched again and was accepted.
+ *
+ * Hours and COMPLETE follow from having both ends.
+ */
+async function applyPunchToDay(
+  db: Pool,
+  a: {
+    employeeId: string;
+    workDate: string;
+    eventType: "CHECK_IN" | "CHECK_OUT";
+    eventId: string | null;
+    at: Date;
+    violation?: boolean;
+    keepExisting?: boolean;
+  },
+): Promise<{ record: RecordRow; created: boolean }> {
+  const isIn = a.eventType === "CHECK_IN";
+  const at = a.at.toISOString();
+  const ins = await db.query(
+    `INSERT INTO attendance_records
+       (employee_id, work_date, check_in_event_id, check_in_at,
+        check_out_event_id, check_out_at, status, geofence_violation)
+     VALUES ($1::uuid, $2::date, $3::uuid, $4, $5::uuid, $6, 'PARTIAL', $7)
+     ON CONFLICT (employee_id, work_date) DO NOTHING
+     RETURNING ${RECORD_COLS}`,
+    [
+      a.employeeId,
+      a.workDate,
+      isIn ? a.eventId : null,
+      isIn ? at : null,
+      isIn ? null : a.eventId,
+      isIn ? null : at,
+      a.violation === true,
+    ],
+  );
+  if ((ins.rowCount ?? 0) > 0) {
+    return { record: ins.rows[0] as RecordRow, created: true };
+  }
+  const cur = (
+    await db.query(
+      `SELECT ${RECORD_COLS} FROM attendance_records
+        WHERE employee_id = $1::uuid AND work_date = $2::date FOR UPDATE`,
+      [a.employeeId, a.workDate],
+    )
+  ).rows[0] as RecordRow;
+  if (a.keepExisting) {
+    return { record: cur, created: false };
+  }
+  const ms = (v: Date | string | null) => (v === null ? null : new Date(v).getTime());
+  let inAt = ms(cur.check_in_at);
+  let outAt = ms(cur.check_out_at);
+  let inEvent = cur.check_in_event_id;
+  let outEvent = cur.check_out_event_id;
+  if (isIn && (inAt === null || a.at.getTime() < inAt)) {
+    inAt = a.at.getTime();
+    inEvent = a.eventId;
+  }
+  if (!isIn && (outAt === null || a.at.getTime() > outAt)) {
+    outAt = a.at.getTime();
+    outEvent = a.eventId;
+  }
+  const both = inAt !== null && outAt !== null;
+  const hours = both ? Number(((outAt! - inAt!) / 3600000).toFixed(2)) : null;
+  const upd = await db.query(
+    `UPDATE attendance_records SET
+       check_in_event_id = $2::uuid, check_in_at = $3,
+       check_out_event_id = $4::uuid, check_out_at = $5,
+       total_hours = $6, status = $7,
+       geofence_violation = geofence_violation OR $8,
+       updated_at = NOW()
+     WHERE id = $1::uuid
+     RETURNING ${RECORD_COLS}`,
+    [
+      cur.id,
+      inEvent,
+      inAt === null ? null : new Date(inAt).toISOString(),
+      outEvent,
+      outAt === null ? null : new Date(outAt).toISOString(),
+      hours,
+      both ? "COMPLETE" : "PARTIAL",
+      a.violation === true,
+    ],
+  );
+  return { record: upd.rows[0] as RecordRow, created: false };
+}
+
+/** What approving an exception would put onto the day's attendance. */
+interface ExceptionEffect {
+  /** work_date of the record the exception was raised against, if any. */
+  recordDate: string | null;
+  /** The day the punches below land on; null when there is nothing to apply. */
+  workDate: string | null;
+  punches: Array<{
+    eventType: "CHECK_IN" | "CHECK_OUT";
+    eventId: string | null;
+    at: Date;
+    violation: boolean;
+  }>;
+}
+
+/**
+ * Work out what an exception's approval applies, without applying it.
+ *
+ * A held-back punch applies itself. Its moment is the server's receipt time,
+ * except for a punch refused for clock skew: that is almost always an offline
+ * punch replayed long after it was made, and the day it belongs to is the day
+ * the phone recorded, not the day the signal came back. A client clock that
+ * runs *ahead* of the server is a wrong clock rather than a late replay, so
+ * the earlier of the two moments is the one taken.
+ *
+ * A regularization applies the times it claims, on the date it names.
+ * Anything else -- a note raised by hand, or a system exception from before
+ * exceptions named their punch -- applies nothing, as before.
+ */
+async function exceptionEffect(db: Pool, orgId: string, x: ExceptionRow): Promise<ExceptionEffect> {
+  let recordDate: string | null = null;
+  if (x.attendance_record_id) {
+    const rec = (
+      await db.query("SELECT work_date FROM attendance_records WHERE id = $1::uuid", [
+        x.attendance_record_id,
+      ])
+    ).rows[0] as { work_date: string } | undefined;
+    recordDate = rec ? String(rec.work_date).slice(0, 10) : null;
+  }
+  if (x.attendance_event_id) {
+    const ev = (
+      await db.query(
+        `SELECT id, event_type, client_timestamp, server_timestamp, geofence_result
+           FROM attendance_events WHERE id = $1::uuid AND employee_id = $2::uuid`,
+        [x.attendance_event_id, x.employee_id],
+      )
+    ).rows[0] as
+      | { id: string; event_type: "CHECK_IN" | "CHECK_OUT"; client_timestamp: Date; server_timestamp: Date; geofence_result: string }
+      | undefined;
+    if (ev) {
+      const client = new Date(ev.client_timestamp);
+      const server = new Date(ev.server_timestamp);
+      const skewed = Math.abs(client.getTime() - server.getTime()) > SKEW_MS;
+      const at = skewed && client.getTime() < server.getTime() ? client : server;
+      const { timeZone } = await orgClock(db, orgId);
+      return {
+        recordDate,
+        workDate: businessDay(at, timeZone),
+        punches: [
+          {
+            eventType: ev.event_type,
+            eventId: ev.id,
+            at,
+            violation: ev.geofence_result === "OUTSIDE",
+          },
+        ],
+      };
+    }
+  }
+  if (x.exception_type === "REGULARIZATION" && x.work_date) {
+    const punches: ExceptionEffect["punches"] = [];
+    if (x.claimed_check_in) {
+      punches.push({ eventType: "CHECK_IN", eventId: null, at: new Date(x.claimed_check_in), violation: false });
+    }
+    if (x.claimed_check_out) {
+      punches.push({ eventType: "CHECK_OUT", eventId: null, at: new Date(x.claimed_check_out), violation: false });
+    }
+    return { recordDate, workDate: String(x.work_date).slice(0, 10), punches };
+  }
+  return { recordDate, workDate: null, punches: [] };
+}
+
 /** Upper bound on markers returned to the map in one request. */
 const MAX_MAP_EVENTS = 5000;
 
@@ -510,25 +727,41 @@ export async function registerAttendanceRoutes(
     return res.rows[0] as RecordRow | undefined;
   }
 
+  /**
+   * Hold a punch for review.
+   *
+   * The exception names the event it holds back, so that approving it can
+   * put that punch onto the day (§078). Without the link an approval had
+   * nothing to apply and the day stayed absent.
+   */
   async function createSystemException(db:Pool, args: {
     employeeId: string;
     recordId: string | null;
+    eventId: string;
     type: "SYSTEM_FLAG" | "OUTSIDE_GEOFENCE";
     reason: string;
   }): Promise<string> {
     const ins = await db.query(
       `INSERT INTO attendance_exceptions
-         (employee_id, attendance_record_id, exception_type, reason, source, status, submitted_by)
-       VALUES ($1::uuid, $2::uuid, $3, $4, 'SYSTEM', 'PENDING', NULL)
+         (employee_id, attendance_record_id, exception_type, reason, source, status,
+          submitted_by, attendance_event_id)
+       VALUES ($1::uuid, $2::uuid, $3, $4, 'SYSTEM', 'PENDING', NULL, $5::uuid)
        RETURNING id`,
-      [args.employeeId, args.recordId, args.type, args.reason],
+      [args.employeeId, args.recordId, args.type, args.reason, args.eventId],
     );
     return (ins.rows[0] as { id: string }).id;
   }
 
   function review(
     reply: Parameters<typeof sendError>[0],
-    code: "TIMESTAMP_SKEW" | "POOR_ACCURACY" | "MOCK_LOCATION" | "OUTSIDE_GEOFENCE" | "DEVICE_SIGNAL",
+    code:
+      | "TIMESTAMP_SKEW"
+      | "POOR_ACCURACY"
+      | "MOCK_LOCATION"
+      | "OUTSIDE_GEOFENCE"
+      | "DEVICE_SIGNAL"
+      | "NO_LOCATION"
+      | "ON_APPROVED_LEAVE",
     exceptionId: string,
     message: string,
   ) {
@@ -650,14 +883,8 @@ export async function registerAttendanceRoutes(
       });
     }
 
-    // The organization's zone lives in two places: the `timezone` column set
-    // when the tenant is created, and a `settings.timezone` override an admin
-    // can edit. Reading only the override ignored the column entirely, so a
-    // tenant outside IST had its work dates computed in IST.
-    const orgRow=(await db.query('SELECT timezone, settings FROM organizations WHERE id=$1',[user.orgId])).rows[0];
-    const settings=orgRow?.settings??{};
-    const timeZone=settings.timezone??orgRow?.timezone??'Asia/Kolkata';
-    const workDateFor=(date:Date)=>new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
+    const { timeZone, settings } = await orgClock(db, user.orgId);
+    const workDateFor = (date: Date) => businessDay(date, timeZone);
     const clientTime = new Date(d.client_timestamp);
     const serverNow = new Date();
 
@@ -761,11 +988,11 @@ export async function registerAttendanceRoutes(
           d.progress_deferred_remarks ?? null,
         ],
       );
-      void ins;
       const message = `client_timestamp differs from server time by more than ${SKEW_WINDOW_MIN} minutes; queued for review`;
       const exceptionId = await createSystemException(db, {
         employeeId: emp.id,
         recordId: rec?.id ?? null,
+        eventId: (ins.rows[0] as EventRow).id,
         type: "SYSTEM_FLAG",
         reason: message,
       });
@@ -931,6 +1158,81 @@ export async function registerAttendanceRoutes(
       return ins.rows[0] as EventRow;
     }
 
+    /**
+     * Hold this punch for review: store the event, raise the exception that
+     * names it, and answer 202. Approving the exception is what puts the
+     * punch onto the day.
+     */
+    async function holdForReview(
+      code: Parameters<typeof review>[1],
+      type: "SYSTEM_FLAG" | "OUTSIDE_GEOFENCE",
+      result: string,
+      message: string,
+    ) {
+      const event = await storeEvent(result);
+      const exceptionId = await createSystemException(db, {
+        employeeId: emp!.id,
+        recordId: record?.id ?? null,
+        eventId: event.id,
+        type,
+        reason: message,
+      });
+      return review(reply, code, exceptionId, message);
+    }
+
+    /*
+     * 8b. A punch on a day of approved leave goes to review.
+     *
+     * Refusing it would be wrong often enough to matter -- leave gets
+     * cancelled in person and the record follows days later, and somebody
+     * called in on a leave day did turn up. Accepting it silently was worse:
+     * payroll then paid the day twice, once as leave and once as attendance.
+     * A reviewer decides which of the two stands.
+     */
+    const onLeave = await db.query(
+      `SELECT from_date, to_date FROM leave_requests
+        WHERE employee_id = $1::uuid AND status = 'APPROVED'
+          AND from_date <= $2::date AND to_date >= $2::date
+        LIMIT 1`,
+      [emp.id, workDate],
+    );
+    if ((onLeave.rowCount ?? 0) > 0) {
+      return holdForReview(
+        "ON_APPROVED_LEAVE",
+        "SYSTEM_FLAG",
+        geoResult,
+        `Punch on ${workDate}, which is covered by approved leave; queued for review. ` +
+          "Cancel the leave if the day was worked.",
+      );
+    }
+
+    /*
+     * 8c. A fenced employee punching without a position goes to review.
+     *
+     * The fence is how the product knows somebody was where the work was. A
+     * punch with no coordinates -- location switched off, permission denied
+     * -- used to be recorded as NO_FENCE and accepted, so turning location
+     * off was the one reliable way past the fence. The same applies to a
+     * fence that sets an accuracy threshold and a punch that reports no
+     * accuracy: the threshold cannot be checked, so it is not passed.
+     */
+    if (
+      fence &&
+      (!hasCoords ||
+        (fence.accuracy_threshold_meters !== null &&
+          fence.accuracy_threshold_meters !== undefined &&
+          d.gps_accuracy === undefined))
+    ) {
+      return holdForReview(
+        "NO_LOCATION",
+        "SYSTEM_FLAG",
+        geoResult,
+        !hasCoords
+          ? "Punch carries no location but this employee has a geo-fence; queued for review"
+          : "Punch carries no GPS accuracy but the geo-fence sets an accuracy threshold; queued for review",
+      );
+    }
+
     // 9. Poor GPS accuracy → review.
     if (
       d.gps_accuracy !== undefined &&
@@ -938,115 +1240,70 @@ export async function registerAttendanceRoutes(
       fence?.accuracy_threshold_meters !== undefined &&
       d.gps_accuracy > Number(fence.accuracy_threshold_meters)
     ) {
-      const event = await storeEvent(geoResult);
-      const message = `gps_accuracy (${d.gps_accuracy}m) exceeds the fence threshold (${fence.accuracy_threshold_meters}m); queued for review`;
-      const exceptionId = await createSystemException(db, {
-        employeeId: emp.id,
-        recordId: record?.id ?? null,
-        type: "SYSTEM_FLAG",
-        reason: message,
-      });
-      return review(reply, "POOR_ACCURACY", exceptionId, message);
+      return holdForReview(
+        "POOR_ACCURACY",
+        "SYSTEM_FLAG",
+        geoResult,
+        `gps_accuracy (${d.gps_accuracy}m) exceeds the fence threshold (${fence.accuracy_threshold_meters}m); queued for review`,
+      );
     }
 
     // 10. Mock locations never auto-accept.
     if (d.mock_location === true) {
-      const event = await storeEvent(geoResult);
-      void event;
-      const message = "Mock location detected; manual review required";
-      const exceptionId = await createSystemException(db, {
-        employeeId: emp.id,
-        recordId: record?.id ?? null,
-        type: "SYSTEM_FLAG",
-        reason: message,
-      });
-      return review(reply, "MOCK_LOCATION", exceptionId, message);
+      return holdForReview(
+        "MOCK_LOCATION",
+        "SYSTEM_FLAG",
+        geoResult,
+        "Mock location detected; manual review required",
+      );
     }
 
     // 10b. Emulator or impossible travel → review. Placed after mock_location
     // so the more specific MOCK_LOCATION code still wins when both apply.
     if (suspectedEmulator || serverMovement?.impossible_travel === true) {
-      const event = await storeEvent(geoResult);
-      void event;
-      const message = serverMovement?.impossible_travel
-        ? `Punch is ${serverMovement.distance_m}m from the previous one after ` +
-          `${Math.round(serverMovement.elapsed_ms / 1000)}s (${serverMovement.implied_speed_mps}m/s); ` +
-          "queued for review"
-        : "Punch came from a device that appears to be an emulator; queued for review";
-      const exceptionId = await createSystemException(db, {
-        employeeId: emp.id,
-        recordId: record?.id ?? null,
-        type: "SYSTEM_FLAG",
-        reason: message,
-      });
-      return review(reply, "DEVICE_SIGNAL", exceptionId, message);
+      return holdForReview(
+        "DEVICE_SIGNAL",
+        "SYSTEM_FLAG",
+        geoResult,
+        serverMovement?.impossible_travel
+          ? `Punch is ${serverMovement.distance_m}m from the previous one after ` +
+              `${Math.round(serverMovement.elapsed_ms / 1000)}s (${serverMovement.implied_speed_mps}m/s); ` +
+              "queued for review"
+          : "Punch came from a device that appears to be an emulator; queued for review",
+      );
     }
 
     // 11. Outside boundary + tolerance → review.
     if (geoResult === "OUTSIDE") {
-      const event = await storeEvent("OUTSIDE");
-      void event;
-      const message =
-        "Punch location is outside the assigned geo-fence (including tolerance); queued for review";
-      const exceptionId = await createSystemException(db, {
-        employeeId: emp.id,
-        recordId: record?.id ?? null,
-        type: "OUTSIDE_GEOFENCE",
-        reason: message,
-      });
       if (record) {
         await db.query(
           "UPDATE attendance_records SET geofence_violation = true, updated_at = NOW() WHERE id = $1::uuid",
           [record.id],
         );
       }
-      return review(reply, "OUTSIDE_GEOFENCE", exceptionId, message);
+      return holdForReview(
+        "OUTSIDE_GEOFENCE",
+        "OUTSIDE_GEOFENCE",
+        "OUTSIDE",
+        "Punch location is outside the assigned geo-fence (including tolerance); queued for review",
+      );
     }
 
     // 12. Accept.
     const event = await storeEvent(fence && hasCoords ? "INSIDE" : "NO_FENCE");
-    let finalRecord: RecordRow;
-    let applied = false;
-    if (d.event_type === "CHECK_IN") {
-      // Concurrency-safe: bursty concurrent check-ins for the same
-      // employee+date race past the suppression check; the UNIQUE
-      // (employee_id, work_date) arbiter picks exactly one winner.
-      // Losers re-read the winner and report ALREADY_APPLIED semantics
-      // instead of 500ing on a unique violation (payroll-impacting
-      // records stay exactly-one per employee+date).
-      const ins = await db.query(
-        `INSERT INTO attendance_records
-           (employee_id, work_date, check_in_event_id, check_in_at, status, geofence_violation)
-         VALUES ($1::uuid, $2::date, $3::uuid, $4, 'PARTIAL', false)
-         ON CONFLICT (employee_id, work_date) DO NOTHING
-         RETURNING ${RECORD_COLS}`,
-        [emp.id, workDate, event.id, serverNow.toISOString()],
-      );
-      if ((ins.rowCount ?? 0) > 0) {
-        finalRecord = ins.rows[0] as RecordRow;
-      } else {
-        const existing = await db.query(
-          `SELECT ${RECORD_COLS} FROM attendance_records
-           WHERE employee_id = $1::uuid AND work_date = $2::date`,
-          [emp.id, workDate],
-        );
-        finalRecord = existing.rows[0] as RecordRow;
-        applied = true;
-      }
-    } else {
-      const checkInAt = new Date(record!.check_in_at as string | Date).getTime();
-      const hours = Number(((serverNow.getTime() - checkInAt) / 3600000).toFixed(2));
-      const upd = await db.query(
-        `UPDATE attendance_records SET
-           check_out_event_id = $2::uuid, check_out_at = $3,
-           total_hours = $4, status = 'COMPLETE', updated_at = NOW()
-         WHERE id = $1::uuid
-         RETURNING ${RECORD_COLS}`,
-        [record!.id, event.id, serverNow.toISOString(), hours],
-      );
-      finalRecord = upd.rows[0] as RecordRow;
-    }
-    if (applied) {
+    // A check-in that finds the day already open lost a race with a
+    // concurrent twin of itself (the duplicate check above ran before either
+    // committed); it reports the winner as already applied rather than
+    // 500ing on the unique (employee_id, work_date) key.
+    const { record: finalRecord, created } = await applyPunchToDay(db, {
+      employeeId: emp.id,
+      workDate,
+      eventType: d.event_type,
+      eventId: event.id,
+      at: serverNow,
+      keepExisting: d.event_type === "CHECK_IN",
+    });
+    if (d.event_type === "CHECK_IN" && !created) {
       return reply.status(200).send({
         applied: true,
         event: toEventShape(event),
@@ -1434,37 +1691,52 @@ export async function registerAttendanceRoutes(
           message: "You cannot decide an exception you submitted",
         });
       }
-      // P1 payroll lock guard: deciding an exception whose linked record's
-      // work_date falls in a LOCKED payroll run period is blocked.
-      // Exceptions WITHOUT a record link (date unknown) skip the guard.
-      if (cur.attendance_record_id) {
-        const recRes = await db.query(
-          "SELECT work_date FROM attendance_records WHERE id = $1::uuid",
-          [cur.attendance_record_id],
-        );
-        const recRow = recRes.rows[0] as
-          | { work_date: Date | string }
-          | undefined;
-        if (recRow) {
-          const workDate =
-            recRow.work_date instanceof Date
-              ? recRow.work_date.toISOString().slice(0, 10)
-              : String(recRow.work_date).slice(0, 10);
-          const locked = await db.query(
-            `SELECT id FROM payroll_runs
-              WHERE org_id = $1 AND status = 'LOCKED'
-                AND period_start <= $2::date AND period_end >= $2::date
-              LIMIT 1`,
-            [user.orgId, workDate],
-          );
-          if ((locked.rowCount ?? 0) > 0) {
-            return sendError(reply, req.requestId, {
-              status: 422,
-              code: "PAYROLL_LOCKED",
-              message:
-                "Attendance exception cannot be decided in a locked payroll period — locked period, contact payroll",
-            });
-          }
+      /*
+       * Nor an exception on their own attendance (HR-7).
+       *
+       * Comparing only submitted_by missed the case that matters most: a
+       * punch held back by the system has no submitter, so a manager whose
+       * own out-of-fence punch was flagged could simply approve it. The
+       * users.manage override above cannot stand in here -- every HR manager
+       * holds it, which would make the rule apply to nobody who can decide.
+       * The override is the organization's explicit maker-checker emergency
+       * grant, approval.self_approve, and its use is audited with the note.
+       */
+      const deciderEmployee = (
+        await db.query("SELECT employee_id FROM users WHERE id = $1", [user.id])
+      ).rows[0]?.employee_id as string | null | undefined;
+      if (
+        deciderEmployee &&
+        deciderEmployee === cur.employee_id &&
+        !user.permissions.includes("approval.self_approve")
+      ) {
+        return sendError(reply, req.requestId, {
+          status: 403,
+          code: "SELF_DECISION",
+          message:
+            "You cannot decide an exception on your own attendance; another approver must decide it",
+        });
+      }
+
+      /*
+       * What approving this would change, worked out before anything is
+       * written: the payroll lock below needs its date, and a held-back punch
+       * or a regularization has a date even when no record exists yet.
+       */
+      const effect = await exceptionEffect(db, user.orgId, cur);
+
+      // P1 payroll lock guard: deciding an exception whose work date falls in
+      // a LOCKED payroll run period is blocked. The date comes from the linked
+      // record, else from the held-back punch or the regularization; an
+      // exception with none of those (date unknown) skips the guard.
+      for (const lockDate of new Set([effect.recordDate, effect.workDate])) {
+        if (lockDate && (await lockedPayrollRun(db, user.orgId, lockDate))) {
+          return sendError(reply, req.requestId, {
+            status: 422,
+            code: "PAYROLL_LOCKED",
+            message:
+              "Attendance exception cannot be decided in a locked payroll period — locked period, contact payroll",
+          });
         }
       }
       if (cur.version !== expectedVersion) {
@@ -1494,6 +1766,27 @@ export async function registerAttendanceRoutes(
       }
       const { decision, note } = parsed.data;
       const next = decision === "APPROVE" ? "APPROVED" : "REJECTED";
+      /*
+       * Approving a punch onto a day of approved leave would pay that day
+       * twice, once as leave and once as attendance. The leave has to go
+       * first; rejecting the punch needs no such step.
+       */
+      if (next === "APPROVED" && effect.punches.length > 0) {
+        const leave = await db.query(
+          `SELECT id FROM leave_requests
+            WHERE employee_id = $1::uuid AND status = 'APPROVED'
+              AND from_date <= $2::date AND to_date >= $2::date
+            LIMIT 1`,
+          [cur.employee_id, effect.workDate],
+        );
+        if ((leave.rowCount ?? 0) > 0) {
+          return sendError(reply, req.requestId, {
+            status: 422,
+            code: "LEAVE_CONFLICT",
+            message: `${effect.workDate} is covered by approved leave. Cancel the leave first if the day was worked, or reject this exception.`,
+          });
+        }
+      }
       const upd = await db.query(
         `UPDATE attendance_exceptions SET
            status = $2, reviewed_by = $3::uuid, reviewed_at = NOW(),
@@ -1513,7 +1806,37 @@ export async function registerAttendanceRoutes(
           ],
         });
       }
-      const body = toExceptionShape(row);
+      /*
+       * An approval changes attendance, in the same transaction as the
+       * decision, exactly as the punch would have had it been accepted when
+       * it arrived. Before this an approval changed only the exception's
+       * status: the day stayed absent and payroll docked it as loss of pay.
+       */
+      let applied = row;
+      if (next === "APPROVED" && effect.punches.length > 0) {
+        let recordId: string | null = null;
+        for (const punch of effect.punches) {
+          const { record } = await applyPunchToDay(db, {
+            employeeId: cur.employee_id,
+            workDate: effect.workDate!,
+            eventType: punch.eventType,
+            eventId: punch.eventId,
+            at: punch.at,
+            violation: punch.violation,
+          });
+          recordId = record.id;
+        }
+        if (recordId && recordId !== row.attendance_record_id) {
+          applied = (
+            await db.query(
+              `UPDATE attendance_exceptions SET attendance_record_id = $2::uuid
+                WHERE id = $1::uuid RETURNING ${EXCEPTION_COLS}`,
+              [row.id, recordId],
+            )
+          ).rows[0] as ExceptionRow;
+        }
+      }
+      const body = toExceptionShape(applied);
       // S5 inbox (best-effort): ATTENDANCE_DECIDED to the exception
       // submitter (skipped for SYSTEM exceptions with no submitter).
       if (row.submitted_by) {
@@ -1626,8 +1949,9 @@ export async function registerAttendanceRoutes(
       });
     }
 
-    // Claimed punches ride along in the reason (the S2 exception table has no
-    // dedicated columns; a history/regularization table is deferred with fence history).
+    // The claim is stored in its own columns (§078) so that approving it can
+    // put those times onto the day. The same claim still rides along in the
+    // reason, which is what every screen already shows a reviewer.
     const claimed: string[] = [];
     if (d.claimed_check_in) {
       claimed.push(`claimed_check_in: ${d.claimed_check_in}`);
@@ -1641,10 +1965,19 @@ export async function registerAttendanceRoutes(
         : `${d.reason} [work_date: ${d.work_date}]`;
     const ins = await db.query(
       `INSERT INTO attendance_exceptions
-         (employee_id, attendance_record_id, exception_type, reason, source, status, submitted_by)
-       VALUES ($1::uuid, NULL, 'REGULARIZATION', $2, 'USER', 'PENDING', $3::uuid)
+         (employee_id, attendance_record_id, exception_type, reason, source, status, submitted_by,
+          work_date, claimed_check_in, claimed_check_out)
+       VALUES ($1::uuid, NULL, 'REGULARIZATION', $2, 'USER', 'PENDING', $3::uuid,
+          $4::date, $5, $6)
        RETURNING ${EXCEPTION_COLS}`,
-      [d.employee_id, reason, user.id],
+      [
+        d.employee_id,
+        reason,
+        user.id,
+        d.work_date,
+        d.claimed_check_in ? new Date(d.claimed_check_in).toISOString() : null,
+        d.claimed_check_out ? new Date(d.claimed_check_out).toISOString() : null,
+      ],
     );
     return reply.status(201).send(toExceptionShape(ins.rows[0] as ExceptionRow));
   
