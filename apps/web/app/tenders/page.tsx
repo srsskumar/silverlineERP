@@ -12,7 +12,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { statusLabel } from '@/lib/board-visuals';
-import { day } from '@/lib/finance';
+import { day, maybeDay } from '@/lib/finance';
 
 type Row = Record<string, any>;
 
@@ -242,7 +242,7 @@ function TenderDetail({ id, onClose, onChanged }: { id: string; onClose: () => v
                       {Object.keys(c.prior_values ?? {}).length > 0 ? (
                         <p className="mt-1 text-2xs text-text-subtle">
                           Was: {Object.entries(c.prior_values as Record<string, unknown>)
-                            .map(([k, v]) => `${k.replaceAll('_', ' ')} ${v ? String(v).slice(0, 10) : '—'}`)
+                            .map(([k, v]) => `${k.replaceAll('_', ' ')} ${maybeDay(v)}`)
                             .join(' · ')}
                         </p>
                       ) : null}

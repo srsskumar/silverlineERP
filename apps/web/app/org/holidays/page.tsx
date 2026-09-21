@@ -18,6 +18,7 @@ import { ErrorCard } from '@/components/ui/ErrorCard';
 import { FormField } from '@/components/ui/FormField';
 import { Input } from '@/components/ui/Input';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { day } from '@/lib/finance';
 
 export const dynamic = 'force-static';
 
@@ -150,7 +151,7 @@ function HolidaysManager() {
             <tbody className="divide-y divide-border">
               {(holidaysQuery.data ?? []).map((h) => (
                 <tr key={h.id}>
-                  <td className="px-3 py-2 font-mono text-xs">{h.date}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{day(h.date)}</td>
                   <td className="px-3 py-2">{h.name}</td>
                   <td className="px-3 py-2">{h.type}</td>
                   <td className="px-3 py-2 text-text-muted">

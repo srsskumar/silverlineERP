@@ -5,6 +5,7 @@ import type { ApprovalStep } from '@/lib/leave';
 import * as React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { listPeople, peopleIndex, personLabel } from '@/lib/people';
+import { dayTime } from '@/lib/finance';
 
 function toneForStep(status: string): 'success' | 'danger' | 'warning' | 'neutral' {
   if (status === 'APPROVED') return 'success';
@@ -46,7 +47,7 @@ export function ApprovalTimeline({ chain }: { chain: ApprovalStep[] }) {
                 {personLabel(index, s.approver_user_id)}
               </span>
               {s.decided_at ? (
-                <span className="text-xs text-text-muted">{String(s.decided_at)}</span>
+                <span className="text-xs text-text-muted">{dayTime(s.decided_at)}</span>
               ) : null}
             </div>
             {s.note ? <p className="text-sm text-text-muted">{String(s.note)}</p> : null}

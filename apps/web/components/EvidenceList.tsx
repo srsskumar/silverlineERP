@@ -16,6 +16,7 @@ import { ErrorCard } from './ui/ErrorCard';
 import { FormField } from './ui/FormField';
 import { Input } from './ui/Input';
 import { Spinner } from './ui/Spinner';
+import { dayTime } from '@/lib/finance';
 
 /**
  * Task evidence list + upload. Files are sent as base64
@@ -101,7 +102,7 @@ export function EvidenceList({
                 <p className="truncate font-medium text-text">{item.file_name}</p>
                 <p className="font-mono text-xs text-text-muted">
                   {item.evidence_type}
-                  {item.created_at ? ` · ${String(item.created_at)}` : ''}
+                  {item.created_at ? ` · ${dayTime(item.created_at)}` : ''}
                 </p>
               </div><DownloadButton path={`/api/v1/tasks/${taskId}/evidence/${item.id}/download`} name={item.file_name} label="Download"/>
             </li>

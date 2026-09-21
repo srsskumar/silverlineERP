@@ -10,7 +10,7 @@ import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { statusLabel } from '@/lib/board-visuals';
-import { day } from '@/lib/finance';
+import { day, dayTime } from '@/lib/finance';
 
 type Row = Record<string, any>;
 
@@ -283,7 +283,7 @@ function LeadDetail({ id, onClose, onChanged }: { id: string; onClose: () => voi
                       <p className="text-xs font-medium text-text">
                         {statusLabel(String(entry.interaction_type))}
                         <span className="ml-2 font-normal text-text-subtle">
-                          {new Date(String(entry.occurred_at)).toLocaleString()}
+                          {dayTime(entry.occurred_at)}
                         </span>
                       </p>
                       <p className="mt-0.5 text-sm text-text-muted">{entry.summary}</p>

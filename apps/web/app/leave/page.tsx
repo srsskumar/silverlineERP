@@ -17,6 +17,7 @@ import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Input } from '@/components/ui/Input';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Spinner } from '@/components/ui/Spinner';
+import { day } from '@/lib/finance';
 
 export const dynamic = 'force-static';
 
@@ -91,7 +92,7 @@ function RequestsTable({ view }: { view: LeaveListView }) {
                 {rows.map((r) => (
                   <tr key={r.id}>
                     <td className="px-3 py-2 font-mono text-xs text-text">{r.leave_code}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-text-muted">{r.from_date} → {r.to_date}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-text-muted">{day(r.from_date)} → {day(r.to_date)}</td>
                     <td className="px-3 py-2 text-text">{formatDays(r.total_days)}</td>
                     <td className="px-3 py-2">
                       <LeaveStatusBadge status={String(r.status)} />

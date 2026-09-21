@@ -53,6 +53,7 @@ import {
 } from "../../src/ui/primitives";
 import { MapCanvas } from "../../src/ui/MapCanvas";
 import { space, useTheme } from "../../src/theme";
+import { clock, day } from "@silverline/shared";
 
 /**
  * Why a day's return could not be filed.
@@ -478,8 +479,8 @@ function AttendanceScreen() {
           (history.data ?? []).map((r, i, arr) => (
             <ListRow
               key={r.id}
-              title={(r.work_date as string) ?? r.id.slice(0, 8)}
-              subtitle={r.check_in_at ? `In ${String(r.check_in_at).slice(11, 16)}` : undefined}
+              title={r.work_date ? day(r.work_date) : r.id.slice(0, 8)}
+              subtitle={r.check_in_at ? `In ${clock(r.check_in_at)}` : undefined}
               right={<Badge text={String(r.status ?? "?")} tone={statusTone(String(r.status ?? ""))} />}
               last={i === arr.length - 1}
             />

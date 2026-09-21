@@ -56,7 +56,7 @@ export function moneyIndian(value: unknown): string {
  * them the same way. Re-exported here because every screen in this app
  * already reaches for them through lib/finance.
  */
-export { day, dayTime, DISPLAY_TIME_ZONE } from '@silverline/shared';
+export { day, dayTime, clock, maybeDay, looksLikeDate, DISPLAY_TIME_ZONE } from '@silverline/shared';
 
 
 /**

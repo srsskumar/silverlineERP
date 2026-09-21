@@ -13,6 +13,7 @@ import { Button } from './ui/Button';
 import { EmptyState } from './ui/EmptyState';
 import { ErrorCard } from './ui/ErrorCard';
 import { Spinner } from './ui/Spinner';
+import { dayTime } from '@/lib/finance';
 
 /**
  * Task comment thread. Post with `{body}`; the server extracts @mentions —
@@ -89,7 +90,7 @@ export function CommentThread({
                 <span className="font-medium text-text" title={c.author_user_id}>
                   {personLabel(people, c.author_user_id) || c.author_username}
                 </span>
-                {c.created_at ? ` · ${String(c.created_at)}` : ''}
+                {c.created_at ? ` · ${dayTime(c.created_at)}` : ''}
               </p>
               <p className="mt-1 whitespace-pre-wrap text-sm text-text">{c.body}</p>
             </li>

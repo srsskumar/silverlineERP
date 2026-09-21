@@ -40,7 +40,7 @@ import {
   Title,
 } from "../../src/ui/primitives";
 import { radius, space, useTheme } from "../../src/theme";
-import { day } from "@silverline/shared";
+import { day, dayTime } from "@silverline/shared";
 
 function statusTone(status: string): "success" | "warning" | "info" | "neutral" {
   if (status === "DONE") return "success";
@@ -400,7 +400,7 @@ function TaskSheet({ taskId, onClose }: { taskId: string | null; onClose: () => 
                     <View key={c.id} style={{ marginBottom: space.md }}>
                       <Muted style={{ color: t.text }}>{c.body}</Muted>
                       <Subtle>
-                        {c.author_username ?? "?"} · {c.created_at ?? ""}
+                        {c.author_username ?? "?"} · {dayTime(c.created_at)}
                       </Subtle>
                     </View>
                   ))

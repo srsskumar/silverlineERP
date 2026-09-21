@@ -18,6 +18,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Spinner } from '@/components/ui/Spinner';
+import { day } from '@/lib/finance';
 
 export const dynamic = 'force-static';
 
@@ -166,7 +167,7 @@ function PendingApprovals() {
                 >
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium text-text">
-                      Leave {String(l.id).slice(0, 8)}… · {String(l.from_date)} → {String(l.to_date)}
+                      Leave {String(l.id).slice(0, 8)}… · {day(l.from_date)} → {day(l.to_date)}
                     </p>
                     <p className="mt-0.5 font-mono text-[11px] text-text-subtle">
                       employee {String(l.employee_id).slice(0, 8)}…

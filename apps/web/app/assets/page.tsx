@@ -14,6 +14,7 @@ import { Combobox } from '@/components/ui/Combobox';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { ASSET_CONDITIONS, ASSET_LOCATION_LABELS } from '@silverline/shared';
+import { day } from '@/lib/finance';
 
 /**
  * The asset register (enhancement note 3).
@@ -180,7 +181,7 @@ export default function Page() {
                       real period in somebody's hands, and rewriting it would
                       erase that they ever had the thing. */}
                   Currently with <strong>{String(asset.held_by ?? 'somebody')}</strong>
-                  {asset.assigned_on ? ` since ${String(asset.assigned_on).slice(0, 10)}` : ''}.
+                  {asset.assigned_on ? ` since ${day(asset.assigned_on)}` : ''}.
                   Handing it on closes that spell and opens a new one, so both stay on the
                   record and the handover has a date.
                 </p>
@@ -574,9 +575,4 @@ function label(code: unknown): string {
   if (known) return known.label;
   const raw = String(code);
   return raw.charAt(0) + raw.slice(1).toLowerCase().replace(/_/g, ' ');
-}
-
-function day(value: unknown): string {
-  if (!value) return '—';
-  return String(value).slice(0, 10);
 }

@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // Imported the way every screen imports them, so the re-export is
 // covered too — the implementation lives in @silverline/shared.
@@ -198,5 +198,85 @@ describe('one size in a table row', () => {
       }
     }
     expect(offenders, `use tone=, not a size:\n${offenders.join('\n')}`).toEqual([]);
+  });
+});
+
+/* ------------------------------------------------------------------ §078
+ * Nothing renders a raw date.
+ *
+ * The existing guards below catch toLocaleDateString and friends. They did
+ * not catch the way this actually went wrong, which was duller: a cell that
+ * simply printed the field. Holidays showed "2026-01-01", attendance showed
+ * "2026-09-21T05:33:00.000Z" under a column headed Check in, and leave
+ * showed "2026-09-14 → 2026-09-18" -- all correct data, none of it in the
+ * format the rest of the application uses.
+ *
+ * Worse, assets carried its own private `day()` that sliced ten characters
+ * off the ISO string, shadowing the shared one at every call site in the
+ * file. A second implementation of a formatter is how a format drifts; the
+ * whole point of putting it in `shared` is that there is one.
+ */
+describe('no screen prints a date the API sent', () => {
+  /*
+   * Deliberately fussy about where the word sits. A loose /date/ matches
+   * "validated", and a guard that cries wolf gets deleted by whoever is
+   * next in a hurry.
+   */
+  const FIELD = /(?:^|[^a-zA-Z])(?:date|dob)\b|_(?:at|on|date)\b|[a-z](?:At|On|Date)\b/;
+  const FORMATTED = /\b(day|dayTime|clock|maybeDay|when|onDay|relativeTime|month|fyLabel)\s*\(/;
+
+  function walk(dir: string, out: string[] = []): string[] {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules' || entry.name.startsWith('.next')) continue;
+        walk(full, out);
+      } else if (entry.name.endsWith('.tsx')) out.push(full);
+    }
+    return out;
+  }
+
+  const files = [
+    ...walk(join(process.cwd(), 'app')),
+    ...walk(join(process.cwd(), 'components')),
+  ];
+
+  it('found the source to check -- an empty sweep would pass silently', () => {
+    expect(files.length).toBeGreaterThan(50);
+  });
+
+  it('formats every date it renders', () => {
+    const offenders: string[] = [];
+    for (const file of files) {
+      const lines = readFileSync(file, 'utf8').split('\n');
+      lines.forEach((line, i) => {
+        for (const m of line.matchAll(/\{([^{}]{1,140})\}/g)) {
+          const before = line.slice(0, m.index ?? 0);
+          // A JSX child, not an attribute: the brace opens the line or
+          // follows a closing tag.
+          if (!(before.trimEnd().endsWith('>') || before.trim() === '')) continue;
+          const expr = m[1];
+          if (!FIELD.test(expr)) continue;
+          if (FORMATTED.test(expr)) continue;
+          // Conditionals and mapped children are structure, not a value.
+          if (/=>|\bmap\b|\?\s*\(|&&\s*</.test(expr)) continue;
+          // Only things that read as a field access or an explicit String().
+          if (!/\bString\(|\w\.\w*(?:date|_at|_on)\w*/i.test(expr)) continue;
+          offenders.push(`${relative(process.cwd(), file)}:${i + 1}  {${expr.trim()}}`);
+        }
+      });
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('nobody writes their own date formatter beside the shared one', () => {
+    const rivals: string[] = [];
+    for (const file of files) {
+      const source = readFileSync(file, 'utf8');
+      // A local function called day/formatDate that is not the import.
+      const local = /^\s*(?:function|const)\s+(day|formatDate|fmtDate|dateLabel)\b/m.exec(source);
+      if (local) rivals.push(`${relative(process.cwd(), file)} declares ${local[1]}()`);
+    }
+    expect(rivals).toEqual([]);
   });
 });

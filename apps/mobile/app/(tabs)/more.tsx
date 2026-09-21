@@ -36,6 +36,7 @@ import {
   Title,
 } from "../../src/ui/primitives";
 import { radius, space, useTheme } from "../../src/theme";
+import { dayTime } from "@silverline/shared";
 
 const CHANNELS = [
   { key: "push", label: "Push" },
@@ -252,7 +253,7 @@ function MoreScreen() {
             <ListRow
               key={n.id}
               title={String(n.title ?? n.type ?? n.id.slice(0, 8))}
-              subtitle={String(n.created_at ?? "")}
+              subtitle={dayTime(n.created_at)}
               right={
                 n.read_at ? null : (
                   <View

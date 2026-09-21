@@ -97,3 +97,60 @@ export function dayTime(value: unknown): string {
   if (!month) return '—';
   return `${p.day}-${month}-${p.year} ${p.hour}:${p.minute} IST`;
 }
+
+/*
+ * Bare date, or an instant. The API sends both, on the same row.
+ *
+ * A DATE column comes back as "2026-09-21"; a TIMESTAMPTZ comes back as
+ * "2026-09-21T05:33:00.000Z". Deliberately strict: a code, an amount or a
+ * reference that happens to contain digits must pass through untouched, so
+ * these match the whole string and nothing less.
+ */
+const BARE_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const INSTANT = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/;
+
+/** True when a value is a date or timestamp as this API sends them. */
+export function looksLikeDate(value: unknown): boolean {
+  if (value instanceof Date) return true;
+  if (typeof value !== 'string') return false;
+  return BARE_DATE.test(value) || INSTANT.test(value);
+}
+
+/**
+ * Format a value if it is a date, and leave it alone if it is not.
+ *
+ * For generic tables that are handed whatever a row contains and have no
+ * column-by-column knowledge of it. Those were rendering raw ISO strings --
+ * "2026-09-21T05:33:00.000Z" in a cell headed "Assigned on" -- because
+ * String() is the honest thing to do with an unknown value and the wrong
+ * thing to do with this one.
+ *
+ * A bare date gets the date. An instant gets the time as well, because a
+ * timestamp column is a timestamp column for a reason: somebody wanted to
+ * know when, not just which day.
+ */
+export function maybeDay(value: unknown): string {
+  if (value === null || value === undefined) return '—';
+  if (value instanceof Date) return dayTime(value);
+  if (typeof value === 'string') {
+    if (BARE_DATE.test(value)) return day(value);
+    if (INSTANT.test(value)) return dayTime(value);
+  }
+  return String(value);
+}
+
+/**
+ * Just the clock, as HH:MM in IST.
+ *
+ * For a column that sits next to the date it belongs to -- a punch-in beside
+ * its work date -- where repeating "21-Sep-2026" in every cell of every row
+ * is noise rather than information. Twenty-four hour, for the same reason
+ * dayTime is: "4:30" with no marker is a fifty-fifty guess.
+ */
+export function clock(value: unknown): string {
+  if (!value) return '—';
+  const d = new Date(String(value));
+  if (Number.isNaN(d.getTime())) return '—';
+  const p = istParts(d);
+  return `${p.hour}:${p.minute}`;
+}

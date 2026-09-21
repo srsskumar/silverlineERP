@@ -19,6 +19,7 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { day, dayTime } from '@/lib/finance';
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -113,7 +114,7 @@ export function LeaveDetailView({ id }: { id: string }) {
                 <h1 className="text-xl font-bold text-text">
                   <span className="font-mono">{req.leave_code}</span>{' '}
                   <span className="text-base font-normal text-text-muted">
-                    {req.from_date} → {req.to_date}
+                    {day(req.from_date)} → {day(req.to_date)}
                   </span>
                 </h1>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -145,7 +146,7 @@ export function LeaveDetailView({ id }: { id: string }) {
                 }
               />
               <DetailRow label="Reason" value={req.reason ? String(req.reason) : '—'} />
-              {req.created_at ? <DetailRow label="Filed at" value={String(req.created_at)} /> : null}
+              {req.created_at ? <DetailRow label="Filed at" value={dayTime(req.created_at)} /> : null}
             </dl>
           </div>
 

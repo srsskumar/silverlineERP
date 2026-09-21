@@ -15,6 +15,7 @@ import { ErrorCard } from './ui/ErrorCard';
 import { FormField } from './ui/FormField';
 import { Input } from './ui/Input';
 import { DecisionBadge } from './DecisionBadge';
+import { day } from '@/lib/finance';
 
 const inputClass =
   'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
@@ -208,7 +209,7 @@ export function PunchPanel({ onPunched }: { onPunched?: (r: PunchResult) => void
           </div>
           {result.kind !== 'review' && (
             <p className="mt-1 font-mono text-xs opacity-75">
-              event {result.event.id} · record {result.record.id} · {result.record.work_date}
+              event {result.event.id} · record {result.record.id} · {day(result.record.work_date)}
             </p>
           )}
         </div>

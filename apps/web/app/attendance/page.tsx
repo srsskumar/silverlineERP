@@ -19,6 +19,8 @@ import { Spinner } from '@/components/ui/Spinner';
 import { PERMISSIONS } from '@/lib/permissions';
 import { formatHours, listMapEvents, listRecords } from '@/lib/attendance';
 import { queryKeys } from '@/lib/query-keys';
+import { clock, day } from '@/lib/finance';
+import { PunchClock } from '@/components/PunchClock';
 
 export const dynamic = 'force-static';
 
@@ -73,6 +75,11 @@ function RecordsTable() {
 
   return (
     <div className="flex flex-col gap-4">
+      {/* §079. Your own attendance, first: marking it is what most people
+          open this page to do. The register below is what a supervisor
+          opens it for, and until now it was all the page had. */}
+      <PunchClock />
+
       <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4 lg:flex-row lg:items-end">
         <div className="flex-1">
           <label htmlFor="rec-employee" className="text-sm font-medium text-text-muted">Employee ID</label>
@@ -113,13 +120,20 @@ function RecordsTable() {
           </Button>
         </div>
         <Button variant="secondary" onClick={() => setPunchOpen((v) => !v)}>
-          {punchOpen ? 'Hide punch' : 'Manual punch'}
+          {punchOpen ? 'Hide' : 'Punch for somebody else'}
         </Button>
       </div>
 
       {punchOpen && (
         <div className="rounded-lg border border-border bg-surface p-4">
-          <h2 className="mb-3 text-sm font-semibold text-text">Manual punch (testing / admin)</h2>
+          <h2 className="mb-1 text-sm font-semibold text-text">Punch on behalf of somebody</h2>
+          <p className="mb-3 text-xs text-text-muted">
+            {/* Renamed from "Manual punch (testing / admin)". It is not a
+                testing tool -- it is how a supervisor fixes a day for
+                somebody whose phone was flat -- and a heading that calls
+                itself testing is a heading people avoid in earnest. */}
+            For correcting somebody else&rsquo;s day. Your own attendance is the panel above.
+          </p>
           <PunchPanel
             onPunched={() => {
               listQuery.refetch();
@@ -180,13 +194,13 @@ function RecordsTable() {
               <tbody className="divide-y divide-border">
                 {rows.map((r) => (
                   <tr key={r.id}>
-                    <td className="px-3 py-2 font-mono text-xs text-text">{r.work_date}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-text">{day(r.work_date)}</td>
                     <td className="px-3 py-2 font-mono text-xs text-text-muted">{r.employee_id}</td>
                     <td className="px-3 py-2">
                       <AttendanceStatusBadge status={String(r.status)} violation={!!r.geofence_violation} />
                     </td>
-                    <td className="px-3 py-2 text-xs text-text-muted">{r.check_in_at ? String(r.check_in_at) : '—'}</td>
-                    <td className="px-3 py-2 text-xs text-text-muted">{r.check_out_at ? String(r.check_out_at) : '—'}</td>
+                    <td className="px-3 py-2 text-xs text-text-muted">{clock(r.check_in_at)}</td>
+                    <td className="px-3 py-2 text-xs text-text-muted">{clock(r.check_out_at)}</td>
                     <td className="px-3 py-2 text-text">{formatHours(r.total_hours)}</td>
                     <td className="px-3 py-2">
                       <Link href={`/attendance/records/${r.id}`} className="text-primary hover:underline">

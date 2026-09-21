@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Combobox } from '@/components/ui/Combobox';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Notice } from '@/components/finance/Primitives';
-import { day, businessToday } from '@/lib/finance';
+import { businessToday, day } from '@/lib/finance';
 import { STAGE_STATE_LABELS, stageLabel, stateTone } from '@/lib/survey';
 import {
   MILESTONE_PERCENT, MILESTONE_LABELS, BILLING_STATUS_LABELS,
@@ -589,7 +589,7 @@ function CrewAssets({ villageId }: { villageId: string }) {
                 </td>
                 <td className="py-1.5 pr-3 text-text-muted">{String(r.employee_name)}</td>
                 <td className="py-1.5 pr-3 text-text-muted">{String(r.phone ?? '—')}</td>
-                <td className="py-1.5 pr-3 text-text-muted">{String(r.issued_at ?? '—')}</td>
+                <td className="py-1.5 pr-3 text-text-muted">{day(r.issued_at)}</td>
                 <td className="py-1.5 pr-3 text-text-muted">{String(r.stage_label ?? '—')}</td>
               </tr>
             ))}

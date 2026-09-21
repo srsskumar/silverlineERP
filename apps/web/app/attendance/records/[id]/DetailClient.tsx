@@ -18,6 +18,7 @@ import { ErrorCard } from '@/components/ui/ErrorCard';
 import { FormField } from '@/components/ui/FormField';
 import { Input } from '@/components/ui/Input';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { day, dayTime } from '@/lib/finance';
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -74,7 +75,7 @@ export function RecordDetailView({ id }: { id: string }) {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h1 className="text-xl font-bold text-text">
-                  {record.work_date} <span className="font-mono text-sm font-normal text-text-muted">{record.employee_id}</span>
+                  {day(record.work_date)} <span className="font-mono text-sm font-normal text-text-muted">{record.employee_id}</span>
                 </h1>
                 <div className="mt-2 flex items-center gap-2">
                   <AttendanceStatusBadge status={String(record.status)} violation={!!record.geofence_violation} />
@@ -88,8 +89,8 @@ export function RecordDetailView({ id }: { id: string }) {
               </div>
             </div>
             <dl className="mt-4 divide-y divide-border">
-              <DetailRow label="Check in" value={record.check_in_at ? String(record.check_in_at) : '—'} />
-              <DetailRow label="Check out" value={record.check_out_at ? String(record.check_out_at) : '—'} />
+              <DetailRow label="Check in" value={dayTime(record.check_in_at)} />
+              <DetailRow label="Check out" value={dayTime(record.check_out_at)} />
               <DetailRow label="Total hours" value={formatHours(record.total_hours)} />
               <DetailRow label="Geofence violation" value={record.geofence_violation ? 'Yes ⚠' : 'No'} />
             </dl>
