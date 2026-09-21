@@ -218,10 +218,10 @@ export default function ExpensePoliciesPage() {
                     return (
                       <TR key={String(p.id)}>
                         <TD className="text-text">{categoryLabel(p.category)}</TD>
-                        <TD className="text-text-muted">
+                        <TD tone="muted">
                           {day(from)} → {to ? day(to) : 'open'}
                         </TD>
-                        <TD className="text-2xs text-text-subtle">{p.applies_to_grade ?? 'Everyone'}</TD>
+                        <TD tone="subtle">{p.applies_to_grade ?? 'Everyone'}</TD>
                         <TD align="right" className="text-text-muted">{p.per_line_limit ? money(p.per_line_limit) : '—'}</TD>
                         <TD align="right" className="text-text-muted">{p.per_claim_limit ? money(p.per_claim_limit) : '—'}</TD>
                         <TD align="right" className="text-text-muted">{p.unit_rate ? money(p.unit_rate) : '—'}</TD>

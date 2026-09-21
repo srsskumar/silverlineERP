@@ -226,7 +226,7 @@ function RollUp({
                   ) : row.name}
                 </TD>
                 {showsParent ? (
-                  <TD className="text-text-muted">{row.district ?? '—'}</TD>
+                  <TD tone="muted">{row.district ?? '—'}</TD>
                 ) : null}
                 {/* A question about a district is asked from the district's
                     own row, not by describing it in a free-text box. */}
@@ -242,9 +242,9 @@ function RollUp({
                 ) : null}
                 <TD className="text-right tabular-nums">{num(row.villages)}</TD>
                 <TD className="text-right tabular-nums">{dec(row.extent_ac)}</TD>
-                <TD className="text-right tabular-nums text-text-muted">{dec(row.extent_sqkm)}</TD>
+                <TD tone="muted" className="text-right tabular-nums">{dec(row.extent_sqkm)}</TD>
                 <TD className="text-right tabular-nums">{dec(row.surveyed_ac)}</TD>
-                <TD className="text-right tabular-nums text-text-muted">{dec(row.surveyed_sqkm)}</TD>
+                <TD tone="muted" className="text-right tabular-nums">{dec(row.surveyed_sqkm)}</TD>
                 <TD className="text-right tabular-nums">{num(row.not_started)}</TD>
                 <TD className="text-right tabular-nums">{num(row.completed)}</TD>
                 <TD className={`text-right tabular-nums ${row.late > 0 ? 'text-danger' : ''}`}>
@@ -270,7 +270,7 @@ function RollUp({
             ))}
             {rows.length === 0 ? (
               <TR><TD colSpan={(showsParent ? 11 : 10) + (onAsk ? 1 : 0)}
-                className="py-6 text-center text-sm text-text-muted">
+                tone="muted" className="py-6 text-center">
                 No villages match these filters.
               </TD></TR>
             ) : null}
@@ -628,15 +628,15 @@ export function SurveyDashboard({
                         </button>
                       </TD>
                       <TD className="text-right tabular-nums">{num(p.villages)}</TD>
-                      <TD className="text-right tabular-nums text-text-muted">
+                      <TD tone="muted" className="text-right tabular-nums">
                         {p.share_pct}%
                       </TD>
                       <TD className="text-right tabular-nums">{dec(p.extent_ac)}</TD>
-                      <TD className="text-right tabular-nums text-text-muted">
+                      <TD tone="muted" className="text-right tabular-nums">
                         {dec(p.extent_sqkm)}
                       </TD>
                       <TD className="text-right tabular-nums">{dec(p.surveyed_ac)}</TD>
-                      <TD className="text-right tabular-nums text-text-muted">
+                      <TD tone="muted" className="text-right tabular-nums">
                         {dec(p.surveyed_sqkm)}
                       </TD>
                     </TR>
@@ -645,15 +645,15 @@ export function SurveyDashboard({
                 <TR className="border-t-2 border-border font-semibold">
                   <TD>Total</TD>
                   <TD className="text-right tabular-nums">{num(sum('villages'))}</TD>
-                  <TD className="text-right tabular-nums text-text-muted">
+                  <TD tone="muted" className="text-right tabular-nums">
                     {Math.round(sum('share_pct') * 10) / 10}%
                   </TD>
                   <TD className="text-right tabular-nums">{dec(sum('extent_ac'))}</TD>
-                  <TD className="text-right tabular-nums text-text-muted">
+                  <TD tone="muted" className="text-right tabular-nums">
                     {dec(sum('extent_sqkm'))}
                   </TD>
                   <TD className="text-right tabular-nums">{dec(sum('surveyed_ac'))}</TD>
-                  <TD className="text-right tabular-nums text-text-muted">
+                  <TD tone="muted" className="text-right tabular-nums">
                     {dec(sum('surveyed_sqkm'))}
                   </TD>
                 </TR>
@@ -734,10 +734,10 @@ export function SurveyDashboard({
                   <TD className="text-right tabular-nums">
                     {st.median_days === null ? '—' : num(st.median_days)}
                   </TD>
-                  <TD className="text-right tabular-nums text-text-muted">
+                  <TD tone="muted" className="text-right tabular-nums">
                     {st.avg_days === null ? '—' : dec(st.avg_days)}
                   </TD>
-                  <TD className="text-right tabular-nums text-text-muted">
+                  <TD tone="muted" className="text-right tabular-nums">
                     {st.max_days === null ? '—' : num(st.max_days)}
                   </TD>
                   {canDrill ? (
@@ -1002,12 +1002,12 @@ export function SurveyDashboard({
                       <span className="ml-1.5 text-2xs text-text-subtle">{v.code}</span>
                     ) : null}
                   </TD>
-                  <TD className="text-text-muted">{v.district ?? '—'}</TD>
-                  <TD className="text-text-muted">{v.mandal ?? '—'}</TD>
+                  <TD tone="muted">{v.district ?? '—'}</TD>
+                  <TD tone="muted">{v.mandal ?? '—'}</TD>
                   <TD className="text-right tabular-nums">{dec(v.extent_ac)}</TD>
-                  <TD className="text-right tabular-nums text-text-muted">{dec(v.extent_sqkm)}</TD>
+                  <TD tone="muted" className="text-right tabular-nums">{dec(v.extent_sqkm)}</TD>
                   <TD className="text-right tabular-nums">{dec(v.surveyed_ac)}</TD>
-                  <TD className="text-right tabular-nums text-text-muted">{dec(v.surveyed_sqkm)}</TD>
+                  <TD tone="muted" className="text-right tabular-nums">{dec(v.surveyed_sqkm)}</TD>
                   <TD>
                     <span className="flex flex-wrap items-center gap-1">
                       <span className="text-sm text-text">{v.position_label}</span>
@@ -1022,7 +1022,7 @@ export function SurveyDashboard({
                     {v.days_in_stage === null ? '—' : num(v.days_in_stage)}
                   </TD>
                   {canDrill ? (
-                    <TD className="text-text-muted">
+                    <TD tone="muted">
                       {(v.holders ?? []).length === 0
                         ? <span className="text-2xs text-text-subtle">nobody</span>
                         : (v.holders ?? []).slice(0, 2).join(', ')
@@ -1054,8 +1054,8 @@ export function SurveyDashboard({
                       </span>
                     )}
                   </TD>
-                  <TD className="tabular-nums text-text-muted">{day(v.gt_started_on)}</TD>
-                  <TD className="tabular-nums text-text-muted">{day(v.gt_expected_end_on)}</TD>
+                  <TD tone="muted" className="tabular-nums">{day(v.gt_started_on)}</TD>
+                  <TD tone="muted" className="tabular-nums">{day(v.gt_expected_end_on)}</TD>
                   {/* What actually happened, beside what was promised. */}
                   <TD className={`tabular-nums ${
                     v.gt_completed_on && v.gt_expected_end_on
@@ -1076,7 +1076,7 @@ export function SurveyDashboard({
                 </TR>
               ))}
               {d.villages.length === 0 ? (
-                <TR><TD colSpan={canDrill ? 15 : 14} className="py-6 text-center text-sm text-text-muted">
+                <TR><TD colSpan={canDrill ? 15 : 14} tone="muted" className="py-6 text-center">
                   No villages match these filters.
                 </TD></TR>
               ) : null}

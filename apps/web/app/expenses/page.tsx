@@ -171,8 +171,8 @@ export default function ExpensesPage() {
                           <span className="font-mono text-xs font-medium text-text">{c.claim_no}</span>
                           <p className="truncate text-2xs text-text-subtle">{c.purpose}</p>
                         </TD>
-                        <TD className="text-text-muted">{c.claimant_username ?? '—'}</TD>
-                        <TD className="text-2xs text-text-subtle">{c.project_code ?? '—'}</TD>
+                        <TD tone="muted">{c.claimant_username ?? '—'}</TD>
+                        <TD tone="subtle">{c.project_code ?? '—'}</TD>
                         <TD align="right" className="text-text-muted">{money(c.total_claimed)}</TD>
                         <TD align="right">
                           <span className={excess > 0 ? 'text-warning' : 'text-text'}>
@@ -350,7 +350,7 @@ function ClaimDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
                             <Badge tone="info" size="sm">Billable</Badge>
                           ) : null}
                         </TD>
-                        <TD className="text-2xs text-text-muted">
+                        <TD tone="muted">
                           {day(l.expense_date)}
                           {l.units ? <p className="text-text-subtle">{Number(l.units)} days</p> : null}
                         </TD>
@@ -358,7 +358,7 @@ function ClaimDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
                         <TD align="right" className={Number(l.excess_amount) > 0 ? 'text-warning' : ''}>
                           {money(l.allowed_amount)}
                         </TD>
-                        <TD className="text-2xs">
+                        <TD>
                           {l.gst_amount ? (
                             <>
                               <span className="text-text-muted">{money(l.gst_amount)}</span>
@@ -370,7 +370,7 @@ function ClaimDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
                             <span className="text-text-subtle">—</span>
                           )}
                         </TD>
-                        <TD className="max-w-56 text-2xs text-warning">
+                        <TD tone="warning" className="max-w-56">
                           {l.exception_notes ? (
                             <span className="flex items-start gap-1">
                               <AlertTriangle className="mt-0.5 size-3 shrink-0" />

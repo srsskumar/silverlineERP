@@ -870,8 +870,8 @@ function Rovers({ villageId, canManage }: { villageId: string; canManage: boolea
                     <span className="text-text">{r.asset_name}</span>
                     <span className="ml-1 text-2xs text-text-subtle">{r.asset_code}</span>
                   </TD>
-                  <TD className="text-xs">{day(r.allocated_on)}</TD>
-                  <TD className="text-xs">
+                  <TD>{day(r.allocated_on)}</TD>
+                  <TD>
                     {r.released_on ? day(r.released_on) : <Badge tone="warning">still out</Badge>}
                   </TD>
                   {canManage ? (
@@ -1133,7 +1133,7 @@ function Billing({
                       {MILESTONE_LABELS[Number(c.milestone)] ?? `Milestone ${c.milestone}`}
                     </TD>
                     <TD className="text-right tabular-nums">{Number(c.percent)}%</TD>
-                    <TD className="text-xs text-text-muted">
+                    <TD tone="muted">
                       {day(c.submitted_on)}
                       {c.extent_ac ? (
                         <span className="ml-1 text-2xs text-text-subtle">
@@ -1141,7 +1141,7 @@ function Billing({
                         </span>
                       ) : null}
                     </TD>
-                    <TD className="font-mono text-2xs text-text-muted">
+                    <TD mono tone="muted">
                       {c.reference_no || '—'}
                     </TD>
                     <TD>
@@ -1434,7 +1434,7 @@ function CertifiedTotals({ village, canCertify }: { village: Row; canCertify: bo
                         <span className="ml-1 text-2xs text-text-subtle">{String(r.unit)}</span>
                       ) : null}
                     </TD>
-                    <TD className="text-right tabular-nums text-text-muted">
+                    <TD tone="muted" className="text-right tabular-nums">
                       {Number(r.recorded)}
                     </TD>
                     <TD className="text-right tabular-nums">
@@ -1459,7 +1459,7 @@ function CertifiedTotals({ village, canCertify }: { village: Row; canCertify: bo
                         </span>
                       )}
                     </TD>
-                    <TD className="text-2xs text-text-muted">
+                    <TD tone="muted">
                       {open ? (
                         <input className={field} placeholder="Recount at handover"
                           value={d.reason}
@@ -1678,7 +1678,7 @@ function DailySheet({ village }: { village: Row }) {
                           {(x.values as Row)[String(m.code)] ?? '—'}
                         </TD>
                       ))}
-                      <TD className="text-2xs text-text-muted">
+                      <TD tone="muted">
                         {x.low_progress_label ? String(x.low_progress_label) : '—'}
                       </TD>
                     </TR>
@@ -1716,7 +1716,7 @@ function DailySheet({ village }: { village: Row }) {
                       {Number((t.values as Row)?.[String(m.code)] ?? 0)}
                     </TD>
                   ))}
-                  <TD className="border-t-2 border-border text-2xs text-text-subtle">
+                  <TD tone="subtle" className="border-t-2 border-border">
                     over {Number(t.return_days ?? 0)} return day
                     {Number(t.return_days ?? 0) === 1 ? '' : 's'}
                   </TD>
@@ -1960,10 +1960,10 @@ function ControlPoints({ village, canManage }: { village: Row; canManage: boolea
                       </div>
                     ) : null}
                   </TD>
-                  <TD className="text-right font-mono text-2xs tabular-nums">
+                  <TD mono className="text-right tabular-nums">
                     {formatCoordinate(Number(g.latitude), 'lat')}
                   </TD>
-                  <TD className="text-right font-mono text-2xs tabular-nums">
+                  <TD mono className="text-right tabular-nums">
                     {formatCoordinate(Number(g.longitude), 'lng')}
                   </TD>
                   <TD className="text-right tabular-nums">
@@ -1971,7 +1971,7 @@ function ControlPoints({ village, canManage }: { village: Row; canManage: boolea
                       ? <span className="text-text-subtle">—</span>
                       : `${Number(g.elevation_m)} m`}
                   </TD>
-                  <TD className="text-right font-mono text-2xs tabular-nums">
+                  <TD mono className="text-right tabular-nums">
                     {g.easting_m === null || g.easting_m === undefined ? (
                       <span className="font-sans text-text-subtle">—</span>
                     ) : (
@@ -1982,7 +1982,7 @@ function ControlPoints({ village, canManage }: { village: Row; canManage: boolea
                       </>
                     )}
                   </TD>
-                  <TD className="text-2xs text-text-muted">
+                  <TD tone="muted">
                     {g.remarks ? String(g.remarks) : '—'}
                     {((g.warnings as GcpWarning[]) ?? []).map((wn) => (
                       <div key={wn} className="text-warning">{GCP_WARNING_NOTES[wn]}</div>

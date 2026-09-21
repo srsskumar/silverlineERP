@@ -603,13 +603,13 @@ function ImportResult({ result }: { result: Row }) {
               {problems.slice(0, 50).map((r) => (
                 <TR key={r.row}>
                   <TD className="tabular-nums">{r.row}</TD>
-                  <TD className="font-mono text-2xs">{r.village_code ?? '—'}</TD>
+                  <TD mono>{r.village_code ?? '—'}</TD>
                   <TD>
                     <Badge tone={r.status === 'REJECTED' ? 'danger' : 'neutral'}>
                       {r.status === 'REJECTED' ? 'Rejected' : 'Already listed'}
                     </Badge>
                   </TD>
-                  <TD className="text-2xs text-text-muted">{r.message}</TD>
+                  <TD tone="muted">{r.message}</TD>
                 </TR>
               ))}
             </TBody>

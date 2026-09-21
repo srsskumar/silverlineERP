@@ -181,7 +181,7 @@ export default function ApprovalsPage() {
                             <p className="text-2xs text-text-subtle">{r.project_code}</p>
                           ) : null}
                         </TD>
-                        <TD className="text-text-muted">{r.requested_by_username ?? '—'}</TD>
+                        <TD tone="muted">{r.requested_by_username ?? '—'}</TD>
                         <TD align="right" className="text-text-muted">{money(r.amount)}</TD>
                         <TD>
                           {tab === 'inbox' ? (
@@ -193,7 +193,7 @@ export default function ApprovalsPage() {
                             <StatusBadge status={r.status} />
                           )}
                         </TD>
-                        <TD className="text-2xs text-text-subtle">
+                        <TD tone="subtle">
                           {r.sequence ?? r.current_sequence
                             ? `Level ${r.sequence ?? r.current_sequence}`
                             : '—'}

@@ -80,15 +80,42 @@ export function TH({
   );
 }
 
+/**
+ * A cell, at the one size a table row is written in.
+ *
+ * `tone` rather than a size class. Sixty-two call sites used to set their own
+ * — text-xs here, text-2xs there, picked by eye — so a single row could carry
+ * three different sizes across its columns and two tables on one screen never
+ * matched. What those sites actually meant was *this column matters less*,
+ * which is a question about emphasis and belongs to the cell, not to whoever
+ * happened to be writing that screen.
+ *
+ * The size is fixed by the table. Colour is what changes.
+ */
 export function TD({
   className,
   align = 'left',
+  tone = 'default',
+  mono = false,
   ...rest
-}: React.TdHTMLAttributes<HTMLTableCellElement> & { align?: 'left' | 'right' | 'center' }) {
+}: React.TdHTMLAttributes<HTMLTableCellElement> & {
+  align?: 'left' | 'right' | 'center';
+  /** How much weight this column carries beside the ones around it. */
+  tone?: 'default' | 'muted' | 'subtle' | 'danger' | 'warning' | 'success';
+  /** Codes, references and identifiers, which are compared character by character. */
+  mono?: boolean;
+}) {
   return (
     <td
       className={cn(
-        'h-row px-3 text-text',
+        'h-row px-3',
+        tone === 'default' && 'text-text',
+        tone === 'muted' && 'text-text-muted',
+        tone === 'subtle' && 'text-text-subtle',
+        tone === 'danger' && 'text-danger',
+        tone === 'warning' && 'text-warning',
+        tone === 'success' && 'text-success',
+        mono && 'font-mono',
         align === 'right' && 'text-right tabular',
         align === 'center' && 'text-center',
         className,

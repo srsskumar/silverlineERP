@@ -176,3 +176,27 @@ describe('one formatter, not three', () => {
       + offenders.join('\n')).toEqual([]);
   });
 });
+
+describe('one size in a table row', () => {
+  /*
+   * Sixty-two cells used to set their own text size — text-xs here, text-2xs
+   * there, chosen by eye — so a single row carried three sizes across its
+   * columns and no two tables on a screen matched. The size belongs to the
+   * table; a cell says how much it *matters* and the table decides how that
+   * looks.
+   */
+  it('lets no cell choose its own text size', () => {
+    const offenders: string[] = [];
+    const root = fileURLToPath(new URL('../', import.meta.url));
+    for (const file of sources(root)) {
+      if (file.includes('/components/ui/Table.tsx')) continue;
+      const body = readFileSync(file, 'utf8');
+      for (const m of body.matchAll(/<T[DH][^>]*?className=(?:"([^"]*)"|\{`([^`]*)`)/g)) {
+        const cls = m[1] ?? m[2] ?? '';
+        const size = cls.match(/\btext-(2xs|xs|sm|base|lg)\b/);
+        if (size) offenders.push(`${file.split(root)[1]}: ${size[0]}`);
+      }
+    }
+    expect(offenders, `use tone=, not a size:\n${offenders.join('\n')}`).toEqual([]);
+  });
+});

@@ -206,7 +206,7 @@ function Renewals({
                         <div className="mt-0.5 text-2xs text-warning">{consequence(d)}</div>
                       ) : null}
                     </TD>
-                    <TD className="text-xs text-text-muted">{OWNER_LABELS[d.owner_type] ?? d.owner_type}</TD>
+                    <TD tone="muted">{OWNER_LABELS[d.owner_type] ?? d.owner_type}</TD>
                     <TD>{day(d.expires_on)}</TD>
                     <TD>
                       <span className={
@@ -402,13 +402,13 @@ function Register({
                       <div className="mt-0.5 text-2xs text-text-subtle">{retentionNote(d.retention)}</div>
                     ) : null}
                   </TD>
-                  <TD className="text-xs text-text-muted">
+                  <TD tone="muted">
                     {CATEGORY_LABELS[d.category] ?? d.category}
                   </TD>
-                  <TD className="text-xs text-text-muted">
+                  <TD tone="muted">
                     {OWNER_LABELS[d.owner_type] ?? d.owner_type}
                   </TD>
-                  <TD className="font-mono text-2xs">
+                  <TD mono>
                     {d.restricted ? (
                       // Listed so its expiry can still be chased; the detail is
                       // withheld rather than the whole row hidden.

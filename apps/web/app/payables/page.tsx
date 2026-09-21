@@ -269,7 +269,7 @@ function InvoiceDetail({
           <TBody>
             {invoices.map((i) => (
               <TR key={String(i.invoice_id)}>
-                <TD className="font-mono text-2xs">{i.serial_number}</TD>
+                <TD mono>{i.serial_number}</TD>
                 <TD>{day(i.contractual_due_date)}</TD>
                 <TD>
                   {i.is_msme ? (
@@ -443,7 +443,7 @@ function PaymentRuns({ perms }: { perms: { permissions?: string[] } }) {
               {runs.data.map((r) => (
                 <React.Fragment key={String(r.id)}>
                   <TR>
-                    <TD className="font-mono text-2xs">{r.run_no}</TD>
+                    <TD mono>{r.run_no}</TD>
                     <TD>{day(r.run_date)}</TD>
                     <TD>{day(r.due_through)}</TD>
                     <TD className="text-right tabular-nums">{r.line_count}</TD>
@@ -528,7 +528,7 @@ function RunLines({ id }: { id: string }) {
             {lines.map((l) => (
               <TR key={String(l.id)}>
                 <TD>{l.vendor_name}</TD>
-                <TD className="font-mono text-2xs">{l.serial_number}</TD>
+                <TD mono>{l.serial_number}</TD>
                 <TD>
                   {day(l.statutory_due_date ?? l.contractual_due_date)}
                   {l.is_msme ? <Badge tone="info" className="ml-1">MSME</Badge> : null}

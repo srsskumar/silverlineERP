@@ -884,7 +884,7 @@ function Progress({
                       </span>
                     </TD>
                     {scored.map((m) => (
-                      <TD key={m.code} className="text-right text-xs tabular-nums">
+                      <TD key={m.code} align="right" className="tabular-nums">
                         <div>{count(r.measures?.[m.code]?.done)}</div>
                         <div className="text-2xs text-text-subtle">
                           {pct(r.measures?.[m.code]?.pct)}
@@ -1209,16 +1209,16 @@ function PeriodReport({
                         ) : null}
                       </TD>
                       <TD className="text-right tabular-nums text-text">{fmt(cmp.current)}</TD>
-                      <TD className="text-right tabular-nums text-text-muted">
+                      <TD tone="muted" className="text-right tabular-nums">
                         {fmt(cmp.previous)}
                       </TD>
-                      <TD className="text-right text-2xs">
+                      <TD className="text-right">
                         <span className={cmp.direction === 'UP' ? 'text-success'
                           : cmp.direction === 'DOWN' ? 'text-warning' : 'text-text-subtle'}>
                           {changeHint(cmp as any) || '—'}
                         </span>
                       </TD>
-                      <TD className="text-right tabular-nums text-text-muted">
+                      <TD tone="muted" className="text-right tabular-nums">
                         {fmt(cum.done)}
                         {cum.pct !== undefined && cum.pct !== null ? (
                           <span className="ml-1 text-2xs text-text-subtle">{pct(cum.pct)}</span>
@@ -2096,7 +2096,7 @@ function RoverIdleDays({
                       <span className="ml-1 text-2xs text-text-muted">{String(r.remarks)}</span>
                     ) : null}
                   </TD>
-                  <TD className="text-xs text-text-muted">{r.employee_name ?? '—'}</TD>
+                  <TD tone="muted">{r.employee_name ?? '—'}</TD>
                 </TR>
               ))}
             </TBody>
@@ -2244,13 +2244,13 @@ function Bottlenecks({ projectId, canForecast }: { projectId: string; canForecas
                 {rows.map((b) => (
                   <TR key={b.villageId}>
                     <TD className="font-medium text-text">{b.village}</TD>
-                    <TD className="text-xs text-text-muted">{b.mandal ?? '—'}</TD>
+                    <TD tone="muted">{b.mandal ?? '—'}</TD>
                     <TD>
                       <Badge tone={villageStatusTone(b.status)}>
                         {VILLAGE_STATUS_LABELS[b.status] ?? b.status}
                       </Badge>
                     </TD>
-                    <TD className="text-xs text-text-muted">
+                    <TD tone="muted">
                       {b.currentStageCode ? stageLabel(b.currentStageCode) : '—'}
                     </TD>
                     <TD>
@@ -2264,7 +2264,7 @@ function Bottlenecks({ projectId, canForecast }: { projectId: string; canForecas
                         ))}
                       </ul>
                     </TD>
-                    <TD className="text-right font-semibold tabular-nums text-danger">
+                    <TD tone="danger" className="text-right font-semibold tabular-nums">
                       {b.severityDays}
                     </TD>
                   </TR>
@@ -2721,7 +2721,7 @@ function Villages({
                         />
                       </TD>
                     ) : null}
-                    <TD className="text-right tabular-nums text-2xs text-text-subtle">
+                    <TD tone="subtle" className="text-right tabular-nums">
                       {index + 1}
                     </TD>
                     <TD>
@@ -2753,10 +2753,10 @@ function Villages({
                         </span>
                       ) : null}
                     </TD>
-                    <TD className="text-xs text-text-muted">{v.district_name ?? '—'}</TD>
-                    <TD className="text-xs text-text-muted">{v.mandal_name ?? '—'}</TD>
+                    <TD tone="muted">{v.district_name ?? '—'}</TD>
+                    <TD tone="muted">{v.mandal_name ?? '—'}</TD>
                     <TD className="text-right tabular-nums">{acres(v.total_extent_ac)}</TD>
-                    <TD className="text-right tabular-nums text-text-muted">
+                    <TD tone="muted" className="text-right tabular-nums">
                       {sqKm(v.total_extent_sq_km)}
                     </TD>
                     <TD className="text-right tabular-nums">
@@ -2809,7 +2809,7 @@ function Villages({
                         );
                       })()}
                     </TD>
-                    <TD className="text-xs text-text-muted">{v.assignee_name ?? '—'}</TD>
+                    <TD tone="muted">{v.assignee_name ?? '—'}</TD>
                     <TD className="text-right">
                       {/*
                         * The work, reachable from the list.
@@ -3492,7 +3492,7 @@ function ControlList({
           <TBody>
             {rows.map((g) => (
               <TR key={String(g.id)}>
-                <TD className="text-xs text-text-muted">{g.mandal_name ?? '—'}</TD>
+                <TD tone="muted">{g.mandal_name ?? '—'}</TD>
                 <TD>
                   {onOpenVillage ? (
                     <button type="button"
@@ -3506,10 +3506,10 @@ function ControlList({
                   )}
                 </TD>
                 <TD className="text-text">{String(g.point_code)}</TD>
-                <TD className="text-right font-mono text-2xs tabular-nums">
+                <TD mono className="text-right tabular-nums">
                   {formatCoordinate(Number(g.latitude), 'lat')}
                 </TD>
-                <TD className="text-right font-mono text-2xs tabular-nums">
+                <TD mono className="text-right tabular-nums">
                   {formatCoordinate(Number(g.longitude), 'lng')}
                 </TD>
                 <TD className="text-right tabular-nums">
@@ -3517,7 +3517,7 @@ function ControlList({
                     ? <span className="text-text-subtle">—</span>
                     : `${Number(g.elevation_m)} m`}
                 </TD>
-                <TD className="text-right font-mono text-2xs tabular-nums">
+                <TD mono className="text-right tabular-nums">
                   {g.easting_m === null || g.easting_m === undefined ? (
                     <span className="font-sans text-text-subtle">—</span>
                   ) : (
@@ -3528,7 +3528,7 @@ function ControlList({
                     </>
                   )}
                 </TD>
-                <TD className="text-2xs text-text-muted">
+                <TD tone="muted">
                   {g.remarks ? String(g.remarks) : '—'}
                   {((g.warnings as string[]) ?? []).map((wn) => (
                     <div key={wn} className="text-warning">
@@ -3741,7 +3741,7 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
         <TBody>
           {rows.map((r, i) => (
             <TR key={`${r.village}-${i}`}>
-              <TD className="text-xs text-text-muted">{r.mandal ?? '—'}</TD>
+              <TD tone="muted">{r.mandal ?? '—'}</TD>
               <TD className="font-medium text-text">{r.village}</TD>
               <TD className="text-right tabular-nums">{acres(r.extent_ac)}</TD>
               <TD className="text-right tabular-nums">{sqKm(r.extent_sq_km)}</TD>
@@ -3777,14 +3777,14 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
                   );
                 })()}
               </TD>
-              <TD className="text-2xs text-text-subtle">
+              <TD tone="subtle">
                 {r.gt_started_on ? day(r.gt_started_on) : '—'}
                 {r.gt_completed_on ? ` → ${day(r.gt_completed_on)}` : ''}
               </TD>
               {/* Who is on it, by employee name. The daily entry records a
                   team count; the task records the person. */}
-              <TD className="text-xs text-text-muted">{r.assignee_name ?? '—'}</TD>
-              <TD className="text-right text-2xs">
+              <TD tone="muted">{r.assignee_name ?? '—'}</TD>
+              <TD className="text-right">
                 {Number(r.rovers_allocated ?? 0) === 0
                   && Number(r.rover_days_used ?? 0) === 0 ? (
                   <span className="text-text-subtle">—</span>
@@ -3803,7 +3803,7 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
                   </>
                 )}
               </TD>
-              <TD className="text-right text-2xs">
+              <TD className="text-right">
                 <div className="text-text">{count(r.crew_assigned)}</div>
                 {Number(r.return_days ?? 0) > 0 ? (
                   <div className="text-text-subtle">
@@ -3819,7 +3819,7 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
                 * and "the department sent nobody for six days" is usually
                 * the reason.
                 */}
-              <TD className="text-right text-2xs">
+              <TD className="text-right">
                 {r.gt_govt_staff_allocated == null && !r.attendance_days ? (
                   <span className="text-text-subtle">—</span>
                 ) : (

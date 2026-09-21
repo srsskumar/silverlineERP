@@ -225,9 +225,9 @@ function AgingTable({ rows }: { rows: Row[] }) {
                         {r.claim_no}
                       </a>
                     </TD>
-                    <TD className="text-text-muted">{r.claimant_username ?? '—'}</TD>
+                    <TD tone="muted">{r.claimant_username ?? '—'}</TD>
                     <TD align="right" className="text-text-muted">{money(r.total_claimed)}</TD>
-                    <TD className="text-2xs text-text-subtle">{day(r.submitted_at)}</TD>
+                    <TD tone="subtle">{day(r.submitted_at)}</TD>
                     <TD>
                       <Badge tone={b.tone} size="sm">{days} day{days === 1 ? '' : 's'}</Badge>
                       <span className="ml-1.5 text-2xs text-text-subtle">{b.label}</span>
@@ -287,12 +287,12 @@ function ExceptionTable({ rows }: { rows: Row[] }) {
                     </a>
                     <p className="text-2xs text-text-subtle">{day(r.decided_at)}</p>
                   </TD>
-                  <TD className="text-text-muted">{r.claimant_username ?? '—'}</TD>
+                  <TD tone="muted">{r.claimant_username ?? '—'}</TD>
                   <TD align="right" className="text-text-muted">{money(r.total_allowed)}</TD>
                   <TD align="right" className="text-text">{money(r.approved_amount)}</TD>
                   <TD align="right" className="text-warning">{money(r.total_excess)}</TD>
                   <TD className="text-text">{r.override_by_username ?? '—'}</TD>
-                  <TD className="max-w-64 whitespace-normal text-2xs text-text-muted">
+                  <TD tone="muted" className="max-w-64 whitespace-normal">
                     {r.override_reason ?? '—'}
                   </TD>
                 </TR>

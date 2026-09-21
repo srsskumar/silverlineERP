@@ -199,7 +199,7 @@ function RaBills({ projectId, onOpen }: { projectId: string; onOpen: (id: string
                       <p className="font-mono text-2xs text-text-subtle">{b.measurement_book_ref}</p>
                     ) : null}
                   </TD>
-                  <TD className="text-2xs text-text-subtle">
+                  <TD tone="subtle">
                     {day(b.period_from)} → {day(b.period_to)}
                   </TD>
                   <TD align="right" className="text-text-muted">{money(b.cumulative_value)}</TD>
@@ -409,7 +409,7 @@ function Boq({ projectId }: { projectId: string }) {
             <TBody>
               {rows.map((i) => (
                 <TR key={String(i.id)}>
-                  <TD className="font-mono text-2xs text-text-subtle">{i.item_code}</TD>
+                  <TD mono tone="subtle">{i.item_code}</TD>
                   <TD className="text-text">{i.description}</TD>
                   <TD align="right" className="text-text-muted">{Number(i.quantity)} {i.unit}</TD>
                   <TD align="right" className="text-text-muted">{money(i.rate)}</TD>
@@ -522,8 +522,8 @@ function Retention({ projectId }: { projectId: string }) {
                         {String(e.entry_type).toLowerCase()}
                       </Badge>
                     </TD>
-                    <TD className="text-2xs text-text-subtle">{day(e.created_at)}</TD>
-                    <TD className="text-text-muted">{e.reason ?? '—'}</TD>
+                    <TD tone="subtle">{day(e.created_at)}</TD>
+                    <TD tone="muted">{e.reason ?? '—'}</TD>
                     <TD align="right" className="text-text">{money(e.amount)}</TD>
                   </TR>
                 ))}
@@ -681,14 +681,14 @@ function CostPosition({ projectId }: { projectId: string }) {
               <TBody>
                 {(entries.data ?? []).map((e) => (
                   <TR key={String(e.id)}>
-                    <TD className="text-2xs text-text-subtle">{day(e.entry_date)}</TD>
+                    <TD tone="subtle">{day(e.entry_date)}</TD>
                     <TD className="text-text">{e.cost_head_name}</TD>
                     <TD>
                       <Badge tone={e.nature === 'COMMITTED' ? 'warning' : 'neutral'} size="sm">
                         {String(e.source_type).replaceAll('_', ' ').toLowerCase()}
                       </Badge>
                     </TD>
-                    <TD className="text-2xs text-text-muted">{e.narration ?? '—'}</TD>
+                    <TD tone="muted">{e.narration ?? '—'}</TD>
                     <TD align="right" className={Number(e.amount) < 0 ? 'text-success' : 'text-text'}>
                       {money(e.amount)}
                     </TD>
@@ -796,7 +796,7 @@ function MeasuredProposal({ projectId }: { projectId: string }) {
                       <div className="text-text">{String(l.item_code)}</div>
                       <div className="text-2xs text-text-subtle">{String(l.description)}</div>
                     </TD>
-                    <TD className="text-xs text-text-muted">
+                    <TD tone="muted">
                       {String(l.measure_label ?? l.measure_code)}
                       {l.stage_label ? (
                         <div className="text-2xs text-text-subtle">
@@ -809,13 +809,13 @@ function MeasuredProposal({ projectId }: { projectId: string }) {
                         </div>
                       ) : null}
                     </TD>
-                    <TD className="text-right tabular-nums text-text-muted">
+                    <TD tone="muted" className="text-right tabular-nums">
                       {Number(l.measured_quantity).toLocaleString('en-IN')} {String(l.measure_unit)}
                     </TD>
                     <TD className="text-right tabular-nums">
                       {Number(l.cumulativeQuantity).toLocaleString('en-IN')} {String(l.boq_unit)}
                     </TD>
-                    <TD className="text-right tabular-nums text-text-muted">
+                    <TD tone="muted" className="text-right tabular-nums">
                       {Number(l.previousQuantity).toLocaleString('en-IN')}
                     </TD>
                     <TD className="text-right tabular-nums font-medium">

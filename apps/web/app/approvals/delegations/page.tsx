@@ -229,8 +229,8 @@ export default function DelegationsPage() {
                       <TR key={String(d.id)}>
                         <TD className="text-text">{d.from_username}</TD>
                         <TD className="text-text">{d.to_username}</TD>
-                        <TD className="text-text-muted">{day(from)} → {day(to)}</TD>
-                        <TD className="text-2xs text-text-subtle">
+                        <TD tone="muted">{day(from)} → {day(to)}</TD>
+                        <TD tone="subtle">
                           {types.length === 0
                             ? 'All documents'
                             : types.map((t) => DOCUMENT_TYPE_LABELS[t] ?? t).join(', ')}

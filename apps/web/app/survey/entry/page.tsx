@@ -805,8 +805,8 @@ function RecentEntries({ villageId }: { villageId: string }) {
                   </TD>
                 ))}
                 {/* The employee name, not the sign-in name. */}
-                <TD className="text-xs text-text-muted">{r.recorded_by_name ?? r.recorded_by}</TD>
-                <TD className="text-2xs text-text-subtle">{r.notes ?? ''}</TD>
+                <TD tone="muted">{r.recorded_by_name ?? r.recorded_by}</TD>
+                <TD tone="subtle">{r.notes ?? ''}</TD>
                 <TD className="text-right">
                   <Button type="button" variant="ghost" size="sm"
                     onClick={() => setAmending(amending === String(r.id) ? null : String(r.id))}>

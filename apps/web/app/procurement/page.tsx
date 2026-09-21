@@ -166,8 +166,8 @@ export default function ProcurementPage() {
                             <span className="font-mono text-xs font-medium text-text">{r.requisition_no}</span>
                             <p className="truncate text-2xs text-text-subtle">{r.justification}</p>
                           </TD>
-                          <TD className="text-2xs text-text-subtle">{r.project_code ?? '—'}</TD>
-                          <TD className="text-text-muted">{r.requested_by_username ?? '—'}</TD>
+                          <TD tone="subtle">{r.project_code ?? '—'}</TD>
+                          <TD tone="muted">{r.requested_by_username ?? '—'}</TD>
                           <TD align="right" className="text-text-muted">{money(r.estimated_value)}</TD>
                           <TD><StatusBadge status={r.status} /></TD>
                         </>
@@ -179,8 +179,8 @@ export default function ProcurementPage() {
                               <p className="text-2xs text-success">Acknowledged {day(r.acknowledged_on)}</p>
                             ) : null}
                           </TD>
-                          <TD className="text-text-muted">{r.vendor_name ?? '—'}</TD>
-                          <TD className="text-2xs text-text-subtle">
+                          <TD tone="muted">{r.vendor_name ?? '—'}</TD>
+                          <TD tone="subtle">
                             {day(r.promised_delivery_date ?? r.delivery_date)}
                           </TD>
                           <TD align="right" className="text-text-muted">{money(r.total_value)}</TD>
@@ -192,7 +192,7 @@ export default function ProcurementPage() {
                             <span className="font-mono text-xs font-medium text-text">{r.rfq_no}</span>
                             <p className="truncate text-2xs text-text-subtle">{r.scope ?? ''}</p>
                           </TD>
-                          <TD className="text-2xs text-text-subtle">{day(r.due_date)}</TD>
+                          <TD tone="subtle">{day(r.due_date)}</TD>
                           <TD align="right" className="text-text-muted">{r.invited_count ?? '—'}</TD>
                           <TD align="right" className="text-text-muted">{r.quote_count ?? 0}</TD>
                           <TD><StatusBadge status={r.status} /></TD>
@@ -203,7 +203,7 @@ export default function ProcurementPage() {
                             <span className="font-mono text-xs text-text">{r.return_no}</span>
                             <p className="text-2xs text-text-subtle">against {r.grn_no}</p>
                           </TD>
-                          <TD className="text-2xs text-text-muted">
+                          <TD tone="muted">
                             {String(r.reason ?? '').replaceAll('_', ' ').toLowerCase()}
                           </TD>
                           <TD>
@@ -211,7 +211,7 @@ export default function ProcurementPage() {
                               {String(r.resolution ?? '').replaceAll('_', ' ').toLowerCase()}
                             </Badge>
                           </TD>
-                          <TD className="text-2xs text-text-subtle">{day(r.return_date)}</TD>
+                          <TD tone="subtle">{day(r.return_date)}</TD>
                           <TD />
                         </>
                       )}

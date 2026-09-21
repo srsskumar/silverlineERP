@@ -265,7 +265,7 @@ function BillDetail({ bills, clientId, asOf }: { bills: Row[]; clientId: string 
           <TBody>
             {bills.map((b) => (
               <TR key={String(b.bill_id)}>
-                <TD className="font-mono text-2xs">{b.bill_no}</TD>
+                <TD mono>{b.bill_no}</TD>
                 <TD>
                   <span className="text-text">{b.project_name}</span>
                   <span className="ml-1 text-2xs text-text-subtle">{b.project_code}</span>
@@ -332,7 +332,7 @@ function Statement({ clientId, to }: { clientId: string; to: string }) {
           <TBody>
             <TR>
               <TD />
-              <TD className="italic text-text-muted">Balance brought forward</TD>
+              <TD tone="muted" className="italic">Balance brought forward</TD>
               <TD />
               <TD />
               <TD className="text-right font-semibold tabular-nums">{money(d.opening)}</TD>
