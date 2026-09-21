@@ -1,6 +1,49 @@
 import { NAV_GROUPS, QUICK_CREATE } from '../lib/nav';
 import { describe, expect, it } from 'vitest';
 import { PERMISSIONS, hasPermission } from '../lib/permissions';
+import * as shared from '@silverline/shared';
+
+/**
+ * Every code this application checks must be one the server actually
+ * defines.
+ *
+ * The file these come from says so in its own header, and it was already
+ * wrong once: EMPLOYEE_UPDATE named an employee.update permission no role
+ * could hold, so the Edit button was invisible to every account in the
+ * system including SUPER_ADMIN -- a built feature nobody could reach. The
+ * failure is silent by construction, because a permission nobody holds
+ * fails closed and just hides the UI.
+ *
+ * The server's catalogue is assembled here rather than listed, so a module
+ * adding permissions next year is covered without anybody remembering to
+ * come back.
+ */
+const SERVER_PERMISSIONS: ReadonlySet<string> = (() => {
+  const codes = new Set<string>();
+  for (const [name, value] of Object.entries(shared)) {
+    if (!/PERMISSIONS$/.test(name) || !Array.isArray(value)) continue;
+    for (const code of value as unknown[]) if (typeof code === 'string') codes.add(code);
+  }
+  return codes;
+})();
+
+describe('the mirrored permission codes', () => {
+  it('found the server catalogue at all -- an empty set would pass everything', () => {
+    expect(SERVER_PERMISSIONS.size).toBeGreaterThan(100);
+  });
+
+  it('names only codes the server defines', () => {
+    const unknown = Object.entries(PERMISSIONS)
+      .filter(([, code]) => !SERVER_PERMISSIONS.has(code as string))
+      .map(([name, code]) => `${name} (${String(code)})`);
+    expect(unknown).toEqual([]);
+  });
+
+  it('carries the view-as permission, which the account menu gates on', () => {
+    expect(PERMISSIONS.ADMIN_IMPERSONATE).toBe('admin.impersonate');
+    expect(SERVER_PERMISSIONS.has(PERMISSIONS.ADMIN_IMPERSONATE)).toBe(true);
+  });
+});
 
 describe('hasPermission', () => {
   it('returns true when the holder has the code', () => {

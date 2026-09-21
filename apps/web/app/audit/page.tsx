@@ -123,6 +123,8 @@ export default function AuditPage() {
             Entries cannot be edited or deleted, by anybody. What is here is what happened.
           </p>
 
+          <ViewAsRegister />
+
           {events.isLoading ? <Skeleton className="h-64" /> : null}
           {events.isError ? (
             <ErrorCard error={events.error} onRetry={() => events.refetch()} />
@@ -161,6 +163,15 @@ export default function AuditPage() {
                             ? personLabel(peopleIdx, String(r.actor_id))
                             : <span className="text-text-subtle">the system</span>}
                         </span>
+                        {/* §075. The row already named whoever the system
+                            believed was acting; this says when somebody
+                            else was holding their session at the time.
+                            Without it the trail quietly misattributes. */}
+                        {r.impersonator_username ? (
+                          <div className="text-2xs text-warning">
+                            {String(r.impersonator_username)} was viewing as them
+                          </div>
+                        ) : null}
                         {r.actor_ip ? (
                           <div className="text-2xs text-text-subtle">{String(r.actor_ip)}</div>
                         ) : null}
@@ -257,4 +268,75 @@ function when(value: unknown): string {
   // The reader's own clock, which is the one they are comparing against.
   // One format across the application (lib/finance): DD-MMM-YYYY HH:MM.
   return dayTime(d);
+}
+
+/**
+ * Who has been looking through whose eyes (§075).
+ *
+ * Kept collapsed, because on most days it is empty and an empty table above
+ * the trail is noise. The count in the summary is the thing worth seeing
+ * without opening it.
+ */
+function ViewAsRegister() {
+  const register = useQuery({
+    queryKey: ['audit', 'view-as'],
+    queryFn: async () =>
+      (await apiRequestRaw('/api/v1/audit/view-as?limit=50')).body as Row,
+  });
+  const rows: Row[] = register.data?.data ?? [];
+  const live = rows.filter((r) => r.live).length;
+
+  if (register.isLoading || rows.length === 0) return null;
+
+  return (
+    <details className="rounded-md border border-border bg-surface">
+      <summary className="cursor-pointer px-4 py-2 text-sm text-text">
+        View-as sessions
+        <span className="ml-2 text-xs text-text-muted">
+          {rows.length} recorded
+          {live > 0 ? <span className="text-warning"> · {live} open now</span> : null}
+        </span>
+      </summary>
+      <div className="overflow-x-auto border-t border-border">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border text-left text-xs text-text-muted">
+              <th className="px-4 py-2">Started</th>
+              <th className="px-4 py-2">Who</th>
+              <th className="px-4 py-2">Viewed as</th>
+              <th className="px-4 py-2">Why</th>
+              <th className="px-4 py-2">Changes made</th>
+              <th className="px-4 py-2">State</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={String(r.id)} className="border-b border-border align-top last:border-0">
+                <td className="whitespace-nowrap px-4 py-2 text-text-muted tabular-nums">
+                  {when(r.started_at)}
+                </td>
+                <td className="px-4 py-2 text-text">{String(r.actor_username)}</td>
+                <td className="px-4 py-2 text-text">{String(r.subject_username)}</td>
+                <td className="px-4 py-2 text-2xs text-text-muted">{String(r.reason ?? '—')}</td>
+                <td className="px-4 py-2 tabular-nums">
+                  {/* A session that looked and left is ordinary. One that
+                      changed things is the one to ask about. */}
+                  {Number(r.writes) > 0
+                    ? <Badge tone="warning">{String(r.writes)}</Badge>
+                    : <span className="text-text-subtle">none</span>}
+                </td>
+                <td className="px-4 py-2 text-2xs">
+                  {r.live
+                    ? <Badge tone="warning">open now</Badge>
+                    : <span className="text-text-subtle">
+                        {r.ended_at ? `ended ${when(r.ended_at)}` : 'expired'}
+                      </span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  );
 }

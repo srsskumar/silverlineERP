@@ -389,3 +389,108 @@ describe("the forbidden list names real routes", () => {
     }
   });
 });
+
+/*
+ * The register and the trail are the accountability half of this feature.
+ * Written because they shipped invisible: impersonator_id was recorded on
+ * every mutation and selected by nothing, and impersonation_sessions had no
+ * endpoint at all, so the only way to read either was psql.
+ */
+describe("reading it back", () => {
+  it("names the administrator on the trail, next to whoever the system thought was acting", async () => {
+    const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
+    const subjectId = await createUser(`imp_trail_${randomUUID().slice(0, 8)}`, ["ADMIN"]);
+    const token = (await viewAs(admin, subjectId)).json() as { access_token: string };
+    const borrowed = { authorization: `Bearer ${token.access_token}` };
+
+    const created = await app.inject({
+      method: "POST", url: "/api/v1/org/units", headers: borrowed,
+      payload: { type: "district", code: `TRL${Date.now()}`, name: "Trail District" },
+    });
+    expect(created.statusCode).toBe(201);
+
+    const trail = await app.inject({ method: "GET", url: "/api/v1/audit?limit=50", headers: admin });
+    expect(trail.statusCode).toBe(200);
+    const entry = (trail.json() as { data: Array<Record<string, unknown>> }).data
+      .find((r) => r.entity_id === (created.json() as { id: string }).id);
+    expect(entry?.actor_id).toBe(subjectId);
+    expect(entry?.impersonator_username).toBe(ADMIN_USERNAME);
+  });
+
+  it("leaves the impersonator blank on ordinary work", async () => {
+    const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
+    const created = await app.inject({
+      method: "POST", url: "/api/v1/org/units", headers: admin,
+      payload: { type: "district", code: `PLN${Date.now()}`, name: "Plain District" },
+    });
+    const trail = await app.inject({ method: "GET", url: "/api/v1/audit?limit=50", headers: admin });
+    const entry = (trail.json() as { data: Array<Record<string, unknown>> }).data
+      .find((r) => r.entity_id === (created.json() as { id: string }).id);
+    expect(entry?.impersonator_id).toBeNull();
+    expect(entry?.impersonator_username).toBeNull();
+  });
+
+  it("keeps the audit filters working now that the query carries a join", async () => {
+    const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
+    await app.inject({
+      method: "POST", url: "/api/v1/org/units", headers: admin,
+      payload: { type: "district", code: `FLT${Date.now()}`, name: "Filter District" },
+    });
+    const filtered = await app.inject({
+      method: "GET", url: "/api/v1/audit?limit=10&entity=org_unit", headers: admin,
+    });
+    expect(filtered.statusCode).toBe(200);
+    const rows = (filtered.json() as { data: Array<{ entity_type: string }> }).data;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.entity_type === "org_unit")).toBe(true);
+  });
+
+  it("serves the register, with the reason and whether anything was changed", async () => {
+    const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
+    const subjectName = `imp_reg2_${randomUUID().slice(0, 8)}`;
+    const subjectId = await createUser(subjectName, ["EMPLOYEE"]);
+    await viewAs(admin, subjectId);
+
+    const open = await app.inject({ method: "GET", url: "/api/v1/audit/view-as", headers: admin });
+    expect(open.statusCode).toBe(200);
+    const live = (open.json() as { data: Array<Record<string, unknown>> }).data
+      .find((r) => r.subject_username === subjectName);
+    expect(live?.actor_username).toBe(ADMIN_USERNAME);
+    expect(live?.reason).toBe(REASON);
+    expect(live?.live).toBe(true);
+    expect(live?.writes).toBe(0);
+
+    await app.inject({ method: "POST", url: "/api/v1/auth/impersonate/stop", headers: admin });
+    const closed = await app.inject({ method: "GET", url: "/api/v1/audit/view-as", headers: admin });
+    const done = (closed.json() as { data: Array<Record<string, unknown>> }).data
+      .find((r) => r.subject_username === subjectName);
+    expect(done?.live).toBe(false);
+    expect(done?.ended_at).not.toBeNull();
+  });
+
+  it("counts what was changed during the session", async () => {
+    const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
+    const subjectName = `imp_cnt_${randomUUID().slice(0, 8)}`;
+    const subjectId = await createUser(subjectName, ["ADMIN"]);
+    const token = (await viewAs(admin, subjectId)).json() as { access_token: string };
+    const borrowed = { authorization: `Bearer ${token.access_token}` };
+    for (const n of [1, 2]) {
+      const res = await app.inject({
+        method: "POST", url: "/api/v1/org/units", headers: borrowed,
+        payload: { type: "district", code: `CNT${n}${Date.now()}`, name: `Counted ${n}` },
+      });
+      expect(res.statusCode).toBe(201);
+    }
+    const reg = await app.inject({ method: "GET", url: "/api/v1/audit/view-as", headers: admin });
+    const row = (reg.json() as { data: Array<Record<string, unknown>> }).data
+      .find((r) => r.subject_username === subjectName);
+    expect(row?.writes).toBe(2);
+  });
+
+  it("is not open to somebody who cannot read the trail", async () => {
+    const name = `imp_noaudit_${randomUUID().slice(0, 8)}`;
+    await createUser(name, ["EMPLOYEE"]);
+    const employee = await headersFor(name, "Pass1234!");
+    expect((await app.inject({ method: "GET", url: "/api/v1/audit/view-as", headers: employee })).statusCode).toBe(403);
+  });
+});

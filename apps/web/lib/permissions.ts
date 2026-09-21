@@ -13,6 +13,12 @@ export const PERMISSIONS = {
   USERS_MANAGE: 'users.manage',
   ROLES_MANAGE: 'roles.manage',
   AUDIT_READ: 'audit.read',
+  /*
+   * Holding another user's session to check what they can reach (§075).
+   * Administrators only -- it can write as somebody else, and there is no
+   * version of it that can only look.
+   */
+  ADMIN_IMPERSONATE: 'admin.impersonate',
   // S1 frozen contract codes (dot-style; backend enforces these).
   ORG_UNITS_READ: 'org.units.read',
   ORG_UNITS_MANAGE: 'org.units.manage',

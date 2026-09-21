@@ -113,7 +113,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
    * viewing as somebody -- the server refuses to chain sessions, so
    * offering it would be an invitation to an error message.
    */
-  const canViewAs = !!session && hasPermission({ permissions: session.permissions }, 'admin.impersonate');
+  const canViewAs = !!session && hasPermission({ permissions: session.permissions }, PERMISSIONS.ADMIN_IMPERSONATE);
   const impersonating = !!session?.impersonation;
 
   React.useEffect(() => {
