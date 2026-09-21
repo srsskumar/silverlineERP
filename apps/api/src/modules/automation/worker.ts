@@ -3,6 +3,7 @@ import {runPushDelivery} from "../jobs/push.js";
 import {runReportJobs} from "../jobs/reports.js";
 import {runScheduledJobs} from "../jobs/scheduled.js";
 import {runSurveyAlerts} from "../jobs/surveyAlerts.js";
+import {drainSurveyAlertMail} from "../jobs/surveyMail.js";
 import { createHmac } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { request } from 'node:https';
@@ -40,6 +41,9 @@ export async function runJobs(app:FastifyInstance,pool:Pool,jwtSecret:string):Pr
   // Survey alerts (§27). Failing here must not stop the rest of the pass:
   // the bottleneck report still shows everything these would have said.
   try{await runSurveyAlerts(pool);}catch(e){console.error('Survey alerts failed',(e as Error).message);}
+  // Finding what is wrong and telling somebody about it are separate passes:
+  // a mail relay having a bad afternoon must not stop the finding.
+  try{await drainSurveyAlertMail(pool);}catch(e){console.error('Survey alert mail failed',(e as Error).message);}
   await runReportJobs(app,pool,jwtSecret);
   const events=await pool.query('SELECT * FROM domain_events WHERE processed_at IS NULL AND attempts<8 AND next_attempt_at<=now() ORDER BY created_at LIMIT 25');
   for(const event of events.rows){

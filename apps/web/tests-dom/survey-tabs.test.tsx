@@ -191,7 +191,7 @@ const ROUTES: Array<[string, unknown]> = [
       raised_at: '2026-09-18T10:00:00Z', answer: null, answered_by_name: null,
       version: 1 },
   ]],
-  ['/alert-subscriptions', []],
+  ['/alert-subscriptions', []],  // meta is added by the mock below
   ['/progress', PROGRESS],
   ['/report', REPORT],
   ['/villages', [VILLAGE, {
@@ -237,7 +237,17 @@ beforeEach(() => {
     apiRequest: vi.fn(async () => ({ data: {} })),
     apiRequestRaw: vi.fn(async (path: string) => {
       for (const [fragment, body] of ROUTES) {
-        if (path.includes(fragment)) return { body: { data: body }, requestId: 't' };
+        if (path.includes(fragment)) {
+          return {
+            body: {
+              data: body,
+              // The alert screen reads whether anything can actually send.
+              ...(fragment === '/alert-subscriptions'
+                ? { meta: { mail_configured: false, queued: 7 } } : {}),
+            },
+            requestId: 't',
+          };
+        }
       }
       return { body: { data: [] }, requestId: 't' };
     }),
@@ -590,7 +600,11 @@ describe('the land survey screen', () => {
     // Nothing ticked is every alert, said out loud — an empty list otherwise
     // reads as "none" and somebody signs up for silence.
     expect(screen.getByText(/every alert goes/)).toBeInTheDocument();
-    expect(screen.getByText(/Delivery needs a mail server/)).toBeInTheDocument();
+    // The form must say that nothing can send yet — a form that takes an
+    // address and stays quiet about it lies by omission.
+    await waitFor(() => expect(
+      screen.getByText(/Nothing is configured to send these yet/)).toBeInTheDocument());
+    expect(screen.getByText(/7 are waiting now/)).toBeInTheDocument();
   });
 
   it('opens on the dashboard', async () => {

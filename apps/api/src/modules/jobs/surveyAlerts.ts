@@ -170,6 +170,80 @@ export async function runSurveyAlerts(
   })));
 
   let sent = 0;
+  /*
+   * 5. Ground truthing past its date with nobody having said why (§073).
+   *
+   * The module refuses another day's return until somebody explains, which
+   * only helps if somebody is filing. A village that has gone quiet *and*
+   * gone over is the one nobody is looking at, and it was advertised as a
+   * subscribable alert while nothing raised it — so anybody who chose it got
+   * silence, which is the one failure an alert must never have.
+   *
+   * Keyed on the date it was due, so moving the date and missing it again is
+   * news and the same missed date is not.
+   */
+  findings.push(...(await pool.query(
+    `SELECT sv.org_id, sv.id AS village_id, sv.survey_project_id AS project_id,
+            'survey.gt_unexplained:' || sv.id || ':' || vs.expected_end_on AS event_key,
+            ou.name AS village_name, vs.expected_end_on,
+            (CURRENT_DATE - vs.expected_end_on)::int AS days_over
+     FROM survey_village_stages vs
+     JOIN survey_stages s ON s.id = vs.stage_id AND s.code = 'GROUND_TRUTHING'
+     JOIN survey_villages sv ON sv.id = vs.survey_village_id
+     JOIN survey_projects p ON p.id = sv.survey_project_id
+     JOIN org_units ou ON ou.id = sv.village_id
+     WHERE p.status = 'ACTIVE'
+       AND vs.state IN ('IN_PROGRESS', 'ON_HOLD')
+       AND vs.expected_end_on IS NOT NULL
+       AND vs.expected_end_on < CURRENT_DATE
+       AND vs.variance_reason IS NULL
+     ORDER BY vs.expected_end_on LIMIT 100`)).rows.map(r => ({
+    org_id: r.org_id, village_id: r.village_id, project_id: r.project_id,
+    event_key: r.event_key, kind: 'GT_UNEXPLAINED',
+    title: `${r.village_name} is over its ground truthing date with no reason given`,
+    body: `It was due on ${r.expected_end_on instanceof Date
+      ? r.expected_end_on.toISOString().slice(0, 10) : r.expected_end_on}, `
+      + `${r.days_over} day${Number(r.days_over) === 1 ? '' : 's'} ago. `
+      + 'Nobody has recorded why, and the next return on this village will be refused '
+      + 'until somebody does.',
+  })));
+
+  /*
+   * 6. A question or concern raised and still unanswered (§073).
+   *
+   * The people who can answer are told the moment one is raised. This is the
+   * second telling, for the ones nobody picked up — and for the addresses
+   * that only ever hear by email.
+   *
+   * Keyed on the query, so it is one alert per question rather than one a day
+   * until somebody answers.
+   */
+  findings.push(...(await pool.query(
+    `SELECT q.org_id,
+            COALESCE(q.survey_village_id, sv_any.id) AS village_id,
+            q.survey_project_id AS project_id,
+            'survey.query_raised:' || q.id AS event_key,
+            q.kind, q.subject, ou.name AS village_name,
+            (CURRENT_DATE - q.raised_at::date)::int AS days_open
+     FROM survey_queries q
+     JOIN survey_projects p ON p.id = q.survey_project_id AND p.status = 'ACTIVE'
+     LEFT JOIN survey_villages sv ON sv.id = q.survey_village_id
+     LEFT JOIN org_units ou ON ou.id = sv.village_id
+     -- The alert hangs off a village, so a programme-wide question borrows
+     -- one rather than being dropped for want of a foreign key.
+     LEFT JOIN LATERAL (
+       SELECT id FROM survey_villages
+        WHERE survey_project_id = q.survey_project_id LIMIT 1) sv_any ON true
+     WHERE q.status = 'OPEN'
+     ORDER BY q.raised_at LIMIT 100`)).rows.filter(r => r.village_id).map(r => ({
+    org_id: r.org_id, village_id: r.village_id, project_id: r.project_id,
+    event_key: r.event_key, kind: 'QUERY_RAISED',
+    title: `${r.kind === 'CONCERN' ? 'Concern' : 'Question'} waiting: ${r.subject}`,
+    body: `${r.village_name ? `About ${r.village_name}. ` : ''}`
+      + `Raised ${r.days_open} day${Number(r.days_open) === 1 ? '' : 's'} ago `
+      + 'and nobody has answered it.',
+  })));
+
   for (const f of findings) {
     const db = await pool.connect();
     try {

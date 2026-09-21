@@ -1274,3 +1274,33 @@ describe("asking, reaching, and being told (§073)", () => {
     expect(codes.length).toBeGreaterThanOrEqual(4);
   });
 });
+
+describe("the alerts that were advertised are the alerts that are raised (§073)", () => {
+  it("raises every kind the subscription screen offers", async () => {
+    /*
+     * Two kinds were offered and never raised, so anybody who chose them got
+     * silence — the one failure an alert must never have. Asserted against
+     * the job's own source rather than a list kept beside it, because a
+     * second list is a second thing to forget.
+     */
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(
+      new URL("../../src/modules/jobs/surveyAlerts.ts", import.meta.url), "utf8");
+    const raised = new Set(
+      [...src.matchAll(/kind: '([A-Z_]+)'/g)].map(m => m[1]));
+    const { ALERT_KINDS } = await import("@silverline/shared");
+    for (const kind of ALERT_KINDS) {
+      expect(raised.has(kind.code), `${kind.code} is offered but never raised`).toBe(true);
+    }
+  });
+
+  it("says whether anything can actually send the mail", async () => {
+    // A screen that takes an address and never mentions that nothing can send
+    // to it lies by omission, and the person who finds out is the one who was
+    // relying on the alert.
+    const r = await get(w.admin, "/api/v1/survey/alert-subscriptions");
+    expect(r.status).toBe(200);
+    expect(r.body.meta).toHaveProperty("mail_configured");
+    expect(r.body.meta).toHaveProperty("queued");
+  });
+});

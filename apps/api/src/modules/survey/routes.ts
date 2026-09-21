@@ -5440,12 +5440,29 @@ export async function registerSurveyRoutes(
       }
       const rows = (await pool.query(
         `SELECT s.*, p.name AS project_name,
-                (s.active AND s.active_until >= CURRENT_DATE) AS live
+                (s.active AND s.active_until >= CURRENT_DATE) AS live,
+                (SELECT count(*)::int FROM survey_alert_sent a
+                  WHERE a.subscription_id = s.id AND a.status = 'QUEUED') AS queued,
+                (SELECT count(*)::int FROM survey_alert_sent a
+                  WHERE a.subscription_id = s.id AND a.status = 'SENT') AS sent
            FROM survey_alert_subscriptions s
            LEFT JOIN survey_projects p ON p.id = s.survey_project_id
           WHERE ${where}
           ORDER BY live DESC, s.email`, values)).rows;
-      return { data: rows.map(r => ({ ...r, active_until: iso(r.active_until) })) };
+      return {
+        data: rows.map(r => ({ ...r, active_until: iso(r.active_until) })),
+        /*
+         * Whether anything can actually send (§073).
+         *
+         * A screen that lets somebody subscribe and never says the mail is
+         * not going anywhere is a screen that lies by omission. Reported as
+         * a fact about the deployment rather than hidden in a log.
+         */
+        meta: {
+          mail_configured: Boolean(process.env.SURVEY_MAIL_WEBHOOK_URL),
+          queued: rows.reduce((t, r) => t + Number(r.queued ?? 0), 0),
+        },
+      };
     });
 
   app.post('/api/v1/survey/alert-subscriptions',

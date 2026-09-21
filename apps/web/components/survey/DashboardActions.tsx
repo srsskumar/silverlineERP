@@ -291,7 +291,7 @@ export function SurveyAlertSettings({ projectId }: { projectId: string }) {
     queryKey: ['survey-alert-subs', projectId],
     queryFn: async () => ((await apiRequestRaw(
       `/api/v1/survey/alert-subscriptions?project_id=${projectId}`))
-      .body as { data: Row[] }).data,
+      .body as { data: Row[]; meta?: Row }),
   });
 
   const save = useMutation({
@@ -321,7 +321,8 @@ export function SurveyAlertSettings({ projectId }: { projectId: string }) {
     },
   });
 
-  const rows = subs.data ?? [];
+  const rows = subs.data?.data ?? [];
+  const meta = subs.data?.meta;
 
   return (
     <Card className="p-4">
@@ -348,6 +349,9 @@ export function SurveyAlertSettings({ projectId }: { projectId: string }) {
                 {(r.kinds ?? []).length === 0
                   ? 'every alert'
                   : `${(r.kinds ?? []).length} of ${ALERT_KINDS.length}`}
+              </span>
+              <span className="text-2xs text-text-subtle">
+                {`${Number(r.sent ?? 0)} sent, ${Number(r.queued ?? 0)} waiting`}
               </span>
               {r.live ? (
                 <Button variant="ghost" onClick={() => stop.mutate(r)}>Stop</Button>
@@ -392,11 +396,21 @@ export function SurveyAlertSettings({ projectId }: { projectId: string }) {
           disabled={save.isPending || !email.trim() || !until}>
           {save.isPending ? 'Saving…' : 'Send alerts here'}
         </Button>
-        <Notice tone="info" title="Delivery needs a mail server">
-          Alerts are queued the moment a condition arises and are held until a
-          mail provider is configured for this deployment. Nothing is lost in
-          the meantime — the queue is drained once one is.
-        </Notice>
+        {/*
+          * Said plainly on the screen where somebody signs up.
+          *
+          * A form that takes an address and never mentions that nothing can
+          * send to it lies by omission, and the person who finds out is the
+          * one who was relying on the alert.
+          */}
+        {meta && !meta.mail_configured ? (
+          <Notice tone="warning" title="Nothing is configured to send these yet">
+            Alerts are queued the moment a condition arises —{' '}
+            {Number(meta.queued ?? 0)} are waiting now — and nothing is lost.
+            They go out as soon as a mail relay is set for this deployment
+            (<code>SURVEY_MAIL_WEBHOOK_URL</code>).
+          </Notice>
+        ) : null}
       </div>
     </Card>
   );
