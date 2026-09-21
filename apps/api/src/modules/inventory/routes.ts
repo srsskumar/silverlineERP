@@ -5,6 +5,7 @@ import type { Pool } from 'pg';
 import { vendorSchema,itemSchema,stockSchema,invoiceSchema,assetSchema,assetLookupSchema,assetAssignSchema,assetBulkAssignSchema,assetTransferSchema,assetAllocationEditSchema,assetLookupCode,assetTransitionSchema,assetAuditSchema,assetLocation } from '@silverline/shared';
 import { buildAuthenticate,requirePermission,scopesForPermission } from '../../common/auth.js';
 import { actor,parse,page,inOrg,mutate,version,fail,projectAccess,employeeAccess } from '../../common/domain.js';
+import { itemDeltaSql,itemOnHand,lowStockLevel,notifyLowStockCrossing } from '../../common/stockLedger.js';
 
 export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Pool;jwtSecret:string}) {
  const {pool}=opts,auth=buildAuthenticate(opts),guard=(p:string)=>requirePermission(auth,p);
@@ -67,7 +68,8 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    if(q.search){values.push(`%${q.search}%`);where+=` AND (a.name ILIKE $${values.length} OR ${table==='assets'?'a.asset_code':'a.code'} ILIKE $${values.length})`;}
    if(table==='assets')where+=` AND ${await assetClause(req,values,'a.id')}`;
    const extra=table==='inventory_items'
-    ?",COALESCE((SELECT sum(CASE WHEN direction='IN' THEN quantity ELSE -quantity END) FROM stock_transactions WHERE item_id=a.id),0)::text AS available"
+    // A transfer moves stock between locations and leaves the item's total alone.
+    ?`,COALESCE((SELECT sum(${itemDeltaSql()}) FROM stock_transactions WHERE item_id=a.id),0)::text AS available`
     :table==='assets'
      // The register's own columns read as words, and each asset says where
      // it is and who has it without a second request per row.
@@ -132,18 +134,13 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    if(input.project_id){const p=await inOrg(db,'projects',input.project_id,u.orgId,true);if(p.status!=='ACTIVE')fail('PROJECT_INACTIVE','Project must be active');}
    if(input.invoice_id)await inOrg(db,'invoices',input.invoice_id,u.orgId);
    // Lock the item before computing its ledger balance: concurrent withdrawals serialize.
-   const check=await db.query(`SELECT COALESCE(sum(CASE WHEN direction='IN' THEN quantity ELSE -quantity END),0) >= $2::numeric AS enough FROM stock_transactions WHERE item_id=$1`,[input.item_id,input.quantity]);
-   if(input.direction==='OUT'&&!check.rows[0].enough)fail('INSUFFICIENT_STOCK','Posting would make available stock negative',409);
+   const before=await itemOnHand(db,input.item_id);
+   if(input.direction==='OUT'&&before<Number(input.quantity))fail('INSUFFICIENT_STOCK','Posting would make available stock negative',409);
    const r=await db.query('INSERT INTO stock_transactions(org_id,item_id,direction,quantity,reference,project_id,invoice_id,reason,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',[u.orgId,input.item_id,input.direction,input.quantity,input.reference,input.project_id??null,input.invoice_id??null,input.reason??null,u.id]);
-   const stock=await db.query(`SELECT COALESCE(sum(CASE WHEN direction='IN' THEN quantity ELSE -quantity END),0)::text AS available FROM stock_transactions WHERE item_id=$1`,[input.item_id]);
-   const low=Number(stock.rows[0].available)<=Number(item.low_stock_threshold);
-   // $1 and $2 carry explicit casts: a bare parameter in an INSERT ... SELECT
-   // list is inferred from the select expression, not the target column, so
-   // reusing $1 in the uuid-typed WHERE made Postgres deduce two different
-   // types for it and reject the statement (42P08). Every OUT posting that
-   // reached the low-stock threshold failed with a 500 because of it.
-   if(low&&input.direction==='OUT')await db.query("INSERT INTO notifications(org_id,recipient_id,type,title,body,entity_type,entity_id,event_key) SELECT DISTINCT $1::uuid,u.id,'LOW_STOCK','Stock needs replenishment','Open Inventory to review stock levels','inventory_item',$2::uuid,$3::text FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN role_permissions rp ON rp.role_id=ur.role_id WHERE u.org_id=$1 AND u.auth_status='ACTIVE' AND rp.permission_code='inventory.manage' ON CONFLICT DO NOTHING",[u.orgId,item.id,`low-stock:${r.rows[0].id}`]);
-   return {...r.rows[0],available:stock.rows[0].available,low_stock:low};
+   const available=await itemOnHand(db,input.item_id);
+   const low=available<=lowStockLevel(item);
+   await notifyLowStockCrossing(db,{orgId:u.orgId,item,before,after:available,transactionId:String(r.rows[0].id)});
+   return {...r.rows[0],available:String(available),low_stock:low};
   });return reply.code(201).send(row);
  });
  app.get('/api/v1/invoices',{preHandler:guard('inventory.read')},async req=>{const {limit,offset}=page(req),rows=(await pool.query('SELECT * FROM invoices WHERE org_id=$1 ORDER BY created_at DESC,id DESC LIMIT $2 OFFSET $3',[actor(req).orgId,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});

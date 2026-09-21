@@ -118,7 +118,11 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
  });
  app.get('/api/v1/admin/settings',{preHandler:guard('admin.configure')},async req=>(await pool.query('SELECT id,name,settings FROM organizations WHERE id=$1',[actor(req).orgId])).rows[0]);
  app.patch('/api/v1/admin/settings',{preHandler:guard('admin.configure')},async req=>{
-  const i=parse(z.object({name:z.string().trim().min(1).max(255).optional(),settings:z.object({timezone:z.string().refine(s=>{try{new Intl.DateTimeFormat('en',{timeZone:s});return true;}catch{return false;}}).optional(),locale:z.string().max(20).optional(),attendance_duplicate_minutes:z.number().int().min(1).max(60).optional(),session_timeout_minutes:z.number().int().min(5).max(1440).optional(),retention_days:z.number().int().min(30).max(36500).optional(),gst_state_code:z.string().regex(/^\d{2}$/).refine(c=>c in GST_STATE_CODES,{message:'Not a GST state code'}).optional()})}),req.body),u=actor(req);
+  const i=parse(z.object({name:z.string().trim().min(1).max(255).optional(),settings:z.object({timezone:z.string().refine(s=>{try{new Intl.DateTimeFormat('en',{timeZone:s});return true;}catch{return false;}}).optional(),locale:z.string().max(20).optional(),attendance_duplicate_minutes:z.number().int().min(1).max(60).optional(),session_timeout_minutes:z.number().int().min(5).max(1440).optional(),retention_days:z.number().int().min(30).max(36500).optional(),gst_state_code:z.string().regex(/^\d{2}$/).refine(c=>c in GST_STATE_CODES,{message:'Not a GST state code'}).optional(),
+   // How far an invoice may differ from its order and receipt and still
+   // pass the three-way match. Held here, not sent with each match: a
+   // tolerance the person running the match chooses is not a control.
+   match_tolerance:z.object({quantity_pct:z.number().min(0).max(25).optional(),rate_pct:z.number().min(0).max(25).optional(),value_absolute:z.number().min(0).max(1_000_000).optional()}).strict().optional()})}),req.body),u=actor(req);
   return mutate(pool,req,'admin.settings','settings',async db=>(await db.query('UPDATE organizations SET name=COALESCE($2,name),settings=settings||$3::jsonb WHERE id=$1 RETURNING id,name,settings',[u.orgId,i.name??null,JSON.stringify(i.settings)])).rows[0]);
  });
  app.get('/api/v1/auth/sessions',{preHandler:auth},async req=>({data:(await pool.query('SELECT id,family,device,ip,created_at,last_used_at,expires_at FROM sessions WHERE user_id=$1 AND revoked=false ORDER BY created_at DESC LIMIT 100',[actor(req).id])).rows}));

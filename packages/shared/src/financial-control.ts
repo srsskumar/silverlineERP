@@ -383,6 +383,23 @@ export const paymentAllocationSchema = z.object({
   other_deduction: money.optional(),
   deduction_reason: z.string().trim().max(500).optional(),
 }).superRefine((v, ctx) => {
+  // An RA bill's net payable is already net of TDS, retention, security
+  // deposit, cess and advance recovery: the bill deducted them when it was
+  // certified. A receipt against it settles the cash that arrived and nothing
+  // else. Accepting TDS or an advance adjustment here as well deducts the same
+  // money a second time and closes the bill with part of it never received.
+  if (v.document_type === 'RA_BILL') {
+    for (const field of ['tds_amount', 'advance_adjusted'] as const) {
+      if ((v[field] ?? 0) > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom, path: [field],
+          message: field === 'tds_amount'
+            ? 'An RA bill\'s net payable is already after TDS. Allocate only the cash received.'
+            : 'An RA bill already recovered the advance when it was certified. Allocate only the cash received.',
+        });
+      }
+    }
+  }
   // A withholding without a stated reason is the line the client disputes,
   // and an unexplained one cannot be defended.
   if ((v.other_deduction ?? 0) > 0 && !v.deduction_reason) {

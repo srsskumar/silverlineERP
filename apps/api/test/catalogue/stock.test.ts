@@ -207,6 +207,83 @@ describe("stock movement", () => {
   });
 });
 
+describe("transfers at item level", () => {
+  const transfer = (itemId: string, quantity: number) => post(w.admin, "/api/v1/stock-transactions", {
+    transaction_type: "TRANSFER", item_id: itemId, quantity,
+    from_location_id: store, to_location_id: site, reference: uniq("TR"),
+  });
+
+  it("leaves the item's available stock where it was", async () => {
+    // A transfer is stored with direction IN, and every item-level sum read
+    // the direction: moving 40 bags across the yard made 40 new ones.
+    const item = await makeItem();
+    await receive(item.id, 100, store);
+    expect((await transfer(item.id, 40)).status).toBe(201);
+    const list = await get(w.admin, `/api/v1/inventory/items?search=${item.code}`);
+    const row = list.data.find((r: any) => r.id === item.id);
+    expect(Number(row.available)).toBe(100);
+  });
+
+  it("keeps an item on the reorder list after it is moved between stores", async () => {
+    const item = await makeItem({ reorder_level: 120 });
+    await receive(item.id, 100, store);
+    let list = await get(w.admin, "/api/v1/stock/reorder");
+    expect(list.data.find((r: any) => r.item_id === item.id)?.onHand).toBe(100);
+    await transfer(item.id, 40);
+    list = await get(w.admin, "/api/v1/stock/reorder");
+    expect(list.data.find((r: any) => r.item_id === item.id)?.onHand).toBe(100);
+  });
+
+  it("lets a legacy issue draw only on stock that exists", async () => {
+    const item = await makeItem();
+    await w.pool.query("UPDATE inventory_items SET status='ACTIVE' WHERE id=$1", [item.id]);
+    await receive(item.id, 50, store);
+    await transfer(item.id, 50);
+    const res = await post(w.admin, "/api/v1/inventory/transactions", {
+      item_id: item.id, direction: "OUT", quantity: 60, reference: uniq("OUT"),
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+  });
+});
+
+describe("low-stock alerts", () => {
+  const issue = (itemId: string, quantity: number) => post(w.admin, "/api/v1/stock-transactions", {
+    transaction_type: "ISSUE", item_id: itemId, quantity, from_location_id: store, reference: uniq("IS"),
+  });
+  const crossings = async (itemId: string) => Number((await w.pool.query(
+    `SELECT count(DISTINCT event_key) AS n FROM notifications
+     WHERE type = 'LOW_STOCK' AND entity_id = $1`, [itemId])).rows[0].n);
+
+  it("fires once when an item falls through its level, not on every issue below it", async () => {
+    const item = await makeItem({ reorder_level: 20 });
+    await receive(item.id, 100, store);
+    expect((await issue(item.id, 70)).status).toBe(201); // 30: still above
+    expect(await crossings(item.id)).toBe(0);
+    expect((await issue(item.id, 15)).status).toBe(201); // 15: crossed
+    expect(await crossings(item.id)).toBe(1);
+    expect((await issue(item.id, 5)).status).toBe(201);  // 10: still low
+    expect(await crossings(item.id)).toBe(1);
+
+    // Replenished above the level and through it again is a new crossing.
+    await receive(item.id, 50, store);                    // 60
+    expect((await issue(item.id, 45)).status).toBe(201); // 15
+    expect(await crossings(item.id)).toBe(2);
+  });
+
+  it("fires from a count write-off as well as an issue", async () => {
+    const item = await makeItem({ reorder_level: 20 });
+    await receive(item.id, 50, store);
+    const count = await post(w.role.INVENTORY_MANAGER, "/api/v1/stock-counts", {
+      count_no: uniq("SC"), location_id: store, counted_on: "2026-09-15",
+      lines: [{ item_id: item.id, counted_quantity: 12 }],
+    });
+    const approved = await post({ ...w.admin, ...(await ver("stock_counts", count.data.id)) },
+      `/api/v1/stock-counts/${count.data.id}/approval`, { action: "APPROVE", reason: "Shortage confirmed" });
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+    expect(await crossings(item.id)).toBe(1);
+  });
+});
+
 describe("reservations", () => {
   it("holds stock without removing it", async () => {
     // The bags are still in the store; they are promised to somebody.
@@ -343,6 +420,23 @@ describe("stock counts", () => {
     expect(rows.rows).toHaveLength(1);
     expect(rows.rows[0].transaction_type).toBe("COUNT_ADJUSTMENT");
     expect(rows.rows[0].document_type).toBe("STOCK_COUNT");
+  });
+
+  it("will not approve a write-off the location no longer holds", async () => {
+    // Counted 10 of 50; 30 were issued before the variance was approved. The
+    // frozen -40 would now leave the store at minus twenty.
+    const item = await makeItem();
+    await receive(item.id, 50, store);
+    const count = await countWith(item.id, 10);
+    const issued = await post(w.admin, "/api/v1/stock-transactions", {
+      transaction_type: "ISSUE", item_id: item.id, quantity: 30, from_location_id: store, reference: uniq("IS"),
+    });
+    expect(issued.status, JSON.stringify(issued.body)).toBe(201);
+    const res = await post({ ...w.admin, ...(await ver("stock_counts", count.id)) },
+      `/api/v1/stock-counts/${count.id}/approval`, { action: "APPROVE", reason: "Shortage accepted" });
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body.code).toBe("INSUFFICIENT_STOCK");
+    expect((await positionOf(item.id, store)).onHand).toBe(20);
   });
 
   it("demands a reason on either decision", async () => {

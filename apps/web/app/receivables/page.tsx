@@ -17,7 +17,7 @@ import { hasPermission } from '@/lib/permissions';
 import { Notice, Section, Stat } from '@/components/finance/Primitives';
 import { AgeingBar, AgeingBuckets, BucketCells, OutsideBuckets } from '@/components/finance/Ageing';
 import { day, money, percent, businessToday } from '@/lib/finance';
-import { AGEING_BUCKETS, BUCKET_LABELS, dsoNote, type AgeingSummary } from '@/lib/ledgers';
+import { AGEING_BUCKETS, BUCKET_LABELS, dsoNote, statementQuery, type AgeingSummary } from '@/lib/ledgers';
 
 type Row = Record<string, any>;
 
@@ -265,7 +265,16 @@ function BillDetail({ bills, clientId, asOf }: { bills: Row[]; clientId: string 
           <TBody>
             {bills.map((b) => (
               <TR key={String(b.bill_id)}>
-                <TD mono>{b.bill_no}</TD>
+                <TD mono>
+                  {b.bill_no}
+                  {b.disputed ? (
+                    // Disputed bills sit outside the buckets; say why here,
+                    // because it is the first thing the collections call needs.
+                    <span className="ml-1" title={b.dispute_reason ?? undefined}>
+                      <Badge tone="warning">disputed</Badge>
+                    </span>
+                  ) : null}
+                </TD>
                 <TD>
                   <span className="text-text">{b.project_name}</span>
                   <span className="ml-1 text-2xs text-text-subtle">{b.project_code}</span>
@@ -301,13 +310,30 @@ function BillDetail({ bills, clientId, asOf }: { bills: Row[]; clientId: string 
  * sent.
  */
 function Statement({ clientId, to }: { clientId: string; to: string }) {
+  // Empty means "from the first bill"; a start date makes the statement the
+  // period a client actually asks for, opening on the balance brought forward.
+  const [from, setFrom] = React.useState('');
+  const query = statementQuery(from, to);
   const q = useQuery({
-    queryKey: ['ar-statement', clientId, to],
+    queryKey: ['ar-statement', clientId, query],
     queryFn: async () =>
-      ((await apiRequestRaw(`/api/v1/ar/statement/${clientId}?to=${to}`)).body as { data: Row }).data,
+      ((await apiRequestRaw(`/api/v1/ar/statement/${clientId}?${query}`)).body as { data: Row }).data,
   });
 
-  if (q.isLoading) return <Skeleton className="mt-3 h-40" />;
+  const fromPicker = (
+    <label className="flex items-center gap-2 text-xs text-text-muted">
+      From
+      <input
+        type="date"
+        value={from}
+        max={to}
+        onChange={(e) => setFrom(e.target.value)}
+        className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+      />
+    </label>
+  );
+
+  if (q.isLoading) return <div className="mt-3">{fromPicker}<Skeleton className="mt-3 h-40" /></div>;
   if (q.isError) return <ErrorCard error={q.error} onRetry={() => q.refetch()} />;
   const d = q.data;
   if (!d) return null;
@@ -315,8 +341,11 @@ function Statement({ clientId, to }: { clientId: string; to: string }) {
   return (
     <div className="mt-3 rounded-lg border border-border bg-surface p-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-xs font-semibold text-text">{d.client_name ?? 'Statement'}</p>
-        <p className="text-2xs text-text-subtle">to {day(d.to)}</p>
+        <p className="text-xs font-semibold text-text">{d.client?.name ?? 'Statement'}</p>
+        {fromPicker}
+        <p className="text-2xs text-text-subtle">
+          {from ? `${day(d.from)} to ${day(d.to)}` : `to ${day(d.to)}`}
+        </p>
       </div>
       <TableWrap className="mt-2">
         <Table>
@@ -335,7 +364,7 @@ function Statement({ clientId, to }: { clientId: string; to: string }) {
               <TD tone="muted" className="italic">Balance brought forward</TD>
               <TD />
               <TD />
-              <TD className="text-right font-semibold tabular-nums">{money(d.opening)}</TD>
+              <TD className="text-right font-semibold tabular-nums">{money(d.opening_balance)}</TD>
             </TR>
             {(d.entries ?? []).map((e: Row, i: number) => (
               <TR key={`${e.id}-${i}`}>
@@ -355,7 +384,7 @@ function Statement({ clientId, to }: { clientId: string; to: string }) {
               <TD className="font-semibold text-text">Balance carried forward</TD>
               <TD />
               <TD />
-              <TD className="text-right font-semibold tabular-nums">{money(d.closing)}</TD>
+              <TD className="text-right font-semibold tabular-nums">{money(d.closing_balance)}</TD>
             </TR>
           </TBody>
         </Table>

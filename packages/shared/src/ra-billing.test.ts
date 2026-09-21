@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   raBillLine, computeRaBill, recoverAdvance, retentionReleaseStatus,
-  raBillSchema, RA_BILL_TRANSITIONS,
+  raBillSchema, RA_BILL_TRANSITIONS, receivableDueDate, deductionPolicySchema,
   type RaBillLine,
 } from './ra-billing.js';
 
@@ -246,5 +246,25 @@ describe('bill schema and lifecycle', () => {
     // must stop moving at that point.
     expect(RA_BILL_TRANSITIONS.SUBMITTED).toContain('DRAFT');
     expect(RA_BILL_TRANSITIONS.CERTIFIED).not.toContain('DRAFT');
+  });
+});
+
+describe('receivableDueDate', () => {
+  it('counts the agreed terms from the certification day', () => {
+    expect(receivableDueDate('2026-01-15', 30)).toBe('2026-02-14');
+    expect(receivableDueDate('2026-12-15', 30)).toBe('2027-01-14');
+    expect(receivableDueDate('2026-03-01', 0)).toBe('2026-03-01');
+  });
+
+  it('gives no date where no terms are recorded, rather than a guess', () => {
+    expect(receivableDueDate('2026-01-15', null)).toBeNull();
+    expect(receivableDueDate('2026-01-15', undefined)).toBeNull();
+  });
+
+  it('takes terms on the billing policy, and lets them be cleared', () => {
+    expect(deductionPolicySchema.parse({ payment_terms_days: 45 }).payment_terms_days).toBe(45);
+    expect(deductionPolicySchema.parse({ payment_terms_days: null }).payment_terms_days).toBeNull();
+    expect(deductionPolicySchema.safeParse({ payment_terms_days: -1 }).success).toBe(false);
+    expect(deductionPolicySchema.safeParse({ payment_terms_days: 400 }).success).toBe(false);
   });
 });

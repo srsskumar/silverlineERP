@@ -435,14 +435,42 @@ describe("three-way match", () => {
     expect(res.data.exceptions[0].code).toBe("RATE_EXCEEDS_ORDER");
   });
 
-  it("honours a configured tolerance", async () => {
+  it("honours the organisation's configured tolerance, not the caller's", async () => {
     const { invoiceId } = await orderReceivedAndInvoiced({
       ordered: 100, rate: 400, received: 100, invoiced: 100, invoiceRate: 406,
     });
     const strict = await post(w.admin, `/api/v1/invoices/${invoiceId}/match`, {});
     expect(strict.data.matched).toBe(false);
-    const tolerant = await post(w.admin, `/api/v1/invoices/${invoiceId}/match`, { tolerance: { ratePct: 2 } });
-    expect(tolerant.data.matched).toBe(true);
+    // A tolerance sent with the request is ignored: whoever runs the match
+    // does not get to decide how close is close enough.
+    const asked = await post(w.admin, `/api/v1/invoices/${invoiceId}/match`, { tolerance: { ratePct: 2 } });
+    expect(asked.data.matched).toBe(false);
+
+    const set = await w.app.inject({
+      method: "PATCH", url: "/api/v1/admin/settings",
+      headers: { ...w.admin, ...idem() },
+      payload: { settings: { match_tolerance: { rate_pct: 2 } } },
+    });
+    expect(set.statusCode, set.body).toBe(200);
+    try {
+      const tolerant = await post(w.admin, `/api/v1/invoices/${invoiceId}/match`, {});
+      expect(tolerant.data.matched).toBe(true);
+    } finally {
+      await w.pool.query(
+        "UPDATE organizations SET settings = settings - 'match_tolerance' WHERE id = $1", [w.orgId]);
+    }
+  });
+
+  it("does not let somebody who can only read matches record one", async () => {
+    // Recording a match decides whether the invoice can be paid.
+    const { invoiceId } = await orderReceivedAndInvoiced({
+      ordered: 100, rate: 400, received: 100, invoiced: 100, invoiceRate: 400,
+    });
+    for (const role of ["AUDITOR", "INVENTORY_MANAGER", "PROJECT_MANAGER"] as const) {
+      const res = await post(w.role[role], `/api/v1/invoices/${invoiceId}/match`, {});
+      expect(res.status, role).toBe(403);
+    }
+    expect((await get(w.role.AUDITOR, `/api/v1/invoices/${invoiceId}/match`)).status).toBe(200);
   });
 
   it("refuses the override to a role that raises orders", async () => {
@@ -787,6 +815,33 @@ describe("acknowledgement and returns (§43.3, §43.4)", () => {
     // The original receipt is untouched.
     const grnLine = await w.pool.query("SELECT accepted_quantity FROM grn_lines WHERE id=$1", [grnLineId]);
     expect(Number(grnLine.rows[0].accepted_quantity)).toBe(100);
+  });
+
+  it("refuses to return material that has already been issued", async () => {
+    // Accepted 100, issued 90 to site: ten bags are in the store, and a return
+    // of fifteen would have left the ledger at minus five.
+    const { grnId, grnLineId, itemId } = await receivedOrder(100);
+    await w.pool.query(
+      `INSERT INTO stock_transactions(org_id, created_by, item_id, direction, quantity, reference)
+       VALUES($1,$2,$3,'OUT',90,'Issued to site')`, [w.orgId, w.adminId, itemId]);
+    const res = await post(w.admin, "/api/v1/vendor-returns", {
+      return_no: uniq("RTV"), grn_id: grnId, return_date: "2026-09-20",
+      reason: "QUALITY_REJECTION", remarks: "Damp",
+      lines: [{ grn_line_id: grnLineId, quantity: 15 }],
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body.code).toBe("INSUFFICIENT_STOCK");
+    const total = await w.pool.query(
+      `SELECT sum(CASE WHEN direction='IN' THEN quantity ELSE -quantity END) AS q
+       FROM stock_transactions WHERE item_id=$1`, [itemId]);
+    expect(Number(total.rows[0].q)).toBe(10);
+
+    const within = await post(w.admin, "/api/v1/vendor-returns", {
+      return_no: uniq("RTV"), grn_id: grnId, return_date: "2026-09-20",
+      reason: "QUALITY_REJECTION", remarks: "Damp",
+      lines: [{ grn_line_id: grnLineId, quantity: 10 }],
+    });
+    expect(within.status, JSON.stringify(within.body)).toBe(201);
   });
 
   it("refuses to return more than was accepted", async () => {

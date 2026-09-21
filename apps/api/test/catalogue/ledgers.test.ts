@@ -6,11 +6,11 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
+import { buildWorld, idem, uniq, workDate, type CatalogueWorld, type Headers } from "./fixture.js";
 
 let w: CatalogueWorld;
 
-async function send(method: "POST" | "GET", headers: Headers, url: string, payload?: unknown) {
+async function send(method: "POST" | "GET" | "PUT" | "PATCH", headers: Headers, url: string, payload?: unknown) {
   const res = await w.app.inject({
     method, url,
     headers: { ...headers, ...(method === "GET" ? {} : idem()) },
@@ -22,6 +22,46 @@ async function send(method: "POST" | "GET", headers: Headers, url: string, paylo
 }
 const post = (h: Headers, u: string, p?: unknown) => send("POST", h, u, p);
 const get = (h: Headers, u: string) => send("GET", h, u);
+const put = (h: Headers, u: string, p?: unknown) => send("PUT", h, u, p);
+const patch = (h: Headers, u: string, p?: unknown) => send("PATCH", h, u, p);
+
+/** A client with one project of its own. */
+async function clientProject() {
+  const client = await w.pool.query(
+    `INSERT INTO clients(org_id, created_by, code, name, client_type, status)
+     VALUES($1,$2,$3,$4,'GOVERNMENT','ACTIVE') RETURNING id`,
+    [w.orgId, w.adminId, uniq("CL"), `Receivable client ${uniq()}`]);
+  const ws = await w.pool.query("SELECT id FROM workspaces WHERE org_id=$1 LIMIT 1", [w.orgId]);
+  const project = await w.pool.query(
+    `INSERT INTO projects(org_id, workspace_id, code, name, status, contract_value, client_id)
+     VALUES($1,$2,$3,'Receivable project','ACTIVE',10000000,$4) RETURNING id`,
+    [w.orgId, ws.rows[0].id, uniq("PRJ"), client.rows[0].id]);
+  return { clientId: String(client.rows[0].id), projectId: String(project.rows[0].id) };
+}
+
+let billNo = 0;
+/** A bill certified at a given instant, straight into the table. */
+async function certifiedBill(projectId: string, amount: number, certifiedAt: string, dueDate: string | null = null) {
+  billNo += 1;
+  const r = await w.pool.query(
+    `INSERT INTO ra_bills(org_id, project_id, bill_no, period_from, period_to, gross_value,
+       net_payable, status, certified_at, certified_by, certified_amount, due_date)
+     VALUES($1,$2,$3,'2026-01-01','2026-01-31',$4,$4,'CERTIFIED',$5,$6,$4,$7) RETURNING id`,
+    [w.orgId, projectId, billNo, amount, certifiedAt, w.adminId, dueDate]);
+  return String(r.rows[0].id);
+}
+
+/** A receipt of `amount` on `paidOn`, applied to one bill. */
+async function receipt(billId: string, amount: number, paidOn: string) {
+  const payment = await post(w.admin, "/api/v1/payments", {
+    direction: "RECEIVABLE", payment_no: uniq("RCPT"), paid_on: paidOn, amount, mode: "NEFT",
+  });
+  expect(payment.status, JSON.stringify(payment.body)).toBe(201);
+  const alloc = await post(w.admin, `/api/v1/payments/${payment.data.id}/allocations`, {
+    document_type: "RA_BILL", document_id: billId, amount,
+  });
+  expect(alloc.status, JSON.stringify(alloc.body)).toBe(201);
+}
 
 async function ver(table: string, id: string): Promise<Headers> {
   const r = await w.pool.query(`SELECT version FROM ${table} WHERE id = $1`, [id]);
@@ -42,11 +82,30 @@ async function msmeVendor(over: Record<string, unknown> = {}) {
 async function invoice(over: Record<string, unknown> = {}) {
   const r = await w.pool.query(
     `INSERT INTO invoices(org_id, serial_number, vendor_id, hsn, gst_enabled, gst_rate,
-       subtotal, tax, total, payment_mode, reference, due_date, accepted_on, match_status)
-     VALUES($1,$2,$3,'9954',false,0,$4,0,$4,'NEFT','ref',$5,$6,$7) RETURNING *`,
+       subtotal, tax, total, payment_mode, reference, due_date, accepted_on, match_status,
+       purchase_order_id)
+     VALUES($1,$2,$3,'9954',false,0,$4,0,$4,'NEFT','ref',$5,$6,$7,$8) RETURNING *`,
     [w.orgId, uniq("INV"), over.vendor_id ?? w.vendorId, over.total ?? 100000,
-     over.due_date ?? null, over.accepted_on ?? null, over.match_status ?? 'MATCHED']);
+     over.due_date ?? null, over.accepted_on ?? null,
+     "match_status" in over ? over.match_status : 'MATCHED',
+     over.purchase_order_id ?? null]);
   return r.rows[0];
+}
+
+/** Build a run as the payments clerk; returns the run and the ids it took. */
+async function buildRun(headers: Headers = w.role.PAYROLL_OFFICER, extra: Record<string, unknown> = {}) {
+  const run = await post(headers, "/api/v1/payment-runs", {
+    run_no: uniq("PR"), run_date: "2026-09-15", due_through: "2026-09-15", ...extra,
+  });
+  expect(run.status, JSON.stringify(run.body)).toBe(201);
+  const lines = await w.pool.query(
+    "SELECT document_id, match_override_reason FROM payment_run_lines WHERE run_id = $1", [run.data.id]);
+  return {
+    run: run.data,
+    ids: lines.rows.map(l => String(l.document_id)),
+    lines: lines.rows,
+    excluded: Object.fromEntries(run.data.excluded.map((e: any) => [e.documentId, e.code])) as Record<string, string>,
+  };
 }
 
 beforeAll(async () => { w = await buildWorld(); }, 180_000);
@@ -187,6 +246,101 @@ describe("payment run", () => {
   });
 });
 
+describe("one invoice, one payment", () => {
+  it("keeps an invoice on an open run out of the next run", async () => {
+    // Two runs a day apart each took every unpaid invoice, and both were paid.
+    const inv = await invoice({ total: 12345, due_date: "2026-02-01" });
+    const first = await buildRun();
+    expect(first.ids).toContain(inv.id);
+
+    const second = await buildRun();
+    expect(second.ids).not.toContain(inv.id);
+    expect(second.excluded[inv.id]).toBe("IN_OPEN_RUN");
+
+    // Cancelling the first run puts it back in the pool.
+    const cancel = await post({ ...w.admin, ...(await ver("payment_runs", first.run.id)) },
+      `/api/v1/payment-runs/${first.run.id}/decision`, { action: "CANCEL", reason: "Rebuilt" });
+    expect(cancel.status, JSON.stringify(cancel.body)).toBe(200);
+    const third = await buildRun();
+    expect(third.ids).toContain(inv.id);
+  });
+
+  it("refuses the same invoice on two open runs at the database", async () => {
+    const inv = await invoice({ total: 5000, due_date: "2026-02-01" });
+    const first = await buildRun();
+    expect(first.ids).toContain(inv.id);
+    const other = await buildRun();
+    const sneak = () => w.pool.query(
+      `INSERT INTO payment_run_lines(org_id, run_id, document_type, document_id, amount)
+       VALUES($1,$2,'VENDOR_INVOICE',$3,5000)`, [w.orgId, other.run.id, inv.id]);
+    await expect(sneak()).rejects.toMatchObject({ code: "23505" });
+
+    // A cancelled run no longer holds it.
+    await post({ ...w.admin, ...(await ver("payment_runs", first.run.id)) },
+      `/api/v1/payment-runs/${first.run.id}/decision`, { action: "CANCEL", reason: "Superseded" });
+    await expect(sneak()).resolves.toBeTruthy();
+  });
+
+  it("will not approve a run whose invoice was put on hold after it was built", async () => {
+    const inv = await invoice({ total: 7000, due_date: "2026-02-01" });
+    const built = await buildRun();
+    expect(built.ids).toContain(inv.id);
+    await post(w.admin, `/api/v1/ap/invoices/${inv.id}/hold`, { on_hold: true, reason: "Supplier query" });
+    const res = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/decision`, { action: "APPROVE" });
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body.code).toBe("RUN_OUT_OF_DATE");
+    expect(res.body.message).toContain(inv.serial_number);
+  });
+
+  it("will not approve a run whose invoice was disputed or part-paid since", async () => {
+    const disputed = await invoice({ total: 8000, due_date: "2026-02-01" });
+    const built = await buildRun();
+    expect(built.ids).toContain(disputed.id);
+    await post(w.admin, `/api/v1/invoices/${disputed.id}/dispute`, { disputed: true, reason: "Short supply" });
+    const res = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/decision`, { action: "APPROVE" });
+    expect(res.status).toBe(409);
+
+    const partPaid = await invoice({ total: 9000, due_date: "2026-02-01" });
+    const run2 = await buildRun();
+    expect(run2.ids).toContain(partPaid.id);
+    const payment = await post(w.admin, "/api/v1/payments", {
+      direction: "PAYABLE", payment_no: uniq("PAY"), paid_on: "2026-09-10", amount: 1000, mode: "NEFT",
+    });
+    expect((await post(w.admin, `/api/v1/payments/${payment.data.id}/allocations`, {
+      document_type: "VENDOR_INVOICE", document_id: partPaid.id, amount: 1000,
+    })).status).toBe(201);
+    const res2 = await post({ ...w.admin, ...(await ver("payment_runs", run2.run.id)) },
+      `/api/v1/payment-runs/${run2.run.id}/decision`, { action: "APPROVE" });
+    expect(res2.status).toBe(409);
+    expect(res2.body.message).toContain("8000.00 outstanding");
+  });
+});
+
+describe("three-way match on the run", () => {
+  it("releases an unmatched invoice only with a reason for it, kept on the line", async () => {
+    const unmatched = await invoice({ total: 6100, due_date: "2026-02-01", match_status: "EXCEPTION" });
+    const bare = await buildRun(w.role.SUPER_ADMIN);
+    expect(bare.excluded[unmatched.id]).toBe("NOT_MATCHED");
+
+    const reasoned = await buildRun(w.role.SUPER_ADMIN, {
+      match_overrides: [{ document_id: unmatched.id, reason: "Rate difference credited on next bill" }],
+    });
+    const line = reasoned.lines.find(l => String(l.document_id) === unmatched.id);
+    expect(line?.match_override_reason).toBe("Rate difference credited on next bill");
+  });
+
+  it("refuses match overrides from somebody without the permission", async () => {
+    const unmatched = await invoice({ total: 6200, due_date: "2026-02-01", match_status: "EXCEPTION" });
+    const res = await post(w.role.PAYROLL_OFFICER, "/api/v1/payment-runs", {
+      run_no: uniq("PR"), run_date: "2026-09-15", due_through: "2026-09-15",
+      match_overrides: [{ document_id: unmatched.id, reason: "Looks fine" }],
+    });
+    expect(res.status).toBe(403);
+  });
+});
+
 describe("receivables", () => {
   it("reports an ageing without crashing on an empty ledger", async () => {
     const res = await get(w.admin, "/api/v1/ar/ageing?as_of=2026-09-15");
@@ -207,6 +361,133 @@ describe("receivables", () => {
     const movement = (res.data.entries as any[]).reduce((t, e) => t + e.debit - e.credit, 0);
     expect(Math.round((res.data.opening_balance + movement) * 100) / 100)
       .toBe(res.data.closing_balance);
+  });
+
+  it("dates a certified bill from the project's payment terms", async () => {
+    // Nothing ever wrote the due date, so every receivable was undated and
+    // nothing was ever overdue.
+    const { projectId } = await clientProject();
+    const policy = await put(w.admin, `/api/v1/projects/${projectId}/billing-policy`, { payment_terms_days: 30 });
+    expect(policy.status, JSON.stringify(policy.body)).toBe(200);
+    expect(policy.data.payment_terms_days).toBe(30);
+    const boq = await post(w.admin, `/api/v1/projects/${projectId}/boq`, {
+      item_code: "1.1", description: "Survey", unit: "ha", quantity: 100, rate: 1000,
+    });
+    expect(boq.status, JSON.stringify(boq.body)).toBe(201);
+    const bill = await post(w.admin, "/api/v1/ra-bills", {
+      project_id: projectId, period_from: "2026-08-01", period_to: "2026-08-31",
+      lines: [{ boq_item_id: boq.data.id, cumulative_quantity: 10 }],
+    });
+    expect(bill.status, JSON.stringify(bill.body)).toBe(201);
+    for (const status of ["SUBMITTED", "CERTIFIED"]) {
+      const res = await post({ ...w.admin, ...(await ver("ra_bills", bill.data.id)) },
+        `/api/v1/ra-bills/${bill.data.id}/status`, { status });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+    }
+    const row = await w.pool.query("SELECT due_date::text AS due FROM ra_bills WHERE id=$1", [bill.data.id]);
+    const expected = new Date(Date.parse(`${workDate()}T00:00:00Z`) + 30 * 86_400_000).toISOString().slice(0, 10);
+    expect(row.rows[0].due).toBe(expected);
+  });
+
+  it("leaves a bill undated where no terms are recorded, rather than guessing", async () => {
+    const { projectId } = await clientProject();
+    const boq = await post(w.admin, `/api/v1/projects/${projectId}/boq`, {
+      item_code: "1.1", description: "Survey", unit: "ha", quantity: 100, rate: 1000,
+    });
+    const bill = await post(w.admin, "/api/v1/ra-bills", {
+      project_id: projectId, period_from: "2026-08-01", period_to: "2026-08-31",
+      lines: [{ boq_item_id: boq.data.id, cumulative_quantity: 10 }],
+    });
+    for (const status of ["SUBMITTED", "CERTIFIED"]) {
+      await post({ ...w.admin, ...(await ver("ra_bills", bill.data.id)) },
+        `/api/v1/ra-bills/${bill.data.id}/status`, { status });
+    }
+    const row = await w.pool.query("SELECT status, due_date FROM ra_bills WHERE id=$1", [bill.data.id]);
+    expect(row.rows[0].status).toBe("CERTIFIED");
+    expect(row.rows[0].due_date).toBeNull();
+  });
+
+  it("ages the position as it stood on as_of, not as it stands today", async () => {
+    const { clientId, projectId } = await clientProject();
+    const early = await certifiedBill(projectId, 1000, "2026-03-01T10:00:00+05:30", "2026-03-31");
+    await certifiedBill(projectId, 500, "2026-06-01T10:00:00+05:30", "2026-07-01");
+    await receipt(early, 400, "2026-05-01");
+    await receipt(early, 600, "2026-07-01");
+
+    const res = await get(w.admin, "/api/v1/ar/ageing?as_of=2026-05-15");
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const c = res.data.clients.find((x: any) => x.client_id === clientId);
+    // On 15 May only the March bill existed, and only 400 of it was paid.
+    expect(c.total).toBe(600);
+    expect(c.buckets.D31_60).toBe(600);
+    expect(c.bills).toHaveLength(1);
+
+    const now = await get(w.admin, "/api/v1/ar/ageing?as_of=2026-07-15");
+    const later = now.data.clients.find((x: any) => x.client_id === clientId);
+    expect(later.total).toBe(500);
+  });
+
+  it("does not count a bill certified late on as_of's evening in UTC as the next day", async () => {
+    // 23:30 in Kolkata on 30 April is 18:00 UTC the same day, and 00:30 on
+    // 1 May is still 30 April in UTC. The business day decides.
+    const { clientId, projectId } = await clientProject();
+    await certifiedBill(projectId, 700, "2026-05-01T00:30:00+05:30", "2026-06-01");
+    const res = await get(w.admin, "/api/v1/ar/ageing?as_of=2026-04-30");
+    expect(res.data.clients.find((x: any) => x.client_id === clientId)).toBeUndefined();
+  });
+
+  it("keeps a receipt against a cancelled bill off the statement", async () => {
+    const { clientId, projectId } = await clientProject();
+    const kept = await certifiedBill(projectId, 1000, "2026-02-01T10:00:00+05:30");
+    const cancelled = await certifiedBill(projectId, 300, "2026-02-05T10:00:00+05:30");
+    await receipt(cancelled, 300, "2026-02-10");
+    await w.pool.query(
+      "UPDATE ra_bills SET status='CANCELLED', cancelled_reason='Raised in error' WHERE id=$1", [cancelled]);
+
+    const res = await get(w.admin, `/api/v1/ar/statement/${clientId}?to=2026-12-31`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.data.entries.filter((e: any) => e.kind === "RECEIPT")).toHaveLength(0);
+    expect(res.data.closing_balance).toBe(1000);
+    void kept;
+  });
+
+  it("opens a statement on the balance brought forward and closes it on the window", async () => {
+    const { clientId, projectId } = await clientProject();
+    const bill = await certifiedBill(projectId, 1000, "2026-01-10T10:00:00+05:30");
+    await receipt(bill, 250, "2026-02-15");
+    await receipt(bill, 250, "2026-04-15");
+    await receipt(bill, 100, "2026-06-15");
+
+    const res = await get(w.admin, `/api/v1/ar/statement/${clientId}?from=2026-03-01&to=2026-05-31`);
+    expect(res.data.opening_balance).toBe(750);
+    expect(res.data.entries).toHaveLength(1);
+    // The June receipt is after the window and does not move the closing.
+    expect(res.data.closing_balance).toBe(500);
+  });
+
+  it("reports a disputed bill apart from the buckets, and clears it", async () => {
+    const { clientId, projectId } = await clientProject();
+    const bill = await certifiedBill(projectId, 2000, "2026-01-10T10:00:00+05:30", "2026-02-10");
+
+    expect((await patch(w.admin, `/api/v1/ra-bills/${bill}/dispute`, { disputed: true })).status).toBe(422);
+    expect((await patch(w.role.AUDITOR, `/api/v1/ra-bills/${bill}/dispute`,
+      { disputed: true, reason: "Measurement queried" })).status).toBe(403);
+
+    const set = await patch(w.admin, `/api/v1/ra-bills/${bill}/dispute`,
+      { disputed: true, reason: "Client disputes the measured area" });
+    expect(set.status, JSON.stringify(set.body)).toBe(200);
+    const res = await get(w.admin, "/api/v1/ar/ageing?as_of=2026-09-15");
+    const c = res.data.clients.find((x: any) => x.client_id === clientId);
+    expect(c.disputed).toBe(2000);
+    expect(c.overdue).toBe(0);
+    expect(c.bills[0].disputed).toBe(true);
+    expect(c.bills[0].dispute_reason).toContain("measured area");
+
+    await patch(w.admin, `/api/v1/ra-bills/${bill}/dispute`, { disputed: false });
+    const after = await get(w.admin, "/api/v1/ar/ageing?as_of=2026-09-15");
+    const c2 = after.data.clients.find((x: any) => x.client_id === clientId);
+    expect(c2.disputed).toBe(0);
+    expect(c2.buckets.OVER_90).toBe(2000);
   });
 
   it("will not read a client from another organisation", async () => {

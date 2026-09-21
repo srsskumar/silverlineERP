@@ -10,6 +10,7 @@ import {
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
+import { itemDeltaSql, itemOnHand, lockItem, notifyLowStockCrossing } from '../../common/stockLedger.js';
 
 /**
  * Inventory and material control (§44).
@@ -277,7 +278,9 @@ export async function registerStockRoutes(app: FastifyInstance, opts: { pool: Po
       }
 
       const direction = STOCK_TYPE_BEHAVIOUR[input.transaction_type].effect === 'OUT' ? 'OUT' : 'IN';
-      return (await db.query(
+      // Read under the item lock inOrg took above, before this posting lands.
+      const before = await itemOnHand(db, input.item_id);
+      const posted = (await db.query(
         `INSERT INTO stock_transactions(org_id, created_by, item_id, direction, quantity,
            base_quantity, entered_quantity, entered_uom, reference, project_id, task_id, reason,
            transaction_type, from_location_id, to_location_id, batch_no, serial_no,
@@ -290,6 +293,11 @@ export async function registerStockRoutes(app: FastifyInstance, opts: { pool: Po
          input.transaction_type, input.from_location_id ?? null, input.to_location_id ?? null,
          input.batch_no ?? null, input.serial_no ?? null, input.occurred_at ?? today(),
          input.document_type ?? null, input.document_id ?? null, negativeOverride])).rows[0];
+      await notifyLowStockCrossing(db, {
+        orgId: u.orgId, item, before, after: await itemOnHand(db, input.item_id),
+        transactionId: String(posted.id),
+      });
+      return posted;
     });
     reply.code(201);
     return { data: row };
@@ -453,10 +461,27 @@ export async function registerStockRoutes(app: FastifyInstance, opts: { pool: Po
             [id, input.reason, u.id])).rows[0];
         }
 
+        // Item order, so two approvals touching the same items take their
+        // locks in the same order and cannot deadlock.
         const lines = (await db.query(
-          'SELECT * FROM stock_count_lines WHERE count_id = $1 AND variance <> 0', [id])).rows;
+          'SELECT * FROM stock_count_lines WHERE count_id = $1 AND variance <> 0 ORDER BY item_id', [id])).rows;
         for (const line of lines) {
           const variance = Number(line.variance);
+          // The variance was frozen when the aisles were walked; stock may
+          // have been issued since. A write-off that now exceeds what the
+          // location holds would drive it negative, so it is checked against
+          // the ledger as it stands, under the item lock, like any other
+          // posting that takes stock out.
+          const item = await lockItem(db, String(line.item_id), u.orgId);
+          const before = await itemOnHand(db, String(line.item_id));
+          if (variance < 0) {
+            const onHand = await onHandAt(db, String(line.item_id), String(count.location_id));
+            if (onHand + variance < -0.0005) {
+              fail('INSUFFICIENT_STOCK',
+                `${item.name}: the count writes off ${Math.abs(variance)} but only ${onHand} is on hand here now -- stock has moved since the count. Recount before approving.`,
+                409);
+            }
+          }
           const posted = (await db.query(
             `INSERT INTO stock_transactions(org_id, created_by, item_id, direction, quantity,
                base_quantity, entered_quantity, entered_uom, reference, reason, transaction_type,
@@ -470,6 +495,10 @@ export async function registerStockRoutes(app: FastifyInstance, opts: { pool: Po
              count.counted_on, id])).rows[0];
           await db.query('UPDATE stock_count_lines SET adjustment_id = $2 WHERE id = $1',
             [line.id, posted.id]);
+          await notifyLowStockCrossing(db, {
+            orgId: u.orgId, item, before, after: await itemOnHand(db, String(line.item_id)),
+            transactionId: String(posted.id),
+          });
         }
 
         return (await db.query(
@@ -486,9 +515,11 @@ export async function registerStockRoutes(app: FastifyInstance, opts: { pool: Po
     const rows = (await pool.query(
       `SELECT i.id, i.code, i.name, i.unit, i.reorder_level, i.reorder_quantity,
               i.low_stock_threshold,
-              COALESCE(sum(CASE WHEN t.to_location_id IS NOT NULL THEN COALESCE(t.base_quantity, t.quantity)
-                                WHEN t.from_location_id IS NOT NULL THEN -COALESCE(t.base_quantity, t.quantity)
-                                ELSE 0 END), 0) AS on_hand,
+              -- The item's total, which a transfer between two locations
+              -- does not change. Summing by location presence counted every
+              -- transfer as an arrival and missed every receipt posted
+              -- without a location.
+              COALESCE(sum(${itemDeltaSql('t')}), 0) AS on_hand,
               COALESCE((SELECT sum(r.quantity) FROM stock_reservations r
                         WHERE r.item_id = i.id AND r.state = 'ACTIVE'
                           AND (r.expires_on IS NULL OR r.expires_on >= $2::date)), 0) AS reserved

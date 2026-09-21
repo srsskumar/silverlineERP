@@ -396,6 +396,22 @@ export const raBillSchema = z.object({
   path: ['period_to'],
 });
 
+/**
+ * When a certified bill falls due: the certification day plus the payment
+ * terms agreed on the project.
+ *
+ * No terms, no date. A receivable with no recorded terms is reported as
+ * undated rather than given a default, because a guessed due date makes an
+ * unknown look current -- and finding what is not current is the whole job
+ * of the ageing.
+ */
+export function receivableDueDate(certifiedOn: string, termsDays: number | null | undefined): string | null {
+  if (termsDays === null || termsDays === undefined || !Number.isFinite(termsDays)) return null;
+  const at = Date.parse(`${certifiedOn}T00:00:00Z`);
+  if (Number.isNaN(at)) return null;
+  return new Date(at + Math.round(termsDays) * 86_400_000).toISOString().slice(0, 10);
+}
+
 export const deductionPolicySchema = z.object({
   retention_pct: z.coerce.number().min(0).max(100).optional(),
   retention_cap_pct_of_contract: z.coerce.number().min(0).max(100).optional(),
@@ -404,6 +420,23 @@ export const deductionPolicySchema = z.object({
   tds_income_tax_pct: z.coerce.number().min(0).max(30).optional(),
   tds_gst_pct: z.coerce.number().min(0).max(10).optional(),
   gst_rate_pct: z.coerce.number().min(0).max(40).optional(),
+  /**
+   * Days from certification to payment, as agreed with the client. Null
+   * clears it; bills certified without terms stay undated in the ageing.
+   */
+  payment_terms_days: z.coerce.number().int().min(0).max(365).nullable().optional(),
+});
+
+export const raBillDisputeSchema = z.object({
+  disputed: z.boolean(),
+  reason: z.string().trim().max(1000).optional(),
+}).superRefine((v, ctx) => {
+  if (v.disputed && !v.reason) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom, path: ['reason'],
+      message: 'Say what the client disputes -- it is what the conversation with them starts from',
+    });
+  }
 });
 
 export const advanceSchema = z.object({

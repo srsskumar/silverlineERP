@@ -11,6 +11,7 @@ import {
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail, projectAccess } from '../../common/domain.js';
 import { levelsForPolicy, submitForApproval } from '../../common/approvalRouting.js';
+import { itemOnHand, lockItem, notifyLowStockCrossing } from '../../common/stockLedger.js';
 
 /**
  * Procurement (§6.6, §13.2, §43).
@@ -409,11 +410,25 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
    * released against an override must keep the evidence of what was
    * overridden, and recomputing later against changed data rewrites history.
    */
-  app.post('/api/v1/invoices/:id/match', { preHandler: guard('match.read') }, async (req, reply) => {
+  // Recording a match changes whether the invoice can be paid, so it needs
+  // the permission that manages invoices; match.read only lets somebody look
+  // at the result. The tolerance comes from the organisation's settings and
+  // never from the request -- a caller who chooses their own tolerance can
+  // make any invoice match.
+  app.post('/api/v1/invoices/:id/match', { preHandler: guard('invoice.manage') }, async (req, reply) => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const body = req.body as { tolerance?: { quantityPct?: number; ratePct?: number; valueAbsolute?: number }; override_reason?: string };
+    const body = (req.body ?? {}) as { override_reason?: string };
     const row = await mutate(pool, req, 'invoice.match', 'invoice', async db => {
       const invoice = await inOrg(db, 'invoices', id, u.orgId, true);
+      const configured = (await db.query(
+        "SELECT settings->'match_tolerance' AS t FROM organizations WHERE id = $1", [u.orgId])).rows[0]?.t ?? {};
+      // Absent means zero, as it always has: an invoice must agree exactly
+      // unless the organisation has decided otherwise.
+      const tolerance = {
+        quantityPct: Number(configured.quantity_pct ?? 0),
+        ratePct: Number(configured.rate_pct ?? 0),
+        valueAbsolute: Number(configured.value_absolute ?? 0),
+      };
       if (!invoice.purchase_order_id) {
         fail('NO_PURCHASE_ORDER',
           'This invoice is not linked to a purchase order, so there is nothing to match it against');
@@ -440,7 +455,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
         };
       });
 
-      const result = threeWayMatch(lines, body.tolerance ?? {});
+      const result = threeWayMatch(lines, tolerance);
       let overridden = false;
       if (!result.matched && body.override_reason) {
         if (!u.permissions.includes('match.override')) {
@@ -875,10 +890,22 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
         // return posts its own OUT rather than editing the original receipt.
         let stockId: string | null = null;
         if (grnLine.item_id) {
+          // Material that has already been issued cannot go back to the
+          // vendor. Checked under the item lock, like every other posting
+          // that takes stock out, so the return cannot drive stock negative.
+          const item = await lockItem(db, String(grnLine.item_id), u.orgId);
+          const before = await itemOnHand(db, String(grnLine.item_id));
+          if (before < line.quantity) {
+            fail('INSUFFICIENT_STOCK',
+              `${grnLine.description}: only ${before} is in stock to return, not ${line.quantity}`, 409);
+          }
           stockId = (await db.query(
             `INSERT INTO stock_transactions(org_id, created_by, item_id, direction, quantity, reference)
              VALUES($1,$2,$3,'OUT',$4,$5) RETURNING id`,
             [u.orgId, u.id, grnLine.item_id, line.quantity, `Return ${input.return_no}`])).rows[0].id;
+          await notifyLowStockCrossing(db, {
+            orgId: u.orgId, item, before, after: before - line.quantity, transactionId: String(stockId),
+          });
         }
         await db.query(
           `INSERT INTO vendor_return_lines(org_id, return_id, grn_line_id, quantity, remarks, stock_transaction_id)
