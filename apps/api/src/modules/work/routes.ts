@@ -2401,6 +2401,26 @@ export async function registerWorkRoutes(
           message: "Task not found",
         });
       }
+      /*
+       * Work on a closed or cancelled project is finished work (BR-02).
+       * Creating a task there is already refused; handing an existing one to
+       * somebody reopened it by the side door, and put it on their list for
+       * a project nobody is running. Read under a share lock so a close
+       * landing at the same moment cannot slip between the check and the
+       * write.
+       */
+      const project = (await db.query(
+        "SELECT status FROM projects WHERE id = $1::uuid AND org_id = $2 FOR SHARE",
+        [cur.project_id, user.orgId],
+      )).rows[0] as { status: string } | undefined;
+      if (project && ["CLOSED", "CANCELLED"].includes(project.status)) {
+        return sendError(reply, req.requestId, {
+          status: 409,
+          code: "PROJECT_INACTIVE",
+          message: `This project is ${project.status.toLowerCase()}, so its tasks cannot be reassigned. `
+            + "Reopen the project first if the work is not finished.",
+        });
+      }
       const ok = await checkAssignee(
         reply,
         req.requestId,
@@ -2456,11 +2476,15 @@ export async function registerWorkRoutes(
    * (i.e. the successor already reaches the predecessor downstream).
    */
   async function wouldCycle(
+    db: Pick<Pool, "query">,
     projectId: string,
     predecessorId: string,
     successorId: string,
   ): Promise<boolean> {
-    const res = await opts.pool.query(
+    // Read in the caller's transaction, after it has locked the project: a
+    // read through the pool sees neither the lock nor anything the
+    // transaction has written.
+    const res = await db.query(
       `SELECT d.predecessor_id, d.successor_id FROM task_dependencies d
        JOIN tasks t ON t.id = d.successor_id
        WHERE t.project_id = $1::uuid`,
@@ -2555,7 +2579,20 @@ export async function registerWorkRoutes(
           ],
         });
       }
-      if (await wouldCycle(successor.project_id, predecessor_id, successor.id)) {
+      /*
+       * The project row is the lock the whole graph hangs off (WORK-18).
+       *
+       * The cycle check reads every edge in the project and then inserts one.
+       * Two requests adding A->B and B->A at the same moment each read a
+       * graph without the other's edge, each found no cycle, and both
+       * committed one. Serialising edge additions per project makes the
+       * second read see the first edge.
+       */
+      await db.query(
+        "SELECT id FROM projects WHERE id = $1::uuid AND org_id = $2 FOR UPDATE",
+        [successor.project_id, user.orgId],
+      );
+      if (await wouldCycle(db, successor.project_id, predecessor_id, successor.id)) {
         return sendRuleError(reply, req.requestId, {
           status: 422,
           code: "DEPENDENCY_CYCLE",

@@ -1165,3 +1165,76 @@ describe("sla read-model", () => {
     expect(onSchedule.sort()).toEqual([done.id, fine.id].sort());
   });
 });
+
+// ------------------------------------------------------------------ archive, not delete
+
+describe("boards and saved views are archived, not deleted (BR-13)", () => {
+  it("keeps an archived board's row and columns, out of every list", async () => {
+    const h = await adminHeaders();
+    const p = await mkProject(h);
+    const b = await mkBoard(h, p.id, {});
+    const del = await app.inject({ method: "DELETE", url: `/api/v1/boards/${b.id}`, headers: h });
+    expect(del.statusCode).toBe(204);
+
+    const row = await pool.query(
+      "SELECT archived_at, archived_by FROM boards WHERE id = $1", [b.id]);
+    expect(row.rowCount).toBe(1);
+    expect(row.rows[0].archived_at).not.toBeNull();
+    expect(row.rows[0].archived_by).not.toBeNull();
+    const cols = await pool.query("SELECT count(*)::int AS n FROM board_columns WHERE board_id = $1", [b.id]);
+    expect(cols.rows[0].n).toBeGreaterThan(0);
+
+    const list = await app.inject({ method: "GET", url: `/api/v1/boards?project_id=${p.id}`, headers: h });
+    expect((list.json() as { data: Array<{ id: string }> }).data.some(x => x.id === b.id)).toBe(false);
+    const again = await app.inject({ method: "DELETE", url: `/api/v1/boards/${b.id}`, headers: h });
+    expect(again.statusCode).toBe(404);
+  });
+
+  it("keeps an archived saved view's row, out of the list", async () => {
+    const a = await mkUser(["EMPLOYEE"], "archiver");
+    const created = await app.inject({
+      method: "POST", url: "/api/v1/saved-filters", headers: a.headers,
+      payload: { name: "Kept", query_definition: { status: "TO_DO" } },
+    });
+    const id = (created.json() as { id: string }).id;
+    const del = await app.inject({ method: "DELETE", url: `/api/v1/saved-filters/${id}`, headers: a.headers });
+    expect(del.statusCode).toBe(204);
+    const row = await pool.query("SELECT archived_at, archived_by FROM saved_filters WHERE id = $1", [id]);
+    expect(row.rowCount).toBe(1);
+    expect(row.rows[0].archived_by).toBe(a.id);
+    const patch = await app.inject({
+      method: "PATCH", url: `/api/v1/saved-filters/${id}`, headers: a.headers, payload: { name: "Back" },
+    });
+    expect(patch.statusCode).toBe(404);
+  });
+});
+
+// ------------------------------------------------------------------ boards in scope
+
+describe("listing boards without a project (WORK-21)", () => {
+  it("returns only boards on projects the reader may see", async () => {
+    // It returned every board in the organisation, which names every project.
+    const h = await adminHeaders();
+    const mine = await mkProject(h);
+    const theirs = await mkProject(h);
+    const bMine = await mkBoard(h, mine.id, {});
+    const bTheirs = await mkBoard(h, theirs.id, {});
+    const emp = await mkUser(["EMPLOYEE"], "boardscope");
+    await mkTask(h, mine.id, { assignee_id: emp.id });
+
+    const all = await app.inject({ method: "GET", url: "/api/v1/boards", headers: emp.headers });
+    expect(all.statusCode).toBe(200);
+    const ids = (all.json() as { data: Array<{ id: string }> }).data.map(x => x.id);
+    expect(ids).toContain(bMine.id);
+    expect(ids).not.toContain(bTheirs.id);
+
+    const named = await app.inject({
+      method: "GET", url: `/api/v1/boards?project_id=${theirs.id}`, headers: emp.headers,
+    });
+    expect((named.json() as { data: unknown[] }).data).toEqual([]);
+
+    const admin = await app.inject({ method: "GET", url: "/api/v1/boards", headers: h });
+    const adminIds = (admin.json() as { data: Array<{ id: string }> }).data.map(x => x.id);
+    expect(adminIds).toContain(bTheirs.id);
+  });
+});

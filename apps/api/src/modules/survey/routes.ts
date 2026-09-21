@@ -397,8 +397,13 @@ export async function registerSurveyRoutes(
    * exactly where it is.
    */
   async function visibleProgrammes(
-    db: Pool | PoolClient, u: { orgId: string; id: string; permissions: string[] },
+    db: Pool | PoolClient, u: { orgId: string; id: string; permissions: string[]; roles?: string[] },
   ): Promise<string[] | null> {
+    // A client is never on the programme's staff, whatever an enrolment row
+    // says: what they are shown is the observer's view, through the routes
+    // that serve it (see readsAsObserver), and none of the staff routes --
+    // crews, claims, returns, productivity -- is theirs to read.
+    if (clientOnly(u)) return [];
     if (u.permissions.includes('survey.manage')
       || u.permissions.includes('survey.forecast')) return null;
     const rows = (await db.query(
@@ -419,6 +424,60 @@ export async function registerSurveyRoutes(
        WHERE usr.id = $1 AND sc.org_id = $2 AND sc.released_on IS NULL`,
       [u.id, u.orgId])).rows;
     return rows.map(r => String(r.id));
+  }
+
+  /**
+   * Somebody whose only role is CLIENT_VIEWER.
+   *
+   * The client holds survey.read -- the role is granted it so the survey
+   * screen opens for them -- but survey.read is the staff permission and
+   * carries crew names, rover codes and the claim register with it. What the
+   * client is owed is what the department is owed: where the work has got
+   * to. So a client reads as an observer, decided here from the role rather
+   * than by withdrawing survey.read from a role other screens rely on.
+   */
+  function clientOnly(u: { roles?: string[] }): boolean {
+    return Array.isArray(u.roles) && u.roles.length > 0
+      && u.roles.every(r => r === 'CLIENT_VIEWER');
+  }
+
+  /** Whether this reader gets the observer's view: progress only. */
+  function readsAsObserver(u: { permissions: string[]; roles?: string[] }): boolean {
+    return !u.permissions.includes('survey.read') || clientOnly(u);
+  }
+
+  /**
+   * The programmes a client may look at: those run against a project they
+   * are assigned to. A client is scoped to projects everywhere else in the
+   * system, and an observer's "every active programme in the organisation"
+   * would show one client another client's work.
+   */
+  async function clientProgrammes(
+    db: Pool | PoolClient, u: { orgId: string; scopes?: Array<{ scope_type: string | null; scope_id: string | null }> },
+  ): Promise<string[]> {
+    const projects = (u.scopes ?? [])
+      .filter(s => s.scope_type === 'project' && s.scope_id)
+      .map(s => String(s.scope_id));
+    if (!projects.length) return [];
+    return (await db.query(
+      `SELECT id FROM survey_projects WHERE org_id = $1 AND project_id = ANY($2::uuid[])`,
+      [u.orgId, projects])).rows.map(r => String(r.id));
+  }
+
+  /**
+   * A programme, reached the way an observer reaches it: by permission, not
+   * by enrolment -- and, for a client, only if it is one of theirs.
+   */
+  async function observerProgrammeOr404(
+    db: Pool | PoolClient,
+    u: { orgId: string; roles?: string[]; scopes?: Array<{ scope_type: string | null; scope_id: string | null }> },
+    id: string,
+  ) {
+    const row = await inOrg(db, 'survey_projects', id, u.orgId);
+    if (clientOnly(u) && !(await clientProgrammes(db, u)).includes(String(id))) {
+      fail('NOT_FOUND', 'Not found', 404);
+    }
+    return row;
   }
 
   async function projectOr404(
@@ -2267,6 +2326,11 @@ export async function registerSurveyRoutes(
     const u = actor(req), { limit, offset, q } = page(req);
     const values: unknown[] = [u.orgId];
     let where = 'e.org_id = $1';
+    // Only the programmes this reader may see. Unfiltered, every holder of
+    // survey.read -- a client among them -- read every crew's returns in the
+    // organisation, names included.
+    const allowed = await visibleProgrammes(pool, u);
+    if (allowed !== null) { values.push(allowed); where += ` AND e.survey_project_id = ANY($${values.length}::uuid[])`; }
     if (q.survey_project_id) { values.push(q.survey_project_id); where += ` AND e.survey_project_id = $${values.length}`; }
     if (q.survey_village_id) { values.push(q.survey_village_id); where += ` AND e.survey_village_id = $${values.length}`; }
     // Validated like every other window in this module: a value that is not a
@@ -3298,6 +3362,34 @@ export async function registerSurveyRoutes(
       };
     });
 
+  /**
+   * A village's claims may not release more than all of it.
+   *
+   * Each claim's percent was checked on its own, so three claims of sixty
+   * each were all acceptable and the village was billed at 180%. The total is
+   * checked here, under a lock on the village row: two claims raised at the
+   * same moment would otherwise each read the other's absence and both pass.
+   *
+   * Returned claims release nothing (claimedPercent says the same), and the
+   * claim being amended is left out so that it is counted once, at its new
+   * figure.
+   */
+  async function withinHundredOr422(
+    db: PoolClient, villageId: string, adding: number, excludeClaimId: string | null,
+  ): Promise<void> {
+    await db.query('SELECT id FROM survey_villages WHERE id = $1 FOR UPDATE', [villageId]);
+    const standing = Number((await db.query(
+      `SELECT COALESCE(sum(percent), 0) AS total FROM survey_village_billing
+        WHERE survey_village_id = $1 AND status <> 'REJECTED'
+          AND ($2::uuid IS NULL OR id <> $2::uuid)`,
+      [villageId, excludeClaimId])).rows[0].total);
+    if (Math.round((standing + adding) * 100) > 100 * 100) {
+      fail('CLAIMED_OVER_100',
+        `This village already has ${standing}% claimed, and ${adding}% more would take it past 100%. `
+        + 'Check the percentage, or amend the claim that is already standing.', 422);
+    }
+  }
+
   app.post('/api/v1/survey/villages/:id/billing', { preHandler: guard('survey.manage') },
     async (req, reply) => {
       const u = actor(req), id = (req.params as { id: string }).id;
@@ -3320,6 +3412,10 @@ export async function registerSurveyRoutes(
             fail('MILESTONE_ALREADY_CLAIMED',
               'Milestone ' + input.milestone + ' has already been submitted for this village. ' +
               'Open the claim to change its status or reference number.', 409);
+          }
+          if (status !== 'REJECTED') {
+            await withinHundredOr422(db, id,
+              Number(input.percent ?? MILESTONE_PERCENT[input.milestone] ?? 0), null);
           }
           const row = (await db.query(
             `INSERT INTO survey_village_billing(org_id, survey_village_id, milestone,
@@ -3356,6 +3452,12 @@ export async function registerSurveyRoutes(
             fail('DECISION_DATE_REQUIRED',
               'A claim recorded as ' + status.toLowerCase() +
               ' needs the date the department decided it.', 422);
+          }
+          // Checked whenever the claim will be standing afterwards: a new
+          // percent, or a returned claim put back in, both change the total.
+          if (status !== 'REJECTED') {
+            await withinHundredOr422(db, String(row.survey_village_id),
+              Number(input.percent ?? row.percent ?? 0), id);
           }
           const sets: string[] = [], values: unknown[] = [id];
           for (const key of ['percent', 'status', 'submitted_on', 'decided_on',
@@ -3404,6 +3506,10 @@ export async function registerSurveyRoutes(
         /** Villages with nothing claimed at this milestone yet. */
         outstanding: z.coerce.number().int().min(1).max(9).optional(),
       }).strict(), req.query ?? {});
+      // The claim register, for the programmes this reader may see. It was
+      // read organisation-wide by anybody holding survey.read, which put what
+      // every village is being invoiced for in front of a client.
+      const allowed = await visibleProgrammes(pool, u);
 
       if (q.outstanding !== undefined) {
         const rows = (await pool.query(
@@ -3416,12 +3522,13 @@ export async function registerSurveyRoutes(
              JOIN org_units ou ON ou.id = v.village_id
             WHERE v.org_id = $1
               AND ($2::uuid IS NULL OR v.survey_project_id = $2)
+              AND ($4::uuid[] IS NULL OR v.survey_project_id = ANY($4::uuid[]))
               AND NOT EXISTS (
                 SELECT 1 FROM survey_village_billing b
                  WHERE b.survey_village_id = v.id AND b.milestone = $3
                    AND b.status <> 'REJECTED')
             ORDER BY ou.name`,
-          [u.orgId, q.project_id ?? null, q.outstanding])).rows;
+          [u.orgId, q.project_id ?? null, q.outstanding, allowed])).rows;
         return {
           data: rows.map(r => ({
             ...r, total_extent_ac: num(r.total_extent_ac),
@@ -3442,9 +3549,10 @@ export async function registerSurveyRoutes(
             AND ($4::text IS NULL OR b.status = $4)
             AND ($5::date IS NULL OR b.submitted_on >= $5)
             AND ($6::date IS NULL OR b.submitted_on <= $6)
+            AND ($7::uuid[] IS NULL OR v.survey_project_id = ANY($7::uuid[]))
           ORDER BY b.submitted_on DESC, ou.name`,
         [u.orgId, q.project_id ?? null, q.milestone ?? null, q.status ?? null,
-          q.from ?? null, q.to ?? null])).rows;
+          q.from ?? null, q.to ?? null, allowed])).rows;
       return {
         data: rows.map(r => ({
           ...r, percent: num(r.percent), extent_ac: num(r.extent_ac),
@@ -3531,6 +3639,29 @@ export async function registerSurveyRoutes(
             const found = new Set(rows.map(r => String(r.id)));
             const notFound = ids.filter(id => !found.has(id));
 
+            /*
+             * What already stands on each village, read under a lock, so a
+             * batch cannot take a village past 100% any more than a single
+             * claim can (see withinHundredOr422). Locked in id order, the
+             * same order every batch uses, so two batches cannot deadlock.
+             * The claim this batch would amend is left out of its own total.
+             */
+            const standingBy = new Map<string, number>();
+            if (input.action === 'SUBMIT' && rows.length) {
+              await db.query(
+                `SELECT id FROM survey_villages WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE`,
+                [rows.map(r => r.id)]);
+              const sums = (await db.query(
+                `SELECT survey_village_id AS vid, COALESCE(sum(percent), 0) AS total
+                   FROM survey_village_billing
+                  WHERE survey_village_id = ANY($1::uuid[]) AND status <> 'REJECTED'
+                    AND milestone <> $2
+                  GROUP BY 1`,
+                [rows.map(r => r.id), input.milestone])).rows;
+              for (const s of sums) standingBy.set(String(s.vid), Number(s.total));
+            }
+            const adding = Number(input.percent ?? MILESTONE_PERCENT[input.milestone] ?? 0);
+
             const eligible: typeof rows = [];
             const skipped: Array<{ village_name: string; reason: string }> = [];
 
@@ -3553,6 +3684,10 @@ export async function registerSurveyRoutes(
                  */
                 if (MILESTONE_REQUIRES[input.milestone] && !r.earned) {
                   skipped.push({ village_name: String(r.village_name), reason: 'NOT_EARNED' });
+                  continue;
+                }
+                if (Math.round(((standingBy.get(String(r.id)) ?? 0) + adding) * 100) > 100 * 100) {
+                  skipped.push({ village_name: String(r.village_name), reason: 'CLAIMED_OVER_100' });
                   continue;
                 }
               } else {
@@ -4182,7 +4317,9 @@ export async function registerSurveyRoutes(
         (Date.parse(`${asOf}T00:00:00Z`) - Date.parse(`${firstDay}T00:00:00Z`)) / 86_400_000) + 1);
 
       const paceFigures = pace({
-        surveyedAc: whole.surveyedAc,
+        // The rate is of all the work done, measured village or not; only
+        // the share of the extent is confined to villages that have one.
+        surveyedAc: whole.surveyedAc + whole.unweightedSurveyedAc,
         remainingAc: Math.max(0, whole.extentAc - whole.surveyedAc),
         villagesCompleted: whole.completed,
         activeDays: Number(window.active_days),
@@ -4368,7 +4505,9 @@ export async function registerSurveyRoutes(
         (Date.parse(`${asOf}T00:00:00Z`) - Date.parse(`${firstDay}T00:00:00Z`)) / 86_400_000) + 1);
       const whole = rollUp(pos, m.codes, codes, m.basis);
       const paceFigures = pace({
-        surveyedAc: whole.surveyedAc,
+        // The rate is of all the work done, measured village or not; only
+        // the share of the extent is confined to villages that have one.
+        surveyedAc: whole.surveyedAc + whole.unweightedSurveyedAc,
         remainingAc: Math.max(0, whole.extentAc - whole.surveyedAc),
         villagesCompleted: whole.completed,
         activeDays: Number(paceWindow.active_days),
@@ -4544,10 +4683,13 @@ export async function registerSurveyRoutes(
   app.get('/api/v1/survey/dashboard/projects',
     { preHandler: guard('survey.dashboard') }, async req => {
       const u = actor(req);
+      // A client is offered only the programmes run for them.
+      const only = clientOnly(u) ? await clientProgrammes(pool, u) : null;
       const rows = (await pool.query(
         `SELECT id, code, name FROM survey_projects
           WHERE org_id = $1 AND status = 'ACTIVE'
-          ORDER BY name`, [u.orgId])).rows;
+            AND ($2::uuid[] IS NULL OR id = ANY($2::uuid[]))
+          ORDER BY name`, [u.orgId, only])).rows;
       return { data: rows };
     });
 
@@ -4557,12 +4699,11 @@ export async function registerSurveyRoutes(
       const q = (req.query ?? {}) as Record<string, string | undefined>;
       // An observer is not enrolled on the programme, so the scoping that
       // governs staff does not apply to them; the permission is the grant.
-      const scoped = u.permissions.includes('survey.dashboard')
-        && !u.permissions.includes('survey.read');
+      // A client reads as an observer too: progress, no names, no money.
       // The department's view: where the work is, never whose desk it is on.
-      const observerView = scoped;
-      const project = scoped
-        ? await inOrg(pool, 'survey_projects', id, u.orgId)
+      const observerView = readsAsObserver(u);
+      const project = observerView
+        ? await observerProgrammeOr404(pool, u, id)
         : await projectOr404(pool, u.orgId, id, u);
 
       const to = dateParam(req, q.to, 'to', today());
@@ -4762,6 +4903,23 @@ export async function registerSurveyRoutes(
          GROUP BY 1`,
         [id, u.orgId, from, to])).rows;
       const doneBy = new Map(doneRows.map(r => [String(r.vid), Number(r.ac)]));
+      /*
+       * Surveyed extent, split by whether it can be weighed.
+       *
+       * A village with no extent recorded contributes nothing to "extent to
+       * survey", so its work cannot go into "surveyed" either: adding one
+       * without the other is how a district read 140% of its extent. The work
+       * is still reported, apart, because it happened.
+       */
+      const weighed = (items: typeof villages) => {
+        let surveyed = 0, unweighted = 0;
+        for (const v of items) {
+          const done = doneBy.get(v.villageId) ?? 0;
+          if (v.extentAc !== null && v.extentAc !== undefined && v.extentAc > 0) surveyed += done;
+          else unweighted += done;
+        }
+        return { surveyed, unweighted };
+      };
 
       /*
        * Which milestones have been claimed on each village.
@@ -4798,9 +4956,9 @@ export async function registerSurveyRoutes(
           villages: row.items.length,
           extent_ac: row.items.reduce((t, v) => t + (v.extentAc ?? 0), 0),
           extent_sqkm: acresToSqKm(row.items.reduce((t, v) => t + (v.extentAc ?? 0), 0)),
-          surveyed_ac: row.items.reduce((t, v) => t + (doneBy.get(v.villageId) ?? 0), 0),
-          surveyed_sqkm: acresToSqKm(
-            row.items.reduce((t, v) => t + (doneBy.get(v.villageId) ?? 0), 0)),
+          surveyed_ac: weighed(row.items).surveyed,
+          surveyed_sqkm: acresToSqKm(weighed(row.items).surveyed),
+          unweighted_surveyed_ac: weighed(row.items).unweighted,
           // Where each village in this group has got to. The chart and the
           // drill-down read the same numbers.
           by_position: tallyByPosition(row.items),
@@ -4811,7 +4969,7 @@ export async function registerSurveyRoutes(
       };
 
       const totalExtent = matches.reduce((t, v) => t + (v.extentAc ?? 0), 0);
-      const surveyed = matches.reduce((t, v) => t + (doneBy.get(v.villageId) ?? 0), 0);
+      const { surveyed, unweighted: unweightedSurveyed } = weighed(matches);
 
       /*
        * Why the work is held up, counted three ways (§073).
@@ -4945,6 +5103,11 @@ export async function registerSurveyRoutes(
             extent_sqkm: acresToSqKm(totalExtent),
             surveyed_ac: surveyed,
             surveyed_sqkm: acresToSqKm(surveyed),
+            // Surveyed in villages with no extent recorded: outside the
+            // percentage, which has nothing to divide it by, but not lost.
+            unweighted_surveyed_ac: unweightedSurveyed,
+            unweighted_villages: matches.filter(
+              v => v.extentAc === null || v.extentAc === undefined || !(v.extentAc > 0)).length,
             by_position: tallyByPosition(matches),
             /*
              * The same eleven rungs with their extent, for the table beside
@@ -4959,7 +5122,7 @@ export async function registerSurveyRoutes(
             positions: VILLAGE_LADDER.map(rung => {
               const at = matches.filter(v => v.position.key === rung.key);
               const extent = at.reduce((t, v) => t + (v.extentAc ?? 0), 0);
-              const done = at.reduce((t, v) => t + (doneBy.get(v.villageId) ?? 0), 0);
+              const { surveyed: done, unweighted } = weighed(at);
               return {
                 key: rung.key,
                 label: rung.label,
@@ -4968,6 +5131,7 @@ export async function registerSurveyRoutes(
                 extent_sqkm: acresToSqKm(extent),
                 surveyed_ac: done,
                 surveyed_sqkm: acresToSqKm(done),
+                unweighted_surveyed_ac: unweighted,
                 /* Of the villages on screen, not of the programme. */
                 share_pct: matches.length
                   ? Math.round((at.length / matches.length) * 1000) / 10 : 0,
@@ -5215,8 +5379,9 @@ export async function registerSurveyRoutes(
       const q = (req.query ?? {}) as Record<string, string | undefined>;
       // An observer holds no survey.read, so the programme is reached by
       // permission rather than by enrolment — as with the dashboard itself.
-      const scoped = !u.permissions.includes('survey.read');
-      if (scoped) await inOrg(pool, 'survey_projects', id, u.orgId);
+      // A client reaches it the same way, and only for their own programmes.
+      const scoped = readsAsObserver(u);
+      if (scoped) await observerProgrammeOr404(pool, u, id);
       else await projectOr404(pool, u.orgId, id, u);
 
       const side = String(q.side ?? '').trim().toUpperCase();
@@ -5304,8 +5469,8 @@ export async function registerSurveyRoutes(
       const input = parse(surveyQuerySchema, req.body);
       const data = await mutate(pool, req, 'survey.query.raise', 'survey_query',
         async db => {
-          const scoped = !u.permissions.includes('survey.read');
-          if (scoped) await inOrg(db, 'survey_projects', id, u.orgId);
+          const scoped = readsAsObserver(u);
+          if (scoped) await observerProgrammeOr404(db, u, id);
           else await projectOr404(db, u.orgId, id, u);
 
           if (input.org_unit_id) {
@@ -5372,8 +5537,8 @@ export async function registerSurveyRoutes(
     { preHandler: guard('survey.query') }, async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const q = (req.query ?? {}) as Record<string, string | undefined>;
-      const scoped = !u.permissions.includes('survey.read');
-      if (scoped) await inOrg(pool, 'survey_projects', id, u.orgId);
+      const scoped = readsAsObserver(u);
+      if (scoped) await observerProgrammeOr404(pool, u, id);
       else await projectOr404(pool, u.orgId, id, u);
 
       const values: unknown[] = [u.orgId, id];

@@ -23,6 +23,29 @@ async function deliver(url:string,secret:string,body:string,id:string):Promise<n
  const timestamp=String(Math.floor(Date.now()/1000)),signature=createHmac('sha256',secret).update(`${timestamp}.${body}`).digest('hex');
  return new Promise((resolve,reject)=>{const req=request(target,{method:'POST',lookup:(_host,_options,cb)=>cb(null,resolved[0].address,4),headers:{'content-type':'application/json','content-length':Buffer.byteLength(body),'x-silverline-event':id,'x-silverline-timestamp':timestamp,'x-silverline-signature':`sha256=${signature}`}},res=>{res.resume();resolve(res.statusCode??500);});req.setTimeout(10000,()=>req.destroy(new Error('Webhook timeout')));req.on('error',reject);req.end(body);});
 }
+/**
+ * The text recorded when something fails, short enough for a column and a
+ * log line. "Processing failed" told whoever opened the row that it had
+ * failed, which they knew, and not why, which they needed.
+ */
+export function failureText(e:unknown):string{
+ const text=e instanceof Error?e.message:String(e);
+ return (text||'Unknown error').slice(0,500);
+}
+
+/**
+ * Run one part of the worker pass, and log rather than rethrow if it fails.
+ *
+ * The parts are independent: SLA alerts, scheduled reports, automation,
+ * webhooks, push, provider jobs. One throwing used to end the whole pass,
+ * so a single bad report schedule stopped every webhook, push and
+ * automation until somebody noticed -- and nothing said why they had.
+ */
+export async function isolated(name:string,job:()=>Promise<unknown>):Promise<void>{
+ try{await job();}
+ catch(e){console.error(`Background job "${name}" failed: ${failureText(e)}`);}
+}
+
 export async function runJobs(app:FastifyInstance,pool:Pool,jwtSecret:string):Promise<{events:number;deliveries:number}> {
  // The run holds one connection for its exclusivity lock and issues every
  // other query alongside it, so a pool of one deadlocks against itself and
@@ -37,14 +60,15 @@ export async function runJobs(app:FastifyInstance,pool:Pool,jwtSecret:string):Pr
   // the run ends — including a serverless invocation that is simply frozen.
   await lock.query('BEGIN');
   const acquired=await lock.query('SELECT pg_try_advisory_xact_lock(7814239) AS ok');if(!acquired.rows[0].ok){await lock.query('COMMIT');return count;}
-  await runScheduledJobs(app,pool,jwtSecret);
+  await isolated('scheduled jobs',()=>runScheduledJobs(app,pool,jwtSecret));
   // Survey alerts (§27). Failing here must not stop the rest of the pass:
   // the bottleneck report still shows everything these would have said.
-  try{await runSurveyAlerts(pool);}catch(e){console.error('Survey alerts failed',(e as Error).message);}
+  await isolated('survey alerts',()=>runSurveyAlerts(pool));
   // Finding what is wrong and telling somebody about it are separate passes:
   // a mail relay having a bad afternoon must not stop the finding.
-  try{await drainSurveyAlertMail(pool);}catch(e){console.error('Survey alert mail failed',(e as Error).message);}
-  await runReportJobs(app,pool,jwtSecret);
+  await isolated('survey alert mail',()=>drainSurveyAlertMail(pool));
+  await isolated('report jobs',()=>runReportJobs(app,pool,jwtSecret));
+  await isolated('automation events',async()=>{
   const events=await pool.query('SELECT * FROM domain_events WHERE processed_at IS NULL AND attempts<8 AND next_attempt_at<=now() ORDER BY created_at LIMIT 25');
   for(const event of events.rows){
    try{
@@ -89,14 +113,31 @@ export async function runJobs(app:FastifyInstance,pool:Pool,jwtSecret:string):Pr
     }
     await pool.query('INSERT INTO webhook_deliveries(org_id,subscription_id,event_id) SELECT $1,id,$2 FROM webhook_subscriptions WHERE org_id=$1 AND active AND events ? $3 ON CONFLICT DO NOTHING',[event.org_id,event.id,event.type]);
     await pool.query('UPDATE domain_events SET processed_at=now(),error=NULL WHERE id=$1',[event.id]);count.events++;
-   }catch{await pool.query("UPDATE domain_events SET attempts=attempts+1,error='Processing failed',next_attempt_at=now()+least(3600,power(2,attempts+1)) * interval '1 second' WHERE id=$1",[event.id]);}
+   }catch(e){
+    // The real reason, so the row says what to fix. Error text from our own
+    // routes and queries -- webhook destinations and responses are never
+    // part of it, since deliveries are recorded separately below.
+    await pool.query("UPDATE domain_events SET attempts=attempts+1,error=$2,next_attempt_at=now()+least(3600,power(2,attempts+1)) * interval '1 second' WHERE id=$1",[event.id,failureText(e)]);
+   }
   }
-  const deliveries=await pool.query("SELECT d.*,s.url,s.secret_encrypted,e.type,e.entity_type,e.entity_id FROM webhook_deliveries d JOIN webhook_subscriptions s ON s.id=d.subscription_id JOIN domain_events e ON e.id=d.event_id WHERE d.status='PENDING' AND d.next_attempt_at<=now() AND s.active AND EXISTS(SELECT 1 FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN role_permissions rp ON rp.role_id=ur.role_id WHERE u.id=s.created_by AND u.auth_status='ACTIVE' AND rp.permission_code='webhook.manage' AND (ur.scope_type IS NULL OR ur.scope_id IS NULL)) ORDER BY d.created_at LIMIT 20");
+  });
+  /*
+   * Deliveries go out only while whoever created the subscription still
+   * holds webhook.manage across the whole organisation: a role row with no
+   * scope at all. It read `scope_type IS NULL OR scope_id IS NULL`, which
+   * also took a half-set row -- a district chosen with no district, say --
+   * as organisation-wide, and kept a narrowed creator's webhooks firing.
+   * Both columns empty, as every other authority check in the background
+   * workers already requires.
+   */
+  await isolated('webhook deliveries',async()=>{
+  const deliveries=await pool.query("SELECT d.*,s.url,s.secret_encrypted,e.type,e.entity_type,e.entity_id FROM webhook_deliveries d JOIN webhook_subscriptions s ON s.id=d.subscription_id JOIN domain_events e ON e.id=d.event_id WHERE d.status='PENDING' AND d.next_attempt_at<=now() AND s.active AND EXISTS(SELECT 1 FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN role_permissions rp ON rp.role_id=ur.role_id WHERE u.id=s.created_by AND u.auth_status='ACTIVE' AND rp.permission_code='webhook.manage' AND ur.scope_type IS NULL AND ur.scope_id IS NULL) ORDER BY d.created_at LIMIT 20");
   for(const d of deliveries.rows){let status=0;try{status=await deliver(d.url,decryptPii(d.secret_encrypted),JSON.stringify({id:d.event_id,type:d.type,entity_type:d.entity_type,entity_id:d.entity_id}),d.event_id);}catch{/* bounded retry, no private destination or response content logged */}
    const ok=status>=200&&status<300;await pool.query("UPDATE webhook_deliveries SET status=$2,attempts=attempts+1,response_status=$3,error=$4,next_attempt_at=now()+least(3600,power(2,attempts+1))*interval '1 second' WHERE id=$1",[d.id,ok?'DELIVERED':d.attempts>=7?'FAILED':'PENDING',status||null,ok?null:'Delivery unsuccessful']);count.deliveries++;
   }
-  await runPushDelivery(pool);
-  await runProviderJobs(pool);
+  });
+  await isolated('push delivery',()=>runPushDelivery(pool));
+  await isolated('provider jobs',()=>runProviderJobs(pool));
   return count;
  }finally{await lock.query('COMMIT').catch(()=>lock.query('ROLLBACK').catch(()=>{}));lock.release();}
 }

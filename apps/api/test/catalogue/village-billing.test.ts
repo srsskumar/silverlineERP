@@ -479,3 +479,63 @@ describe("claiming out of order", () => {
     expect(r.data.out_of_order).toBe(0);
   });
 });
+
+describe("a village cannot be claimed past 100%", () => {
+  /*
+   * Each claim's percent was checked on its own, so claims of seventy and
+   * forty were both acceptable and the village was billed at 110%.
+   */
+  it("refuses a claim that would take the total past a hundred", async () => {
+    const v = await makeVillage("OVERCLAIM");
+    const first = await post(w.admin, `/api/v1/survey/villages/${v}/billing`,
+      { milestone: 1, percent: 70 });
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
+    const second = await post(w.admin, `/api/v1/survey/villages/${v}/billing`,
+      { milestone: 2, percent: 40 });
+    expect(second.status).toBe(422);
+    expect(second.body.code).toBe("CLAIMED_OVER_100");
+    const fits = await post(w.admin, `/api/v1/survey/villages/${v}/billing`,
+      { milestone: 2, percent: 30 });
+    expect(fits.status, JSON.stringify(fits.body)).toBe(201);
+  });
+
+  it("refuses an amendment that would take it past a hundred", async () => {
+    const v = await makeVillage("OVERAMEND");
+    const m1 = await post(w.admin, `/api/v1/survey/villages/${v}/billing`, { milestone: 1, percent: 50 });
+    await post(w.admin, `/api/v1/survey/villages/${v}/billing`, { milestone: 2, percent: 40 });
+    const r = await patch({ ...w.admin, ...(await ver(m1.data.id)) },
+      `/api/v1/survey/billing/${m1.data.id}`, { percent: 70 });
+    expect(r.status).toBe(422);
+    expect(r.body.code).toBe("CLAIMED_OVER_100");
+    // Its own current figure is not counted twice: 60 + 40 is fine.
+    const ok = await patch({ ...w.admin, ...(await ver(m1.data.id)) },
+      `/api/v1/survey/billing/${m1.data.id}`, { percent: 60 });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+  });
+
+  it("lets only one of two simultaneous claims through when together they exceed it", async () => {
+    // Separately each fits; together they would be 110%. Without the lock on
+    // the village both read the other's absence and both pass.
+    const v = await makeVillage("RACE");
+    const m1 = await post(w.admin, `/api/v1/survey/villages/${v}/billing`, { milestone: 1, percent: 50 });
+    const [a, b] = await Promise.all([
+      post(w.admin, `/api/v1/survey/villages/${v}/billing`, { milestone: 2, percent: 40 }),
+      (async () => patch({ ...w.admin, ...(await ver(m1.data.id)) },
+        `/api/v1/survey/billing/${m1.data.id}`, { percent: 70 }))(),
+    ]);
+    expect([a.status, b.status].filter(s => s === 422)).toHaveLength(1);
+    const after = await get(w.admin, `/api/v1/survey/villages/${v}/billing`);
+    expect(after.meta.claimed_percent).toBeLessThanOrEqual(100);
+  });
+
+  it("skips a village in a batch that the claim would take past it, and says why", async () => {
+    const v = await makeVillage("OVERBATCH");
+    await post(w.admin, `/api/v1/survey/villages/${v}/billing`, { milestone: 1, percent: 80 });
+    const r = await post(w.admin, "/api/v1/survey/billing/bulk", {
+      survey_village_ids: [v], action: "SUBMIT", milestone: 2, percent: 30,
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.would_change).toBe(0);
+    expect(r.data.skipped[0].reason).toBe("CLAIMED_OVER_100");
+  });
+});

@@ -2304,3 +2304,30 @@ describe('one date format, one clock (§082)', () => {
     }
   });
 });
+
+describe('rollUp with a village that has no denominator', () => {
+  it('never counts work it cannot weigh towards the percentage', () => {
+    // The numerator used to take every village and the denominator only the
+    // ones with an extent, so one unmeasured village pushed a programme past
+    // a hundred percent.
+    const r = rollUp([
+      village({ villageId: 'a', extentAc: 100, done: { GOVT_LAND_EXTENT_AC: 40 } }),
+      village({ villageId: 'b', extentAc: null, done: { GOVT_LAND_EXTENT_AC: 80 } }),
+    ], ['GOVT_LAND_EXTENT_AC'], STAGE_CODES, BASIS);
+    expect(r.overallPct).toBe(40);
+    expect(r.surveyedAc).toBe(40);
+    expect(r.unweightedSurveyedAc).toBe(80);
+    expect(r.measures.GOVT_LAND_EXTENT_AC.pct).toBe(40);
+    expect(r.measures.GOVT_LAND_EXTENT_AC.done).toBe(40);
+    expect(r.measures.GOVT_LAND_EXTENT_AC.unweightedDone).toBe(80);
+  });
+
+  it('keeps a target-based measure to the villages with a target', () => {
+    const r = rollUp([
+      village({ villageId: 'a', done: { VILLAGE_BOUNDARY_POINTS: 50 }, targets: { VILLAGE_BOUNDARY_POINTS: 100 } }),
+      village({ villageId: 'b', done: { VILLAGE_BOUNDARY_POINTS: 300 } }),
+    ], ['VILLAGE_BOUNDARY_POINTS'], STAGE_CODES, BASIS);
+    expect(r.measures.VILLAGE_BOUNDARY_POINTS.pct).toBe(50);
+    expect(r.measures.VILLAGE_BOUNDARY_POINTS.unweightedDone).toBe(300);
+  });
+});

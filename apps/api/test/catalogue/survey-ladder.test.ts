@@ -1358,3 +1358,94 @@ describe("a question about a district (§074)", () => {
     expect(r.data.refreshed).toHaveProperty("last_stage_change");
   });
 });
+
+describe("what a client may see", () => {
+  /*
+   * A client holds survey.read -- the role needs it for the screen to open --
+   * and the dashboard used to take that as a reason to hand them the staff
+   * view: whose desk each village is on, and which milestones are due to be
+   * invoiced. A client is owed what the department is owed, and nothing more.
+   */
+  let other = "";
+  beforeAll(async () => {
+    // The client is assigned to the project this programme is run against,
+    // which is how a client is scoped everywhere else in the system.
+    await w.pool.query("UPDATE survey_projects SET project_id = $1 WHERE id = $2",
+      [w.activeProject, programmeId]);
+    await w.pool.query(
+      `UPDATE user_roles SET scope_type = 'project', scope_id = $1
+        WHERE user_id = $2`, [w.activeProject, w.roleUserId.CLIENT_VIEWER]);
+    const p = await post(w.admin, "/api/v1/survey/projects",
+      { code: uniq("SP"), name: "Somebody else's programme" });
+    other = String(p.data.id);
+  });
+
+  it("gives a client the observer's dashboard: progress, no names, no money", async () => {
+    const staff = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    expect((staff.data.villages as Array<Record<string, unknown>>)
+      .some(v => Array.isArray(v.holders) && (v.holders as unknown[]).length > 0),
+    "the staff view names somebody, so the absence below means something").toBe(true);
+
+    const r = await get(w.role.CLIENT_VIEWER, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.totals.villages).toBeGreaterThan(0);
+    expect(r.data.totals).not.toHaveProperty("earned");
+    expect(r.data.totals).not.toHaveProperty("claimed_unearned");
+    for (const v of r.data.villages as Array<Record<string, unknown>>) {
+      expect(v).not.toHaveProperty("holders");
+      expect(v).not.toHaveProperty("holder_count");
+      expect(v).not.toHaveProperty("earned_milestones");
+    }
+    for (const st of r.data.stage_days as Array<Record<string, unknown>>) {
+      expect(st).not.toHaveProperty("holders");
+    }
+    const body = JSON.stringify(r.data);
+    for (const leak of ["employee_id", "employee_name", "assignee", "milestone",
+      "billing", "claim", "invoice", "amount"]) {
+      expect(body, leak).not.toContain(leak);
+    }
+    const people = await w.pool.query(
+      "SELECT id, first_name FROM employees WHERE org_id = $1 LIMIT 50", [w.orgId]);
+    for (const row of people.rows) expect(body).not.toContain(String(row.id));
+  });
+
+  it("shows a client only the programmes run for them", async () => {
+    const picker = await get(w.role.CLIENT_VIEWER, "/api/v1/survey/dashboard/projects");
+    expect(picker.status).toBe(200);
+    const ids = (picker.data as Array<{ id: string }>).map(p => p.id);
+    expect(ids).toContain(programmeId);
+    expect(ids).not.toContain(other);
+    const r = await get(w.role.CLIENT_VIEWER, `/api/v1/survey/projects/${other}/dashboard`);
+    expect(r.status).toBe(404);
+  });
+
+  it("closes the staff routes to a client: crews, claims, returns", async () => {
+    for (const url of [
+      `/api/v1/survey/villages/${villageA}/crew`,
+      `/api/v1/survey/villages/${villageA}/billing`,
+      `/api/v1/survey/projects/${programmeId}/employees`,
+      `/api/v1/survey/projects/${programmeId}/progress`,
+    ]) {
+      const r = await get(w.role.CLIENT_VIEWER, url);
+      expect([403, 404], `${url} -> ${r.status}`).toContain(r.status);
+    }
+    const claims = await get(w.role.CLIENT_VIEWER, "/api/v1/survey/billing");
+    expect(claims.data ?? []).toEqual([]);
+  });
+});
+
+describe("the claim register and the returns, outside the programme", () => {
+  it("keeps a client out of the organisation's claim register and returns", async () => {
+    // Both lists were read organisation-wide by anybody holding survey.read.
+    const staff = await get(w.admin, "/api/v1/survey/billing");
+    expect((staff.data as unknown[]).length).toBeGreaterThan(0);
+    const claims = await get(w.role.CLIENT_VIEWER, "/api/v1/survey/billing");
+    expect(claims.status).toBe(200);
+    expect(claims.data).toEqual([]);
+    const outstanding = await get(w.role.CLIENT_VIEWER, "/api/v1/survey/billing?outstanding=2");
+    expect(outstanding.data).toEqual([]);
+    const entries = await get(w.role.CLIENT_VIEWER, "/api/v1/survey/entries");
+    expect(entries.status).toBe(200);
+    expect(entries.data).toEqual([]);
+  });
+});

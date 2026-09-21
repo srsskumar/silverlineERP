@@ -326,3 +326,54 @@ describe('employee work isolation',()=>{it('limits ordinary and explicit-assigne
  expect((await call('POST','tasks',{project_id:p.id,title:'Invalid delegation',assignee_id:adminId})).statusCode).toBe(403);
  expect((await call('GET','projects')).json().data.map((r:any)=>r.id)).toContain(p.id);
 });});
+
+describe('the background pass keeps going when one part fails (OPS-11, OPS-13)', () => {
+ it('still processes automation events when the scheduled jobs throw', async () => {
+  // One throw in the SLA pass used to end the whole run, so nothing queued
+  // behind it -- automation, webhooks, push -- ran either.
+  const p=await project();
+  const t=(await call('POST','tasks',{project_id:p.id,title:'Overdue'})).json(),task=t.task??t;
+  await pool.query("UPDATE tasks SET planned_end_date='2020-01-01' WHERE id=$1",[task.id]);
+  await pool.query(`CREATE OR REPLACE FUNCTION test_refuse_sla() RETURNS trigger AS $$
+   BEGIN IF NEW.type LIKE 'sla.%' THEN RAISE EXCEPTION 'sla store unavailable'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql`);
+  await pool.query('CREATE TRIGGER test_refuse_sla BEFORE INSERT ON domain_events FOR EACH ROW EXECUTE FUNCTION test_refuse_sla()');
+  try{
+   const pending=(await pool.query('SELECT count(*)::int AS n FROM domain_events WHERE processed_at IS NULL')).rows[0].n;
+   expect(pending).toBeGreaterThan(0);
+   await runJobs(app,pool,'v2-test-secret');
+   const left=(await pool.query('SELECT count(*)::int AS n FROM domain_events WHERE processed_at IS NULL')).rows[0].n;
+   expect(left).toBe(0);
+  }finally{
+   await pool.query('DROP TRIGGER IF EXISTS test_refuse_sla ON domain_events');
+   await pool.query('DROP FUNCTION IF EXISTS test_refuse_sla()');
+  }
+ });
+
+ it('records why an event failed, not just that it did', async () => {
+  const e=(await pool.query("INSERT INTO domain_events(org_id,type,entity_type,payload) VALUES($1,'thing.happened','thing','null'::jsonb) RETURNING id",[orgId])).rows[0];
+  await runJobs(app,pool,'v2-test-secret');
+  const row=(await pool.query('SELECT error,attempts FROM domain_events WHERE id=$1',[e.id])).rows[0];
+  expect(row.attempts).toBe(1);
+  expect(row.error).not.toBe('Processing failed');
+  expect(row.error).toMatch(/project_id/);
+ });
+
+ it('sends webhooks only for a creator with an unscoped webhook.manage role', async () => {
+  // `scope_type IS NULL OR scope_id IS NULL` took a half-set row as
+  // organisation-wide; every other background authority check needs both.
+  const adminRole=(await pool.query("SELECT id FROM roles WHERE code='ADMIN'")).rows[0].id;
+  const half=(await pool.query("INSERT INTO users(org_id,username,password_hash,auth_status) VALUES($1,$2,'x','ACTIVE') RETURNING id",[orgId,'half_'+randomUUID().slice(0,8)])).rows[0].id;
+  await pool.query("INSERT INTO user_roles(user_id,role_id,scope_type,scope_id) VALUES($1,$2,'district',NULL)",[half,adminRole]);
+  const event=(await pool.query("INSERT INTO domain_events(org_id,type,entity_type,processed_at) VALUES($1,'x.y','thing',now()) RETURNING id",[orgId])).rows[0].id;
+  const sub=async(createdBy:string)=>(await pool.query(
+   "INSERT INTO webhook_subscriptions(org_id,name,url,secret_encrypted,events,created_by) VALUES($1,'hook','https://nowhere.invalid/hook','not-a-secret','[\"x.y\"]',$2) RETURNING id",[orgId,createdBy])).rows[0].id;
+  const halfSub=await sub(half),fullSub=await sub(adminId);
+  const halfDel=(await pool.query('INSERT INTO webhook_deliveries(org_id,subscription_id,event_id) VALUES($1,$2,$3) RETURNING id',[orgId,halfSub,event])).rows[0].id;
+  const fullDel=(await pool.query('INSERT INTO webhook_deliveries(org_id,subscription_id,event_id) VALUES($1,$2,$3) RETURNING id',[orgId,fullSub,event])).rows[0].id;
+  await runJobs(app,pool,'v2-test-secret');
+  const attempts=async(id:string)=>(await pool.query('SELECT attempts FROM webhook_deliveries WHERE id=$1',[id])).rows[0].attempts;
+  expect(await attempts(halfDel)).toBe(0);
+  // Attempted (and failed: the address does not exist), which is the point.
+  expect(await attempts(fullDel)).toBe(1);
+ });
+});

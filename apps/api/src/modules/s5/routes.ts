@@ -20,7 +20,7 @@ import {
   toFieldErrors,
   type BoardColumnInput,
 } from "@silverline/shared";
-import { buildAuthenticate, requirePermission } from "../../common/auth.js";
+import { buildAuthenticate, requirePermission, scopesForPermission } from "../../common/auth.js";
 import { writeAudit } from "../../common/audit.js";
 import { sendError } from "../../common/httpErrors.js";
 import {
@@ -30,6 +30,7 @@ import {
 } from "../../common/idempotency.js";
 import { redactPiiForAudit } from "../../common/crypto.js";
 import { parseIfMatch } from '../../common/ifMatch.js';
+import { projectRestriction } from '../../common/scopedReads.js';
 
 export interface S5RoutesOptions {
   pool: Pool;
@@ -332,8 +333,11 @@ export async function registerS5Routes(
     orgId: string,
     id: string,
   ): Promise<BoardRow | undefined> {
+    // An archived board is gone as far as every route is concerned; only
+    // the row survives, so the wrong one archived can be put back.
     const res = await opts.pool.query(
-      `SELECT ${BOARD_COLS} FROM boards WHERE id = $1::uuid AND org_id = $2`,
+      `SELECT ${BOARD_COLS} FROM boards
+        WHERE id = $1::uuid AND org_id = $2 AND archived_at IS NULL`,
       [id, orgId],
     );
     return res.rows[0] as BoardRow | undefined;
@@ -540,7 +544,21 @@ export async function registerS5Routes(
       });
     }
     const values: unknown[] = [user.orgId];
-    const clauses = ["org_id = $1"];
+    const clauses = ["org_id = $1", "archived_at IS NULL"];
+    // Boards on the projects this reader may see, and no others. Without a
+    // project_id this returned every board in the organisation, which named
+    // every project in it -- including to somebody scoped to one.
+    //
+    // "May see" is project.read's scope, the rule GET /projects applies:
+    // board.read is not narrowed to a person's own work (auth.ts), so its own
+    // scope would call almost everybody organisation-wide.
+    const projectScopes = user.permissions.includes("project.read")
+      ? await scopesForPermission(req, "project.read")
+      : user.scopes;
+    clauses.push(
+      `project_id IN (SELECT id FROM projects WHERE org_id = $1 AND ${
+        await projectRestriction(opts.pool, { ...user, scopes: projectScopes }, values)})`,
+    );
     if (parsed.data.project_id) {
       values.push(parsed.data.project_id);
       clauses.push(`project_id = $${values.length}::uuid`);
@@ -818,10 +836,14 @@ export async function registerS5Routes(
           message: "Board not found",
         });
       }
-      // Config delete only: board_columns cascade; tasks are never touched.
+      // Archived, not deleted (BR-13): the board and its columns stay, out of
+      // every list, so a board removed by mistake can be restored. Tasks are
+      // never touched either way.
       await db.query(
-        "DELETE FROM boards WHERE id = $1::uuid AND org_id = $2",
-        [id, user.orgId],
+        `UPDATE boards SET archived_at = NOW(), archived_by = $3::uuid,
+           updated_at = NOW(), updated_by = $3::uuid, version = version + 1
+         WHERE id = $1::uuid AND org_id = $2 AND archived_at IS NULL`,
+        [id, user.orgId, user.id],
       );
       const meta = metaOf(req);
       await writeAudit(db, {
@@ -829,7 +851,7 @@ export async function registerS5Routes(
         actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
-        action: "board.delete",
+        action: "board.archive",
         entityType: "board",
         entityId: id,
         beforeState: redactPiiForAudit(toBoardShape(cur)),
@@ -933,7 +955,8 @@ export async function registerS5Routes(
       // Own filters union shared ones; an optional project scope keeps
       // global (project-less) filters visible inside that project.
       const values: unknown[] = [user.orgId, user.id];
-      const clauses = ["org_id = $1", "(owner_id = $2::uuid OR shared = true)"];
+      const clauses = ["org_id = $1", "archived_at IS NULL",
+        "(owner_id = $2::uuid OR shared = true)"];
       if (parsed.data.project_id) {
         values.push(parsed.data.project_id);
         clauses.push(`(project_id IS NULL OR project_id = $${values.length}::uuid)`);
@@ -958,7 +981,8 @@ export async function registerS5Routes(
     id: string,
   ): Promise<SavedFilterRow | undefined> {
     const res = await opts.pool.query(
-      `SELECT ${FILTER_COLS} FROM saved_filters WHERE id = $1::uuid AND org_id = $2`,
+      `SELECT ${FILTER_COLS} FROM saved_filters
+        WHERE id = $1::uuid AND org_id = $2 AND archived_at IS NULL`,
       [id, orgId],
     );
     return res.rows[0] as SavedFilterRow | undefined;
@@ -1055,9 +1079,12 @@ export async function registerS5Routes(
           message: "Saved filter not found",
         });
       }
+      // Archived, not deleted (BR-13), for the same reason as a board.
       await db.query(
-        "DELETE FROM saved_filters WHERE id = $1::uuid AND org_id = $2",
-        [id, user.orgId],
+        `UPDATE saved_filters SET archived_at = NOW(), archived_by = $3::uuid,
+           updated_at = NOW()
+         WHERE id = $1::uuid AND org_id = $2 AND archived_at IS NULL`,
+        [id, user.orgId, user.id],
       );
       const meta = metaOf(req);
       await writeAudit(db, {
@@ -1065,7 +1092,7 @@ export async function registerS5Routes(
         actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
         actorIp: meta.ip,
         actorUserAgent: meta.userAgent,
-        action: "filter.delete",
+        action: "filter.archive",
         entityType: "saved_filter",
         entityId: id,
         beforeState: redactPiiForAudit(toFilterShape(cur)),

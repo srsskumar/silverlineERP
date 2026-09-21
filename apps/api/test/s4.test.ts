@@ -1355,3 +1355,101 @@ describe("project close", () => {
     expect((audit.rows[0] as { reason: string }).reason).toBe("all done");
   });
 });
+
+// ------------------------------------------------------------------ BR-02 / WORK-18
+
+describe("assigning on a finished project (BR-02)", () => {
+  it("refuses to reassign a task on a closed or cancelled project", async () => {
+    // Creating a task there was refused; handing an existing one to somebody
+    // reopened it by the side door.
+    const h = await adminHeaders();
+    const worker = await mkUser(["EMPLOYEE"], "late");
+    for (const status of ["CLOSED", "CANCELLED"]) {
+      const p = await mkProject(h);
+      const t = await mkTask(h, p.id);
+      await pool.query("UPDATE projects SET status = $2 WHERE id = $1", [p.id, status]);
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/tasks/${t.id}/assign`,
+        headers: h,
+        payload: { assignee_id: worker.id, reason: "after the close" },
+      });
+      expect(res.statusCode, status).toBe(409);
+      expect((res.json() as { code: string }).code).toBe("PROJECT_INACTIVE");
+      const after = await pool.query("SELECT assignee_id FROM tasks WHERE id = $1", [t.id]);
+      expect(after.rows[0].assignee_id).not.toBe(worker.id);
+    }
+  });
+});
+
+describe("dependency cycles under concurrency (WORK-18)", () => {
+  it("lets only one of A->B and B->A through when both arrive at once", async () => {
+    // Each read the graph without the other's edge, found no cycle, and both
+    // committed one.
+    const h = await adminHeaders();
+    for (let round = 0; round < 5; round += 1) {
+      const p = await mkProject(h);
+      const a = await mkTask(h, p.id, { title: "A" });
+      const b = await mkTask(h, p.id, { title: "B" });
+      const [x, y] = await Promise.all([
+        app.inject({ method: "POST", url: `/api/v1/tasks/${b.id}/dependencies`,
+          headers: h, payload: { predecessor_id: a.id } }),
+        app.inject({ method: "POST", url: `/api/v1/tasks/${a.id}/dependencies`,
+          headers: h, payload: { predecessor_id: b.id } }),
+      ]);
+      expect([x.statusCode, y.statusCode].sort()).toEqual([201, 422]);
+      const edges = await pool.query(
+        `SELECT count(*)::int AS n FROM task_dependencies
+          WHERE (predecessor_id = $1 AND successor_id = $2) OR (predecessor_id = $2 AND successor_id = $1)`,
+        [a.id, b.id]);
+      expect(edges.rows[0].n).toBe(1);
+    }
+  });
+});
+
+describe("a failed notification never takes the business write with it (OPS-9)", () => {
+  it("keeps the assignment when the inbox insert fails inside the transaction", async () => {
+    /*
+     * The notification is written on the route's own transaction and its
+     * failure was swallowed -- but Postgres had already aborted the
+     * transaction, so the route answered 200 and its COMMIT became a
+     * ROLLBACK. Forced here with a trigger that refuses this one row.
+     */
+    const h = await adminHeaders();
+    const p = await mkProject(h);
+    const t = await mkTask(h, p.id);
+    const worker = await mkUser(["EMPLOYEE"], "unnotifiable");
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION test_refuse_notification() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.recipient_id = '${worker.id}'::uuid THEN
+          RAISE EXCEPTION 'inbox unavailable';
+        END IF;
+        RETURN NEW;
+      END $$ LANGUAGE plpgsql`);
+    await pool.query(`
+      CREATE TRIGGER test_refuse_notification BEFORE INSERT ON notifications
+      FOR EACH ROW EXECUTE FUNCTION test_refuse_notification()`);
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/tasks/${t.id}/assign`,
+        headers: h,
+        payload: { assignee_id: worker.id, reason: "notification will fail" },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      const after = await pool.query("SELECT assignee_id FROM tasks WHERE id = $1", [t.id]);
+      expect(after.rows[0].assignee_id).toBe(worker.id);
+      const audit = await pool.query(
+        "SELECT count(*)::int AS n FROM audit_events WHERE action = 'task.assign' AND entity_id = $1",
+        [t.id]);
+      expect(audit.rows[0].n).toBe(1);
+      const inbox = await pool.query(
+        "SELECT count(*)::int AS n FROM notifications WHERE recipient_id = $1", [worker.id]);
+      expect(inbox.rows[0].n).toBe(0);
+    } finally {
+      await pool.query("DROP TRIGGER IF EXISTS test_refuse_notification ON notifications");
+      await pool.query("DROP FUNCTION IF EXISTS test_refuse_notification()");
+    }
+  });
+});

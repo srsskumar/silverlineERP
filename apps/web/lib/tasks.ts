@@ -354,7 +354,13 @@ export async function patchTask(
   return normalizeTask(data);
 }
 
-export async function transitionTask(id: string, status: string, version?: number | string): Promise<Task> {
+export async function transitionTask(
+  id: string,
+  status: string,
+  version?: number | string,
+  /** Moving past unfinished predecessors: project.update and a reason. */
+  override?: { override: true; override_reason: string },
+): Promise<Task> {
   const headers: Record<string, string> = {};
   // The status endpoint requires If-Match (optimistic concurrency); without
   // it every call 422s with a generic "Validation failed".
@@ -362,7 +368,7 @@ export async function transitionTask(id: string, status: string, version?: numbe
   const { data } = await apiRequest<unknown>(`/api/v1/tasks/${encodeURIComponent(id)}/status`, {
     method: 'PATCH',
     headers,
-    body: { status },
+    body: { status, ...(override ?? {}) },
   });
   return normalizeTask(data);
 }

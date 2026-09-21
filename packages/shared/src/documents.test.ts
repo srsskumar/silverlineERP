@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DOCUMENT_ROLE_GRANTS, DOCUMENT_TYPE_SEEDS, DOCUMENT_TYPE_CODES,
+  DOCUMENT_PERMISSIONS, DOCUMENT_ROLE_GRANTS, DOCUMENT_TYPE_SEEDS, DOCUMENT_TYPE_CODES,
   canDelete, daysUntil, documentCreateSchema, documentRenewSchema, documentState,
   isInForce, legalHoldSchema, renewalQueue, summarise, typeAllowsOwner,
 } from './documents.js';
@@ -295,10 +295,13 @@ describe('schemas', () => {
     expect(documentCreateSchema.safeParse({ ...valid, owner_type: 'building' }).success).toBe(false);
   });
 
-  it('requires an expiry date on a renewal', () => {
-    // A renewal with no new expiry is not a renewal.
-    expect(documentRenewSchema.safeParse({}).success).toBe(false);
+  it('leaves the expiry of a revision to the type, not the schema', () => {
+    // A drawing is revised without ever expiring. Whether a date is required
+    // is the type's rule, and the route applies it; the schema only checks
+    // the shape of a date when one is given.
+    expect(documentRenewSchema.safeParse({}).success).toBe(true);
     expect(documentRenewSchema.safeParse({ expires_on: '2028-03-31' }).success).toBe(true);
+    expect(documentRenewSchema.safeParse({ expires_on: '31/03/2028' }).success).toBe(false);
   });
 
   it('requires a reason to place a hold but not to release one', () => {
@@ -316,6 +319,17 @@ describe('role grants', () => {
     expect(auditor).toContain('document.confidential');
     expect(auditor).toContain('document.legalhold');
     expect(auditor).not.toContain('document.delete');
+  });
+
+  it('gives releasing a hold its own permission, held where placing one is', () => {
+    // Migration 082 seeds the release to exactly the roles that could place
+    // a hold before the two were split, so nobody lost the ability and
+    // nobody gained it.
+    expect(DOCUMENT_PERMISSIONS).toContain('document.legalhold.release');
+    for (const [role, grants] of Object.entries(DOCUMENT_ROLE_GRANTS)) {
+      expect(grants.includes('document.legalhold.release'), role)
+        .toBe(grants.includes('document.legalhold'));
+    }
   });
 
   it('keeps confidential documents away from roles that do not need them', () => {

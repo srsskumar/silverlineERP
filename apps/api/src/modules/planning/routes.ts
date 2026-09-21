@@ -25,7 +25,8 @@ export async function registerPlanningRoutes(app:FastifyInstance,opts:{pool:Pool
    await inOrg(db,'projects',id,u.orgId,true);
    const current=(await db.query('SELECT version FROM project_workflow_overrides WHERE project_id=$1 FOR UPDATE',[id])).rows[0]??{version:0};
    if(req.headers['if-match']!==String(current.version))fail('VERSION_CONFLICT','Workflow changed. Reload before editing',409);
-   const used=await db.query('SELECT DISTINCT status FROM tasks WHERE project_id=$1 UNION SELECT c.status_code AS status FROM board_columns c JOIN boards b ON b.id=c.board_id WHERE b.project_id=$1',[id]);
+   // An archived board (083) is out of use: its columns no longer hold a status in place.
+   const used=await db.query('SELECT DISTINCT status FROM tasks WHERE project_id=$1 UNION SELECT c.status_code AS status FROM board_columns c JOIN boards b ON b.id=c.board_id WHERE b.project_id=$1 AND b.archived_at IS NULL',[id]);
    if(used.rows.some(r=>!statuses.has(r.status)))fail('WORKFLOW_IN_USE','Keep statuses used by existing tasks or board columns',409);
    return (await db.query('INSERT INTO project_workflow_overrides(project_id,statuses,allowed_transitions,updated_by) VALUES($1,$2,$3,$4) ON CONFLICT(project_id) DO UPDATE SET statuses=EXCLUDED.statuses,allowed_transitions=EXCLUDED.allowed_transitions,version=project_workflow_overrides.version+1,updated_at=now(),updated_by=EXCLUDED.updated_by RETURNING project_id AS id,project_id,statuses,allowed_transitions,version',[id,JSON.stringify(i.statuses),JSON.stringify(i.allowed_transitions),u.id])).rows[0];
   });

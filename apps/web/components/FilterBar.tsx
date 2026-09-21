@@ -124,6 +124,9 @@ export function FilterBar({
   const deleteSelected = async () => {
     const found = savedFilters.find((f) => f.id === selectedFilter);
     if (!found) return;
+    // Asked first: the button sits beside "Apply", and a shared view deleted
+    // by a mis-click is gone for everybody it was shared with.
+    if (!window.confirm(`Delete the saved view “${found.name}”?${found.shared ? ' It is shared, so it goes for everybody.' : ''}`)) return;
     setActionError(null);
     try {
       await deleteSavedFilter(found.id);
