@@ -295,3 +295,94 @@ describe("a project's schedule", () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+/*
+ * Written because the feature shipped unusable in two places at once: the
+ * catalogue had endpoints and no screen, so the picker on a schedule was
+ * empty and could never be filled; and the GST state had no field, so the
+ * split could never resolve -- while the message saying so pointed at the
+ * settings screen that did not have it. Both are the same failure as the
+ * "Scope record ID" box this release removed, committed twice in a day.
+ */
+describe("the settings the split depends on", () => {
+  it("accepts a GST state code and keeps it", async () => {
+    const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
+    const res = await app.inject({
+      method: "PATCH", url: "/api/v1/admin/settings", headers: admin,
+      payload: { settings: { gst_state_code: "37" } },
+    });
+    expect(res.statusCode, JSON.stringify(res.json())).toBe(200);
+    const stored = await pool.query(
+      "SELECT settings->>'gst_state_code' AS code FROM organizations WHERE id=$1", [orgId]);
+    expect(stored.rows[0].code).toBe("37");
+  });
+
+  it("refuses something that is not a state code", async () => {
+    const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
+    // 97 and 99 are real (Other Territory, Centre Jurisdiction); 98 is not.
+    for (const bad of ["98", "AP", "7"]) {
+      const res = await app.inject({
+        method: "PATCH", url: "/api/v1/admin/settings", headers: admin,
+        payload: { settings: { gst_state_code: bad } },
+      });
+      expect(res.statusCode, bad).toBe(422);
+    }
+  });
+
+  it("leaves the other settings alone", async () => {
+    const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
+    await app.inject({
+      method: "PATCH", url: "/api/v1/admin/settings", headers: admin,
+      payload: { settings: { timezone: "Asia/Kolkata" } },
+    });
+    await app.inject({
+      method: "PATCH", url: "/api/v1/admin/settings", headers: admin,
+      payload: { settings: { gst_state_code: "37" } },
+    });
+    const stored = await pool.query(
+      "SELECT settings->>'timezone' AS tz, settings->>'gst_state_code' AS code FROM organizations WHERE id=$1",
+      [orgId]);
+    expect(stored.rows[0].tz).toBe("Asia/Kolkata");
+    expect(stored.rows[0].code).toBe("37");
+  });
+
+  it("closes the loop: set the state, and the schedule names the tax heads", async () => {
+    const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
+    /*
+     * organizations is not truncated between tests -- the seed reuses the
+     * org it finds -- so settings written by a sibling test survive into
+     * this one. Start from not-set on purpose.
+     */
+    await pool.query("UPDATE organizations SET settings = settings - 'gst_state_code' WHERE id=$1", [orgId]);
+    const projectId = await mkProject(admin, "goods");
+    const client = await pool.query(
+      `INSERT INTO clients (org_id, code, name, state)
+       VALUES ($1,$2,$3,'Karnataka') RETURNING id`,
+      [orgId, `CL${randomUUID().slice(0, 6)}`, `Client ${randomUUID().slice(0, 6)}`]);
+    await pool.query("UPDATE projects SET client_id=$1 WHERE id=$2", [client.rows[0].id, projectId]);
+    await app.inject({
+      method: "PUT", url: `/api/v1/projects/${projectId}/supply`, headers: admin,
+      payload: { lines: [{ description: "Rover", uom: "nos", quantity: 1,
+        unit_price: 100000, gst_rate: 18 }] },
+    });
+
+    // Before: blocked, and it says on what.
+    let got = await app.inject({
+      method: "GET", url: `/api/v1/projects/${projectId}/supply`, headers: admin });
+    expect((got.json() as { data: { split_blocked_by: string[] } }).data.split_blocked_by.join(' '))
+      .toContain('GST state');
+
+    await app.inject({
+      method: "PATCH", url: "/api/v1/admin/settings", headers: admin,
+      payload: { settings: { gst_state_code: "37" } },
+    });
+
+    // After: Andhra Pradesh supplying Karnataka is inter-state.
+    got = await app.inject({
+      method: "GET", url: `/api/v1/projects/${projectId}/supply`, headers: admin });
+    const body = (got.json() as { data: { totals: Record<string, unknown>; split_blocked_by: string[] } }).data;
+    expect(body.totals.treatment).toBe("INTER_STATE");
+    expect(body.totals.igst).toBe(18000);
+    expect(body.split_blocked_by).toEqual([]);
+  });
+});

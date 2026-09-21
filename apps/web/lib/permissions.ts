@@ -20,6 +20,9 @@ export const PERMISSIONS = {
    * version of it that can only look.
    */
   ADMIN_IMPERSONATE: 'admin.impersonate',
+  /* §077: the goods and services we sell, and their standard rates. */
+  CATALOGUE_READ: 'catalogue.read',
+  CATALOGUE_MANAGE: 'catalogue.manage',
   // S1 frozen contract codes (dot-style; backend enforces these).
   ORG_UNITS_READ: 'org.units.read',
   ORG_UNITS_MANAGE: 'org.units.manage',
