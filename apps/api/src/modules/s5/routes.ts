@@ -20,7 +20,7 @@ import {
   toFieldErrors,
   type BoardColumnInput,
 } from "@silverline/shared";
-import { buildAuthenticate, requirePermission } from "../../common/auth.js";
+import { buildAuthenticate, requirePermission, scopesForPermission } from "../../common/auth.js";
 import { writeAudit } from "../../common/audit.js";
 import { sendError } from "../../common/httpErrors.js";
 import {
@@ -548,9 +548,16 @@ export async function registerS5Routes(
     // Boards on the projects this reader may see, and no others. Without a
     // project_id this returned every board in the organisation, which named
     // every project in it -- including to somebody scoped to one.
+    //
+    // "May see" is project.read's scope, the rule GET /projects applies:
+    // board.read is not narrowed to a person's own work (auth.ts), so its own
+    // scope would call almost everybody organisation-wide.
+    const projectScopes = user.permissions.includes("project.read")
+      ? await scopesForPermission(req, "project.read")
+      : user.scopes;
     clauses.push(
       `project_id IN (SELECT id FROM projects WHERE org_id = $1 AND ${
-        await projectRestriction(opts.pool, user, values)})`,
+        await projectRestriction(opts.pool, { ...user, scopes: projectScopes }, values)})`,
     );
     if (parsed.data.project_id) {
       values.push(parsed.data.project_id);
