@@ -416,3 +416,157 @@ describe("§46 concurrency", () => {
     expect(second.status).toBe(409);
   });
 });
+
+describe("§46.6.1 dates are fixed once recorded", () => {
+  it("refuses to move an expiry date back far enough to pass retention", async () => {
+    // A licence still inside retention, backdated twenty years, became
+    // deletable on the spot: the edit defeated the rule it was checked by.
+    const doc = await orgDoc({ expires_on: dayOffset(-10) });
+    const r = await patch({ ...w.admin, ...(await ver(doc.id)) },
+      `/api/v1/documents/${doc.id}`, { expires_on: dayOffset(-365 * 20) });
+    expect(r.status).toBe(422);
+    expect(r.body.code).toBe("DATES_IMMUTABLE");
+
+    const still = await del({ ...w.admin, ...(await ver(doc.id)) }, `/api/v1/documents/${doc.id}`);
+    expect(still.status).toBe(409);
+    expect(still.body.code).toBe("RETENTION_BLOCKED");
+  });
+
+  it("refuses to clear the expiry of a type that requires one", async () => {
+    // A labour licence with no expiry reads as compliant forever.
+    const doc = await orgDoc({ expires_on: dayOffset(20) });
+    const r = await patch({ ...w.admin, ...(await ver(doc.id)) },
+      `/api/v1/documents/${doc.id}`, { expires_on: null });
+    expect(r.status).toBe(422);
+    expect(r.body.code).toBe("DATES_IMMUTABLE");
+    const after = await get(w.admin, `/api/v1/documents/${doc.id}`);
+    expect(after.data.expires_on).toBe(dayOffset(20));
+  });
+
+  it("refuses to change the issue date", async () => {
+    const doc = await orgDoc({ issued_on: dayOffset(-30) });
+    const r = await patch({ ...w.admin, ...(await ver(doc.id)) },
+      `/api/v1/documents/${doc.id}`, { issued_on: dayOffset(-4000) });
+    expect(r.status).toBe(422);
+    expect(r.body.code).toBe("DATES_IMMUTABLE");
+  });
+
+  it("still saves a form that sends the dates back unchanged", async () => {
+    const doc = await orgDoc({ expires_on: dayOffset(90), issued_on: dayOffset(-5) });
+    const r = await patch({ ...w.admin, ...(await ver(doc.id)) },
+      `/api/v1/documents/${doc.id}`,
+      { title: "Renamed licence", expires_on: dayOffset(90), issued_on: dayOffset(-5) });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.title).toBe("Renamed licence");
+  });
+
+  it("refuses to amend a revision that has been superseded", async () => {
+    // The old row is the record of what was in force. Editing it rewrites
+    // the history a renewal is there to keep.
+    const old = await orgDoc({ expires_on: dayOffset(20) });
+    await post(w.admin, `/api/v1/documents/${old.id}/renew`, { expires_on: dayOffset(400) });
+    const r = await patch({ ...w.admin, ...(await ver(old.id)) },
+      `/api/v1/documents/${old.id}`, { title: "Rewritten" });
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe("SUPERSEDED");
+  });
+});
+
+describe("§46.4 revising what never expires", () => {
+  it("revises a drawing without an expiry date", async () => {
+    // A drawing does not expire, and demanding a date for its revision made
+    // the only honest answer impossible to record.
+    const drawing = await post(w.admin, "/api/v1/documents", {
+      type_code: "DRAWING", owner_type: "project", owner_id: w.activeProject,
+      title: "GA drawing", revision: "R0",
+    });
+    expect(drawing.status, JSON.stringify(drawing.body)).toBe(201);
+    const r = await post(w.admin, `/api/v1/documents/${drawing.data.id}/renew`, { revision: "R1" });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.data.revision).toBe("R1");
+    expect(r.data.expires_on).toBeNull();
+    expect(r.data.supersedes_id).toBe(drawing.data.id);
+  });
+
+  it("still requires an expiry to renew a type that must have one", async () => {
+    const old = await orgDoc({ expires_on: dayOffset(20) });
+    const r = await post(w.admin, `/api/v1/documents/${old.id}/renew`, { reference_number: "LL/2" });
+    expect(r.status).toBe(422);
+    expect(r.body.code).toBe("EXPIRY_REQUIRED");
+  });
+});
+
+describe("§46.6.2 releasing a hold is its own permission", () => {
+  it("refuses a release to a role that may place a hold but not lift one", async () => {
+    // Take the release away from the auditor for this test only; the suite
+    // runs in one fork, so no other file sees the change.
+    const roleId = (await w.pool.query("SELECT id FROM roles WHERE code = 'AUDITOR'")).rows[0].id;
+    await w.pool.query(
+      "DELETE FROM role_permissions WHERE role_id = $1 AND permission_code = 'document.legalhold.release'",
+      [roleId]);
+    try {
+      const doc = await orgDoc({ expires_on: dayOffset(-365 * 20) });
+      const held = await post({ ...w.role.AUDITOR, ...(await ver(doc.id)) },
+        `/api/v1/documents/${doc.id}/legal-hold`, { legal_hold: true, reason: "Statutory audit" });
+      expect(held.status).toBe(200);
+
+      const released = await post({ ...w.role.AUDITOR, ...(await ver(doc.id)) },
+        `/api/v1/documents/${doc.id}/legal-hold`, { legal_hold: false });
+      expect(released.status).toBe(403);
+      expect(released.body.message).toContain("document.legalhold.release");
+      const after = await get(w.admin, `/api/v1/documents/${doc.id}`);
+      expect(after.data.legal_hold).toBe(true);
+    } finally {
+      await w.pool.query(
+        `INSERT INTO role_permissions (role_id, permission_code)
+         VALUES ($1, 'document.legalhold.release') ON CONFLICT DO NOTHING`, [roleId]);
+    }
+  });
+
+  it("lets a role with the release permission lift the hold", async () => {
+    const doc = await orgDoc({ expires_on: dayOffset(-365 * 20) });
+    await post({ ...w.role.AUDITOR, ...(await ver(doc.id)) },
+      `/api/v1/documents/${doc.id}/legal-hold`, { legal_hold: true, reason: "Statutory audit" });
+    const released = await post({ ...w.role.AUDITOR, ...(await ver(doc.id)) },
+      `/api/v1/documents/${doc.id}/legal-hold`, { legal_hold: false });
+    expect(released.status, JSON.stringify(released.body)).toBe(200);
+    expect(released.data.legal_hold).toBe(false);
+  });
+});
+
+describe("§46.2 the owner must exist", () => {
+  it("refuses an owner id that is nothing at all", async () => {
+    const r = await post(w.admin, "/api/v1/documents", {
+      type_code: "DRAWING", owner_type: "project",
+      owner_id: "00000000-0000-4000-8000-000000000000", title: "Drawing for nobody",
+    });
+    expect(r.status).toBe(422);
+    expect(r.body.code).toBe("OWNER_NOT_FOUND");
+  });
+
+  it("refuses another organisation's employee", async () => {
+    const r = await post(w.admin, "/api/v1/documents", {
+      type_code: "MEDICAL_FITNESS", owner_type: "employee", owner_id: w.other.employee,
+      title: "Somebody else's certificate", expires_on: dayOffset(90),
+    });
+    expect(r.status).toBe(422);
+    expect(r.body.code).toBe("OWNER_NOT_FOUND");
+  });
+
+  it("refuses an id of the wrong kind of owner", async () => {
+    // An employee's id filed as a project owner exists, but not as a project.
+    const r = await post(w.admin, "/api/v1/documents", {
+      type_code: "DRAWING", owner_type: "project", owner_id: w.directEmployee,
+      title: "Drawing on a person",
+    });
+    expect(r.status).toBe(422);
+    expect(r.body.code).toBe("OWNER_NOT_FOUND");
+  });
+
+  it("accepts an owner that exists in this organisation", async () => {
+    const r = await post(w.admin, "/api/v1/documents", {
+      type_code: "DRAWING", owner_type: "project", owner_id: w.activeProject, title: "Real drawing",
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+});

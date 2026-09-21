@@ -435,6 +435,16 @@ export const documentCreateSchema = documentBaseSchema.refine(
 export const documentPatchSchema = documentBaseSchema.partial();
 
 /**
+ * The dates an amendment may not change (§46.3.4, §46.6.1).
+ *
+ * Retention is counted from them. An edit that moves an expiry ten years back
+ * makes a document deletable today, and one that clears it turns a labour
+ * licence into a document that "never expires". A new date means a new
+ * certificate, which is a renewal: the old one stays on the register.
+ */
+export const DOCUMENT_IMMUTABLE_DATES = ['issued_on', 'valid_from', 'expires_on'] as const;
+
+/**
  * Renewing a document: a new row that supersedes the old one.
  *
  * Not an edit of the expiry date. The previous certificate existed, an
@@ -442,7 +452,10 @@ export const documentPatchSchema = documentBaseSchema.partial();
  * that the organisation was covered last year.
  */
 export const documentRenewSchema = z.object({
-  expires_on: isoDate,
+  // Optional here, required by the route when the type demands an expiry. A
+  // drawing or an agreement is revised without ever expiring, and insisting
+  // on a date made the only honest answer -- none -- impossible to record.
+  expires_on: isoDate.nullable().optional(),
   issued_on: isoDate.nullable().optional(),
   valid_from: isoDate.nullable().optional(),
   reference_number: z.string().max(128).nullable().optional(),
@@ -463,6 +476,10 @@ export const legalHoldSchema = z.object({
 export const DOCUMENT_PERMISSIONS = [
   'document.read', 'document.manage', 'document.confidential',
   'document.delete', 'document.legalhold',
+  // Releasing is its own permission (§46.6.2). Lifting a hold ends the
+  // protection the hold exists to give, so who may do it is a separate
+  // decision from who may place one.
+  'document.legalhold.release',
 ] as const;
 
 export const DOCUMENT_ROLE_GRANTS: Record<RoleCode, string[]> = {
@@ -477,7 +494,8 @@ export const DOCUMENT_ROLE_GRANTS: Record<RoleCode, string[]> = {
   PAYROLL_OFFICER: ['document.read', 'document.confidential'],
   // Reads everything including the confidential types, and places a hold.
   // Cannot delete: an auditor who can destroy evidence is not a control.
-  AUDITOR: ['document.read', 'document.confidential', 'document.legalhold'],
+  AUDITOR: ['document.read', 'document.confidential', 'document.legalhold',
+    'document.legalhold.release'],
   TEAM_LEAD: ['document.read'],
   SALES_BD_EXECUTIVE: ['document.read'],
   // Sees the register for their own employer's documents through the employee

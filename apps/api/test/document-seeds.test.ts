@@ -96,9 +96,30 @@ const grantSql = readFileSync(
   'utf8',
 );
 
+/**
+ * Migration 082 split releasing a hold off placing one, and grants the release
+ * to whichever roles hold document.legalhold when it runs, rather than from a
+ * list. So for these checks it is granted exactly where 048 grants the hold.
+ */
+const releaseSql = readFileSync(
+  fileURLToPath(new URL('../src/database/migrations/082_document_hold_release.sql', import.meta.url)),
+  'utf8',
+);
+
 describe('document permission grants', () => {
-  const pairs = [...grantSql.matchAll(/\('([A-Z_]+)','(document\.[a-z]+)'\)/g)]
+  const placed = [...grantSql.matchAll(/\('([A-Z_]+)','(document\.[a-z]+)'\)/g)]
     .map(m => [m[1], m[2]] as const);
+  const pairs = [
+    ...placed,
+    ...placed.filter(([, p]) => p === 'document.legalhold')
+      .map(([r]) => [r, 'document.legalhold.release'] as const),
+  ];
+
+  it('grants the release of a hold to exactly the roles that hold document.legalhold', () => {
+    expect(releaseSql).toMatch(/permission_code = 'document\.legalhold'/);
+    expect(releaseSql).toContain("'document.legalhold.release'");
+    expect(releaseSql).toContain('ON CONFLICT (role_id, permission_code) DO NOTHING');
+  });
 
   it('parses the grants out of the migration', () => {
     expect(pairs.length).toBeGreaterThan(10);
@@ -139,7 +160,7 @@ describe('document permission grants', () => {
   it('creates every permission it then grants', () => {
     // A grant referencing a permission that does not exist violates the
     // foreign key and fails the whole migration.
-    const created = [...grantSql.matchAll(/\('(document\.[a-z]+)',\s*'[^']*',\s*'documents'\)/g)]
+    const created = [...[grantSql, releaseSql].join('\n').matchAll(/\('(document\.[a-z.]+)',\s*'[^']*',\s*'documents'\)/g)]
       .map(m => m[1]);
     for (const [, permission] of pairs) {
       if (permission === 'document.read') continue;

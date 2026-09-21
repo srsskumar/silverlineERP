@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import {
   documentCreateSchema, documentPatchSchema, documentRenewSchema, legalHoldSchema,
+  DOCUMENT_IMMUTABLE_DATES,
   documentState, renewalQueue, summarise, canDelete, typeAllowsOwner,
   type DocumentOwner,
   businessDay,
@@ -86,6 +87,45 @@ export async function registerDocumentRoutes(
         ? { reference_number: null, notes: null, restricted: true }
         : { restricted: false }),
     };
+  }
+
+  /**
+   * The table each owner type lives in. Interpolated into SQL below, so this
+   * map -- not the request -- is the only source of a table name.
+   */
+  const OWNER_TABLES: Record<Exclude<DocumentOwner, 'organization'>, string> = {
+    employee: 'employees', project: 'projects', client: 'clients',
+    vendor: 'vendors', asset: 'assets', tender: 'tenders',
+  };
+
+  /**
+   * The owner a document is attached to must exist, in this organisation.
+   *
+   * Without the check a document could be filed against an id that was never
+   * anything, or against another tenant's employee: it would sit on the
+   * register chasing a renewal for nobody, and the owner's own screens, which
+   * look documents up by owner, would never show it.
+   */
+  async function ownerExists(
+    db: PoolClient, orgId: string, ownerType: DocumentOwner, ownerId: string | null,
+  ): Promise<void> {
+    if (ownerType === 'organization') {
+      // The organisation is the tenant itself. An id, if one is sent, can only
+      // be this organisation's own.
+      if (ownerId && ownerId !== orgId) {
+        fail('OWNER_NOT_FOUND',
+          'An organisation-level document can only belong to this organisation', 422);
+      }
+      return;
+    }
+    const table = OWNER_TABLES[ownerType];
+    const found = (await db.query(
+      `SELECT 1 FROM ${table} WHERE id = $1 AND org_id = $2`, [ownerId, orgId])).rowCount;
+    if (!found) {
+      fail('OWNER_NOT_FOUND',
+        `There is no ${ownerType} with that id. Choose the ${ownerType} from the list and try again.`,
+        422);
+    }
   }
 
   /* ----------------------------------------------------------- types */
@@ -225,6 +265,7 @@ export async function registerDocumentRoutes(
       if (input.owner_type !== 'organization' && !input.owner_id) {
         fail('OWNER_REQUIRED', `A document attached to a ${input.owner_type} needs its id`, 422);
       }
+      await ownerExists(db, u.orgId, input.owner_type, input.owner_id ?? null);
 
       return (await db.query(
         `INSERT INTO documents(org_id, type_id, owner_type, owner_id, title, reference_number,
@@ -249,9 +290,33 @@ export async function registerDocumentRoutes(
         const row = await inOrg(db, 'documents', id, u.orgId, true);
         version(req, row as { version: number });
 
+        // A superseded row is the record of what was in force before. Editing
+        // it rewrites exactly the history a renewal exists to keep.
+        const successor = (await db.query(
+          'SELECT id FROM documents WHERE supersedes_id = $1', [id])).rows[0];
+        if (successor) {
+          fail('SUPERSEDED',
+            'This revision has been replaced and is kept as it was. Amend the current revision instead.',
+            409);
+        }
+
+        // The dates are fixed once recorded (§46.6.1). Retention is counted
+        // from them, so moving an expiry back makes a document deletable today,
+        // and clearing it makes a licence read as never expiring. A new date
+        // is a new certificate: renew it. The same value is accepted, so a
+        // form that sends every field back unchanged still saves.
+        for (const key of DOCUMENT_IMMUTABLE_DATES) {
+          if (input[key] !== undefined && (input[key] ?? null) !== iso(row[key])) {
+            fail('DATES_IMMUTABLE',
+              'Issue, start and expiry dates cannot be changed once recorded. '
+              + 'To record a new certificate, renew the document; the current one stays on the register.',
+              422);
+          }
+        }
+
         const sets: string[] = [], values: unknown[] = [id];
-        for (const key of ['title', 'reference_number', 'issuing_authority', 'issued_on',
-          'valid_from', 'expires_on', 'revision', 'notes'] as const) {
+        for (const key of ['title', 'reference_number', 'issuing_authority',
+          'revision', 'notes'] as const) {
           if (input[key] !== undefined) {
             values.push(input[key]);
             sets.push(`${key} = $${values.length}`);
@@ -292,7 +357,18 @@ export async function registerDocumentRoutes(
           fail('ALREADY_RENEWED',
             'This document has already been renewed. Renew the current revision instead.', 409);
         }
-        if (input.valid_from && input.expires_on < input.valid_from) {
+        // Required only where the type requires it. A drawing or an agreement
+        // is revised without ever expiring; a labour licence renewed without a
+        // new expiry would read as compliant forever.
+        const type = (await db.query(
+          'SELECT label, expiry_required FROM document_types WHERE id = $1', [old.type_id])).rows[0];
+        if (type?.expiry_required && !input.expires_on) {
+          fail('EXPIRY_REQUIRED',
+            `A ${type.label} must record an expiry date — without one it reads as compliant forever`,
+            422);
+        }
+        const validFrom = input.valid_from ?? iso(old.valid_from);
+        if (validFrom && input.expires_on && input.expires_on < validFrom) {
           fail('VALIDATION_ERROR', 'A document cannot expire before it takes effect', 422);
         }
 
@@ -307,7 +383,7 @@ export async function registerDocumentRoutes(
                   source_type, source_id, id, $8, $8
            FROM documents WHERE id = $1 RETURNING *`,
           [id, input.reference_number ?? null, input.issued_on ?? null,
-            input.valid_from ?? null, input.expires_on, input.revision ?? null,
+            input.valid_from ?? null, input.expires_on ?? null, input.revision ?? null,
             input.notes ?? null, u.id])).rows[0];
       });
       reply.code(201);
@@ -320,13 +396,26 @@ export async function registerDocumentRoutes(
    * A separate permission from deletion on purpose: an auditor places holds
    * and cannot delete, and an administrator who can delete should not be able
    * to quietly lift somebody else's hold without it being audited.
+   *
+   * Placing and releasing are separate permissions as well. A hold only ever
+   * protects a document; releasing it is the step that makes the document
+   * deletable again, and who may take that step is its own decision. The
+   * body is parsed before a preHandler runs, so the guard can tell which is
+   * asked for; anything that is not plainly a release is held to "place".
    */
-  app.post('/api/v1/documents/:id/legal-hold', { preHandler: guard('document.legalhold') },
+  const holdGuard = guard('document.legalhold');
+  const releaseGuard = guard('document.legalhold.release');
+  const isRelease = (body: unknown) =>
+    (body as { legal_hold?: unknown } | null)?.legal_hold === false;
+  app.post('/api/v1/documents/:id/legal-hold', {
+    preHandler: async req => (isRelease(req.body) ? releaseGuard(req) : holdGuard(req)),
+  },
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(legalHoldSchema, req.body);
+      const action = input.legal_hold ? 'document.legalhold' : 'document.legalhold.release';
       return {
-        data: await mutate(pool, req, 'document.legalhold', 'document', async db => {
+        data: await mutate(pool, req, action, 'document', async db => {
           const row = await inOrg(db, 'documents', id, u.orgId, true);
           version(req, row as { version: number });
           return (await db.query(
