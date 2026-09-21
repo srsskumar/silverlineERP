@@ -1,4 +1,11 @@
 import { apiRequest, apiRequestRaw } from './apiClient';
+import { EMPLOYEE_STATUSES } from '@silverline/shared';
+
+/**
+ * The statuses the directory can filter by: exactly what the API accepts,
+ * taken from the same list rather than typed out again here.
+ */
+export const EMPLOYEE_FILTER_STATUSES: readonly string[] = EMPLOYEE_STATUSES;
 
 export interface CursorPage<T> {
   data: T[];
