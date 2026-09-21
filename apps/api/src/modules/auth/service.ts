@@ -10,6 +10,18 @@ export const ACCESS_TOKEN_TTL_SECONDS = 900; // 15 minutes
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
+/**
+ * A bcrypt hash of a random string nobody kept, at cost 12 -- the cost the
+ * application hashes passwords at.
+ *
+ * Compared against when there is no real hash to compare, so a sign-in for
+ * a name that does not exist takes as long as one for a name that does.
+ * Without it the unknown name came back in a millisecond and a wrong
+ * password in a few hundred, which is a list of who works here for anybody
+ * with a stopwatch. A literal rather than hashed at start-up, because
+ * hashing it costs a quarter of a second of boot for nothing.
+ */
+export const TIMING_DUMMY_HASH = "$2a$12$aV3NAbJdFxf/3kcziB6mS.RR3TW0NZ1DO1jg.sjdKi7Nj1IRvAq4C";
 
 /** Thrown when the login username matches no account (audited without actor). */
 export class UnknownUserError extends ApiError {
@@ -164,6 +176,9 @@ export async function login(
   const user = await findLoginUser(ctx, input.username);
 
   if (!user) {
+    // Spend the time a real password check would, so how long a refusal
+    // takes does not say whether the name exists (AUTH-11).
+    await bcrypt.compare(input.password, TIMING_DUMMY_HASH);
     throw new UnknownUserError();
   }
 
@@ -180,7 +195,9 @@ export async function login(
   }
 
   if (user.auth_status !== "ACTIVE") {
-    // Same generic shape as a bad password: do not leak account state.
+    // Same generic shape as a bad password, and the same time: do not leak
+    // account state.
+    await bcrypt.compare(input.password, TIMING_DUMMY_HASH);
     throw invalidCredentials();
   }
 
