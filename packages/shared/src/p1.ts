@@ -12,17 +12,19 @@ import { cursorPageQuerySchema } from "./pagination.js";
  *
  * All money lives in Postgres as NUMERIC and is converted ONCE at the API
  * boundary to integer paise (`Math.round(Number(v) * 100)`). Every derived
- * step (per_day, gross, lop_amount, pf) rounds to the nearest paise with
+ * step (per_day, entitlement, lop_amount, gross, pf) rounds to the nearest paise with
  * `Math.round` in integer space, and values are divided by 100 only when
  * serialized. No float accumulation ever crosses a step boundary, so every
  * stored/returned money field is exact to 2dp. Day counts are multiples of
  * 0.5 (PARTIAL attendance = 0.5) and stay exact in binary floating point;
  * a half-round guard normalizes any summation dust before money math.
  *
- * ## Calculation simplification (frozen for P1)
+ * ## Calculation
  *
- * `working_days` = inclusive calendar days in the period. Sundays and
- * holidays are NOT excluded in P1 (documented simplification).
+ * See calculatePayslip below. P1 first shipped treating every calendar day as
+ * a working day and deducting loss of pay from a gross that had already left
+ * it out; runs locked under that rule keep their figures, because a locked
+ * run is never recalculated except through a controlled reopen.
  *
  * ## Run lifecycle (forward only + controlled reopen)
  *
@@ -183,6 +185,195 @@ export const ATTENDANCE_WEIGHTS: Record<string, number> = {
   COMPLETE: 1,
   PARTIAL: 0.5,
 };
+
+// ---------------------------------------------------------------------------
+// One payslip's arithmetic
+// ---------------------------------------------------------------------------
+
+export interface PayslipLeave {
+  /** YYYY-MM-DD, inclusive. */
+  from: string;
+  to: string;
+  paid: boolean;
+}
+
+export interface PayslipCalculationInput {
+  /** Run period, YYYY-MM-DD inclusive. */
+  periodStart: string;
+  periodEnd: string;
+  dateOfJoining: string;
+  /** Last day employed, inclusive; null while still employed. */
+  dateOfExit: string | null;
+  /** Monthly basic in paise; null when no salary is set. */
+  basicPaise: number | null;
+  perDayDivisor: number;
+  pfPct: number;
+  /** This employee's effective holiday dates (already location-resolved). */
+  holidays: ReadonlySet<string>;
+  /** Attendance weight per work date (COMPLETE 1, PARTIAL 0.5). */
+  attendance: ReadonlyMap<string, number>;
+  /** Approved leave overlapping the period. */
+  leaves: readonly PayslipLeave[];
+}
+
+export interface PayslipCalculation {
+  /** The part of the period this person was employed; null if none. */
+  windowStart: string | null;
+  windowEnd: string | null;
+  employedDays: number;
+  workingDays: number;
+  /** Sundays and holidays inside the employment window: paid, not worked. */
+  paidOffDays: number;
+  presentDays: number;
+  paidLeaveDays: number;
+  lopLeaveDays: number;
+  /** Working days with no attendance and no leave at all. */
+  absentDays: number;
+  /** lopLeaveDays + absentDays: the days that cost pay. */
+  unpaidDays: number;
+  payableDays: number;
+  perDayPaise: number;
+  /** Pay for the employment window before any loss of pay. */
+  entitlementPaise: number;
+  lopPaise: number;
+  grossPaise: number;
+  pfPaise: number;
+  totalDeductionsPaise: number;
+  netPaise: number;
+}
+
+const DAY_MS = 86_400_000;
+
+// Payroll dates are calendar dates, not instants, so UTC arithmetic on them is
+// exact and a Sunday is a Sunday in every timezone. Local time would be the
+// bug here: two servers in different zones would disagree about a date.
+function addDays(date: string, n: number): string {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);
+}
+
+function isSunday(date: string): boolean {
+  return new Date(`${date}T00:00:00Z`).getUTCDay() === 0;
+}
+
+function lastOfMonth(date: string): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+}
+
+function spanDays(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / DAY_MS) + 1;
+}
+
+/**
+ * What one employee is paid for one run.
+ *
+ * The rule, as the owner settled it: loss of pay is deducted once; Sundays and
+ * holiday-calendar days are paid days off, not absences; joiners and leavers
+ * are paid for the part of the period they were employed.
+ *
+ * Every day of the employment window is exactly one of: a paid day off
+ * (Sunday or the employee's effective holiday), or a working day, which is in
+ * turn split between attendance, paid leave, unpaid leave and plain absence.
+ * The split is per day and capped at one, so a day with both a punch and an
+ * approved leave is paid once, a leave that spans a Sunday does not pay the
+ * Sunday twice, and paid leave outranks unpaid leave on the same day because
+ * the employee should not lose pay to overlapping paperwork.
+ *
+ * Money follows the fixed-divisor convention:
+ *
+ *   entitlement = pay for the employment window, as if every day were paid
+ *   lop         = per_day x unpaid days (the only place absence costs money)
+ *   gross       = entitlement - lop       (earned wages)
+ *   pf          = pf_pct x gross
+ *   net         = gross - pf
+ *
+ * Entitlement is worked out per calendar month. A month the person was
+ * employed for in full earns the monthly basic, whatever its length: with a
+ * divisor of 30, pricing a whole month day by day would pay 31 days in July
+ * and 28 in February, so the same full attendance on a Rs 30,000 basic would
+ * be worth Rs 31,000 one month and Rs 28,000 another. A part month (joining,
+ * leaving, or a run that covers only part of a month) earns per_day for each
+ * employed calendar day, never more than the monthly basic -- so a joiner on
+ * 2 July, 30 days at Rs 1,000, is capped at the Rs 30,000 a full month pays.
+ *
+ * Because lop is subtracted from that entitlement and nowhere else, each
+ * unpaid day costs exactly per_day, once.
+ */
+export function calculatePayslip(input: PayslipCalculationInput): PayslipCalculation {
+  const windowStart =
+    input.dateOfJoining > input.periodStart ? input.dateOfJoining : input.periodStart;
+  const windowEnd =
+    input.dateOfExit !== null && input.dateOfExit < input.periodEnd
+      ? input.dateOfExit
+      : input.periodEnd;
+  const basicPaise = input.basicPaise ?? 0;
+  const perDayPaise = Math.round(basicPaise / input.perDayDivisor);
+
+  const days = {
+    employed: 0, working: 0, off: 0, present: 0, paidLeave: 0, lopLeave: 0, absent: 0,
+  };
+  const hasWindow = windowStart <= windowEnd;
+  const onLeave = (date: string, paid: boolean): number =>
+    input.leaves.some((l) => l.paid === paid && l.from <= date && date <= l.to) ? 1 : 0;
+  if (hasWindow) {
+    for (let d = windowStart; d <= windowEnd; d = addDays(d, 1)) {
+      days.employed += 1;
+      if (isSunday(d) || input.holidays.has(d)) {
+        // Paid whether or not anyone punched; a punch here adds nothing.
+        days.off += 1;
+        continue;
+      }
+      days.working += 1;
+      const present = Math.min(1, input.attendance.get(d) ?? 0);
+      const paidLeave = Math.min(1 - present, onLeave(d, true));
+      const lopLeave = Math.min(1 - present - paidLeave, onLeave(d, false));
+      days.present += present;
+      days.paidLeave += paidLeave;
+      days.lopLeave += lopLeave;
+      days.absent += 1 - present - paidLeave - lopLeave;
+    }
+  }
+  const unpaidDays = days.lopLeave + days.absent;
+
+  let entitlementPaise = 0;
+  if (hasWindow) {
+    for (let from = windowStart; from <= windowEnd; ) {
+      const monthEnd = lastOfMonth(from);
+      const to = monthEnd < windowEnd ? monthEnd : windowEnd;
+      const wholeMonth = from.endsWith("-01") && to === monthEnd;
+      entitlementPaise += wholeMonth
+        ? basicPaise
+        : Math.min(basicPaise, perDayPaise * spanDays(from, to));
+      from = addDays(to, 1);
+    }
+  }
+
+  const lopPaise = Math.min(entitlementPaise, Math.round(perDayPaise * unpaidDays));
+  const grossPaise = entitlementPaise - lopPaise;
+  const pfPaise = basicPaise > 0 ? Math.round((grossPaise * input.pfPct) / 100) : 0;
+  const netPaise = Math.max(0, grossPaise - pfPaise);
+
+  return {
+    windowStart: hasWindow ? windowStart : null,
+    windowEnd: hasWindow ? windowEnd : null,
+    employedDays: days.employed,
+    workingDays: days.working,
+    paidOffDays: days.off,
+    presentDays: days.present,
+    paidLeaveDays: days.paidLeave,
+    lopLeaveDays: days.lopLeave,
+    absentDays: days.absent,
+    unpaidDays,
+    payableDays: days.employed - unpaidDays,
+    perDayPaise,
+    entitlementPaise,
+    lopPaise,
+    grossPaise,
+    pfPaise,
+    totalDeductionsPaise: pfPaise,
+    netPaise,
+  };
+}
 
 /** Warning types attached to a run (and raised per employee). */
 export const PAYSLIP_WARNING_TYPES = ["NO_RECORDS", "NO_SALARY"] as const;

@@ -1332,7 +1332,9 @@ describe("E2E-17 payroll run has missing attendance, then data is corrected and 
       "SELECT gross, net_pay FROM payslips WHERE payroll_run_id = $1 AND employee_id = $2",
       [runId, employeeId],
     );
-    expect(Number(slip.rows[0].gross)).toBe(20_000);
+    // March 2021: 1-20 attended; of 21-31, the 21st and 28th are Sundays
+    // (paid), leaving 9 unpaid working days. 30,000 - 9 x 1,000 = 21,000.
+    expect(Number(slip.rows[0].gross)).toBe(21_000);
 
     // 4. Locked data rejects ordinary edits.
     const recalculate = await w.app.inject({

@@ -475,9 +475,11 @@ describe("payroll calculate", () => {
     };
     expect(body.status).toBe("CALCULATED");
     expect(body.employee_count).toBe(3);
+    // Gross 5000 + 4500 + 0; deductions are PF only, 600 + 540; net 4400 +
+    // 3960. (Before the fix B's 500 of LOP came off twice: 1640 / 7860.)
     expect(body.total_gross).toBe(9500);
-    expect(body.total_deductions).toBe(1640);
-    expect(body.total_net).toBe(7860);
+    expect(body.total_deductions).toBe(1140);
+    expect(body.total_net).toBe(8360);
     expect(body.warnings).toHaveLength(2);
     expect(
       body.warnings.filter((w) => w.employee_id === empC).map((w) => w.type).sort(),
@@ -492,7 +494,9 @@ describe("payroll calculate", () => {
     const rows = (slips.json() as { data: Array<{ employee_id: string }> }).data;
     expect(rows).toHaveLength(3);
 
-    // Full-present slip: per_day 1000, gross 5000, pf 600, net 4400.
+    // 1-5 Aug 2026 is Sat, Sun, Mon, Tue, Wed. Full-present slip: four working
+    // days present plus Sunday the 2nd paid as a day off (the punch on it adds
+    // nothing) = 5 payable; part month, so 5 x 1000 = 5000; pf 600, net 4400.
     const meA = await mkUser(["EMPLOYEE"], "empA");
     await linkUser(meA.id, empA);
     const slipA = await app.inject({
@@ -512,8 +516,9 @@ describe("payroll calculate", () => {
       basic: 30000,
       per_day: 1000,
       payable_days: 5,
-      present_days: 5,
+      present_days: 4,
       paid_leave_days: 0,
+      paid_off_days: 1,
       lop_leave_days: 0,
     });
     expect(a.deductions).toMatchObject({ lop_days: 0, lop_amount: 0, pf: 600 });
@@ -521,7 +526,12 @@ describe("payroll calculate", () => {
     expect(a.total_deductions).toBe(600);
     expect(a.net_pay).toBe(4400);
 
-    // Half + CL slip: payable 4.5 → gross 4500, lop 0.5d → 500, pf 540, net 3460.
+    // Half + CL slip. Working days 1, 3, 4, 5: present 1 (Sat) + 0.5 (Mon
+    // PARTIAL), CL Tue-Wed = 2, the other half of Monday is LOP. Sunday the
+    // 2nd is a paid day off. Payable 1.5 + 2 + 1 = 4.5.
+    // Entitlement 5 x 1000 = 5000, lop 0.5 x 1000 = 500 -> gross 4500;
+    // pf 12% of 4500 = 540; net 4500 - 540 = 3960. lop_amount is shown but
+    // is already out of gross, so total_deductions is the PF alone.
     const meB = await mkUser(["EMPLOYEE"], "empB");
     await linkUser(meB.id, empB);
     const slipB = await app.inject({
@@ -539,14 +549,15 @@ describe("payroll calculate", () => {
     };
     expect(b.earnings).toMatchObject({
       payable_days: 4.5,
-      present_days: 2.5,
+      present_days: 1.5,
       paid_leave_days: 2,
+      paid_off_days: 1,
       lop_leave_days: 0,
     });
     expect(b.deductions).toMatchObject({ lop_days: 0.5, lop_amount: 500, pf: 540 });
     expect(b.gross).toBe(4500);
-    expect(b.total_deductions).toBe(1040);
-    expect(b.net_pay).toBe(3460);
+    expect(b.total_deductions).toBe(540);
+    expect(b.net_pay).toBe(3960);
   });
 
   it("returns 422 NO_ATTENDANCE_DATA and leaves the run OPEN", async () => {
@@ -576,6 +587,172 @@ describe("payroll calculate", () => {
     const second = await toStatus(officer.headers, runId, "calculate");
     expect(second.statusCode).toBe(422);
     expect((second.json() as { code: string }).code).toBe("RUN_SEALED");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The pay rule: LOP once, Sundays and holidays paid, employed days only
+// ---------------------------------------------------------------------------
+
+describe("payroll calculate: days that are paid", () => {
+  /** Every non-Sunday date in [from, to] (August 2026 Sundays: 2, 9, 16, 23, 30). */
+  function workdays(from: string, to: string): string[] {
+    const out: string[] = [];
+    for (
+      let t = Date.parse(`${from}T00:00:00Z`);
+      t <= Date.parse(`${to}T00:00:00Z`);
+      t += 86_400_000
+    ) {
+      const d = new Date(t);
+      if (d.getUTCDay() !== 0) out.push(d.toISOString().slice(0, 10));
+    }
+    return out;
+  }
+
+  async function presentOn(employeeId: string, dates: string[]): Promise<void> {
+    await addRecords(
+      employeeId,
+      dates.map((date) => ({ date, status: "COMPLETE" as const })),
+    );
+  }
+
+  async function calculate(start: string, end: string) {
+    const officer = await mkUser(["PAYROLL_OFFICER"], "officer");
+    const run = await mkRun(officer.headers, start, end);
+    expect(run.statusCode).toBe(201);
+    const runId = (run.json() as { id: string }).id;
+    const calc = await toStatus(officer.headers, runId, "calculate");
+    expect(calc.statusCode).toBe(200);
+    return { officer, runId };
+  }
+
+  async function slipOf(runId: string, employeeId: string) {
+    const res = await pool.query(
+      `SELECT earnings, deductions, gross, total_deductions, net_pay, version
+         FROM payslips WHERE payroll_run_id = $1 AND employee_id = $2`,
+      [runId, employeeId],
+    );
+    const row = res.rows[0] as
+      | {
+          earnings: Record<string, number>;
+          deductions: Record<string, number>;
+          gross: string;
+          total_deductions: string;
+          net_pay: string;
+          version: number;
+        }
+      | undefined;
+    return row
+      ? {
+          ...row,
+          gross: Number(row.gross),
+          total_deductions: Number(row.total_deductions),
+          net_pay: Number(row.net_pay),
+        }
+      : undefined;
+  }
+
+  it("pays a Sunday and the employee's holiday, and counts another district's holiday as absence", async () => {
+    const emp = await mkEmployee({ salary_basic: 30000 });
+    // Mon 10 - Thu 13 present. Fri 14 is a holiday only for some other
+    // district, so for this employee it is an unattended working day.
+    await presentOn(emp, ["2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13"]);
+    await pool.query(
+      `INSERT INTO holidays (org_id, date, name, type)
+       VALUES ($1, '2026-08-15', 'Independence Day', 'national')`,
+      [orgId],
+    );
+    await pool.query(
+      `INSERT INTO holidays (org_id, date, name, type, scope_type, scope_id)
+       VALUES ($1, '2026-08-14', 'Elsewhere', 'local', 'district', $2::uuid)`,
+      [orgId, randomUUID()],
+    );
+
+    const { runId } = await calculate("2026-08-10", "2026-08-16");
+    const s = await slipOf(runId, emp);
+    // 7 days: 4 present, Sat 15 (holiday) + Sun 16 paid off, Fri 14 LOP.
+    // Part month: 7 x 1000 = 7000 - 1000 LOP = 6000; pf 720; net 5280.
+    expect(s?.earnings).toMatchObject({
+      present_days: 4,
+      paid_off_days: 2,
+      payable_days: 6,
+    });
+    expect(s?.deductions).toMatchObject({ lop_days: 1, lop_amount: 1000, pf: 720 });
+    expect(s?.gross).toBe(6000);
+    expect(s?.total_deductions).toBe(720);
+    expect(s?.net_pay).toBe(5280);
+  });
+
+  it("pays someone who left mid-period for the days they were employed", async () => {
+    const leaver = await mkEmployee({ salary_basic: 30000, date_of_exit: "2026-08-20" });
+    const gone = await mkEmployee({ salary_basic: 30000, date_of_exit: "2026-07-31" });
+    await pool.query(
+      "UPDATE employees SET status = 'EXITED' WHERE id = ANY($1::uuid[])",
+      [[leaver, gone]],
+    );
+    await presentOn(leaver, workdays("2026-08-01", "2026-08-20"));
+
+    const { runId } = await calculate("2026-08-01", "2026-08-31");
+    const s = await slipOf(runId, leaver);
+    // 1-20 Aug: 17 working days present, Sundays 2, 9, 16 paid; nothing after
+    // the exit is LOP. Part month: 20 x 1000 = 20000; pf 2400; net 17600.
+    expect(s?.earnings).toMatchObject({ payable_days: 20, present_days: 17, paid_off_days: 3 });
+    expect(s?.deductions).toMatchObject({ lop_days: 0, lop_amount: 0 });
+    expect(s?.gross).toBe(20000);
+    expect(s?.net_pay).toBe(17600);
+    // Someone who left before the period is not on it at all.
+    expect(await slipOf(runId, gone)).toBeUndefined();
+  });
+
+  it("pays a joiner from the joining date, not LOP for the days before it", async () => {
+    const joiner = await mkEmployee({ salary_basic: 30000, date_of_joining: "2026-08-17" });
+    await presentOn(joiner, workdays("2026-08-17", "2026-08-31"));
+
+    const { runId } = await calculate("2026-08-01", "2026-08-31");
+    const s = await slipOf(runId, joiner);
+    // 17-31 Aug: 15 days, Sundays 23 and 30 among them; 15 x 1000 = 15000.
+    expect(s?.earnings).toMatchObject({ payable_days: 15, present_days: 13, paid_off_days: 2 });
+    expect(s?.deductions).toMatchObject({ lop_days: 0, lop_amount: 0, pf: 1800 });
+    expect(s?.gross).toBe(15000);
+    expect(s?.net_pay).toBe(13200);
+  });
+
+  it("pays a full month of attendance the monthly basic, with no LOP", async () => {
+    const emp = await mkEmployee({ salary_basic: 30000 });
+    await presentOn(emp, workdays("2026-08-01", "2026-08-31"));
+    const { runId } = await calculate("2026-08-01", "2026-08-31");
+    const s = await slipOf(runId, emp);
+    // 31 days at 1000 would be 31000; a whole month is the basic, 30000.
+    expect(s?.earnings).toMatchObject({ payable_days: 31, present_days: 26, paid_off_days: 5 });
+    expect(s?.gross).toBe(30000);
+    expect(s?.total_deductions).toBe(3600);
+    expect(s?.net_pay).toBe(26400);
+  });
+
+  it("pays a day with both attendance and approved leave once", async () => {
+    const emp = await mkEmployee({ salary_basic: 30000 });
+    await presentOn(emp, ["2026-08-03"]);
+    await addApprovedLeave(emp, "CL", "2026-08-03", "2026-08-04", 2);
+
+    const { runId } = await calculate("2026-08-03", "2026-08-04");
+    const s = await slipOf(runId, emp);
+    // Monday: present (the leave adds nothing). Tuesday: CL. 2 x 1000.
+    expect(s?.earnings).toMatchObject({ payable_days: 2, present_days: 1, paid_leave_days: 1 });
+    expect(s?.gross).toBe(2000);
+  });
+
+  it("leaves a LOCKED run's figures alone: recalculation is refused", async () => {
+    const emp = await mkEmployee({ salary_basic: 30000 });
+    await presentOn(emp, ["2026-08-03"]);
+    const { officer, runId } = await calculate("2026-08-03", "2026-08-05");
+    await lockChain(officer.headers, runId);
+    const before = await slipOf(runId, emp);
+
+    await presentOn(emp, ["2026-08-04", "2026-08-05"]);
+    const again = await toStatus(officer.headers, runId, "calculate");
+    expect(again.statusCode).toBe(422);
+    expect((again.json() as { code: string }).code).toBe("RUN_SEALED");
+    expect(await slipOf(runId, emp)).toEqual(before);
   });
 });
 
