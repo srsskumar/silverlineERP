@@ -233,7 +233,14 @@ function PrintDocument({ sheet }: { sheet: SheetSpec }) {
     <>
       <style>{`@page { size: A4 ${landscape ? 'landscape' : 'portrait'}; margin: 16mm 10mm 12mm; }`}</style>
 
-      <img id="silverline-print-logo" src="/silverline-logo.png" alt="Silverline" />
+      {/*
+        * No logo element here any more.
+        *
+        * It used to be an <img> fixed to the corner, which Chrome painted
+        * once, at the bottom of the first sheet, over the table. The logo and
+        * the page number are drawn by the page's own margin boxes now — see
+        * the @page rule in globals.css.
+        */}
 
       {t ? (
         <div className="masthead">

@@ -261,18 +261,57 @@
   }
 
   /*
-   * The logo, in the top right of every sheet.
+   * The sheet itself.
    *
-   * A fixed-position element is painted on each printed page, which is the
-   * standard way to get a running header without paged-media support. The
-   * page margin below leaves room for it.
+   * This was missing, and the comment that used to sit here cheerfully
+   * referred to "the page margin below" as though it existed. Without it the
+   * content ran to the paper's edge and the logo was painted straight over
+   * the first rows of the table.
+   *
+   * The logo and the page number live in the page's own margin boxes rather
+   * than in fixed-position elements. Fixed positioning is the usual advice
+   * for a running header, and it was tried here: Chrome painted the logo
+   * once, at the bottom of the first sheet, clipped — it does not repeat
+   * them per page. Margin boxes are the mechanism actually meant for this,
+   * and this engine supports them (verified by printing a marked-up sheet
+   * and reading the PDF back).
+   *
+   * Engines without margin-box support — older Chrome, Firefox — simply get
+   * no logo and no number rather than a misplaced one, which is the right
+   * way round to fail.
    */
-  #silverline-print-logo {
-    position: fixed;
-    top: 0;
-    right: 0;
-    height: 12mm;
-    width: auto;
+  @page {
+    size: auto;
+    /* Deep enough at the top to hold the logo clear of the first row on
+       every sheet, not just the first. */
+    margin: 22mm 12mm 16mm;
+
+    /*
+     * The logo, top right of every sheet.
+     *
+     * A background rather than `content: url(...)`, which draws the image at
+     * its natural size — 488px, about 129mm, most of the width of the page —
+     * and crops rather than scales when the box is given dimensions. A
+     * background honours `contain`, so one asset serves both screen and
+     * paper and there is no second copy to keep in step.
+     */
+    @top-right {
+      content: "";
+      width: 34mm;
+      height: 11mm;
+      background-image: url("/silverline-logo.png");
+      background-repeat: no-repeat;
+      background-position: right center;
+      background-size: contain;
+    }
+
+    /* "Page 3 of 11", so a sheet that comes adrift can be put back. */
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      font-size: 8pt;
+      color: #555;
+    }
   }
 
   #silverline-print-root table {
