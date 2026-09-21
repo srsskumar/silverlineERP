@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { calculatePayslip, type PayslipCalculationInput } from './p1.js';
+import {
+  LOP_INFORMATIONAL_LABEL,
+  calculatePayslip,
+  formatPayslipDays,
+  payslipView,
+  type PayslipCalculationInput,
+} from './p1.js';
 
 /**
  * One payslip's arithmetic.
@@ -191,5 +197,54 @@ describe('calculatePayslip', () => {
       (d) => new Date(`${d}T00:00:00Z`).getUTCDay() === 0,
     );
     expect(new Set(sundays)).toEqual(AUG_SUNDAYS);
+  });
+});
+
+describe('payslipView', () => {
+  const earnings = {
+    basic: 30000, per_day: 1000, payable_days: 4.5, present_days: 1.5,
+    paid_leave_days: 2, paid_off_days: 1, lop_leave_days: 0,
+  };
+  const deductions = { lop_days: 0.5, lop_amount: 500, pf: 540 };
+
+  it('separates day counts from money', () => {
+    const v = payslipView(earnings, deductions, 540);
+    expect(v.rates.map((l) => l.key)).toEqual(['basic', 'per_day']);
+    expect(v.rates.every((l) => l.kind === 'money')).toBe(true);
+    expect(v.days.map((l) => l.key)).toEqual([
+      'payable_days', 'present_days', 'paid_leave_days', 'paid_off_days', 'lop_leave_days', 'lop_days',
+    ]);
+    expect(v.days.every((l) => l.kind === 'days')).toBe(true);
+    expect(v.days.find((l) => l.key === 'paid_off_days')?.label).toBe('Sundays and holidays (paid)');
+  });
+
+  it('shows LOP as information, so the deductions add up to their total', () => {
+    const v = payslipView(earnings, deductions, '540.00');
+    expect(v.deductions.map((l) => l.key)).toEqual(['pf']);
+    expect(v.deductions.reduce((t, l) => t + l.value, 0)).toBe(540);
+    expect(v.notes).toEqual([
+      { key: 'lop_amount', label: LOP_INFORMATIONAL_LABEL, kind: 'money', value: 500 },
+    ]);
+  });
+
+  it('shows a slip from before the LOP fix as it was paid', () => {
+    // Its total included LOP a second time: 500 + 540.
+    const v = payslipView(earnings, deductions, 1040);
+    expect(v.deductions.map((l) => [l.key, l.label])).toEqual([
+      ['pf', 'Provident fund'],
+      ['lop_amount', 'Loss of pay'],
+    ]);
+    expect(v.notes).toEqual([]);
+  });
+
+  it('keeps unknown deductions as money that counts, labelled readably', () => {
+    const v = payslipView({}, { pf: 4800, professional_tax: 200 }, 5000);
+    expect(v.deductions.map((l) => l.label)).toEqual(['Provident fund', 'Professional tax']);
+  });
+
+  it('formats a day count as a count', () => {
+    expect(formatPayslipDays(1)).toBe('1 day');
+    expect(formatPayslipDays(4.5)).toBe('4.5 days');
+    expect(formatPayslipDays(0)).toBe('0 days');
   });
 });

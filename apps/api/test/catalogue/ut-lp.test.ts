@@ -1517,6 +1517,14 @@ describe("UT-LP-09 generate payslip revision", () => {
     ).rows[0].emp_no as string;
     const text = pdf.rawPayload.toString("latin1");
     expect(text).toContain(empNo);
+
+    // Days print as counts, not rupees, and the LOP figure is labelled as
+    // already outside gross rather than listed as a deduction. (PDF text
+    // escapes parentheses.)
+    expect(text).toMatch(/Payable days: [\d.]+ days/);
+    expect(text).not.toMatch(/days: Rs /);
+    expect(text).toContain("Loss of pay \\(already excluded from gross\\)");
+    expect(text).toContain("FOR INFORMATION \\(not deducted again\\)");
   });
 
   it("keeps an earlier revision's PDF intact after a recalculation", async () => {

@@ -375,6 +375,112 @@ export function calculatePayslip(input: PayslipCalculationInput): PayslipCalcula
   };
 }
 
+// ---------------------------------------------------------------------------
+// Reading a payslip
+// ---------------------------------------------------------------------------
+
+export interface PayslipLine {
+  key: string;
+  label: string;
+  /** Money renders as rupees; days render as a plain count. */
+  kind: 'money' | 'days';
+  value: number;
+}
+
+export interface PayslipView {
+  /** The rates the pay was worked out from. */
+  rates: PayslipLine[];
+  /** Day counts: what was paid, and what was not. */
+  days: PayslipLine[];
+  /** Money that makes up total_deductions, and nothing else. */
+  deductions: PayslipLine[];
+  /** Money shown for information only: already outside gross, not deducted. */
+  notes: PayslipLine[];
+}
+
+const PAYSLIP_LABELS: Record<string, string> = {
+  basic: 'Monthly basic',
+  per_day: 'Per-day rate',
+  payable_days: 'Payable days',
+  present_days: 'Days present',
+  paid_leave_days: 'Paid leave',
+  paid_off_days: 'Sundays and holidays (paid)',
+  lop_leave_days: 'Unpaid leave',
+  lop_days: 'Loss-of-pay days',
+  pf: 'Provident fund',
+  esi: 'ESI',
+};
+
+export const LOP_INFORMATIONAL_LABEL = 'Loss of pay (already excluded from gross)';
+
+function payslipLabel(key: string): string {
+  return PAYSLIP_LABELS[key] ?? key.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase());
+}
+
+/** "1 day", "4.5 days". */
+export function formatPayslipDays(n: number): string {
+  return `${n} ${n === 1 ? 'day' : 'days'}`;
+}
+
+/**
+ * A payslip's earnings and deductions, grouped the way a person reads them.
+ *
+ * The stored objects are flat bags: day counts sit beside rupee amounts, and
+ * lop_amount sits in `deductions` although it is not deducted -- gross is
+ * already the pay for the paid days only, so the LOP figure is there to show
+ * what the unpaid days cost, not to be subtracted again. Listing the bags as
+ * they are showed days as rupees and a deductions column that did not add up
+ * to its own total. The web slip and the PDF both render from this, so they
+ * cannot drift apart.
+ *
+ * Slips calculated before loss of pay was corrected did subtract lop_amount a
+ * second time, and their total_deductions includes it. Those are recognised
+ * by their total and shown as they were paid, with LOP under deductions: a
+ * locked slip is a record of what happened, not of what should have.
+ */
+export function payslipView(
+  earnings: Record<string, unknown> | null | undefined,
+  deductions: Record<string, unknown> | null | undefined,
+  totalDeductions?: number | string | null,
+): PayslipView {
+  const view: PayslipView = { rates: [], days: [], deductions: [], notes: [] };
+  const num = (v: unknown): number | null => {
+    const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+    return typeof n === 'number' && Number.isFinite(n) ? n : null;
+  };
+  const isDays = (key: string) => key.endsWith('_days');
+
+  for (const [key, raw] of Object.entries(earnings ?? {})) {
+    const value = num(raw);
+    if (value === null) continue;
+    if (isDays(key)) view.days.push({ key, label: payslipLabel(key), kind: 'days', value });
+    else view.rates.push({ key, label: payslipLabel(key), kind: 'money', value });
+  }
+
+  let lop: PayslipLine | null = null;
+  for (const [key, raw] of Object.entries(deductions ?? {})) {
+    const value = num(raw);
+    if (value === null) continue;
+    if (isDays(key)) {
+      view.days.push({ key, label: payslipLabel(key), kind: 'days', value });
+    } else if (key === 'lop_amount') {
+      lop = { key, label: LOP_INFORMATIONAL_LABEL, kind: 'money', value };
+    } else {
+      view.deductions.push({ key, label: payslipLabel(key), kind: 'money', value });
+    }
+  }
+
+  if (lop) {
+    const paise = (n: number) => Math.round(n * 100);
+    const total = num(totalDeductions);
+    const others = view.deductions.reduce((t, l) => t + paise(l.value), 0);
+    const legacy = total !== null && lop.value !== 0 && paise(total) === others + paise(lop.value);
+    if (legacy) view.deductions.push({ ...lop, label: 'Loss of pay' });
+    else view.notes.push(lop);
+  }
+  return view;
+}
+
 /** Warning types attached to a run (and raised per employee). */
 export const PAYSLIP_WARNING_TYPES = ["NO_RECORDS", "NO_SALARY"] as const;
 
