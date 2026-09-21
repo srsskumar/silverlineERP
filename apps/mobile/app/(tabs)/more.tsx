@@ -18,8 +18,7 @@ import {
   type BiometricState,
 } from "../../src/device/auth";
 import { registerForPushNotifications } from "../../src/device/push";
-import { retryOp } from "../../src/sync/queue";
-import { listPendingOps } from "../../src/sync/db";
+import { listOps, retryOp } from "../../src/sync/queue";
 import { useSyncEngine } from "../../src/sync/engine";
 import {
   Badge,
@@ -64,11 +63,11 @@ function MoreScreen() {
 
   const employee = useQuery({ queryKey: ["employee", "me"], queryFn: getEmployeesMe });
   const notifs = useQuery({ queryKey: ["notifications"], queryFn: () => getNotifications() });
-  const [queue, setQueue] = useState<Awaited<ReturnType<typeof listPendingOps>>>([]);
+  const [queue, setQueue] = useState<Awaited<ReturnType<typeof listOps>>>([]);
 
   useEffect(() => {
     void getBiometricState().then(setBio).catch(() => undefined);
-    void listPendingOps().then(setQueue).catch(() => setQueue([]));
+    void listOps().then(setQueue).catch(() => setQueue([]));
   }, [sync.pending]);
 
   async function setPreference(key: string, value: boolean) {

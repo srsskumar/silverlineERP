@@ -1,5 +1,6 @@
 import {SCHEMA_SQL,RECOVER_INTERRUPTED_SQL,applyMigrations} from "./schema";
 import {seal,unseal,destroyVault} from "../device/vault";
+import {purgeSettledOps} from "./queueCore";
 /**
  * expo-sqlite schema for the offline-first MVP.
  *
@@ -32,6 +33,7 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
     await db.execAsync(SCHEMA_SQL);
     await applyMigrations(async (sql) => db.execAsync(sql));
     await db.runAsync(RECOVER_INTERRUPTED_SQL);
+    await purgeSettledOps(db);
     return db;
   })().catch(error => { dbPromise=null; throw error; });
   return dbPromise;
@@ -86,11 +88,4 @@ export async function countReadyOps(now = Date.now()): Promise<number> {
     [now],
   );
   return row?.n ?? 0;
-}
-
-export async function listPendingOps(): Promise<PendingOpRow[]> {
-  const db = await getDb();
-  return db.getAllAsync<PendingOpRow>(
-    "SELECT * FROM pending_ops ORDER BY created_at ASC, client_uuid ASC LIMIT 100",
-  );
 }
