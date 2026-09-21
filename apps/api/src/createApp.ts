@@ -34,6 +34,7 @@ import { verifySchemaCurrent } from "./database/schemaGuard.js";
 import { scanningDisabled } from "./common/fileSafety.js";
 import { registerAuthRoutes } from "./modules/auth/routes.js";
 import { registerAuditRoutes } from "./modules/audit/routes.js";
+import { registerCatalogueRoutes } from "./modules/catalogue/routes.js";
 import { registerOrgUnitRoutes } from "./modules/org/routes.js";
 import { registerEmployeeRoutes } from "./modules/employees/routes.js";
 import { registerHolidayRoutes } from "./modules/holidays/routes.js";
@@ -181,6 +182,7 @@ export async function buildApp(
     loginRateLimitWindowMs: config.loginRateLimitWindowMs,
   });
   await registerAuditRoutes(app, { pool, jwtSecret: config.jwtSecret });
+  await registerCatalogueRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerOrgUnitRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerEmployeeRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerHolidayRoutes(app, { pool, jwtSecret: config.jwtSecret });

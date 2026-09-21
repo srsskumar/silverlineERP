@@ -315,3 +315,98 @@ export function parseProjectOpenTasks(error: unknown): number | null {
   const n = typeof raw === 'string' ? Number(raw) : raw;
   return typeof n === 'number' && Number.isFinite(n) ? n : null;
 }
+
+/* ------------------------------------------------------------------ §077
+ * What is being supplied on a goods, services or AMC project.
+ */
+
+export interface CatalogueItem {
+  id: string;
+  code: string;
+  name: string;
+  kind: 'GOOD' | 'SERVICE' | 'AMC';
+  uom: string;
+  hsn_sac: string | null;
+  standard_rate: number;
+  gst_rate: number;
+  notes: string | null;
+  status: string;
+  version: number;
+}
+
+export interface SupplyLine {
+  id?: string;
+  line_no?: number;
+  catalogue_item_id: string | null;
+  catalogue_code?: string | null;
+  standard_rate?: number | null;
+  description: string;
+  hsn_sac: string | null;
+  uom: string;
+  quantity: number;
+  unit_price: number;
+  gst_rate: number;
+  price_includes_gst: boolean;
+  notes?: string | null;
+  totals?: { taxable: number; gst: number; gross: number };
+}
+
+export interface SupplyTotals {
+  lines: number;
+  taxable: number;
+  gst: number;
+  gross: number;
+  by_rate: Array<{ gst_rate: number; taxable: number; gst: number }>;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  treatment: 'INTRA_STATE' | 'INTER_STATE' | null;
+  in_words: string;
+}
+
+export interface ProjectSupply {
+  project: {
+    id: string; code: string; name: string;
+    type_code: string | null; client_name: string | null;
+  };
+  applies: boolean;
+  lines: SupplyLine[];
+  totals: SupplyTotals;
+  split_blocked_by: string[];
+}
+
+export async function listCatalogueItems(q = ''): Promise<CatalogueItem[]> {
+  const { data } = await apiRequest<CatalogueItem[]>(
+    `/api/v1/catalogue-items${q ? `?q=${encodeURIComponent(q)}` : ''}`, { method: 'GET' });
+  return data;
+}
+
+export async function getProjectSupply(projectId: string): Promise<ProjectSupply> {
+  const { data } = await apiRequest<ProjectSupply>(
+    `/api/v1/projects/${projectId}/supply`, { method: 'GET' });
+  return data;
+}
+
+export async function putProjectSupply(
+  projectId: string, lines: SupplyLine[],
+): Promise<{ totals: SupplyTotals }> {
+  const { data } = await apiRequest<{ totals: SupplyTotals }>(
+    `/api/v1/projects/${projectId}/supply`,
+    {
+      method: 'PUT',
+      body: {
+        lines: lines.map((l) => ({
+          catalogue_item_id: l.catalogue_item_id,
+          description: l.description,
+          hsn_sac: l.hsn_sac || null,
+          uom: l.uom,
+          quantity: l.quantity,
+          unit_price: l.unit_price,
+          gst_rate: l.gst_rate,
+          price_includes_gst: l.price_includes_gst,
+          notes: l.notes || null,
+        })),
+      },
+    });
+  return data;
+}

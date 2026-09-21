@@ -25,6 +25,7 @@ import { TaskStatusBadge } from '@/components/TaskStatusBadge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { SupplySchedule } from '@/components/projects/SupplySchedule';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ApiClientError } from '@/lib/apiClient';
 import { Badge } from '@/components/ui/Badge';
@@ -255,6 +256,11 @@ export function ProjectDetailView({ id }: { id: string }) {
               conflictShow={conflict.show}
             />
           )}
+
+          {/* §077. Renders nothing unless the project is supplied rather
+              than measured; a field-work contract is billed from its bill
+              of quantities and has no business with this. */}
+          <SupplySchedule projectId={project.id} canManage={canUpdate} />
 
           <section aria-label="Tasks" className="rounded-lg border border-border bg-surface p-4 sm:p-6">
             <h2 className="text-sm font-semibold text-text">Tasks</h2>

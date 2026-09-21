@@ -18,6 +18,7 @@
  */
 export const VOLATILE_TABLES = `
   impersonation_sessions,
+  project_supply_lines, catalogue_items,
   role_scope_policies,
   password_reset_requests,
   task_collaborators,
