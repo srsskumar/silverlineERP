@@ -9,7 +9,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  buildWorld, idem, uniq, uniquePhone, workDate,
+  buildWorld, idem, uniq, uniquePhone, workDate, ORG_TIMEZONE,
   type CatalogueWorld, type Headers,
 } from "./fixture.js";
 import { runSurveyAlerts } from "../../src/modules/jobs/surveyAlerts.js";
@@ -573,9 +573,15 @@ describe("punching in and out against a village", () => {
     await w.pool.query(
       `DELETE FROM attendance_records WHERE employee_id = $1 AND work_date = $2::date`,
       [w.directEmployee, workDate()]);
+    // Midnight in the organization's timezone, not the database's. A bare
+    // `$2::date` is UTC midnight, 05:30 in Kolkata, so a run between 18:30
+    // and 24:00 UTC left the earlier check-in standing; the fresh one then
+    // matched it as a duplicate, opened no record, and every check-out after
+    // it was refused.
     await w.pool.query(
       `DELETE FROM attendance_events WHERE employee_id = $1
-         AND server_timestamp >= $2::date`, [w.directEmployee, workDate()]);
+         AND server_timestamp >= ($2::date)::timestamp AT TIME ZONE $3`,
+      [w.directEmployee, workDate(), ORG_TIMEZONE]);
     await punch("CHECK_IN", villageId ? { survey_village_id: villageId } : {});
   }
 
