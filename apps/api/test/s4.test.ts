@@ -1406,3 +1406,50 @@ describe("dependency cycles under concurrency (WORK-18)", () => {
     }
   });
 });
+
+describe("a failed notification never takes the business write with it (OPS-9)", () => {
+  it("keeps the assignment when the inbox insert fails inside the transaction", async () => {
+    /*
+     * The notification is written on the route's own transaction and its
+     * failure was swallowed -- but Postgres had already aborted the
+     * transaction, so the route answered 200 and its COMMIT became a
+     * ROLLBACK. Forced here with a trigger that refuses this one row.
+     */
+    const h = await adminHeaders();
+    const p = await mkProject(h);
+    const t = await mkTask(h, p.id);
+    const worker = await mkUser(["EMPLOYEE"], "unnotifiable");
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION test_refuse_notification() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.recipient_id = '${worker.id}'::uuid THEN
+          RAISE EXCEPTION 'inbox unavailable';
+        END IF;
+        RETURN NEW;
+      END $$ LANGUAGE plpgsql`);
+    await pool.query(`
+      CREATE TRIGGER test_refuse_notification BEFORE INSERT ON notifications
+      FOR EACH ROW EXECUTE FUNCTION test_refuse_notification()`);
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/tasks/${t.id}/assign`,
+        headers: h,
+        payload: { assignee_id: worker.id, reason: "notification will fail" },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      const after = await pool.query("SELECT assignee_id FROM tasks WHERE id = $1", [t.id]);
+      expect(after.rows[0].assignee_id).toBe(worker.id);
+      const audit = await pool.query(
+        "SELECT count(*)::int AS n FROM audit_events WHERE action = 'task.assign' AND entity_id = $1",
+        [t.id]);
+      expect(audit.rows[0].n).toBe(1);
+      const inbox = await pool.query(
+        "SELECT count(*)::int AS n FROM notifications WHERE recipient_id = $1", [worker.id]);
+      expect(inbox.rows[0].n).toBe(0);
+    } finally {
+      await pool.query("DROP TRIGGER IF EXISTS test_refuse_notification ON notifications");
+      await pool.query("DROP FUNCTION IF EXISTS test_refuse_notification()");
+    }
+  });
+});
