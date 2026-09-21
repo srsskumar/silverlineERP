@@ -817,6 +817,33 @@ describe("acknowledgement and returns (§43.3, §43.4)", () => {
     expect(Number(grnLine.rows[0].accepted_quantity)).toBe(100);
   });
 
+  it("refuses to return material that has already been issued", async () => {
+    // Accepted 100, issued 90 to site: ten bags are in the store, and a return
+    // of fifteen would have left the ledger at minus five.
+    const { grnId, grnLineId, itemId } = await receivedOrder(100);
+    await w.pool.query(
+      `INSERT INTO stock_transactions(org_id, created_by, item_id, direction, quantity, reference)
+       VALUES($1,$2,$3,'OUT',90,'Issued to site')`, [w.orgId, w.adminId, itemId]);
+    const res = await post(w.admin, "/api/v1/vendor-returns", {
+      return_no: uniq("RTV"), grn_id: grnId, return_date: "2026-09-20",
+      reason: "QUALITY_REJECTION", remarks: "Damp",
+      lines: [{ grn_line_id: grnLineId, quantity: 15 }],
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body.code).toBe("INSUFFICIENT_STOCK");
+    const total = await w.pool.query(
+      `SELECT sum(CASE WHEN direction='IN' THEN quantity ELSE -quantity END) AS q
+       FROM stock_transactions WHERE item_id=$1`, [itemId]);
+    expect(Number(total.rows[0].q)).toBe(10);
+
+    const within = await post(w.admin, "/api/v1/vendor-returns", {
+      return_no: uniq("RTV"), grn_id: grnId, return_date: "2026-09-20",
+      reason: "QUALITY_REJECTION", remarks: "Damp",
+      lines: [{ grn_line_id: grnLineId, quantity: 10 }],
+    });
+    expect(within.status, JSON.stringify(within.body)).toBe(201);
+  });
+
   it("refuses to return more than was accepted", async () => {
     const { grnId, grnLineId } = await receivedOrder(100);
     const res = await post(w.admin, "/api/v1/vendor-returns", {

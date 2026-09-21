@@ -4,6 +4,7 @@ import {textPdf} from "../../common/pdf.js";
 import {spreadsheet} from "../../common/xlsx.js";
 import {scopedReads} from "../../common/scopedReads.js";
 import {readBlob} from "../../common/blobStore.js";
+import {itemDeltaSql} from "../../common/stockLedger.js";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
@@ -1178,7 +1179,7 @@ async function buildLeaveReport(
 function scopeFingerprint(user:AuthUser):string {return JSON.stringify((user.scopes??[]).map(s=>[s.scope_type,s.scope_id]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b))));}
 
 async function buildOperationsReport(db:Db,orgId:string,type:'inventory'|'assets'|'invoices'|'payroll',maxRows=REPORT_MAX_ROWS):Promise<{total:number;rows:string[][]}>{
- const sources={inventory:"SELECT i.*,COALESCE((SELECT sum(CASE direction WHEN 'IN' THEN quantity ELSE -quantity END) FROM stock_transactions WHERE item_id=i.id),0) AS available FROM inventory_items i WHERE i.org_id=$1",assets:'SELECT * FROM assets WHERE org_id=$1',invoices:'SELECT * FROM invoices WHERE org_id=$1',payroll:'SELECT * FROM payslips WHERE is_current=true AND org_id=$1 AND employee_id IN(SELECT id FROM employees)'};
+ const sources={inventory:`SELECT i.*,COALESCE((SELECT sum(${itemDeltaSql()}) FROM stock_transactions WHERE item_id=i.id),0) AS available FROM inventory_items i WHERE i.org_id=$1`,assets:'SELECT * FROM assets WHERE org_id=$1',invoices:'SELECT * FROM invoices WHERE org_id=$1',payroll:'SELECT * FROM payslips WHERE is_current=true AND org_id=$1 AND employee_id IN(SELECT id FROM employees)'};
  const result=await db.query(`SELECT * FROM (${sources[type]}) source ORDER BY id LIMIT ${maxRows+1}`,[orgId]);
  return {total:result.rows.length,rows:result.rows.map(r=>REPORT_COLUMNS[type].map(k=>String(r[k]??'')))};
 }

@@ -11,6 +11,7 @@ import {
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail, projectAccess } from '../../common/domain.js';
 import { levelsForPolicy, submitForApproval } from '../../common/approvalRouting.js';
+import { itemOnHand, lockItem, notifyLowStockCrossing } from '../../common/stockLedger.js';
 
 /**
  * Procurement (§6.6, §13.2, §43).
@@ -889,10 +890,22 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
         // return posts its own OUT rather than editing the original receipt.
         let stockId: string | null = null;
         if (grnLine.item_id) {
+          // Material that has already been issued cannot go back to the
+          // vendor. Checked under the item lock, like every other posting
+          // that takes stock out, so the return cannot drive stock negative.
+          const item = await lockItem(db, String(grnLine.item_id), u.orgId);
+          const before = await itemOnHand(db, String(grnLine.item_id));
+          if (before < line.quantity) {
+            fail('INSUFFICIENT_STOCK',
+              `${grnLine.description}: only ${before} is in stock to return, not ${line.quantity}`, 409);
+          }
           stockId = (await db.query(
             `INSERT INTO stock_transactions(org_id, created_by, item_id, direction, quantity, reference)
              VALUES($1,$2,$3,'OUT',$4,$5) RETURNING id`,
             [u.orgId, u.id, grnLine.item_id, line.quantity, `Return ${input.return_no}`])).rows[0].id;
+          await notifyLowStockCrossing(db, {
+            orgId: u.orgId, item, before, after: before - line.quantity, transactionId: String(stockId),
+          });
         }
         await db.query(
           `INSERT INTO vendor_return_lines(org_id, return_id, grn_line_id, quantity, remarks, stock_transaction_id)
