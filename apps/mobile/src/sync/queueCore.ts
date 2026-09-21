@@ -285,9 +285,23 @@ async function retryOp(clientUuid:string):Promise<void> {
  await db.runAsync("UPDATE pending_ops SET state='QUEUED',retry_count=0,next_retry_at=NULL,error=NULL WHERE client_uuid=? AND state='FAILED'",[clientUuid]);
 }
 
+/**
+ * Removes a failed operation for good. For a CONFLICT or REJECTED row this is
+ * the only way out: retrying sends the same request the server already refused,
+ * and without it the row sat in the queue as a permanent red item. Only FAILED
+ * rows can go -- a row that is waiting or sending may still be delivered, and
+ * discarding it would lose work the user has not seen fail.
+ */
+async function discardOp(clientUuid:string):Promise<void> {
+ const db=await getDb();
+ const row=await db.getFirstAsync<PendingOpRow>('SELECT * FROM pending_ops WHERE client_uuid=?',[clientUuid]);
+ if(!row||row.state!=='FAILED')throw new Error('Only a failed operation can be discarded.');
+ await db.runAsync("DELETE FROM pending_ops WHERE client_uuid=? AND state='FAILED'",[clientUuid]);
+}
+
 async function listOps():Promise<PendingOpRow[]> {
  return (await getDb()).getAllAsync<PendingOpRow>(LIST_OPS_SQL,[]);
 }
 
-return {enqueueOp,flushQueue,retryOp,listOps};
+return {enqueueOp,flushQueue,retryOp,discardOp,listOps};
 }

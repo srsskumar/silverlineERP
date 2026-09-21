@@ -126,3 +126,35 @@ describe("MOB-2 the queue screen shows failures first", () => {
     fx.db.close();
   });
 });
+
+describe("MOB-3 a refused operation can be discarded", () => {
+  it("removes a CONFLICT row that retry refuses to resend", async () => {
+    const fx = fixture();
+    const op = await fx.queue.enqueueOp({ entity: "task_status", op: "t", payload: { status: "DONE" } });
+    await fx.queue.flushQueue(async () => ({ status: 409, body: { code: "VERSION_CONFLICT" } }));
+    await assert.rejects(() => fx.queue.retryOp(op.client_uuid), /Review and correct/);
+
+    await fx.queue.discardOp(op.client_uuid);
+    assert.equal(fx.count("1=1"), 0);
+    fx.db.close();
+  });
+
+  it("removes a REJECTED row", async () => {
+    const fx = fixture();
+    const op = await fx.queue.enqueueOp({ entity: "leave_request", op: "l", payload: {} });
+    await fx.queue.flushQueue(async () => ({ status: 422, body: { code: "VALIDATION_ERROR" } }));
+    await fx.queue.discardOp(op.client_uuid);
+    assert.equal(fx.count("1=1"), 0);
+    fx.db.close();
+  });
+
+  it("will not discard work that may still be delivered", async () => {
+    const fx = fixture();
+    const op = await fx.queue.enqueueOp({ entity: "task_comment", op: "c", payload: {} });
+    await assert.rejects(() => fx.queue.discardOp(op.client_uuid), /Only a failed operation/);
+    await fx.queue.flushQueue(async () => ({ status: 503, body: {} }));
+    await assert.rejects(() => fx.queue.discardOp(op.client_uuid), /Only a failed operation/);
+    assert.equal(fx.count("state='BACKOFF'"), 1);
+    fx.db.close();
+  });
+});

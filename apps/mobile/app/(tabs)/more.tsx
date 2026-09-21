@@ -5,7 +5,7 @@
 import { withScreenBoundary } from "../../src/ui/ErrorBoundary";
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Switch, View } from "react-native";
+import { Alert, Switch, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Payslip } from "../../src/ui/Payslip";
 import { apiFetch } from "../../src/api/client";
@@ -18,7 +18,7 @@ import {
   type BiometricState,
 } from "../../src/device/auth";
 import { registerForPushNotifications } from "../../src/device/push";
-import { listOps, retryOp } from "../../src/sync/queue";
+import { discardOp, listOps, retryOp } from "../../src/sync/queue";
 import { useSyncEngine } from "../../src/sync/engine";
 import {
   Badge,
@@ -79,6 +79,30 @@ function MoreScreen() {
       setPreferenceError("Connect to the internet to update notification preferences.");
     }
   }
+
+  // A refused operation cannot be retried as it stands, so the only way out is
+  // to drop it. The server's reason is on the row; discarding is final, so ask.
+  const confirmDiscard = (op: (typeof queue)[number]) => {
+    Alert.alert(
+      "Discard this change?",
+      `The server did not accept this ${op.entity.replaceAll("_", " ")}` +
+        `${op.error ? ` (${op.error})` : ""}. Discarding removes it from this ` +
+        "device; it will not be sent. Make the change again if it is still needed.",
+      [
+        { text: "Keep", style: "cancel" },
+        {
+          text: "Discard",
+          style: "destructive",
+          onPress: () => {
+            void discardOp(op.client_uuid)
+              .then(() => listOps())
+              .then(setQueue)
+              .catch(() => undefined);
+          },
+        },
+      ],
+    );
+  };
 
   const toggleBio = async (v: boolean) => {
     try {
@@ -206,7 +230,7 @@ function MoreScreen() {
             <ListRow
               key={op.client_uuid}
               title={op.entity.replaceAll("_", " ")}
-              subtitle={op.op}
+              subtitle={op.state === "FAILED" && op.error ? `${op.op} · ${op.error}` : op.op}
               right={
                 <Row gap={space.sm}>
                   {op.state === "FAILED" &&
@@ -215,6 +239,15 @@ function MoreScreen() {
                       title="Retry"
                       variant="ghost"
                       onPress={() => void retryOp(op.client_uuid).then(() => sync.syncNow())}
+                    />
+                  ) : null}
+                  {op.state === "FAILED" &&
+                  ["CONFLICT", "REJECTED"].includes(op.decision ?? "") ? (
+                    <Button
+                      title="Discard"
+                      variant="ghost"
+                      tone="danger"
+                      onPress={() => confirmDiscard(op)}
                     />
                   ) : null}
                   <Badge
