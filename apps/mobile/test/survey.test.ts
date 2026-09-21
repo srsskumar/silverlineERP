@@ -374,3 +374,58 @@ describe("ground truthing past its date, on the phone", () => {
     assert.equal(r.ok, false);
   });
 });
+
+describe("buildEntry runs the server's schema before queueing", () => {
+  /*
+   * The device checked the rules with a story to tell and skipped the rest,
+   * so a return the server would refuse went into the outbox and came back
+   * refused hours later, to a phone whose owner had left the village.
+   */
+  const base = {
+    villageId: VILLAGE,
+    entryDate: TODAY,
+    measures: MEASURES,
+    lowProgressThresholdAc: null as number | null,
+  };
+
+  it("refuses a headcount no village is staffed with", () => {
+    const r = buildEntry({
+      ...base,
+      draft: draft({ quantities: { PVT_EXTENT: "3" }, crewPresent: "5000" }),
+    });
+    assert.equal(r.ok, false);
+    if (r.ok) return;
+    assert.ok(r.problems.some(p => /more people than any village/.test(p)), r.problems.join("; "));
+    assert.ok(r.fieldErrors?.some(fe => fe.field === "crew_present"));
+  });
+
+  it("refuses a quantity larger than the server can hold, naming the measure", () => {
+    const r = buildEntry({
+      ...base,
+      draft: draft({ quantities: { PVT_EXTENT: "99999999999" } }),
+    });
+    assert.equal(r.ok, false);
+    if (r.ok) return;
+    assert.ok(r.problems.some(p => p.includes("Private extent")), r.problems.join("; "));
+    assert.ok(r.problems.every(p => !p.includes("PVT_EXTENT")), r.problems.join("; "));
+  });
+
+  it("refuses a return dated in the future", () => {
+    const r = buildEntry({
+      ...base,
+      entryDate: "2999-01-01",
+      draft: draft({ quantities: { PVT_EXTENT: "3" } }),
+    });
+    assert.equal(r.ok, false);
+    if (r.ok) return;
+    assert.ok(r.fieldErrors?.some(fe => fe.field === "entry_date"));
+  });
+
+  it("refuses notes too long to store", () => {
+    const r = buildEntry({
+      ...base,
+      draft: draft({ quantities: { PVT_EXTENT: "3" }, notes: "x".repeat(2001) }),
+    });
+    assert.equal(r.ok, false);
+  });
+});

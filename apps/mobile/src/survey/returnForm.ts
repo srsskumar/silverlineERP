@@ -17,6 +17,9 @@ import {
   checkRoverDay,
   gtReasonRequired,
   reasonNeedsRemarks,
+  surveyEntrySchema,
+  toFieldErrors,
+  type FieldError,
   type RoverDayStatus,
 } from "@silverline/shared";
 import type { RoverDayInput, SurveyEntryInput, SurveyMeasure } from "../api/endpoints";
@@ -102,7 +105,12 @@ export function extentToday(
 
 export type BuildResult =
   | { ok: true; entry: SurveyEntryInput; warnings: string[] }
-  | { ok: false; problems: string[] };
+  | {
+      ok: false;
+      problems: string[];
+      /** The schema's refusals by field, for a form that marks the field itself. */
+      fieldErrors?: FieldError[];
+    };
 
 /**
  * Turn the form into the entry the server takes, or say what is wrong with it.
@@ -212,10 +220,7 @@ export function buildEntry(args: {
 
   if (problems.length) return { ok: false, problems };
 
-  return {
-    ok: true,
-    warnings,
-    entry: {
+  const entry: SurveyEntryInput = {
       survey_village_id: args.villageId,
       entry_date: args.entryDate,
       values,
@@ -239,6 +244,34 @@ export function buildEntry(args: {
               : {}),
           }
         : {}),
-    },
   };
+
+  /*
+   * The server's own schema, run on the device before anything is queued.
+   *
+   * The checks above are the ones with a story to tell; this is everything
+   * else the server will refuse -- a crew of five thousand, a quantity past
+   * what the column holds, a date that has not happened, a note too long to
+   * store. Skipped, each of those went into the outbox, reached the server
+   * hours later, and came back refused to a phone whose owner had long left
+   * the village. Worded by the same function the server words its refusals
+   * with, with the measure's label in place of its code.
+   */
+  const checked = surveyEntrySchema.safeParse(entry);
+  if (!checked.success) {
+    const fieldErrors = toFieldErrors(checked.error).map((fe) => {
+      const code = fe.field.startsWith("values.") ? fe.field.slice("values.".length) : null;
+      const measure = code ? measures.find((m) => m.code === code) : undefined;
+      if (!measure) return fe;
+      // A custom refusal ("larger than this field can hold") does not name
+      // the field at all, and on a form of twenty figures that matters.
+      const message = fe.message.includes(code!)
+        ? fe.message.split(code!).join(measure.label)
+        : `${measure.label}: ${fe.message}`;
+      return { ...fe, message };
+    });
+    return { ok: false, problems: fieldErrors.map((fe) => fe.message), fieldErrors };
+  }
+
+  return { ok: true, warnings, entry };
 }
