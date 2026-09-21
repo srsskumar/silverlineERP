@@ -15,7 +15,25 @@ export interface ApiConfig {
   /** Pino log threshold. Request logs default to info in development. */
   logLevel: ApiLogLevel;
   bcryptRounds: number;
-  /** Max login attempts per IP per window (S0: 10/min/IP). */
+  /**
+   * Which peers may tell us the client's address (Fastify `trustProxy`).
+   *
+   * Production sits behind nginx on the same host, so every connection
+   * arrives from loopback; without this `req.ip` is 127.0.0.1 for everyone
+   * and every per-address limit is one bucket for the whole organisation.
+   * Defaults to trusting loopback only -- a client connecting directly can
+   * never forge X-Forwarded-For, because its own address is not trusted.
+   * TRUST_PROXY takes a comma-separated list of addresses/CIDRs, or
+   * true/false. "true" trusts every hop and so lets any client choose its
+   * own address; it is only right when nothing can reach the API except
+   * through the proxy.
+   */
+  trustProxy: boolean | string;
+  /**
+   * Max login attempts per window, counted separately per client address and
+   * per account name (S0: 10/min). The other authentication limits are
+   * derived from it; see registerAuthRoutes.
+   */
   loginRateLimitMax: number;
   loginRateLimitWindowMs: number;
   /** Max attendance punches per authed user (else IP) per window (S6: 30/min). */
@@ -46,6 +64,7 @@ export interface ApiConfigOverrides {
   nodeEnv?: string;
   logLevel?: ApiLogLevel;
   bcryptRounds?: number;
+  trustProxy?: boolean | string;
   loginRateLimitMax?: number;
   loginRateLimitWindowMs?: number;
   punchRateLimitMax?: number;
@@ -89,6 +108,15 @@ function required(name: string, fallback?: string): string {
   if (value === undefined || value === "") {
     throw new Error(`Missing required env var ${name}`);
   }
+  return value;
+}
+
+/** TRUST_PROXY: "true"/"false", or a list of addresses/CIDRs. */
+export function parseTrustProxy(raw: string | undefined): boolean | string {
+  const value = (raw ?? "").trim();
+  if (value === "") return "127.0.0.1,::1";
+  if (value === "true") return true;
+  if (value === "false") return false;
   return value;
 }
 
@@ -154,6 +182,7 @@ export function getConfig(overrides: ApiConfigOverrides = {}): ApiConfig {
     nodeEnv,
     logLevel: overrides.logLevel ?? parseLogLevel(process.env["LOG_LEVEL"]),
     bcryptRounds: overrides.bcryptRounds ?? Number(process.env["BCRYPT_ROUNDS"] ?? 10),
+    trustProxy: overrides.trustProxy ?? parseTrustProxy(process.env["TRUST_PROXY"]),
     loginRateLimitMax:
       overrides.loginRateLimitMax ??
       Number(process.env["LOGIN_RATE_LIMIT_MAX"] ?? 10),

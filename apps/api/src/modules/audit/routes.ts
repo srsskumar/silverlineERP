@@ -3,6 +3,7 @@ import type { Pool } from "pg";
 import { z } from "zod";
 import {
   cursorPageQuerySchema,
+  dateStringSchema,
   decodeCursor,
   encodeCursor,
   toFieldErrors,
@@ -19,6 +20,21 @@ const auditQuerySchema = cursorPageQuerySchema.extend({
   action: z.string().min(1).max(100).optional(),
   /** Filters on entity_type. */
   entity: z.string().min(1).max(100).optional(),
+  /*
+   * "What did this person do" and "what happened to this record" (AUTH-12).
+   * The two questions an audit trail is consulted for, and until now the
+   * only way to ask either was to page through the organisation's whole
+   * history by hand.
+   */
+  actor_id: z.string().uuid().optional(),
+  entity_id: z.string().uuid().optional(),
+  /*
+   * Calendar days, both ends inclusive, in the organisation's own timezone:
+   * "the 3rd" means the 3rd in Kurnool, not from 05:30 IST as a UTC
+   * midnight would make it.
+   */
+  from: dateStringSchema.optional(),
+  to: dateStringSchema.optional(),
 });
 
 interface AuditCursor {
@@ -49,7 +65,7 @@ export async function registerAuditRoutes(
           fieldErrors: toFieldErrors(parsed.error),
         });
       }
-      const { limit, cursor, action, entity } = parsed.data;
+      const { limit, cursor, action, entity, actor_id, entity_id, from, to } = parsed.data;
       const user = req.authUser;
       if (!user) {
         return sendError(reply, req.requestId, {
@@ -68,6 +84,24 @@ export async function registerAuditRoutes(
       if (entity) {
         values.push(entity);
         clauses.push(`a.entity_type = $${values.length}`);
+      }
+      if (actor_id) {
+        values.push(actor_id);
+        clauses.push(`a.actor_id = $${values.length}::uuid`);
+      }
+      if (entity_id) {
+        values.push(entity_id);
+        clauses.push(`a.entity_id = $${values.length}::uuid`);
+      }
+      const orgZone =
+        "(SELECT COALESCE(o.settings->>'timezone','Asia/Kolkata') FROM organizations o WHERE o.id = $1)";
+      if (from) {
+        values.push(from);
+        clauses.push(`a.created_at >= ($${values.length}::date)::timestamp AT TIME ZONE ${orgZone}`);
+      }
+      if (to) {
+        values.push(to);
+        clauses.push(`a.created_at < ($${values.length}::date + 1)::timestamp AT TIME ZONE ${orgZone}`);
       }
       if (cursor) {
         const decoded = decodeCursor<AuditCursor>(cursor);

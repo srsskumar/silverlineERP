@@ -10,6 +10,18 @@ export const ACCESS_TOKEN_TTL_SECONDS = 900; // 15 minutes
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
+/**
+ * A bcrypt hash of a random string nobody kept, at cost 12 -- the cost the
+ * application hashes passwords at.
+ *
+ * Compared against when there is no real hash to compare, so a sign-in for
+ * a name that does not exist takes as long as one for a name that does.
+ * Without it the unknown name came back in a millisecond and a wrong
+ * password in a few hundred, which is a list of who works here for anybody
+ * with a stopwatch. A literal rather than hashed at start-up, because
+ * hashing it costs a quarter of a second of boot for nothing.
+ */
+export const TIMING_DUMMY_HASH = "$2a$12$aV3NAbJdFxf/3kcziB6mS.RR3TW0NZ1DO1jg.sjdKi7Nj1IRvAq4C";
 
 /** Thrown when the login username matches no account (audited without actor). */
 export class UnknownUserError extends ApiError {
@@ -164,6 +176,9 @@ export async function login(
   const user = await findLoginUser(ctx, input.username);
 
   if (!user) {
+    // Spend the time a real password check would, so how long a refusal
+    // takes does not say whether the name exists (AUTH-11).
+    await bcrypt.compare(input.password, TIMING_DUMMY_HASH);
     throw new UnknownUserError();
   }
 
@@ -180,7 +195,9 @@ export async function login(
   }
 
   if (user.auth_status !== "ACTIVE") {
-    // Same generic shape as a bad password: do not leak account state.
+    // Same generic shape as a bad password, and the same time: do not leak
+    // account state.
+    await bcrypt.compare(input.password, TIMING_DUMMY_HASH);
     throw invalidCredentials();
   }
 
@@ -419,20 +436,38 @@ async function rotateRefresh(
   };
 }
 
-/** Revokes one session by refresh token. Idempotent: unknown/already-revoked → ok. */
+/**
+ * Ends a session. Idempotent: unknown/already-revoked → ok.
+ *
+ * By the refresh token when one is sent, and by the session the bearer
+ * token belongs to as well (AUTH-10). A client that signs out with only its
+ * access token -- a tab that lost its refresh token, a script -- used to get
+ * { success: true } and revoke nothing, so the session it believed closed
+ * could still be refreshed for a week by whoever held the refresh token.
+ */
 export async function logout(
   ctx: ServiceContext,
   refreshToken: string | undefined,
+  bearer?: { userId: string; family: string } | null,
 ): Promise<{ revoked: boolean }> {
-  if (!refreshToken) {
-    return { revoked: false };
+  let revoked = 0;
+  if (refreshToken) {
+    const res = await ctx.pool.query(
+      `UPDATE sessions SET revoked = true, revoked_at = NOW()
+       WHERE family = (SELECT family FROM sessions WHERE refresh_hash = $1) AND revoked = false`,
+      [sha256Hex(refreshToken)],
+    );
+    revoked += res.rowCount ?? 0;
   }
-  const res = await ctx.pool.query(
-    `UPDATE sessions SET revoked = true, revoked_at = NOW()
-     WHERE family = (SELECT family FROM sessions WHERE refresh_hash = $1) AND revoked = false`,
-    [sha256Hex(refreshToken)],
-  );
-  return { revoked: (res.rowCount ?? 0) > 0 };
+  if (bearer) {
+    const res = await ctx.pool.query(
+      `UPDATE sessions SET revoked = true, revoked_at = NOW()
+       WHERE family = $1 AND user_id = $2 AND revoked = false`,
+      [bearer.family, bearer.userId],
+    );
+    revoked += res.rowCount ?? 0;
+  }
+  return { revoked: revoked > 0 };
 }
 
 export async function setupMfa(
@@ -497,6 +532,16 @@ export async function disableMfa(ctx: ServiceContext, userId: string, code: stri
     "UPDATE users SET mfa_enabled = false, mfa_secret = NULL, mfa_last_counter = NULL, updated_at = NOW() WHERE id = $1",
     [userId],
   );
+  /*
+   * Every session goes, here as well as in verifyMfa (AUTH-10). Switching
+   * the second factor off is the moment a stolen password alone becomes
+   * enough, so no session opened before it should outlive it -- and this
+   * should not depend on verifyMfa happening to revoke them as a side effect
+   * of checking the code.
+   */
+  await ctx.pool.query(
+    "UPDATE sessions SET revoked = true, revoked_at = now() WHERE user_id = $1 AND revoked = false",
+    [userId]);
 }
 
 export async function revokeFamily(ctx: ServiceContext, family: string): Promise<void> {

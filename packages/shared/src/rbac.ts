@@ -132,6 +132,52 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
 };
 
 /**
+ * Permissions that make an account worth taking over (AUTH-1).
+ *
+ * Setting somebody's password is a way into their account, so whoever does
+ * it must already hold anything that account holds that matters. "Matters"
+ * is this list: permissions that reach security configuration, other
+ * people's accounts, pay, personal data, or money -- moving it, authorising
+ * it, or overriding the controls on it. Holding one of these that the
+ * caller lacks puts an account out of the caller's reach.
+ *
+ * Ordinary working permissions are deliberately absent. An HR manager has
+ * no task permissions, and a rule that counted every permission meant they
+ * could not reset the password of any employee, team lead or project
+ * manager -- which is the everyday half of their job, and the reason they
+ * are told about locked-out staff at all. Taking over a team lead's account
+ * gains somebody the ability to move tasks, which is not the risk this
+ * guards.
+ *
+ * Reads of purchasing and billing (po.read, invoice.read, ...) are left out
+ * for the same reason: project managers and team leads hold them for their
+ * daily work. What is here authorises or moves money, not what shows it.
+ *
+ * Add to it when a new permission reaches any of those five things. The
+ * cost of leaving one off is that the next role holding it can be taken
+ * over by anybody with users.manage.
+ */
+export const SENSITIVE_PERMISSIONS: readonly string[] = [
+  // Security configuration and other people's accounts.
+  'admin.configure', 'users.manage', 'admin.impersonate', 'roles.manage',
+  'approval.configure', 'webhook.manage', 'audit.read',
+  // Personal data.
+  'employee.pii.read', 'document.confidential',
+  // Pay.
+  'payroll.read', 'payroll.manage', 'payroll.generate', 'payroll.approve',
+  'payroll.lock', 'payroll.configure',
+  // Money: moving it, authorising it, or overriding the controls on it.
+  'approval.self_approve',
+  'paymentrun.manage', 'paymentrun.approve',
+  'payment.manage', 'payment.allocate', 'payable.hold', 'bank.reconcile',
+  'invoice.manage', 'invoice.issue', 'rabill.certify', 'retention.release',
+  'po.manage', 'po.amend', 'match.override',
+  'expense.reimburse', 'expense.override', 'expense.policy.manage',
+  'period.manage', 'period.override', 'cost.adjust',
+  'stock.negative_override', 'tender.override',
+];
+
+/**
  * Returns true when `userPermissions` grants `required` (single code or all of a list).
  */
 export function can(

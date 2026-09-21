@@ -511,6 +511,9 @@ const taskListQuerySchema = cursorPageQuerySchema.extend({
   label_ids: z.string().min(1).max(2000).optional(),
 });
 
+/** Roles held by people outside the organisation (clients, government observers). */
+const EXTERNAL_ROLES = new Set(["CLIENT_VIEWER", "GOVT_OBSERVER"]);
+
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
@@ -910,15 +913,32 @@ export async function registerWorkRoutes(
   // and project-manager field asked for a raw UUID that somebody had to look
   // up elsewhere and paste.
   //
-  // Authenticated rather than permission-gated, and deliberately narrow: it
-  // returns a colleague's display name and employee number, both of which
-  // already appear on every task card. No contact details, no identifiers,
-  // nothing that is not already on screen.
+  // Deliberately narrow: a colleague's display name, sign-in name and
+  // employee number. No contact details, nothing that is not already on a
+  // task card.
+  //
+  // For staff, not for outsiders (AUTH-6). It is the whole organisation's
+  // staff list, and it was open to any signed-in account -- a client's
+  // viewer login or a government observer could read every name and
+  // employee number in it. Not gated on a single permission, because the
+  // readers are everybody who works here: an employee reads it to put names
+  // on their comment thread and their leave approvals, a payroll officer on
+  // an approval timeline, a team lead in the assign picker, and no one
+  // permission is held by all of them. What the outsiders have in common is
+  // their roles, so that is the test: an account needs at least one role
+  // that is not an external one. Screens that call it fall back to a short
+  // id when it is refused.
   app.get("/api/v1/people", { preHandler: authenticate }, async (req, reply) => {
     const user = req.authUser;
     if (!user) {
       return sendError(reply, req.requestId, {
         status: 401, code: "UNAUTHENTICATED", message: "Authentication required",
+      });
+    }
+    if (!user.roles.some((r) => !EXTERNAL_ROLES.has(r))) {
+      return sendError(reply, req.requestId, {
+        status: 403, code: "FORBIDDEN",
+        message: "The staff directory is for people who work in the organisation",
       });
     }
     // The same page cap as every other list. A picker wants the whole

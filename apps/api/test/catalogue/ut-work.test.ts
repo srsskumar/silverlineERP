@@ -1617,4 +1617,17 @@ describe("UT-WORK-15 people directory", () => {
     const res = await w.app.inject({ method: "GET", url: "/api/v1/people" });
     expect(res.statusCode).toBe(401);
   });
+
+  it("is the staff's list, not a client's or an observer's (AUTH-6)", async () => {
+    // Every name and employee number in the organisation, which a client's
+    // viewer login used to be able to read in full.
+    for (const outsider of ["CLIENT_VIEWER", "GOVT_OBSERVER"] as const) {
+      const res = await w.app.inject({ method: "GET", url: "/api/v1/people", headers: w.role[outsider] });
+      expect(res.statusCode, outsider).toBe(403);
+      expect(res.body).not.toContain("emp_no");
+    }
+    // An employee still gets names on their comment thread and leave approvals.
+    const staff = await w.app.inject({ method: "GET", url: "/api/v1/people", headers: w.role.EMPLOYEE });
+    expect(staff.statusCode).toBe(200);
+  });
 });
