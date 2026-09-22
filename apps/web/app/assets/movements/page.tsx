@@ -38,6 +38,9 @@ type Row = Record<string, any>;
 export default function MovementsPage() {
   const { session } = useAuth();
   const canRead = hasPermission({ permissions: session?.permissions }, 'asset.read');
+  // The eligible-employee list is the issuing picker's, and the API keeps
+  // it behind asset.manage; a reader filters by equipment and dates.
+  const canManage = hasPermission({ permissions: session?.permissions }, 'asset.manage');
 
   const [assetId, setAssetId] = React.useState('');
   const [employeeId, setEmployeeId] = React.useState('');
@@ -64,7 +67,7 @@ export default function MovementsPage() {
       ((await apiRequestRaw('/api/v1/assets?limit=100')).body as { data: Row[] }).data,
   });
   const people = useQuery({
-    queryKey: ['assets', 'eligible-employees'], enabled: canRead, staleTime: 300_000,
+    queryKey: ['assets', 'eligible-employees'], enabled: canRead && canManage, staleTime: 300_000,
     queryFn: async () =>
       ((await apiRequestRaw('/api/v1/assets/eligible-employees')).body as { data: Row[] }).data,
   });
@@ -107,7 +110,7 @@ export default function MovementsPage() {
                 }))}
               />
             </div>
-            <div className="min-w-[14rem]">
+            {canManage ? <div className="min-w-[14rem]">
               <Combobox
                 value={employeeId}
                 onChange={(id) => change(() => setEmployeeId(id))}
@@ -120,7 +123,7 @@ export default function MovementsPage() {
                   hint: String(e.emp_no ?? ''),
                 }))}
               />
-            </div>
+            </div> : null}
             <label className="flex items-center gap-1.5 text-xs text-text-muted">
               From
               <input type="date" value={from} onChange={(e) => change(() => setFrom(e.target.value))}

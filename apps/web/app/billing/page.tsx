@@ -18,6 +18,7 @@ import { Field, Notice, RecordSheet, Section, StatusBadge, Stat } from '@/compon
 import { day, money, moneyIndian, percent, utilisationWidth } from '@/lib/finance';
 import { useToast } from '@/components/ui/Toast';
 import { messageOf } from '@/lib/form-errors';
+import { RequireDestination } from '@/components/RequirePermission';
 
 type Row = Record<string, any>;
 type Tab = 'bills' | 'boq' | 'measured' | 'retention' | 'cost';
@@ -83,6 +84,7 @@ export default function BillingPage() {
       />
 
       <PageBody>
+        <RequireDestination href="/billing">
         <Toolbar>
           <select
             aria-label="Project"
@@ -124,6 +126,7 @@ export default function BillingPage() {
         ) : (
           <CostPosition projectId={projectId} />
         )}
+        </RequireDestination>
       </PageBody>
 
       {selectedBill ? (

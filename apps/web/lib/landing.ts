@@ -1,4 +1,4 @@
-import { NAV_GROUPS, type NavItem } from './nav';
+import { NAV_GROUPS, QUICK_CREATE, type NavItem } from './nav';
 import { hasPermission } from './permissions';
 
 /**
@@ -46,12 +46,34 @@ export function landingRoute(permissions: string[] | undefined): string {
  * bookmarked URL behaves the same way the navigation does.
  */
 export function canOpen(permissions: string[] | undefined, href: string): boolean {
-  for (const group of NAV_GROUPS) {
-    for (const item of group.items) {
-      if (item.href === href) return navItemVisible(permissions, item);
-    }
-  }
+  const item = destination(href);
+  if (item) return navItemVisible(permissions, item);
   // Not a navigation destination (a detail page, a form). Those carry their
   // own gates; this function does not get an opinion about them.
   return true;
+}
+
+/** The navigation or quick-create entry for a route, if it has one. */
+export function destination(href: string): NavItem | null {
+  for (const group of NAV_GROUPS) {
+    for (const item of group.items) if (item.href === href) return item;
+  }
+  // The create forms are reached from the top bar, not the sidebar, and are
+  // gated in the same way: a quick-create form loads pickers of its own.
+  for (const item of QUICK_CREATE) if (item.href === href) return item;
+  return null;
+}
+
+/**
+ * The first permission the route needs that these do not include, so the
+ * refusal can name it -- the one thing the person can actually ask for.
+ */
+export function firstMissingFor(permissions: string[] | undefined, href: string): string | null {
+  const item = destination(href);
+  if (!item) return null;
+  const actor = { permissions };
+  for (const code of [item.permission, ...(item.requires ?? [])]) {
+    if (code && !hasPermission(actor, code)) return code;
+  }
+  return null;
 }

@@ -1,5 +1,6 @@
 'use client';
 import {Workbench,Panel,MutationForm,choices} from '@/components/v2/Workbench';
+import {RequireDestination} from '@/components/RequirePermission';
 
 /**
  * §8.1 tender capture. Linking an opportunity closes the originating lead and
@@ -12,7 +13,7 @@ import {Workbench,Panel,MutationForm,choices} from '@/components/v2/Workbench';
  */
 export default function Page(){
  return <Workbench title="New tender" description="Government and private bids. Linking an opportunity carries the pipeline across instead of re-keying it.">
-  <Panel title="Tender">
+  <RequireDestination href="/tenders/new"><Panel title="Tender">
    <MutationForm path="tenders" fields={[
      {key:'tender_no',label:'Tender number',required:true},
      {key:'tender_type',label:'Type',type:'select',required:true,options:choices(['OPEN','LIMITED','SINGLE','EOI','RFP'])},
@@ -39,6 +40,6 @@ export default function Page(){
      {key:'portal',label:'Portal'},
      {key:'notes',label:'Notes',type:'textarea'},
    ]} submit="Create tender"/>
-  </Panel>
+  </Panel></RequireDestination>
  </Workbench>;
 }

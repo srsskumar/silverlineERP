@@ -1,6 +1,7 @@
 'use client';
 import {Workbench,Panel,MutationForm} from '@/components/v2/Workbench';
 import {LEAD_FIELDS} from '@/lib/lead-fields';
+import {RequireDestination} from '@/components/RequirePermission';
 
 /**
  * §7.1 lead capture. A lead starts at NEW; the stage machine moves it on.
@@ -12,8 +13,8 @@ import {LEAD_FIELDS} from '@/lib/lead-fields';
  */
 export default function Page(){
  return <Workbench title="New lead" description="The first record in the chain. It becomes an opportunity, then a tender or proposal, then a project.">
-  <Panel title="Lead">
+  <RequireDestination href="/leads/new"><Panel title="Lead">
    <MutationForm path="leads" fields={LEAD_FIELDS} submit="Create lead"/>
-  </Panel>
+  </Panel></RequireDestination>
  </Workbench>;
 }

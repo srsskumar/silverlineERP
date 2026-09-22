@@ -11,6 +11,8 @@ import {
 import { optionsNote } from '@/lib/xlsx';
 import { useQuery } from '@tanstack/react-query';
 import { apiRequestRaw } from '@/lib/apiClient';
+import { useAuth } from '@/components/AuthProvider';
+import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 
 /**
  * The download-the-format panel.
@@ -32,7 +34,12 @@ export function TemplatePanel({ template }: { template: ImportTemplate }) {
    * workbook is the list as it stands, rather than the list as it stood when
    * this template was written.
    */
-  const wantsDesignations = template.headers.includes('designation');
+  const { session } = useAuth();
+  // The designation list is part of the staff directory, so it is only
+  // asked for by somebody who may read that; anyone else gets the template
+  // without the live dropdown rather than a refused request.
+  const wantsDesignations = template.headers.includes('designation')
+    && hasPermission({ permissions: session?.permissions }, PERMISSIONS.EMPLOYEE_READ);
   const designations = useQuery({
     queryKey: ['designations'],
     enabled: wantsDesignations,
