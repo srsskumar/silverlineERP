@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation } from '@tanstack/react-query';
 import { fileException, type AttendanceException } from '@/lib/attendance';
@@ -11,6 +11,7 @@ import { Button } from './ui/Button';
 import { ErrorCard } from './ui/ErrorCard';
 import { FormField } from './ui/FormField';
 import { Input } from './ui/Input';
+import { EmployeePicker } from './EmployeePicker';
 import { Badge } from './ui/Badge';
 
 const inputClass =
@@ -39,6 +40,7 @@ export function ExceptionDialog({
 
   const {
     register,
+    control,
     handleSubmit,
     reset,
     setError,
@@ -112,8 +114,14 @@ export function ExceptionDialog({
           </div>
         ) : (
           <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="mt-4 flex flex-col gap-4" noValidate>
-            <FormField label="Employee ID *" htmlFor="ex-employee" error={errors.employee_id?.message}>
-              <Input id="ex-employee" invalid={!!errors.employee_id} {...register('employee_id')} />
+            <FormField label="Employee *" htmlFor="ex-employee" error={errors.employee_id?.message}>
+              <Controller
+                control={control}
+                name="employee_id"
+                render={({ field }) => (
+                  <EmployeePicker id="ex-employee" value={field.value ?? ''} onChange={field.onChange} />
+                )}
+              />
             </FormField>
             <FormField label="Attendance record ID (optional)" htmlFor="ex-record" error={errors.attendance_record_id?.message}>
               <Input id="ex-record" placeholder="Link to a record…" {...register('attendance_record_id')} />

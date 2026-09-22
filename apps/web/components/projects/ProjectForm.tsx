@@ -220,7 +220,7 @@ export function ProjectForm({
           label="Project manager"
           value={state.project_manager_id}
           onChange={(id) => set({ project_manager_id: id })}
-          options={(users.data ?? []).map((u) => ({ id: String(u.id), label: String(u.username) }))}
+          options={(users.data ?? []).map((u) => ({ id: String(u.id), label: String(u.name ?? u.username), hint: u.emp_no ? String(u.emp_no) : undefined }))}
           isLoading={users.isLoading}
           placeholder="Unassigned…"
         />

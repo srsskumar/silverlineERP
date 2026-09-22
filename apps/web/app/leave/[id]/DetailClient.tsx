@@ -11,6 +11,7 @@ import { getMyEmployee } from '@/lib/employees';
 import { queryKeys } from '@/lib/query-keys';
 import { PERMISSIONS } from '@/lib/permissions';
 import { ApprovalTimeline } from '@/components/ApprovalTimeline';
+import { PersonName } from '@/components/PersonName';
 import { listPeople, peopleIndex, personLabel } from '@/lib/people';
 import { DecisionButtons } from '@/components/DecisionButtons';
 import { CancelButton } from '@/components/CancelButton';
@@ -131,14 +132,13 @@ export function LeaveDetailView({ id }: { id: string }) {
             </div>
             <dl className="mt-4 divide-y divide-border">
               <DetailRow label="Request ID" value={<span className="font-mono text-xs">{req.id}</span>} />
-              <DetailRow label="Employee" value={<span className="font-mono text-xs">{req.employee_id}</span>} />
+              <DetailRow label="Employee" value={<PersonName id={req.employee_id} name={req.employee_name} empNo={req.employee_emp_no} />} />
               <DetailRow
                 label="Current approver"
                 value={
                   req.current_approver_id ? (
                     <span title={String(req.current_approver_id)}>
                       {personLabel(people, String(req.current_approver_id))}
-                      <span className="ml-2 text-text-subtle">(user id — names are not provided by the API)</span>
                     </span>
                   ) : (
                     '—'
@@ -152,7 +152,7 @@ export function LeaveDetailView({ id }: { id: string }) {
 
           <div className="rounded-lg border border-border bg-surface p-4 sm:p-6">
             <h2 className="text-sm font-semibold text-text">Approval chain ({chain.length})</h2>
-            <p className="mt-1 text-xs text-text-muted">Approvers are shown as user ids — the API does not return approver names.</p>
+            <p className="mt-1 text-xs text-text-muted">Each step names the person whose decision it waits for.</p>
             <div className="mt-3">
               <ApprovalTimeline chain={chain} />
             </div>

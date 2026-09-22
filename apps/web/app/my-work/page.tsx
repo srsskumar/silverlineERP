@@ -11,6 +11,7 @@ import { DASHBOARD_GC_TIME, DASHBOARD_STALE_TIME, getMyWork } from '@/lib/dashbo
 import { listTasksPage, type Task } from '@/lib/tasks';
 import { queryKeys } from '@/lib/query-keys';
 import { LabelPill } from '@/components/LabelPill';
+import { PersonName } from '@/components/PersonName';
 import { SlaBadge } from '@/components/SlaBadge';
 import { TaskStatusBadge } from '@/components/TaskStatusBadge';
 import { Button } from '@/components/ui/Button';
@@ -170,7 +171,7 @@ function PendingApprovals() {
                       Leave {String(l.id).slice(0, 8)}… · {day(l.from_date)} → {day(l.to_date)}
                     </p>
                     <p className="mt-0.5 font-mono text-[11px] text-text-subtle">
-                      employee {String(l.employee_id).slice(0, 8)}…
+                      <PersonName id={l.employee_id} name={l.employee_name} empNo={l.employee_emp_no} />
                     </p>
                   </div>
                   <Link href={`/leave/${l.id}`} className="shrink-0 text-sm text-primary hover:underline">

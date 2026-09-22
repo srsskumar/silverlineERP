@@ -13,6 +13,7 @@ import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
 import { Combobox } from '@/components/ui/Combobox';
+import { OwnerPicker } from '@/components/OwnerPicker';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Notice, Section, Stat } from '@/components/finance/Primitives';
@@ -514,10 +515,13 @@ function AddDocument({ onDone }: { onDone: () => void }) {
         {form.owner_type !== 'organization' ? (
           <label className="space-y-1">
             <span className="text-2xs uppercase tracking-wide text-text-subtle">
-              {OWNER_LABELS[form.owner_type]} id
+              {OWNER_LABELS[form.owner_type]}
             </span>
-            <input className={field} value={form.owner_id}
-              onChange={(e) => setForm({ ...form, owner_id: e.target.value })} />
+            <OwnerPicker
+              ownerType={form.owner_type}
+              value={form.owner_id}
+              onChange={(owner_id) => setForm({ ...form, owner_id })}
+            />
           </label>
         ) : null}
         <label className="space-y-1">

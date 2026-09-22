@@ -15,7 +15,9 @@ import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Tabl
 import { Badge } from '@/components/ui/Badge';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
-import { assignablePeople, listPeople } from '@/lib/people';
+import { listPeople, peopleIndex } from '@/lib/people';
+import { PersonName } from '@/components/PersonName';
+import { UserPicker } from '@/components/UserPicker';
 import { Notice, Section } from '@/components/finance/Primitives';
 import { day, DOCUMENT_TYPE_LABELS } from '@/lib/finance';
 
@@ -45,10 +47,13 @@ export default function DelegationsPage() {
   const users = useQuery({
     queryKey: ['users', 'for-delegation'],
     queryFn: listPeople,
-    enabled: canDelegate,
+    // Loaded for everybody who can see the table: the rows carry ids and
+    // usernames, and the directory is what turns them into names.
+    retry: false,
     staleTime: 300_000,
   });
 
+  const peopleIdx = React.useMemo(() => peopleIndex(users.data ?? []), [users.data]);
   const [toUserId, setToUserId] = React.useState('');
   const [validFrom, setValidFrom] = React.useState(todayIso());
   const [validTo, setValidTo] = React.useState('');
@@ -104,18 +109,13 @@ export default function DelegationsPage() {
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <label className="text-xs text-text-muted">
                   To
-                  <select
-                    className="mt-1 w-full"
+                  <UserPicker
+                    id="delegate-to"
                     value={toUserId}
-                    onChange={(e) => setToUserId(e.target.value)}
-                  >
-                    <option value="">Choose a person</option>
-                    {assignablePeople(users.data)
-                      .filter((u) => String(u.id) !== session?.user?.id)
-                      .map((u) => (
-                        <option key={String(u.id)} value={String(u.id)}>{u.name ?? u.username}</option>
-                      ))}
-                  </select>
+                    onChange={setToUserId}
+                    exclude={session?.user?.id ? [session.user.id] : []}
+                    placeholder="Type a name…"
+                  />
                 </label>
                 <label className="text-xs text-text-muted">
                   From
@@ -227,8 +227,8 @@ export default function DelegationsPage() {
                     const types: string[] = Array.isArray(d.document_types) ? d.document_types : [];
                     return (
                       <TR key={String(d.id)}>
-                        <TD className="text-text">{d.from_username}</TD>
-                        <TD className="text-text">{d.to_username}</TD>
+                        <TD className="text-text"><PersonName id={String(d.from_user_id ?? "")} username={d.from_username} index={peopleIdx} /></TD>
+                        <TD className="text-text"><PersonName id={String(d.to_user_id ?? "")} username={d.to_username} index={peopleIdx} /></TD>
                         <TD tone="muted">{day(from)} → {day(to)}</TD>
                         <TD tone="subtle">
                           {types.length === 0

@@ -155,7 +155,11 @@ function HolidaysManager() {
                   <td className="px-3 py-2">{h.name}</td>
                   <td className="px-3 py-2">{h.type}</td>
                   <td className="px-3 py-2 text-text-muted">
-                    {h.scope_type ? `${h.scope_type}:${String(h.scope_id).slice(0, 8)}…` : 'Org-wide'}
+                    {h.scope_type ? (
+                      <span title={String(h.scope_id ?? '')}>
+                        {h.scope_name ? `${h.scope_name} (${h.scope_type})` : `${h.scope_type} ${String(h.scope_id).slice(0, 8)}…`}
+                      </span>
+                    ) : 'Org-wide'}
                   </td>
                 </tr>
               ))}

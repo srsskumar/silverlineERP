@@ -57,6 +57,9 @@ export interface ApprovalStep {
 export interface LeaveRequest {
   id: string;
   employee_id: string;
+  /** From the employee record, joined by the API. */
+  employee_name?: string | null;
+  employee_emp_no?: string | null;
   leave_type_id: string;
   leave_code: string;
   from_date: string;

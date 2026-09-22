@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppShell } from '@/components/AppShell';
@@ -19,6 +19,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { FormField } from '@/components/ui/FormField';
 import { Input } from '@/components/ui/Input';
+import { EmployeePicker } from '@/components/EmployeePicker';
 import { Skeleton } from '@/components/ui/Skeleton';
 
 export const dynamic = 'force-static';
@@ -55,6 +56,7 @@ function AdjustDialog({
 
   const {
     register,
+    control,
     handleSubmit,
     reset,
     setError,
@@ -107,8 +109,14 @@ function AdjustDialog({
           </div>
         ) : (
           <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="mt-4 flex flex-col gap-4" noValidate>
-            <FormField label="Employee ID *" htmlFor="bal-employee" error={errors.employee_id?.message}>
-              <Input id="bal-employee" invalid={!!errors.employee_id} {...register('employee_id')} />
+            <FormField label="Employee *" htmlFor="bal-employee" error={errors.employee_id?.message}>
+              <Controller
+                control={control}
+                name="employee_id"
+                render={({ field }) => (
+                  <EmployeePicker id="bal-employee" value={field.value ?? ''} onChange={field.onChange} />
+                )}
+              />
             </FormField>
             <FormField label="Leave type *" htmlFor="bal-type" error={errors.leave_type_id?.message}>
               <select id="bal-type" className={inputClass} {...register('leave_type_id')}>
@@ -187,12 +195,13 @@ function BalancesPanel() {
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4 sm:flex-row sm:items-end">
         <div className="flex-1">
-          <FormField label="Employee ID (or emp_no)" htmlFor="bal-lookup">
-            <Input
+          <FormField label="Employee" htmlFor="bal-lookup">
+            <EmployeePicker
               id="bal-lookup"
-              placeholder="Paste an employee ID…"
+              status={null}
               value={employeeInput}
-              onChange={(e) => setEmployeeInput(e.target.value)}
+              onChange={setEmployeeInput}
+              placeholder="Type a name or employee number…"
             />
           </FormField>
         </div>
