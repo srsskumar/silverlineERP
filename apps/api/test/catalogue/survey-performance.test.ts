@@ -182,3 +182,33 @@ describe("the department's village rows", () => {
     expect(Array.isArray(r.data.stage_days)).toBe(true);
   });
 });
+
+describe("the department's headline agrees with the office's", () => {
+  it("uses the certified total where one has been set", async () => {
+    const measure = (await get(w.admin, "/api/v1/survey/measures")).data.measures
+      .find((x: { basis: string }) => x.basis === "EXTENT").code as string;
+    const filed = await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: villageB, entry_date: "2026-01-06", values: { [measure]: 30 },
+      gt_variance_reason: "WEATHER",
+    });
+    expect(filed.status, JSON.stringify(filed.body)).toBe(201);
+    const done = await post(w.admin, `/api/v1/survey/villages/${villageB}/stage`, {
+      stage_code: "GROUND_TRUTHING", state: "COMPLETED", completed_on: "2026-01-07",
+      variance_reason: "WEATHER",
+    });
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
+    const certified = await send("PUT", w.admin, `/api/v1/survey/villages/${villageB}/finals`, {
+      finals: [{ measure_code: measure, quantity: 45, reason: "Recounted at handover" }],
+    });
+    expect(certified.status, JSON.stringify(certified.body)).toBe(200);
+    const office = await get(w.admin, `/api/v1/survey/projects/${programmeB}/progress`);
+    const department = await get(w.admin, `/api/v1/survey/projects/${programmeB}/dashboard`);
+    expect(office.data.total.surveyedAc).toBe(45);
+    expect(department.data.totals.surveyed_ac).toBe(45);
+    expect(department.data.villages[0].surveyed_ac).toBe(45);
+    // A period report asks what was done in it, and a recount is not a week's work.
+    const period = await get(w.admin,
+      `/api/v1/survey/projects/${programmeB}/dashboard?from=2026-01-01&to=2026-01-31`);
+    expect(period.data.totals.surveyed_ac).toBe(30);
+  });
+});

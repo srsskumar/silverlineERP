@@ -4980,16 +4980,45 @@ export async function registerSurveyRoutes(
        * a statement about the programme rather than about the fortnight.
        */
       const doneRows = (await pool.query(
-        `SELECT se.survey_village_id AS vid, COALESCE(sum(sev.quantity), 0) AS ac
+        `SELECT se.survey_village_id AS vid, sm.code, COALESCE(sum(sev.quantity), 0) AS ac
          FROM survey_entries se
          JOIN survey_entry_values sev ON sev.entry_id = se.id
          JOIN survey_measures sm ON sm.id = sev.measure_id AND sm.basis = 'EXTENT'
          WHERE se.survey_project_id = $1 AND se.org_id = $2
            AND ($3 = '' OR se.entry_date >= $3::date)
            AND se.entry_date <= $4::date
-         GROUP BY 1`,
+         GROUP BY 1, 2`,
         [id, u.orgId, from, to])).rows;
-      const doneBy = new Map(doneRows.map(r => [String(r.vid), Number(r.ac)]));
+      const recordedBy = new Map<string, Record<string, number>>();
+      for (const r of doneRows) {
+        const key = String(r.vid);
+        (recordedBy.get(key) ?? recordedBy.set(key, {}).get(key)!)[String(r.code)] = Number(r.ac);
+      }
+      /*
+       * Certified totals stand in for the running sum, measure by measure,
+       * where somebody has set one (§068) -- as every internal screen does
+       * through positions(). This screen summed the daily returns on their
+       * own, so a village recounted at handover read one figure to the
+       * department and another to the office; on the live contract the two
+       * headlines disagreed by seven thousand acres.
+       *
+       * Only for an unbounded read: a period asks what was done *in* it.
+       */
+      if (!from) {
+        const finals = (await pool.query(
+          `SELECT f.survey_village_id AS vid, sm.code, f.quantity
+             FROM survey_village_finals f
+             JOIN survey_measures sm ON sm.id = f.measure_id AND sm.basis = 'EXTENT'
+             JOIN survey_villages sv ON sv.id = f.survey_village_id
+            WHERE sv.survey_project_id = $1 AND f.org_id = $2`, [id, u.orgId])).rows;
+        for (const r of finals) {
+          const key = String(r.vid);
+          (recordedBy.get(key) ?? recordedBy.set(key, {}).get(key)!)[String(r.code)] = Number(r.quantity);
+        }
+      }
+      const doneBy = new Map<string, number>(
+        [...recordedBy.entries()].map(([vid, byCode]) =>
+          [vid, Object.values(byCode).reduce((t, n) => t + n, 0)]));
       /*
        * Surveyed extent, split by whether it can be weighed.
        *
