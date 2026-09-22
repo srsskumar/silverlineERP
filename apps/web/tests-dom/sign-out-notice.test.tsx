@@ -87,8 +87,9 @@ describe('a change that revokes every session', () => {
     expect(getRefreshToken()).toBeNull();
 
     // ...and the sign-in screen finds the message, once.
+    // (The form's own "Saved successfully." is a status too, so ask for the text.)
     render(<LoginNotice />);
-    expect(await screen.findByRole('status')).toHaveTextContent(/Two-factor authentication is on/);
+    expect(await screen.findByText(/Two-factor authentication is on/)).toHaveAttribute('role', 'status');
     expect(takeLoginNotice()).toBeNull();
   });
 });
