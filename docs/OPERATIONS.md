@@ -12,6 +12,7 @@ Production runs on a single GCP VM, `dev-thor` (34.131.134.217), plain HTTP on p
 | Worker | `silverline-worker.timer`, one pass about every five minutes, calling `/api/v1/jobs/run` with `CRON_SECRET`. Enabled. | `scripts/vm/silverline-worker.*` |
 | Database | Supabase PostgreSQL (`DATABASE_URL` in `api.env`) | — |
 | Uploads | Stored encrypted in the database. `/var/lib/silverline/uploads` is only the read fallback for files from before that change. | — |
+| Malware scanner | ClamAV in Docker (`silverline-clamav`, 127.0.0.1:3310, restart unless-stopped). The API fails every upload closed without it. | `scripts/vm/silverline-clamav.sh` |
 
 nginx is the only public door: it serves the web, proxies `/api/` and `/health`, sets the security headers, and redirects canonical record URLs (`/projects/<id>` and the rest) to `/record?type=&id=`, the one page the static export can serve for any id.
 
