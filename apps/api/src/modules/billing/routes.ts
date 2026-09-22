@@ -6,6 +6,7 @@ import {
   RA_BILL_TRANSITIONS, type RaBillStatus, type RaBillLine, type DeductionPolicy,
   surveyBoqLinkSchema, measuredLine, proposalHasWork, dateStringSchema,
   receivableDueDate, raBillDisputeSchema, businessDay,
+  raBillStatusSchema, certifiableAmount, retentionReleaseSchema,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail, projectAccess } from '../../common/domain.js';
@@ -320,12 +321,24 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
    */
   app.post('/api/v1/ra-bills/:id/status', { preHandler: guard('rabill.manage') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const body = req.body as { status?: string; reason?: string; certified_amount?: number };
-    const next = String(body.status ?? '') as RaBillStatus;
+    const body = parse(raBillStatusSchema, req.body);
+    const next = body.status;
+    // Certification is project-scoped like every other bill mutation: a
+    // manager scoped to one project must not certify another's bill by id.
+    await projectAccess(pool, req, String((await inOrg(pool, 'ra_bills', id, u.orgId)).project_id));
     return {
       data: await mutate(pool, req, 'rabill.status', 'ra_bill', async db => {
         const bill = await inOrg(db, 'ra_bills', id, u.orgId, true);
         version(req, bill as { version: number });
+        // The certified figure becomes the receivable. Less than claimed is
+        // the client's prerogative; more than the work plus its tax is not.
+        if (body.certified_amount !== undefined && next !== 'CERTIFIED') {
+          fail('VALIDATION_ERROR', 'A certified amount is recorded when the bill is certified, not on other moves');
+        }
+        if (body.certified_amount !== undefined && !certifiableAmount(bill, body.certified_amount)) {
+          fail('EXCEEDS_CLAIM',
+            `The certified amount cannot exceed the bill's value of ${(Number(bill.gross_value) + Number(bill.gst_amount ?? 0)).toFixed(2)} including GST`);
+        }
         const from = bill.status as RaBillStatus;
         const allowed = RA_BILL_TRANSITIONS[from] ?? [];
         if (!allowed.includes(next)) {
@@ -459,7 +472,7 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
 
   app.post('/api/v1/projects/:id/retention/release', { preHandler: guard('retention.release') }, async (req, reply) => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const body = req.body as { amount?: number; reason?: string };
+    const body = parse(retentionReleaseSchema, req.body ?? {});
     await projectAccess(pool, req, id);
     const row = await mutate(pool, req, 'retention.release', 'retention', async db => {
       await inOrg(db, 'projects', id, u.orgId, true);
