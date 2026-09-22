@@ -14,6 +14,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
+import { Paged } from '@/components/ui/Paged';
 import { Badge } from '@/components/ui/Badge';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
@@ -2237,6 +2238,7 @@ function Bottlenecks({ projectId, canForecast }: { projectId: string; canForecas
         />
       ) : (
         <Section title={`${rows.length} village${rows.length === 1 ? '' : 's'} needing attention`}>
+          <Paged rows={rows} noun="villages">{(shown) => (
           <TableWrap>
             <Table>
               <THead>
@@ -2246,7 +2248,7 @@ function Bottlenecks({ projectId, canForecast }: { projectId: string; canForecas
                 </TR>
               </THead>
               <TBody>
-                {rows.map((b) => (
+                {shown.map((b) => (
                   <TR key={b.villageId}>
                     <TD className="font-medium text-text">{b.village}</TD>
                     <TD tone="muted">{b.mandal ?? '—'}</TD>
@@ -2277,6 +2279,7 @@ function Bottlenecks({ projectId, canForecast }: { projectId: string; canForecas
               </TBody>
             </Table>
           </TableWrap>
+          )}</Paged>
           <p className="mt-2 text-2xs text-text-subtle">
             A stage counts as overdue after {stuck.data?.stage_sla_days} days.
             Severity is days past whichever threshold the village broke.
@@ -2648,6 +2651,9 @@ function Villages({
 
       {/* Capped height: the horizontal scrollbar for a twelve-column table
           has to be reachable without scrolling past a thousand villages. */}
+      <Paged rows={rows} noun="villages"
+        focusIndex={open ? rows.findIndex((v) => String(v.id) === open) : -1}>
+        {(shown, offset) => (
       <TableWrap tall>
         <Table>
           <THead>
@@ -2707,7 +2713,8 @@ function Villages({
             </TR>
           </THead>
           <TBody>
-            {rows.map((v, index) => {
+            {shown.map((v, i) => {
+              const index = offset + i;
               const isOpen = open === String(v.id);
               // The furthest stage not yet complete: the work waiting, which
               // is what somebody means by "where is this village".
@@ -2884,6 +2891,7 @@ function Villages({
           </TBody>
         </Table>
       </TableWrap>
+      )}</Paged>
     </div>
   );
 }
@@ -3480,6 +3488,7 @@ function ControlList({
         </Notice>
       ) : null}
 
+      <Paged rows={rows} noun="control points">{(shown) => (
       <TableWrap tall>
         <Table>
           <THead>
@@ -3495,7 +3504,7 @@ function ControlList({
             </TR>
           </THead>
           <TBody>
-            {rows.map((g) => (
+            {shown.map((g) => (
               <TR key={String(g.id)}>
                 <TD tone="muted">{g.mandal_name ?? '—'}</TD>
                 <TD>
@@ -3546,6 +3555,7 @@ function ControlList({
           </TBody>
         </Table>
       </TableWrap>
+      )}</Paged>
     </div>
   );
 }
@@ -3716,6 +3726,7 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
         <EmptyState title="No villages match that"
           description="Nothing on this sheet fits that combination. Widen the filter or clear it." />
       ) : (
+    <Paged rows={rows} noun="villages">{(shown, offset) => (
     <TableWrap tall>
       <Table>
         <THead>
@@ -3744,8 +3755,8 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
           </TR>
         </THead>
         <TBody>
-          {rows.map((r, i) => (
-            <TR key={`${r.village}-${i}`}>
+          {shown.map((r, i) => (
+            <TR key={`${r.village}-${offset + i}`}>
               <TD tone="muted">{r.mandal ?? '—'}</TD>
               <TD className="font-medium text-text">{r.village}</TD>
               <TD className="text-right tabular-nums">{acres(r.extent_ac)}</TD>
@@ -3848,6 +3859,7 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
         </TBody>
       </Table>
     </TableWrap>
+    )}</Paged>
       )}
     </div>
   );

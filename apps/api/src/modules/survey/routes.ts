@@ -181,7 +181,7 @@ export async function registerSurveyRoutes(
    */
   async function positions(
     db: Pool | PoolClient, orgId: string, projectId: string,
-    opts: { asOf?: string; from?: string } = {},
+    opts: { asOf?: string; from?: string; villageId?: string } = {},
   ): Promise<Array<VillageProgress & { row: Record<string, any> }>> {
     const asOf = opts.asOf ?? today();
     const values: unknown[] = [orgId, projectId, asOf];
@@ -190,6 +190,19 @@ export async function registerSurveyRoutes(
     // statement about the programme rather than about the week.
     let periodClause = '';
     if (opts.from) { values.push(opts.from); periodClause = `AND e.entry_date >= $${values.length}`; }
+    /*
+     * One village, when one is all that is wanted.
+     *
+     * The entry screen opens on a single village and needs its position in
+     * the same shape the list gives it. Reading the whole programme to find
+     * one row was twelve hundred rows of work for one.
+     */
+    if (opts.villageId) {
+      values.push(opts.villageId);
+      periodClause += ` AND e.survey_village_id = $${values.length}`;
+    }
+    const scope: unknown[] = opts.villageId ? [orgId, projectId, opts.villageId] : [orgId, projectId];
+    const scopeClause = opts.villageId ? 'AND sv.id = $3' : '';
 
     const rows = (await db.query(
       `SELECT sv.*,
@@ -226,8 +239,8 @@ export async function registerSurveyRoutes(
        LEFT JOIN org_units m ON m.id = v.parent_id
        LEFT JOIN org_units p ON p.id = m.parent_id
        LEFT JOIN org_units gp ON gp.id = p.parent_id
-       WHERE sv.org_id = $1 AND sv.survey_project_id = $2
-       ORDER BY m.name, v.name`, [orgId, projectId])).rows;
+       WHERE sv.org_id = $1 AND sv.survey_project_id = $2 ${scopeClause}
+       ORDER BY m.name, v.name`, scope)).rows;
 
     const cumulative = (await db.query(
       `SELECT e.survey_village_id, mm.code AS measure_code, sum(ev.quantity) AS total
@@ -237,11 +250,20 @@ export async function registerSurveyRoutes(
        WHERE e.org_id = $1 AND e.survey_project_id = $2 AND e.entry_date <= $3 ${periodClause}
        GROUP BY e.survey_village_id, mm.code`, values)).rows;
 
+    /*
+     * This programme's targets and stages, not the organisation's.
+     *
+     * Both queries used to read every row in the organisation and let the
+     * map below drop what did not belong. On a two-village programme that
+     * was twelve and a half thousand stage rows, each joined to its task,
+     * fetched and thrown away on every read of every screen.
+     */
     const targets = (await db.query(
       `SELECT t.survey_village_id, mm.code AS measure_code, t.target_quantity
        FROM survey_targets t
        JOIN survey_measures mm ON mm.id = t.measure_id
-       WHERE t.org_id = $1`, [orgId])).rows;
+       JOIN survey_villages sv ON sv.id = t.survey_village_id
+       WHERE t.org_id = $1 AND sv.survey_project_id = $2 ${scopeClause}`, scope)).rows;
 
     // Stage state comes from the linked task where there is one, and from the
     // stage row's own columns where there is not. `task_id` says which, so the
@@ -256,8 +278,9 @@ export async function registerSurveyRoutes(
               t.status AS task_status, t.actual_start_at, t.actual_end_at
        FROM survey_village_stages vs
        JOIN survey_stages s ON s.id = vs.stage_id
+       JOIN survey_villages sv ON sv.id = vs.survey_village_id
        LEFT JOIN tasks t ON t.id = vs.task_id
-       WHERE vs.org_id = $1`, [orgId])).rows;
+       WHERE vs.org_id = $1 AND sv.survey_project_id = $2 ${scopeClause}`, scope)).rows;
 
     const done = new Map<string, Record<string, number>>();
     for (const c of cumulative) {
@@ -323,7 +346,7 @@ export async function registerSurveyRoutes(
            FROM survey_village_finals f
            JOIN survey_measures mm ON mm.id = f.measure_id
            JOIN survey_villages sv ON sv.id = f.survey_village_id
-          WHERE f.org_id = $1 AND sv.survey_project_id = $2`, [orgId, projectId])).rows
+          WHERE f.org_id = $1 AND sv.survey_project_id = $2 ${scopeClause}`, scope)).rows
         .reduce((acc, r) => {
           const key = String(r.survey_village_id);
           (acc.get(key) ?? acc.set(key, {}).get(key)!)[String(r.code)] = Number(r.quantity);
@@ -911,6 +934,41 @@ export async function registerSurveyRoutes(
     const u = actor(req), id = (req.params as { id: string }).id;
     const { q } = page(req);
     await projectOr404(pool, u.orgId, id, u);
+
+    /*
+     * The names alone, for a picker (`fields=picker`).
+     *
+     * The entry screen listed villages by fetching each one's whole
+     * position -- stages, targets, every measure's completion -- and read
+     * four fields of it. At twelve hundred villages that is two and a half
+     * megabytes to fill a dropdown, before anybody has chosen anything. The
+     * village chosen is then read on its own, in full, from the route below.
+     */
+    if (String(q.fields ?? '') === 'picker') {
+      const rows = (await pool.query(
+        `SELECT sv.id, sv.village_id, sv.status_override,
+                v.name AS village_name, COALESCE(v.source_code, v.code) AS village_code,
+                m.name AS mandal_name,
+                CASE WHEN p.type = 'district' THEN p.name
+                     WHEN gp.type = 'district' THEN gp.name END AS district_name
+           FROM survey_villages sv
+           JOIN org_units v ON v.id = sv.village_id
+           LEFT JOIN org_units m ON m.id = v.parent_id
+           LEFT JOIN org_units p ON p.id = m.parent_id
+           LEFT JOIN org_units gp ON gp.id = p.parent_id
+          WHERE sv.org_id = $1 AND sv.survey_project_id = $2
+          ORDER BY m.name, v.name`, [u.orgId, id])).rows;
+      return {
+        total: rows.length, has_more: false,
+        data: rows.map(r => ({
+          id: String(r.id), village_id: String(r.village_id),
+          village_name: r.village_name, village_code: r.village_code ?? null,
+          mandal_name: r.mandal_name ?? null, district_name: r.district_name ?? null,
+          status_override: r.status_override ?? null,
+        })),
+      };
+    }
+
     const [m, codes, all] = await Promise.all([
       measures(pool, u.orgId), stageCodes(pool, u.orgId),
       positions(pool, u.orgId, id, { asOf: dateParam(req, q.as_of, 'as_of', today()) }),
@@ -938,7 +996,37 @@ export async function registerSurveyRoutes(
     return {
       total: all.length,
       has_more: wantsPage && offset + pos.length < all.length,
-      data: pos.map(p => ({
+      data: pos.map(p => villageRow(p, m, codes)),
+    };
+  });
+
+  /**
+   * One village, as the list shows it.
+   *
+   * The same row the list route returns, so a screen that opened on a list
+   * and now opens on one village reads the same fields with the same
+   * meanings. Scoped like every other village-addressed route: the caller
+   * has to be allowed the programme it belongs to.
+   */
+  app.get('/api/v1/survey/villages/:id', { preHandler: guard('survey.read') }, async req => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const { q } = page(req);
+    const sv = await villageOr404(pool, u.orgId, id, u);
+    const [m, codes, all] = await Promise.all([
+      measures(pool, u.orgId), stageCodes(pool, u.orgId),
+      positions(pool, u.orgId, String(sv.survey_project_id), {
+        asOf: dateParam(req, q.as_of, 'as_of', today()), villageId: id,
+      }),
+    ]);
+    if (!all.length) fail('NOT_FOUND', 'Not found', 404);
+    return { data: villageRow(all[0], m, codes) };
+  });
+
+  function villageRow(
+    p: VillageProgress & { row: Record<string, any> },
+    m: Awaited<ReturnType<typeof measures>>, codes: string[],
+  ) {
+    return {
         id: p.villageId,
         village_id: p.row.village_id,
         village_name: p.row.village_name,
@@ -994,9 +1082,8 @@ export async function registerSurveyRoutes(
             m.basis[code] === 'EXTENT' ? p.extentAc : p.targets?.[code] ?? null),
         ])),
         version: p.row.version,
-      })),
     };
-  });
+  }
 
   app.post('/api/v1/survey/projects/:id/villages', { preHandler: guard('survey.manage') },
     async (req, reply) => {
@@ -4893,16 +4980,45 @@ export async function registerSurveyRoutes(
        * a statement about the programme rather than about the fortnight.
        */
       const doneRows = (await pool.query(
-        `SELECT se.survey_village_id AS vid, COALESCE(sum(sev.quantity), 0) AS ac
+        `SELECT se.survey_village_id AS vid, sm.code, COALESCE(sum(sev.quantity), 0) AS ac
          FROM survey_entries se
          JOIN survey_entry_values sev ON sev.entry_id = se.id
          JOIN survey_measures sm ON sm.id = sev.measure_id AND sm.basis = 'EXTENT'
          WHERE se.survey_project_id = $1 AND se.org_id = $2
            AND ($3 = '' OR se.entry_date >= $3::date)
            AND se.entry_date <= $4::date
-         GROUP BY 1`,
+         GROUP BY 1, 2`,
         [id, u.orgId, from, to])).rows;
-      const doneBy = new Map(doneRows.map(r => [String(r.vid), Number(r.ac)]));
+      const recordedBy = new Map<string, Record<string, number>>();
+      for (const r of doneRows) {
+        const key = String(r.vid);
+        (recordedBy.get(key) ?? recordedBy.set(key, {}).get(key)!)[String(r.code)] = Number(r.ac);
+      }
+      /*
+       * Certified totals stand in for the running sum, measure by measure,
+       * where somebody has set one (§068) -- as every internal screen does
+       * through positions(). This screen summed the daily returns on their
+       * own, so a village recounted at handover read one figure to the
+       * department and another to the office; on the live contract the two
+       * headlines disagreed by seven thousand acres.
+       *
+       * Only for an unbounded read: a period asks what was done *in* it.
+       */
+      if (!from) {
+        const finals = (await pool.query(
+          `SELECT f.survey_village_id AS vid, sm.code, f.quantity
+             FROM survey_village_finals f
+             JOIN survey_measures sm ON sm.id = f.measure_id AND sm.basis = 'EXTENT'
+             JOIN survey_villages sv ON sv.id = f.survey_village_id
+            WHERE sv.survey_project_id = $1 AND f.org_id = $2`, [id, u.orgId])).rows;
+        for (const r of finals) {
+          const key = String(r.vid);
+          (recordedBy.get(key) ?? recordedBy.set(key, {}).get(key)!)[String(r.code)] = Number(r.quantity);
+        }
+      }
+      const doneBy = new Map<string, number>(
+        [...recordedBy.entries()].map(([vid, byCode]) =>
+          [vid, Object.values(byCode).reduce((t, n) => t + n, 0)]));
       /*
        * Surveyed extent, split by whether it can be weighed.
        *
@@ -5318,9 +5434,11 @@ export async function registerSurveyRoutes(
               // What actually happened, beside what was promised (§074).
               gt_completed_on: v.gtCompletedOn,
               surveyed_sqkm: acresToSqKm(doneBy.get(v.villageId) ?? 0),
-              // Days spent in each stage it has reached, open stages counted
-              // to today so the figure is current rather than final.
-              stage_days: v.stageDays,
+              // Days in the stage it is at now, counted to today while open.
+              // The per-stage breakdown is not sent per village: no screen
+              // read it, and on twelve hundred villages it was a quarter of
+              // the response. The programme-wide `stage_days` below carries
+              // the averages.
               days_in_stage: v.position.stage ? v.stageDays[v.position.stage] ?? null : null,
               /*
                * Whose desk it is on — and only for a reader entitled to know.
