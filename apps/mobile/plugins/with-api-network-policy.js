@@ -24,11 +24,22 @@ function resolvePolicy(env) {
   const parts = host.split('.').map(Number);
   const privateIp = parts.length === 4 && parts.every(n => Number.isInteger(n) && n >= 0 && n <= 255) &&
     (parts[0] === 10 || (parts[0] === 192 && parts[1] === 168) || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31));
-  if (profile === 'production' || (profile === 'preview' && !privateIp)) {
+  if (profile === 'production') {
     throw new Error('Production requires HTTPS; preview HTTP is limited to a private LAN IP.');
   }
-  if (!privateIp && !loopback) {
-    throw new Error('Development HTTP is limited to localhost, an emulator host, or a private LAN IP.');
+  // A QA build against a server that has a public address but no certificate
+  // yet. Allowed only when the build names that exact host a second time in
+  // MOBILE_QA_CLEARTEXT_HOST, so a stray EXPO_PUBLIC_API_URL cannot open
+  // cleartext to the internet by itself -- and never for production, which
+  // has already been refused above whatever the flag says. The XML still
+  // permits that one host and nothing else.
+  const qaHost = (env.MOBILE_QA_CLEARTEXT_HOST || '').trim();
+  const qaCleartext = qaHost !== '' && qaHost === host && !loopback;
+  if (profile === 'preview' && !privateIp && !qaCleartext) {
+    throw new Error('Production requires HTTPS; preview HTTP is limited to a private LAN IP.');
+  }
+  if (!privateIp && !loopback && !qaCleartext) {
+    throw new Error('Development HTTP is limited to localhost, an emulator host, or a private LAN IP (or the host named in MOBILE_QA_CLEARTEXT_HOST for a QA build).');
   }
   // Debug manifests still reference this XML. Android gives an explicit
   // network-security config precedence over android:usesCleartextTraffic, so
