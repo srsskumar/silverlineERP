@@ -3,7 +3,7 @@
  *
  * Permission dot-codes mirror the backend exactly:
  *  - S0 base map:        packages/shared/src/rbac.ts      (PERMISSIONS)
- *  - S2 attendance/geo:  packages/shared/src/s2.ts        (S2_PERMISSIONS)
+ *  - S2 attendance:      packages/shared/src/s2.ts        (S2_PERMISSIONS)
  *  - S3 leave:           packages/shared/src/s3.ts        (S3_PERMISSIONS)
  *  - S4 projects/tasks:  packages/shared/src/s4.ts        (S4_PERMISSIONS)
  *  - S5 boards/notifs:   packages/shared/src/s5.ts        (S5_PERMISSIONS)
@@ -20,9 +20,7 @@ export const PERMISSIONS = {
   AUDIT_READ: "audit.read",
   EMPLOYEES_READ: "employees.read",
   EMPLOYEES_MANAGE: "employees.manage",
-  // S2
-  GEO_READ: "geo.read",
-  GEO_MANAGE: "geo.manage",
+  // S2 (geo.read / geo.manage retired with the geo-fence, 2026-09-22)
   ATTENDANCE_PUNCH: "attendance.punch",
   ATTENDANCE_READ: "attendance.read",
   ATTENDANCE_DECIDE: "attendance.decide",

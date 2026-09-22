@@ -33,7 +33,7 @@ describe("classifySyncResponse", () => {
     assert.equal(
       classifySyncResponse(202, {
         review: "REQUIRES_REVIEW",
-        code: "OUTSIDE_GEOFENCE",
+        code: "DEVICE_SIGNAL",
         exception_id: "x",
       }),
       "REVIEW",

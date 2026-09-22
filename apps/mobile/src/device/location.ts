@@ -5,7 +5,12 @@
 
 import * as Location from "expo-location";
 
-/** Default poor-accuracy threshold (meters) — mirrors fence default 100m. */
+/**
+ * Below this accuracy (meters) the screen warns that the fix is weak.
+ *
+ * Advisory only: there is no geo-fence and the server never holds a punch
+ * for poor accuracy. The number is stored with the punch as evidence.
+ */
 export const ACCURACY_THRESHOLD_M = 100;
 
 export interface PunchFix {
@@ -43,7 +48,7 @@ export function accuracyLabel(fix: PunchFix | null): string {
   return fix.mocked ? `${acc} · MOCKED` : acc;
 }
 
-/** True when the fix is too poor to auto-accept (backend would 202 it). */
+/** True when the fix is weak enough to warn about. The punch is accepted regardless. */
 export function isPoorAccuracy(
   fix: PunchFix,
   thresholdM = ACCURACY_THRESHOLD_M,

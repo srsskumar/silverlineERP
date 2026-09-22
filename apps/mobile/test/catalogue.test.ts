@@ -281,7 +281,7 @@ describe("UT-OFF-02 classify ACCEPTED ALREADY_APPLIED REJECTED CONFLICT and REVI
     {
       label: "queued for human review",
       status: 202,
-      body: { review: "REQUIRES_REVIEW", code: "OUTSIDE_GEOFENCE" },
+      body: { review: "REQUIRES_REVIEW", code: "MOCK_LOCATION" },
       decision: "REVIEW",
       state: "SUCCEEDED",
       retryable: false,
@@ -763,7 +763,7 @@ describe("E2E-02 employee signs in without admin permissions", () => {
     // The app has no admin surface at all, so there is nothing to gate: the
     // whole class of "employee reached an admin page" cannot occur.
     const layout = readSource("app/(tabs)/_layout.tsx");
-    for (const forbidden of ["admin", "payroll", "geo-fences", "employees", "reports"]) {
+    for (const forbidden of ["admin", "payroll", "employees", "reports"]) {
       assert.ok(
         !new RegExp(`<Tabs\\.Screen name="${forbidden}"`).test(layout),
         `unexpected ${forbidden} tab`,

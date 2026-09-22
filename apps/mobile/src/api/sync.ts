@@ -6,8 +6,9 @@
  *  - 200 { applied: true, event, record }             → idempotent replay /
  *    5-min suppression echo (no side effects, treat as success)
  *  - 202 { review: "REQUIRES_REVIEW", code, exception_id, message }
- *    → stored, queued for human review (TIMESTAMP_SKEW | POOR_ACCURACY |
- *    MOCK_LOCATION | OUTSIDE_GEOFENCE)
+ *    → stored, queued for human review (TIMESTAMP_SKEW | MOCK_LOCATION |
+ *    DEVICE_SIGNAL | ON_APPROVED_LEAVE; older rows may carry the retired
+ *    OUTSIDE_GEOFENCE / NO_LOCATION / POOR_ACCURACY codes)
  *  - 422 envelope { code, message, field_errors[] }   → rejected, do NOT retry
  *    blindly (DUPLICATE_CHECKIN, CHECKOUT_WITHOUT_CHECKIN, RECORD_CLOSED,
  *    FUTURE_PUNCH, EMPLOYEE_INACTIVE, VALIDATION_ERROR, ...)

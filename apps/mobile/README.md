@@ -3,9 +3,8 @@
 Offline-first field companion to the same single API the web client uses.
 
 API *contracts* are still mirrored locally rather than imported (drift risk noted
-below), but the geofencing work does import `@silverline/shared` for the geometry
-and signal helpers the server shares (`src/device/geofencing.ts`,
-`src/device/signals.ts`, `src/ui/MapCanvas.tsx`, `src/api/endpoints.ts`). That
+below), but the anti-fraud and survey work does import `@silverline/shared` for
+the helpers the server shares (`src/device/signals.ts`, `src/survey/*`). That
 package resolves to its gitignored `dist/`, so build it once per clone:
 
 ```sh
@@ -15,8 +14,8 @@ npm run build --workspace=@silverline/shared    # from the repository root
 ## Run
 
 **Expo Go cannot run this app.** It depends on native modules that are not
-bundled into the Expo Go client: `expo-maps`, background geofencing via
-`expo-location` + `expo-task-manager`, `expo-background-task`,
+bundled into the Expo Go client: `expo-maps`, the background sync worker via
+`expo-task-manager` + `expo-background-task`,
 `expo-secure-store`, `expo-local-authentication`, and `expo-notifications`.
 Scanning the QR code with Expo Go gets you a red screen on the first import, not
 a degraded experience. The app depends on `expo-dev-client` precisely because a

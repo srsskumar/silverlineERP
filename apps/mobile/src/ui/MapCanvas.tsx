@@ -1,5 +1,9 @@
 /**
- * Cross-platform fence map.
+ * Cross-platform map of where the user is.
+ *
+ * It used to draw the geo-fences around the user; Silverline has no
+ * geo-fencing since 2026-09-22, so it now draws only markers -- the punch
+ * position -- over the base map.
  *
  * expo-maps ships two distinct native views — `GoogleMaps.View` on Android and
  * `AppleMaps.View` on iOS — with separate (though similar) prop types. This
@@ -15,10 +19,8 @@ import { useMemo } from "react";
 import { Platform, StyleSheet, View } from "react-native";
 import { requireOptionalNativeModule } from "expo";
 import { Ionicons } from "@expo/vector-icons";
-import type { CircleGeometry, PolygonGeometry } from "@silverline/shared";
 import { font, radius, space, useIsDark, useTheme } from "../theme";
 import { Muted } from "./primitives";
-import type { GeoFence } from "../api/endpoints";
 
 type ExpoMapsModule = typeof import("expo-maps");
 type ReactNativeMapsModule = typeof import("react-native-maps");
@@ -72,73 +74,23 @@ export interface MapPoint {
 }
 
 export interface MapCanvasProps {
-  fences?: readonly GeoFence[];
   points?: readonly MapPoint[];
-  /** Centre. Falls back to the first fence, then to a wide default view. */
+  /** Centre. Falls back to the first point, then to an empty-state panel. */
   center?: { latitude: number; longitude: number } | null;
   zoom?: number;
   height?: number;
-  /** Highlights one fence — the one the user is currently standing in. */
-  activeFenceId?: string | null;
 }
 
 const DEFAULT_ZOOM = 15;
 
-/** Hex + alpha byte, since both native layers take a colour string. */
-function alpha(hex: string, a: string): string {
-  return `${hex}${a}`;
-}
-
 export function MapCanvas({
-  fences = [],
   points = [],
   center,
   zoom = DEFAULT_ZOOM,
   height = 240,
-  activeFenceId = null,
 }: MapCanvasProps) {
   const t = useTheme();
   const isDark = useIsDark();
-
-  const circles = useMemo(
-    () =>
-      fences
-        .filter((f) => f.geometry_type === "circle" && (!f.status || f.status === "ACTIVE"))
-        .map((f) => {
-          const g = f.geometry as CircleGeometry;
-          const active = f.id === activeFenceId;
-          return {
-            id: f.id,
-            center: { latitude: g.lat, longitude: g.lng },
-            // Tolerance is part of the accepted area, so draw what the server
-            // will actually accept rather than the nominal radius.
-            radius: g.radius_m + (f.tolerance_meters ?? 0),
-            color: alpha(active ? t.success : t.primary, active ? "40" : "22"),
-            lineColor: active ? t.success : t.primary,
-            lineWidth: active ? 3 : 2,
-          };
-        }),
-    [fences, activeFenceId, t],
-  );
-
-  const polygons = useMemo(
-    () =>
-      fences
-        .filter((f) => f.geometry_type === "polygon" && (!f.status || f.status === "ACTIVE"))
-        .map((f) => {
-          const g = f.geometry as PolygonGeometry;
-          const active = f.id === activeFenceId;
-          return {
-            id: f.id,
-            // Contract stores [lat, lng] tuples; the map wants objects.
-            coordinates: g.points.map(([latitude, longitude]) => ({ latitude, longitude })),
-            color: alpha(active ? t.success : t.primary, active ? "40" : "22"),
-            lineColor: active ? t.success : t.primary,
-            lineWidth: active ? 3 : 2,
-          };
-        }),
-    [fences, activeFenceId, t],
-  );
 
   const markers = useMemo(
     () =>
@@ -154,12 +106,8 @@ export function MapCanvas({
   const resolvedCenter = useMemo(() => {
     if (center) return center;
     if (points[0]) return { latitude: points[0].latitude, longitude: points[0].longitude };
-    const circle = circles[0];
-    if (circle) return circle.center;
-    const poly = polygons[0]?.coordinates[0];
-    if (poly) return { latitude: poly.latitude, longitude: poly.longitude };
     return null;
-  }, [center, points, circles, polygons]);
+  }, [center, points]);
 
   const frame = {
     height,
@@ -176,7 +124,7 @@ export function MapCanvas({
     return (
       <View style={[frame, { alignItems: "center", justifyContent: "center", gap: space.sm }]}>
         <Ionicons name="map-outline" size={22} color={t.textSubtle} />
-        <Muted>No sites to show yet</Muted>
+        <Muted>No position yet</Muted>
       </View>
     );
   }
@@ -191,8 +139,6 @@ export function MapCanvas({
         <GoogleMaps.View
           style={{ flex: 1 }}
           cameraPosition={cameraPosition}
-          circles={circles}
-          polygons={polygons}
           markers={markers}
           uiSettings={uiSettings}
           colorScheme={isDark ? GoogleMaps.MapColorScheme.DARK : GoogleMaps.MapColorScheme.LIGHT}
@@ -209,8 +155,6 @@ export function MapCanvas({
         <AppleMaps.View
           style={{ flex: 1 }}
           cameraPosition={cameraPosition}
-          circles={circles}
-          polygons={polygons}
           markers={markers}
           uiSettings={uiSettings}
           colorScheme={isDark ? AppleMaps.MapColorScheme.DARK : AppleMaps.MapColorScheme.LIGHT}
@@ -222,8 +166,6 @@ export function MapCanvas({
 
   if (reactNativeMaps) {
     const NativeMapView = reactNativeMaps.default;
-    const NativeCircle = reactNativeMaps.Circle;
-    const NativePolygon = reactNativeMaps.Polygon;
     const NativeMarker = reactNativeMaps.Marker;
     const NativeUrlTile = reactNativeMaps.UrlTile;
     // Region deltas are a portable approximation of the native zoom level.
@@ -257,25 +199,6 @@ export function MapCanvas({
             shouldReplaceMapContent={Platform.OS === "ios"}
             zIndex={0}
           />
-          {circles.map((circle) => (
-            <NativeCircle
-              key={circle.id}
-              center={circle.center}
-              radius={circle.radius}
-              fillColor={circle.color}
-              strokeColor={circle.lineColor}
-              strokeWidth={circle.lineWidth}
-            />
-          ))}
-          {polygons.map((polygon) => (
-            <NativePolygon
-              key={polygon.id}
-              coordinates={polygon.coordinates}
-              fillColor={polygon.color}
-              strokeColor={polygon.lineColor}
-              strokeWidth={polygon.lineWidth}
-            />
-          ))}
           {markers.map((marker) => (
             <NativeMarker
               key={marker.id}
