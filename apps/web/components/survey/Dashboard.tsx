@@ -23,6 +23,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Table, TBody, TD, TH, THead, TR, TableWrap } from '@/components/ui/Table';
 import { Stat } from '@/components/finance/Primitives';
 import { day, dayTime } from '@/lib/finance';
+import { milestoneCounts } from '@/lib/survey';
 import { ExportMenu } from '@/components/ui/ExportMenu';
 import {
   SurveyAlertSettings, SurveyContacts, SurveyQueries, type QueryScope,
@@ -121,8 +122,9 @@ interface DashboardData {
     on_hold: number; in_rework: number; gcp_missing: number;
     late: number; late_unexplained: number; unplanned: number;
     positions: PositionRow[];
-    earned: Record<string, number>;
-    claimed_unearned: Record<string, number>;
+    /* Absent for an outside viewer: the billing figures are not theirs to see. */
+    earned?: Record<string, number>;
+    claimed_unearned?: Record<string, number>;
     awaiting_sign_off: Array<{
       code: string; label: string; villages: number; signed_off_by: string | null;
     }>;
@@ -798,7 +800,7 @@ export function SurveyDashboard({
           * not.
           */}
         <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
-          {Object.entries(totals.earned).map(([milestone, n]) => (
+          {milestoneCounts(totals.earned).map(([milestone, n]) => (
             <Badge key={milestone} tone={n > 0 ? 'success' : 'neutral'}>
               {`${num(n)} eligible for milestone ${milestone}`}
             </Badge>
@@ -814,9 +816,9 @@ export function SurveyDashboard({
           * leaves a programme quietly disagreeing with itself, and the first
           * anybody hears of it is the department asking.
           */}
-        {Object.values(totals.claimed_unearned).some((n) => n > 0) ? (
+        {milestoneCounts(totals.claimed_unearned).some(([, n]) => n > 0) ? (
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            {Object.entries(totals.claimed_unearned)
+            {milestoneCounts(totals.claimed_unearned)
               .filter(([, n]) => n > 0)
               .map(([milestone, n]) => (
                 <Badge key={milestone} tone="danger">
