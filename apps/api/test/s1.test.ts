@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { VOLATILE_TABLES } from "./tables.js";
 import {testDatabaseUrl} from "./database.js";
 import { tmpdir } from "node:os";
@@ -999,6 +1000,32 @@ describe("holidays", () => {
       },
     });
     expect(scopedDup.statusCode).toBe(409);
+
+    // A scope that names nothing, or names a unit of another type, is refused
+    // rather than stored as a holiday that applies to nobody.
+    const ghost = await app.inject({
+      method: "POST",
+      url: "/api/v1/holidays",
+      headers: admin,
+      payload: { date: "2026-01-27", name: "Ghost", type: "local", scope_type: "district", scope_id: randomUUID() },
+    });
+    expect(ghost.statusCode).toBe(422);
+    expect((ghost.json() as { field_errors: Array<{ field: string }> }).field_errors[0]?.field).toBe("scope_id");
+    const wrongType = await app.inject({
+      method: "POST",
+      url: "/api/v1/holidays",
+      headers: admin,
+      payload: { date: "2026-01-27", name: "Wrong", type: "local", scope_type: "mandal", scope_id: did },
+    });
+    expect(wrongType.statusCode).toBe(422);
+    expect((wrongType.json() as { field_errors: Array<{ field: string }> }).field_errors[0]?.field).toBe("scope_type");
+    const half = await app.inject({
+      method: "POST",
+      url: "/api/v1/holidays",
+      headers: admin,
+      payload: { date: "2026-01-27", name: "Half", type: "local", scope_id: did },
+    });
+    expect(half.statusCode).toBe(422);
 
     const list = await app.inject({
       method: "GET",

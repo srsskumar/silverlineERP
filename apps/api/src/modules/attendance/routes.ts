@@ -1920,6 +1920,22 @@ export async function registerAttendanceRoutes(
           `That attendance record belongs to somebody else. You can raise an exception on your own attendance; anybody else's needs the "attendance.decide" permission.`,
       });
     }
+    /*
+     * A day that has not happened yet has no attendance to correct. A
+     * regularization for a future date was accepted and sat in the queue,
+     * and approving it would have written a day's presence before the day.
+     */
+    const { timeZone: regularizeTz } = await orgClock(db, user.orgId);
+    if (d.work_date > businessDay(new Date(), regularizeTz)) {
+      return sendError(reply, req.requestId, {
+        status: 422,
+        code: "VALIDATION_ERROR",
+        message: "Validation failed",
+        fieldErrors: [
+          { field: "work_date", message: "The work date cannot be in the future" },
+        ],
+      });
+    }
     // BR-05: the same lock applies to a regularization, which is a request to
     // change attendance for a specific work date.
     const lockedRun = await lockedPayrollRun(db, user.orgId, d.work_date);

@@ -9,6 +9,7 @@ import {
   type MapMouseEvent,
 } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import './worker';
 import { baseMapStyle, tokenColor } from './mapStyle';
 import { hasWebGL2 } from './webgl';
 import { MapFallback } from './MapFallback';

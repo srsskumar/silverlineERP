@@ -336,6 +336,46 @@ describe("leave balances", () => {
     expect((second.json() as { opening_balance: number }).opening_balance).toBe(4);
   });
 
+  it("names the right action when an employee files leave for somebody else", async () => {
+    // The refusal used to talk about adjusting balances, which is not what
+    // was attempted; the person then went looking for the wrong screen.
+    const { adminH, emp, types } = await chainFixture();
+    const otherEmp = await mkEmployee(adminH);
+    const res = await fileLeave(emp.headers, {
+      employee_id: otherEmp,
+      leave_type_id: types["CL"],
+      from_date: plusDays(40),
+      to_date: plusDays(40),
+    });
+    expect(res.statusCode).toBe(403);
+    const body = res.json() as { code: string; message: string };
+    expect(body.code).toBe("FORBIDDEN");
+    expect(body.message).toMatch(/filing leave for somebody else/i);
+    expect(body.message).toMatch(/leave\.admin/);
+  });
+
+  it("refuses leave for somebody who has left (422 EMPLOYEE_INACTIVE)", async () => {
+    // It used to answer "insufficient balance", which is the wrong problem.
+    const { adminH, types } = await chainFixture();
+    const gone = await mkEmployee(adminH);
+    await activateEmployee(gone);
+    const exit = await app.inject({
+      method: "POST",
+      url: `/api/v1/employees/${gone}/exit`,
+      headers: adminH,
+      payload: { exit_date: "2025-01-31", reason: "resigned" },
+    });
+    expect(exit.statusCode).toBe(200);
+    const res = await fileLeave(adminH, {
+      employee_id: gone,
+      leave_type_id: types["CL"],
+      from_date: plusDays(40),
+      to_date: plusDays(40),
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { code: string }).code).toBe("EMPLOYEE_INACTIVE");
+  });
+
   it("rejects upserts without leave.admin (403 EMPLOYEE)", async () => {
     const { emp, eId, types } = await chainFixture();
     const res = await setBalance(emp.headers, eId, types["CL"] as string, yr(plusDays(30)), 5);
@@ -593,6 +633,7 @@ describe("leave request create", () => {
     const adminId = (adminRow.rows[0] as { id: string }).id;
     const lead = await mkUser(["TEAM_LEAD", "EMPLOYEE"], "leadself");
     const tId = await mkEmployee(adminH); // reports_to null → no step1
+    await activateEmployee(tId);
     await linkUser(lead.id, tId);
     const from = plusDays(30);
     await setBalance(adminH, tId, types["EL"] as string, yr(from), 15);

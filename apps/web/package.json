@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "node scripts/vendor-maplibre-worker.mjs",
     "dev": "next dev -p 3002",
+    "prebuild": "node scripts/vendor-maplibre-worker.mjs",
     "build": "NEXT_VERIFY_BUILD=1 next build",
     "start": "next start",
     "test": "vitest run",

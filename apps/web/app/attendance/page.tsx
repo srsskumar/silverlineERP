@@ -5,7 +5,8 @@ import Link from '@/components/AppLink';
 import nextDynamic from 'next/dynamic';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { AppShell } from '@/components/AppShell';
-import { RequirePermission } from '@/components/RequirePermission';
+import { Forbidden } from '@/components/Forbidden';
+import { useAuth } from '@/components/AuthProvider';
 import { AttendanceStatusBadge } from '@/components/AttendanceStatusBadge';
 import { PunchPanel } from '@/components/PunchPanel';
 import type { PunchClusterMapProps } from '@/components/map/PunchClusterMap';
@@ -17,6 +18,7 @@ import { Input } from '@/components/ui/Input';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Spinner } from '@/components/ui/Spinner';
 import { PERMISSIONS } from '@/lib/permissions';
+import { attendanceView } from '@/lib/attendance-view';
 import { formatHours, listMapEvents, listRecords } from '@/lib/attendance';
 import { queryKeys } from '@/lib/query-keys';
 import { clock, day } from '@/lib/finance';
@@ -234,15 +236,36 @@ function RecordsTable() {
 }
 
 export default function AttendancePage() {
+  const { session, isLoading } = useAuth();
+  const view = attendanceView(session?.permissions);
   return (
     <AppShell>
-      <RequirePermission code={PERMISSIONS.ATTENDANCE_READ}>
-        <h1 className="text-xl font-bold text-text">Attendance records</h1>
-        <p className="mt-1 text-sm text-text-muted">Daily records with punch status, hours and geofence flags.</p>
-        <div className="mt-6">
-          <RecordsTable />
-        </div>
-      </RequirePermission>
+      {isLoading ? (
+        <div className="flex items-center justify-center py-16"><Spinner /></div>
+      ) : view === 'none' ? (
+        <Forbidden required={PERMISSIONS.ATTENDANCE_PUNCH} />
+      ) : view === 'punch' ? (
+        /*
+         * Somebody who marks their own day and reads nobody else's. The
+         * register below needs attendance.read, which they do not hold, so
+         * the page is the clock and nothing that would answer with a 403.
+         */
+        <>
+          <h1 className="text-xl font-bold text-text">Attendance</h1>
+          <p className="mt-1 text-sm text-text-muted">Mark your own attendance for today.</p>
+          <div className="mt-6">
+            <PunchClock />
+          </div>
+        </>
+      ) : (
+        <>
+          <h1 className="text-xl font-bold text-text">Attendance records</h1>
+          <p className="mt-1 text-sm text-text-muted">Daily records with punch status, hours and geofence flags.</p>
+          <div className="mt-6">
+            <RecordsTable />
+          </div>
+        </>
+      )}
     </AppShell>
   );
 }

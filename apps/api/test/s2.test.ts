@@ -1127,6 +1127,24 @@ describe("attendance records + exceptions", () => {
     expect(body.reason).toContain("biometric offline");
   });
 
+  it("refuses a regularization for a day that has not happened (422)", async () => {
+    // Approving one would have recorded presence for a day nobody has worked.
+    const h = await adminHeaders();
+    const empId = await activeEmployee(h);
+    const future = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/regularize",
+      headers: h,
+      payload: { employee_id: empId, work_date: future, reason: "planned" },
+    });
+    expect(res.statusCode).toBe(422);
+    const body = res.json() as { code: string; field_errors: Array<{ field: string; message: string }> };
+    expect(body.code).toBe("VALIDATION_ERROR");
+    expect(body.field_errors[0]?.field).toBe("work_date");
+    expect(body.field_errors[0]?.message).toMatch(/future/i);
+  });
+
   it("denies exception decisions without attendance.decide (403 EMPLOYEE, 401 anon)", async () => {
     const h = await adminHeaders();
     const empId = await activeEmployee(h);

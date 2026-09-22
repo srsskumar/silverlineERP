@@ -558,7 +558,7 @@ export async function registerLeaveRoutes(
           status: 403,
           code: "FORBIDDEN",
           message:
-            `Adjusting leave balances needs the "leave.admin" permission, which is held by HR. Ask them to make the adjustment.`,
+            `Filing leave for somebody else needs the "leave.admin" permission, which is held by HR. Leave employee_id out to file your own.`,
         });
       }
       const other = await db.query(
@@ -591,6 +591,24 @@ export async function registerLeaveRoutes(
         status: 404,
         code: "NOT_FOUND",
         message: "No employee linked to this user",
+      });
+    }
+
+    /*
+     * Leave is taken from employment, so the person has to be employed. A
+     * request filed on behalf of somebody who had left was answered with
+     * "insufficient balance", which sent HR to top up a balance for a person
+     * who no longer had one to keep.
+     */
+    const employment = (
+      await db.query("SELECT status FROM employees WHERE id = $1::uuid AND org_id = $2", [employeeId, user.orgId])
+    ).rows[0] as { status: string } | undefined;
+    if (employment && employment.status !== "ACTIVE") {
+      return sendRuleError(reply, req.requestId, {
+        status: 422,
+        code: "EMPLOYEE_INACTIVE",
+        message: `Leave cannot be filed for an employee whose status is ${employment.status}`,
+        fieldErrors: [{ field: "employee_id", message: `Employee is ${employment.status}, not ACTIVE` }],
       });
     }
 

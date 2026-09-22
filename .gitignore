@@ -5,6 +5,8 @@ dist/
 out/
 coverage/
 .turbo/
+# Generated before every web build by apps/web/scripts/vendor-maplibre-worker.mjs
+apps/web/public/vendor/
 *.log
 .env
 .env*.local

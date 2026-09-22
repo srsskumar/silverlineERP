@@ -220,6 +220,45 @@ export async function registerHolidayRoutes(
       });
     }
     const { date, name, type, scope_type, scope_id } = parsed.data;
+    /*
+     * A scoped holiday names a unit. One that named nothing -- a typo, or a
+     * unit from another organisation -- was accepted and then applied to
+     * nobody, while the list showed a holiday that looked perfectly real.
+     * Either both halves of the scope are given and match a unit here, or
+     * neither is and the holiday is the organisation's.
+     */
+    if ((scope_type === undefined) !== (scope_id === undefined)) {
+      return sendError(reply, req.requestId, {
+        status: 422,
+        code: "VALIDATION_ERROR",
+        message: "Validation failed",
+        fieldErrors: [{
+          field: scope_id === undefined ? "scope_id" : "scope_type",
+          message: "scope_type and scope_id are given together, or not at all",
+        }],
+      });
+    }
+    if (scope_type !== undefined && scope_id !== undefined) {
+      const unit = (
+        await db.query("SELECT type FROM org_units WHERE id = $1::uuid AND org_id = $2", [scope_id, user.orgId])
+      ).rows[0] as { type: string } | undefined;
+      if (!unit) {
+        return sendError(reply, req.requestId, {
+          status: 422,
+          code: "VALIDATION_ERROR",
+          message: "Validation failed",
+          fieldErrors: [{ field: "scope_id", message: "Scoped unit not found" }],
+        });
+      }
+      if (unit.type !== scope_type) {
+        return sendError(reply, req.requestId, {
+          status: 422,
+          code: "VALIDATION_ERROR",
+          message: "Validation failed",
+          fieldErrors: [{ field: "scope_type", message: `scope_type must match the unit type, got ${unit.type}` }],
+        });
+      }
+    }
     let row: HolidayRow;
     try {
       const ins = await db.query(
