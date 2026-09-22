@@ -24,7 +24,7 @@ export interface PunchPoint {
    * purpose: as an optional `status?` this silently accepted the server's
    * `outcome` objects and coloured every punch as clean.
    */
-  outcome: 'ok' | 'review' | 'outside';
+  outcome: 'ok' | 'review';
 }
 
 export interface PunchClusterMapProps {
@@ -107,7 +107,6 @@ export function PunchClusterMap({ points, height = 420, className, onSelect }: P
     const primary = tokenColor('--primary', '#2f5bff');
     const success = tokenColor('--success', '#1f8757');
     const warning = tokenColor('--warning', '#b06a08');
-    const danger = tokenColor('--danger', '#d32836');
 
     map.addSource('punches', {
       type: 'geojson',
@@ -150,7 +149,6 @@ export function PunchClusterMap({ points, height = 420, className, onSelect }: P
           'match',
           ['get', 'outcome'],
           'review', warning,
-          'outside', danger,
           success,
         ],
         'circle-radius': 6,
@@ -205,12 +203,7 @@ export function PunchClusterMap({ points, height = 420, className, onSelect }: P
         className={className}
         items={points.map((p) => ({
           id: p.id,
-          label:
-            p.outcome === 'ok'
-              ? 'Inside fence'
-              : p.outcome === 'outside'
-                ? 'Outside fence'
-                : 'Flagged for review',
+          label: p.outcome === 'ok' ? 'Accepted' : 'Flagged for review',
           detail: `${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}`,
         }))}
       />

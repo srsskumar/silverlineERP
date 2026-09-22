@@ -8,7 +8,7 @@ const setWorkerUrl = vi.fn();
 vi.mock('maplibre-gl', () => ({ setWorkerUrl: (url: string) => setWorkerUrl(url) }));
 
 /*
- * The geo-fence map drew tiles but never a fence: MapLibre 6 could not work
+ * The punch map drew tiles but never a marker: MapLibre 6 could not work
  * out its worker's address inside the bundle, started a worker from '' (the
  * page itself), and every GeoJSON layer waited on it for ever. These pin the
  * two halves of the fix -- the worker is served, and the map is told where.

@@ -237,100 +237,36 @@ export const documentUploadSchema = z.object({
 export type DocumentUploadInput = z.infer<typeof documentUploadSchema>;
 
 // ---------------------------------------------------------------------------
-// S2 attendance + geo-fences (frozen contract). Snake_case to match the API.
+// S2 attendance (frozen contract). Snake_case to match the API.
+//
+// No geo-fencing (decision 2026-09-22): the fence form, its polygon parser
+// and the VIOLATION status are gone. OUTSIDE_GEOFENCE can no longer be filed;
+// rows that already carry it are labelled through EXCEPTION_TYPE_LABELS.
 // ---------------------------------------------------------------------------
 
-export const GEOMETRY_TYPES = ['circle', 'polygon'] as const;
 export const PUNCH_EVENT_TYPES = ['CHECK_IN', 'CHECK_OUT'] as const;
-export const RECORD_STATUSES = ['PRESENT', 'PARTIAL', 'ABSENT', 'VIOLATION'] as const;
+export const RECORD_STATUSES = ['PRESENT', 'PARTIAL', 'ABSENT'] as const;
 export const EXCEPTION_TYPES = [
   'MISSED_PUNCH',
   'LATE_CHECKIN',
   'EARLY_CHECKOUT',
-  'OUTSIDE_GEOFENCE',
   'REGULARIZATION',
   'SYSTEM_FLAG',
 ] as const;
 export const EXCEPTION_DECISIONS = ['APPROVE', 'REJECT'] as const;
 
-export interface ParsedPoint {
-  lat: number;
-  lng: number;
-}
-
-export type PolygonParseResult =
-  | { ok: true; points: ParsedPoint[] }
-  | { ok: false; error: string };
-
-/**
- * Parse the polygon textarea format: one "lat,lng" pair per line.
- * Returns the first error encountered (line-numbered) or the points.
- * Callers enforce the ≥3-point minimum via `ok` + length check.
- */
-export function parsePolygonTextarea(text: string): PolygonParseResult {
-  const lines = text
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-  if (lines.length === 0) return { ok: false, error: 'Enter at least 3 points, one "lat,lng" per line' };
-  const points: ParsedPoint[] = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    const parts = lines[i].split(',').map((p) => p.trim());
-    if (parts.length !== 2) {
-      return { ok: false, error: `Line ${i + 1}: use "lat,lng" format` };
-    }
-    const lat = Number(parts[0]);
-    const lng = Number(parts[1]);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-      return { ok: false, error: `Line ${i + 1}: lat and lng must be numbers` };
-    }
-    if (lat < -90 || lat > 90) return { ok: false, error: `Line ${i + 1}: lat must be between -90 and 90` };
-    if (lng < -180 || lng > 180) return { ok: false, error: `Line ${i + 1}: lng must be between -180 and 180` };
-    points.push({ lat, lng });
-  }
-  if (points.length < 3) return { ok: false, error: `Polygon needs at least 3 points (got ${points.length})` };
-  return { ok: true, points };
-}
+/** Labels for every exception type a stored row may carry, including the retired one. */
+export const EXCEPTION_TYPE_LABELS: Record<string, string> = {
+  MISSED_PUNCH: 'Missed punch',
+  LATE_CHECKIN: 'Late check-in',
+  EARLY_CHECKOUT: 'Early check-out',
+  REGULARIZATION: 'Regularization',
+  SYSTEM_FLAG: 'System flag',
+  OUTSIDE_GEOFENCE: 'Outside geo-fence (legacy)',
+};
 
 const emptyToUndefined = (v: unknown) => (v === '' || v === null ? undefined : v);
 const optionalCoercedNumber = z.preprocess(emptyToUndefined, z.coerce.number().optional());
-const optionalTolerance = z.preprocess(
-  emptyToUndefined,
-  z.coerce.number().min(0, 'Must be 0 or more').max(100_000).optional(),
-);
-
-export const fenceSchema = z
-  .object({
-    name: z.string().trim().min(1, 'Name is required').max(255),
-    scope_type: z.enum(ORG_UNIT_TYPES, { errorMap: () => ({ message: 'Pick a scope type' }) }),
-    scope_id: z.string().trim().min(1, 'Scope is required').max(100),
-    geometry_type: z.enum(GEOMETRY_TYPES, { errorMap: () => ({ message: 'Pick circle or polygon' }) }),
-    circle_lat: optionalCoercedNumber,
-    circle_lng: optionalCoercedNumber,
-    radius_m: optionalCoercedNumber,
-    polygon_text: z.string().optional().or(z.literal('').transform(() => undefined)).pipe(z.string().optional()),
-    tolerance_meters: optionalTolerance,
-    accuracy_threshold_meters: optionalTolerance,
-  })
-  .superRefine((v, ctx) => {
-    if (v.geometry_type === 'circle') {
-      if (v.circle_lat === undefined || v.circle_lat < -90 || v.circle_lat > 90) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['circle_lat'], message: 'Lat must be between -90 and 90' });
-      }
-      if (v.circle_lng === undefined || v.circle_lng < -180 || v.circle_lng > 180) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['circle_lng'], message: 'Lng must be between -180 and 180' });
-      }
-      if (v.radius_m === undefined || !(v.radius_m > 0)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['radius_m'], message: 'Radius must be greater than 0' });
-      }
-    } else {
-      const parsed = parsePolygonTextarea(v.polygon_text ?? '');
-      if (!parsed.ok) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['polygon_text'], message: parsed.error });
-      }
-    }
-  });
-export type FenceFormInput = z.infer<typeof fenceSchema>;
 
 export const punchFormSchema = z.object({
   employee_id: z.string().trim().min(1, 'Pick an employee'),

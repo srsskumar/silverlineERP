@@ -175,7 +175,7 @@ function ExceptionsManager() {
         ) : null}
         {lookup.record ? (
           <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-border px-3 py-2 text-sm">
-            <AttendanceStatusBadge status={String(lookup.record.status)} violation={!!lookup.record.geofence_violation} />
+            <AttendanceStatusBadge status={String(lookup.record.status)} />
             <span className="font-mono text-xs text-text-muted">{lookup.record.id} · {lookup.record.work_date}</span>
             <Link href={`/attendance/records/${lookup.record.id}`} className="text-primary hover:underline">
               Open record

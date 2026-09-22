@@ -6,7 +6,7 @@ import { setWorkerUrl } from 'maplibre-gl';
  * MapLibre works out this address from its own module URL, which a bundled
  * build does not have, and the fallback is an empty string: the browser then
  * loads the page itself as the worker script, the request never finishes,
- * and no GeoJSON layer -- fences, punch clusters -- is ever drawn.
+ * and no GeoJSON layer -- the punch clusters -- is ever drawn.
  * scripts/vendor-maplibre-worker.mjs puts the real script here before every
  * build, and this module tells the map so before any map is constructed.
  * Import it from every component that creates a map.

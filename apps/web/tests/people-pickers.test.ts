@@ -57,7 +57,6 @@ describe('every picker actually applies it', () => {
   it('asks the server for active employees where the list comes from the directory', () => {
     expect(read('components/survey/VillageDetail.tsx')).toContain('status=ACTIVE');
     expect(read('app/admin/page.tsx')).toContain('status=ACTIVE');
-    expect(read('app/geo-fences/page.tsx')).toContain("status: 'ACTIVE'");
     expect(read('components/EmployeeForm.tsx')).toContain("status: 'ACTIVE'");
   });
 
