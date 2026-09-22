@@ -354,6 +354,28 @@ describe("leave balances", () => {
     expect(body.message).toMatch(/leave\.admin/);
   });
 
+  it("refuses leave for somebody who has left (422 EMPLOYEE_INACTIVE)", async () => {
+    // It used to answer "insufficient balance", which is the wrong problem.
+    const { adminH, types } = await chainFixture();
+    const gone = await mkEmployee(adminH);
+    await activateEmployee(gone);
+    const exit = await app.inject({
+      method: "POST",
+      url: `/api/v1/employees/${gone}/exit`,
+      headers: adminH,
+      payload: { exit_date: "2025-01-31", reason: "resigned" },
+    });
+    expect(exit.statusCode).toBe(200);
+    const res = await fileLeave(adminH, {
+      employee_id: gone,
+      leave_type_id: types["CL"],
+      from_date: plusDays(40),
+      to_date: plusDays(40),
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { code: string }).code).toBe("EMPLOYEE_INACTIVE");
+  });
+
   it("rejects upserts without leave.admin (403 EMPLOYEE)", async () => {
     const { emp, eId, types } = await chainFixture();
     const res = await setBalance(emp.headers, eId, types["CL"] as string, yr(plusDays(30)), 5);
