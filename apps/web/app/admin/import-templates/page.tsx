@@ -6,6 +6,7 @@ import { PageHeader, PageBody } from '@/components/ui/Page';
 import { AllImportTemplates } from '@/components/ImportTemplateCard';
 import { TaskTemplateCard } from '@/components/TaskTemplateCard';
 import { ExportPanel } from '@/components/ExportPanel';
+import { RequireDestination } from '@/components/RequirePermission';
 
 /**
  * Getting data in, and getting it out.
@@ -28,6 +29,7 @@ export default function ImportTemplatesPage() {
         breadcrumb={<Link href="/admin" className="hover:underline">Administration</Link>}
       />
       <PageBody>
+        <RequireDestination href="/admin/import-templates">
         <ExportPanel />
         <AllImportTemplates />
         <TaskTemplateCard />
@@ -35,6 +37,7 @@ export default function ImportTemplatesPage() {
           Each file carries one filled example row. It is there so the expected formats are
           unambiguous — a date is 1990-07-24, never 24/07/90 — and can be deleted before uploading.
         </p>
+        </RequireDestination>
       </PageBody>
     </AppShell>
   );

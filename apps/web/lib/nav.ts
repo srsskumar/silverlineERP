@@ -78,7 +78,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/my-work', label: 'My work', permission: PERMISSIONS.TASK_READ, icon: ClipboardList },
       { href: '/inbox', label: 'Inbox', permission: 'notification.read', icon: Inbox },
       { href: '/projects', label: 'Projects', permission: PERMISSIONS.PROJECT_READ, icon: FolderKanban },
-      { href: '/planning', label: 'Planning', permission: 'cycle.read', icon: CalendarDays },
+      // Every view starts from the project picker.
+      { href: '/planning', label: 'Planning', permission: 'cycle.read', requires: [PERMISSIONS.PROJECT_READ], icon: CalendarDays },
       { href: '/reports', label: 'Reports', permission: PERMISSIONS.REPORT_GENERATE, icon: FileSpreadsheet },
     ],
   },
@@ -100,7 +101,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/approvals', label: 'Approvals', permission: 'approval.read', icon: CheckSquare },
       { href: '/procurement', label: 'Procurement', permission: 'requisition.read', icon: ShoppingCart },
       { href: '/expenses', label: 'Expenses', permission: 'expense.read', icon: Receipt },
-      { href: '/billing', label: 'Project finance', permission: 'rabill.read', icon: IndianRupee },
+      // The bills hang off a project, chosen first.
+      { href: '/billing', label: 'Project finance', permission: 'rabill.read', requires: [PERMISSIONS.PROJECT_READ], icon: IndianRupee },
       // The two ledgers (section 58). Separate entries rather than tabs under
       // project finance: collections and payment runs are different people's
       // jobs, and neither is scoped to one project.
@@ -133,7 +135,8 @@ export const NAV_GROUPS: NavGroup[] = [
       // different questions asked by different people.
       { href: '/assets/movements', label: 'Asset movements', permission: 'asset.read', icon: ArrowLeftRight },
       { href: '/geo-fences', label: 'Geo-fences', permission: PERMISSIONS.GEO_READ, icon: MapPin },
-      { href: '/analytics', label: 'Analytics', permission: 'analytics.read', icon: BarChart3 },
+      // Measured per project, so the first thing it loads is the project list.
+      { href: '/analytics', label: 'Analytics', permission: 'analytics.read', requires: [PERMISSIONS.PROJECT_READ], icon: BarChart3 },
       { href: '/automation', label: 'Automation', permission: 'automation.read', icon: Workflow },
     ],
   },
@@ -154,8 +157,10 @@ export const NAV_GROUPS: NavGroup[] = [
 
 /** Primary create actions surfaced in the top bar rather than buried in nav. */
 export const QUICK_CREATE: NavItem[] = [
-  { href: '/leads/new', label: 'New lead', permission: 'lead.manage', icon: Briefcase },
-  { href: '/tenders/new', label: 'New tender', permission: 'tender.manage', icon: Gavel },
+  // The form's client picker reads the client register.
+  { href: '/leads/new', label: 'New lead', permission: 'lead.manage', requires: ['client.read'], icon: Briefcase },
+  // Its pickers read the client register and the opportunity pipeline.
+  { href: '/tenders/new', label: 'New tender', permission: 'tender.manage', requires: ['client.read', 'lead.read'], icon: Gavel },
   { href: '/projects/new', label: 'New project', permission: PERMISSIONS.PROJECT_CREATE, icon: FolderKanban },
   { href: '/expenses', label: 'New expense claim', permission: 'expense.manage', icon: Receipt },
   { href: '/leave/new', label: 'New leave request', permission: PERMISSIONS.LEAVE_REQUEST, icon: PlaneTakeoff },

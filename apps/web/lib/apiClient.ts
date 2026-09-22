@@ -206,10 +206,62 @@ export function restoreOwnSession(): boolean {
   return true;
 }
 
+/*
+ * Where the sign-in screen is reached from, kept behind an object so a test
+ * can watch the navigation without a real window to navigate.
+ */
+export const authNavigation = {
+  /** True when a navigation was started; false when already on the sign-in screen. */
+  toLogin(): boolean {
+    if (isBrowser() && window.location.pathname !== '/login') {
+      window.location.assign('/login');
+      return true;
+    }
+    return false;
+  },
+};
+
 function redirectToLogin(): void {
-  if (isBrowser() && window.location.pathname !== '/login') {
-    window.location.assign('/login');
+  authNavigation.toLogin();
+}
+
+/*
+ * A word for the sign-in screen about why somebody is looking at it.
+ *
+ * Enrolling an authenticator, turning it off and changing a password all
+ * revoke every session on purpose, and the screen used to go from a
+ * spinner to the sign-in form with nothing said. sessionStorage, so it is
+ * this tab's and gone once read; the sign-in screen reads it once.
+ */
+const LOGIN_NOTICE_KEY = 'silverline.login_notice';
+
+export function takeLoginNotice(): string | null {
+  if (!isBrowser()) return null;
+  try {
+    const notice = window.sessionStorage.getItem(LOGIN_NOTICE_KEY);
+    if (notice) window.sessionStorage.removeItem(LOGIN_NOTICE_KEY);
+    return notice;
+  } catch {
+    return null;
   }
+}
+
+function leaveLoginNotice(message: string): void {
+  if (!isBrowser()) return;
+  try { window.sessionStorage.setItem(LOGIN_NOTICE_KEY, message); } catch { /* private mode: no note, same sign-out */ }
+}
+
+/**
+ * Sign out on purpose, and say why on the way in.
+ *
+ * For the changes that revoke every session server-side: the tokens in hand
+ * are already dead, so nothing is sent; they are dropped, the message is
+ * left for the sign-in screen, and the browser goes there.
+ */
+export function signOutWithNotice(message: string): void {
+  clearTokens();
+  leaveLoginNotice(message);
+  authNavigation.toLogin();
 }
 
 export async function logout(): Promise<void> {
@@ -418,8 +470,14 @@ export async function apiRequestRaw(
         message: 'That view-as session has ended. You are yourself again.',
       });
     } else {
+      /*
+       * The session is over -- revoked by an administrator, timed out, or
+       * ended by a change made in another tab. The screen is about to
+       * change to the sign-in form, and it should say so rather than leave
+       * somebody wondering what they pressed.
+       */
       clearTokens();
-      redirectToLogin();
+      if (authNavigation.toLogin()) leaveLoginNotice('Your session has ended. Sign in again to continue.');
       throw new ApiClientError(401, {
         code: 'UNAUTHORIZED',
         message: 'Session expired. Please sign in again.',

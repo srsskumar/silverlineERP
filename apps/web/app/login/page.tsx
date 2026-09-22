@@ -12,6 +12,7 @@ import { ErrorCard } from '@/components/ui/ErrorCard';
 import { FormField } from '@/components/ui/FormField';
 import { Input } from '@/components/ui/Input';
 import { Spinner } from '@/components/ui/Spinner';
+import { LoginNotice } from '@/components/LoginNotice';
 
 export const dynamic = 'force-static';
 
@@ -71,6 +72,7 @@ export default function LoginPage() {
         />
         <h1 className="text-xl font-bold text-text">ERP</h1>
         <p className="mt-1 text-sm text-text-muted">Sign in to continue</p>
+        <LoginNotice />
         <form onSubmit={handleSubmit(onSubmit)} className="mt-6 flex flex-col gap-4" noValidate>
           <FormField label="Username or mobile number" htmlFor="username" error={errors.username?.message}>
             <Input

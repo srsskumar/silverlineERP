@@ -8,6 +8,8 @@ import { listPeople } from '@/lib/people';
 import { downloadCsv, downloadWorkbook, optionsNote } from '@/lib/xlsx';
 import { taskTemplateSheets, TASK_TEMPLATE_NOTES } from '@/lib/task-template';
 import { apiRequestRaw } from '@/lib/apiClient';
+import { useAuth } from '@/components/AuthProvider';
+import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 
 type Row = Record<string, any>;
 
@@ -19,12 +21,22 @@ type Row = Record<string, any>;
  * snapshot that quietly goes stale.
  */
 export function TaskTemplateCard({ projectCode }: { projectCode?: string }) {
-  const people = useQuery({ queryKey: ['people'], queryFn: listPeople, staleTime: 300_000 });
+  const { session } = useAuth();
+  const perms = { permissions: session?.permissions };
+  /*
+   * A task upload lands on a project, so the card is for somebody who can
+   * read projects; without that every list it fills its dropdowns from is
+   * refused, and a card of refused requests helps nobody. The survey stage
+   * vocabulary is asked for only with survey.read, for the same reason.
+   */
+  const canUse = hasPermission(perms, PERMISSIONS.PROJECT_READ);
+  const people = useQuery({ queryKey: ['people'], queryFn: listPeople, staleTime: 300_000, enabled: canUse });
   // Real project codes, so the column that decides where the work lands is a
   // list rather than something to type. A typo there makes a whole upload
   // arrive nowhere.
   const projects = useQuery({
     queryKey: ['projects', 'codes'],
+    enabled: canUse,
     queryFn: async () =>
       ((await apiRequestRaw('/api/v1/projects?limit=100')).body as { data: Row[] }).data,
     staleTime: 300_000,
@@ -33,6 +45,7 @@ export function TaskTemplateCard({ projectCode }: { projectCode?: string }) {
   // copy here that drifts the first time a stage is renamed.
   const stages = useQuery({
     queryKey: ['survey-stage-pipeline'],
+    enabled: canUse && hasPermission(perms, 'survey.read'),
     queryFn: async () =>
       ((await apiRequestRaw('/api/v1/survey/measures')).body as { data: Row }).data,
     staleTime: 300_000,

@@ -225,3 +225,38 @@ describe('the attendance page and the person punching', () => {
     expect(navItemVisible(['b.read'], item)).toBe(false);
   });
 });
+
+describe('a destination declares what it loads', () => {
+  /*
+   * A page used to be gated on the permission it was named after while the
+   * first thing it fetched needed another. The QA crawl found HR opening
+   * Analytics and watching the project list come back 403, and a payroll
+   * officer on the new-tender form with every picker refused. The page and
+   * the sidebar now read the same rule, so this pins what that rule says.
+   */
+  const cases: Array<[string, string, string]> = [
+    ['/analytics', 'analytics.read', PERMISSIONS.PROJECT_READ],
+    ['/billing', 'rabill.read', PERMISSIONS.PROJECT_READ],
+    ['/planning', 'cycle.read', PERMISSIONS.PROJECT_READ],
+    ['/leads/new', 'lead.manage', 'client.read'],
+    ['/tenders/new', 'tender.manage', 'client.read'],
+  ];
+  it.each(cases)('%s needs more than %s: it also loads under %s', (href, named, loads) => {
+    expect(canOpen([named], href)).toBe(false);
+    expect(canOpen([named, loads, 'lead.read'], href)).toBe(true);
+  });
+
+  it('gates the quick-create forms the same way as the sidebar', () => {
+    // Before, canOpen had no opinion on a form reached from the top bar.
+    expect(canOpen([], '/leads/new')).toBe(false);
+    expect(canOpen(['lead.manage', 'client.read'], '/leads/new')).toBe(true);
+  });
+
+  it('keeps the roles the crawl caught out of pages that would refuse them', () => {
+    // HR holds analytics.read and no project permission; payroll holds neither.
+    expect(canOpen(permissionsFor('HR_MANAGER'), '/analytics')).toBe(false);
+    expect(canOpen(permissionsFor('PAYROLL_OFFICER'), '/billing')).toBe(false);
+    expect(canOpen(permissionsFor('PROJECT_MANAGER'), '/planning')).toBe(true);
+    expect(canOpen(permissionsFor('ADMIN'), '/tenders/new')).toBe(true);
+  });
+});
