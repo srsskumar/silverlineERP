@@ -676,9 +676,12 @@ export async function registerS6Routes(
         planned_end_date: dateOnly(r.planned_end_date),
       }));
       const leaveRes = await opts.pool.query(
-        `SELECT id, employee_id, from_date, to_date FROM leave_requests
-          WHERE org_id = $1 AND status = 'PENDING' AND current_approver_id = $2::uuid
-          ORDER BY created_at ASC, id ASC`,
+        `SELECT r.id, r.employee_id, r.from_date, r.to_date,
+                trim(concat_ws(' ', e.first_name, e.last_name)) AS employee_name, e.emp_no AS employee_emp_no
+           FROM leave_requests r
+           LEFT JOIN employees e ON e.id = r.employee_id AND e.org_id = r.org_id
+          WHERE r.org_id = $1 AND r.status = 'PENDING' AND r.current_approver_id = $2::uuid
+          ORDER BY r.created_at ASC, r.id ASC`,
         [user.orgId, user.id],
       );
       const pendingLeave = (
@@ -687,12 +690,16 @@ export async function registerS6Routes(
           employee_id: string;
           from_date: Date | string;
           to_date: Date | string;
+          employee_name: string | null;
+          employee_emp_no: string | null;
         }>
       ).map((r) => ({
         id: r.id,
         employee_id: r.employee_id,
         from_date: dateOnly(r.from_date),
         to_date: dateOnly(r.to_date),
+        employee_name: r.employee_name || null,
+        employee_emp_no: r.employee_emp_no ?? null,
       }));
       // Exceptions have no per-request approver column: callers holding
       // attendance.decide can decide any org-pending exception, so the count

@@ -1033,8 +1033,11 @@ describe("holidays", () => {
       headers: admin,
     });
     expect(list.statusCode).toBe(200);
-    const page = list.json() as { data: Array<{ name: string }> };
+    const page = list.json() as { data: Array<{ name: string; scope_type: string | null; scope_name: string | null }> };
     expect(page.data.length).toBe(2);
+    // A scoped holiday says which unit, by name, not only by id.
+    expect(page.data.find((h) => h.scope_type === "district")?.scope_name).toBe("H");
+    expect(page.data.find((h) => h.scope_type === null)?.scope_name).toBeNull();
 
     const empty = await app.inject({
       method: "GET",

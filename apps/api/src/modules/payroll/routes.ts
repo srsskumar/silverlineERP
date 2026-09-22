@@ -646,6 +646,9 @@ export async function registerPayrollRoutes(
         const warnings: Array<{
           type: string;
           employee_id: string;
+          /* The name and number, so a warning reads as a person and not an id. */
+          emp_no: string;
+          employee_name: string;
           message: string;
         }> = [];
         let totalGrossPaise = 0;
@@ -732,6 +735,8 @@ export async function registerPayrollRoutes(
             warnings.push({
               type: "NO_RECORDS",
               employee_id: emp.id,
+              emp_no: emp.emp_no,
+              employee_name: [emp.first_name, emp.last_name].filter(Boolean).join(" "),
               message: `No attendance records for employee ${emp.emp_no} in this period`,
             });
           }
@@ -739,6 +744,8 @@ export async function registerPayrollRoutes(
             warnings.push({
               type: "NO_SALARY",
               employee_id: emp.id,
+              emp_no: emp.emp_no,
+              employee_name: [emp.first_name, emp.last_name].filter(Boolean).join(" "),
               message: `No basic salary set for employee ${emp.emp_no}`,
             });
           }

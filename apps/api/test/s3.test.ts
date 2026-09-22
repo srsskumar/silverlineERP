@@ -464,6 +464,9 @@ describe("leave request create", () => {
       version: number;
     };
     expect(body.employee_id).toBe(eId);
+    // The person, not only their id: the list and the detail print the name.
+    expect((body as { employee_name?: string }).employee_name).toBe("S3 User");
+    expect((body as { employee_emp_no?: string }).employee_emp_no).toMatch(/^S3E/);
     expect(body.from_date).toBe(from);
     expect(body.to_date).toBe(to);
     expect(body.total_days).toBe(5);
@@ -484,6 +487,7 @@ describe("leave request create", () => {
     expect(chain.length).toBe(2);
     expect(chain[0]).toMatchObject({ step: 1, approver_user_id: tl.id, status: "PENDING" });
     expect(chain[1]).toMatchObject({ step: 2, approver_user_id: adminId, status: "PENDING" });
+    expect((detail.json() as { employee_name?: string }).employee_name).toBe("S3 User");
   });
 
   it("rejects from > to (422 DATE_RANGE)", async () => {
@@ -1127,9 +1131,10 @@ describe("leave request list + get", () => {
       headers: emp.headers,
     });
     expect(mine.statusCode).toBe(200);
-    const mineRows = (mine.json() as { data: Array<{ employee_id: string }> }).data;
+    const mineRows = (mine.json() as { data: Array<{ employee_id: string; employee_name?: string }> }).data;
     expect(mineRows.length).toBe(1);
     expect(mineRows[0]?.employee_id).toBe(eId);
+    expect(mineRows[0]?.employee_name).toBe("S3 User");
 
     // TL default: approver queue includes the subordinate's request.
     const queue = await app.inject({
