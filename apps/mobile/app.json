@@ -63,7 +63,8 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Camera is used to capture task evidence photos."
+          "cameraPermission": "Camera is used to capture task evidence photos.",
+          "recordAudioAndroid": false
         }
       ],
       [

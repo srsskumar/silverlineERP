@@ -5,6 +5,7 @@ import { AppState,View,Text,Pressable } from "react-native";
 import { setActiveAccount, wipeAccount, wipeUsername } from "../sync/db";
 import { DEVICE_REVOKED, isDeviceRevoked } from "../api/revocation";
 import { biometricUnlock } from "../device/auth";
+import { useTheme } from "../theme";
 /**
  * AuthProvider: login / MFA / refresh / logout + user/roles/permissions.
  * Tokens in SecureStore only. Registers the api client's logout hook so a
@@ -198,7 +199,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }),
     [ready, session, mfaPending, login, verifyMfa, logout],
   );
-  return <AuthContext.Provider value={value}>{locked?<View style={{flex:1,justifyContent:'center',padding:30,backgroundColor:'#f4f6fb'}}><Text style={{fontSize:24,marginBottom:20}}>Silverline is locked</Text><Pressable onPress={()=>void biometricUnlock().then(ok=>setLocked(!ok))}><Text style={{fontSize:18,color:'#1a56db'}}>Unlock</Text></Pressable><Pressable onPress={()=>{setLocked(false);void logout();}}><Text style={{marginTop:24}}>Sign out</Text></Pressable></View>:children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={value}>{locked?<LockedScreen onUnlock={()=>void biometricUnlock().then(ok=>setLocked(!ok))} onSignOut={()=>{setLocked(false);void logout();}}/>:children}</AuthContext.Provider>;
+}
+
+/**
+ * The lock screen follows the system theme like every other screen: it used
+ * to be the one light-only view in the app, a white flash over a dark app
+ * every time the phone came back from the pocket.
+ */
+function LockedScreen({ onUnlock, onSignOut }: { onUnlock: () => void; onSignOut: () => void }) {
+  const t = useTheme();
+  return (
+    <View style={{ flex: 1, justifyContent: 'center', padding: 30, backgroundColor: t.canvas }}>
+      <Text style={{ fontSize: 24, marginBottom: 20, color: t.text }}>Silverline is locked</Text>
+      <Pressable onPress={onUnlock}><Text style={{ fontSize: 18, color: t.primary }}>Unlock</Text></Pressable>
+      <Pressable onPress={onSignOut}><Text style={{ marginTop: 24, color: t.textMuted }}>Sign out</Text></Pressable>
+    </View>
+  );
 }
 
 export function useAuth(): AuthState {
