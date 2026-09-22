@@ -935,6 +935,8 @@ describe("notifications inbox", () => {
     expect(lop).toBeDefined();
     const requester = await mkUser(["EMPLOYEE"], "leaver");
     const empId = await mkEmployee(h);
+    // Leave is filed for somebody employed; a freshly created record is DRAFT.
+    await pool.query("UPDATE employees SET status = 'ACTIVE' WHERE id = $1::uuid", [empId]);
     await linkUser(requester.id, empId);
     const from = istPlusDays(10);
     const to = istPlusDays(11);
