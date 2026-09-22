@@ -24,6 +24,27 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
   // five and a half hours of every Indian day, UTC is still yesterday.
   const today = () => businessDay();
 
+  /**
+   * Carry the ladder's verdict onto the document that asked for it.
+   *
+   * A requisition has no status route of its own: it is submitted here and
+   * waits. Without this, a fully approved ladder left the requisition at
+   * SUBMITTED forever, and no order could ever be raised against it -- the
+   * test suite papered over the gap by updating the row directly. Orders and
+   * claims are not touched: both read the instance and move themselves, with
+   * checks of their own that belong in their modules.
+   */
+  async function reflectOnDocument(
+    db: PoolClient, instance: Record<string, any>, outcome: 'APPROVED' | 'REJECTED', actorId: string,
+  ) {
+    if (instance.document_type !== 'PURCHASE_REQUISITION') return;
+    await db.query(
+      `UPDATE purchase_requisitions SET status = $2, version = version + 1,
+         updated_at = now(), updated_by = $3
+       WHERE id = $1 AND approval_id = $4 AND status = 'SUBMITTED'`,
+      [instance.document_id, outcome, actorId, instance.id]);
+  }
+
   /** Live delegations in the org, as the pure layer wants them. */
   async function delegationsFor(db: Pool | PoolClient, orgId: string): Promise<Delegation[]> {
     const rows = (await db.query(
@@ -340,6 +361,7 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
         if (input.decision === 'REJECT') {
           // Rejection ends the instance. The requester reworks and resubmits,
           // which draws a fresh ladder against whatever the amount now is.
+          await reflectOnDocument(db, instance, 'REJECTED', u.id);
           return (await db.query(
             `UPDATE approval_instances SET status = 'REJECTED', rejection_reason = $2,
                decided_at = now(), version = version + 1, updated_at = now(), updated_by = $3
@@ -348,6 +370,7 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
 
         const remaining = steps.filter(s => s.sequence > current.sequence && s.status === 'PENDING');
         if (!remaining.length) {
+          await reflectOnDocument(db, instance, 'APPROVED', u.id);
           return (await db.query(
             `UPDATE approval_instances SET status = 'APPROVED', current_sequence = NULL,
                decided_at = now(), version = version + 1, updated_at = now(), updated_by = $2

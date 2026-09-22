@@ -5,7 +5,7 @@ import {
   ageOutstanding, payableDue, msmeInterestOn, creditExposure, daysSalesOutstanding,
   selectForRun, matchAllowsPayment, PAYMENT_RUN_TRANSITIONS,
   type PayableCandidate, type PaymentRunState, type AgeingItem,
-  businessDay,
+  businessDay, dateStringSchema, ApiError,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
@@ -25,6 +25,23 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
   const today = () => businessDay();
   const iso = (v: unknown) =>
     v instanceof Date ? v.toISOString().slice(0, 10) : v ? String(v).slice(0, 10) : null;
+  /**
+   * A date from the query string, or the fallback. Anything else is refused
+   * with a field error: an unparseable as_of used to reach the database as
+   * text and come back as a 500, or slip through a JavaScript comparison and
+   * produce an ageing "as at nope".
+   */
+  const dateParam = (value: unknown, field: string, fallback: string): string => {
+    if (value === undefined || value === null || value === '') return fallback;
+    const parsed = dateStringSchema.safeParse(String(value));
+    if (!parsed.success) {
+      throw new ApiError({
+        status: 422, code: 'VALIDATION_ERROR', message: `Give ${field} as a real date, YYYY-MM-DD`,
+        fieldErrors: [{ field, message: 'Use YYYY-MM-DD, and make it a real date', code: 'invalid_string' }],
+      });
+    }
+    return parsed.data;
+  };
 
   async function bankRate(db: Pool | PoolClient, orgId: string): Promise<number> {
     const row = (await db.query(
@@ -58,7 +75,7 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
    */
   app.get('/api/v1/ar/ageing', { preHandler: guard('ar.read') }, async req => {
     const u = actor(req), { q } = page(req);
-    const asOf = String(q.as_of ?? today());
+    const asOf = dateParam(q.as_of, 'as_of', today());
 
     // Everything as it stood at the end of as_of: bills certified by then,
     // receipts dated by then, retention entries made by then. Reading today's
@@ -157,8 +174,14 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
   app.get('/api/v1/ar/statement/:clientId', { preHandler: guard('ar.read') }, async req => {
     const u = actor(req), { clientId } = req.params as { clientId: string };
     const { q } = page(req);
-    const from = String(q.from ?? '1900-01-01');
-    const to = String(q.to ?? today());
+    const from = dateParam(q.from, 'from', '1900-01-01');
+    const to = dateParam(q.to, 'to', today());
+    if (from > to) {
+      throw new ApiError({
+        status: 422, code: 'VALIDATION_ERROR', message: 'The statement cannot end before it starts',
+        fieldErrors: [{ field: 'to', message: 'The statement cannot end before it starts', code: 'custom' }],
+      });
+    }
     const client = await inOrg(pool, 'clients', clientId, u.orgId);
 
     const bills = (await pool.query(
@@ -291,7 +314,7 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
 
   app.get('/api/v1/ap/ageing', { preHandler: guard('ap.read') }, async req => {
     const u = actor(req), { q } = page(req);
-    const asOf = String(q.as_of ?? today());
+    const asOf = dateParam(q.as_of, 'as_of', today());
     const rows = await payableRows(pool, u.orgId, asOf);
 
     const byVendor = new Map<string, { name: string; items: AgeingItem[]; rows: unknown[]; interest: number }>();
@@ -356,6 +379,9 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
     return {
       data: await mutate(pool, req, 'payable.hold', 'invoice', async db => {
         await inOrg(db, 'invoices', id, u.orgId, true);
+        // The invoice table carries no version or updated_by column, so the
+        // hold is the one mutation here that cannot be stamped; the audit
+        // event written by mutate() is the record of who held it and when.
         return (await db.query(
           'UPDATE invoices SET on_hold = $2, hold_reason = $3 WHERE id = $1 RETURNING *',
           [id, input.on_hold, input.on_hold ? input.reason : null])).rows[0];

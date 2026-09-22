@@ -79,7 +79,10 @@ async function approveRequisition(prId: string) {
     `/api/v1/approvals/${approvalId}/decision`, { decision: "APPROVE" });
   expect(decision.status, JSON.stringify(decision.body)).toBe(200);
 
-  await w.pool.query("UPDATE purchase_requisitions SET status='APPROVED' WHERE id=$1", [prId]);
+  // The ladder's verdict lands on the requisition itself; nothing else moves
+  // it, so an order can only follow a requisition the approvers cleared.
+  const after = await w.pool.query("SELECT status FROM purchase_requisitions WHERE id=$1", [prId]);
+  expect(after.rows[0].status).toBe("APPROVED");
   const lines = await w.pool.query(
     "SELECT * FROM requisition_lines WHERE requisition_id=$1 ORDER BY line_no", [prId]);
   return lines.rows;

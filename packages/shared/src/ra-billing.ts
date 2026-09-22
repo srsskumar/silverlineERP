@@ -427,6 +427,38 @@ export const deductionPolicySchema = z.object({
   payment_terms_days: z.coerce.number().int().min(0).max(365).nullable().optional(),
 });
 
+/**
+ * Moving a bill along its lifecycle.
+ *
+ * The certified figure is what the client agreed to pay, so it is the base
+ * for receivables, ageing and every allocation after it. It used to be taken
+ * from the body untyped, and a negative or nonsensical value became a
+ * negative receivable. A certification can be for less than was claimed --
+ * the client disallows a measurement -- but never for less than nothing and
+ * never for more than the work plus its tax.
+ */
+export const raBillStatusSchema = z.object({
+  status: z.enum(RA_BILL_STATUSES),
+  reason: z.string().trim().max(1000).optional(),
+  certified_amount: z.coerce.number().finite().nonnegative().optional(),
+});
+
+/** Whether a certified figure is within what the bill can be worth. */
+export function certifiableAmount(bill: { gross_value: unknown; gst_amount: unknown }, amount: number): boolean {
+  const ceiling = toPaise(Number(bill.gross_value)) + toPaise(Number(bill.gst_amount ?? 0));
+  return toPaise(amount) <= ceiling;
+}
+
+/**
+ * Releasing retention: a positive amount, or nothing to mean "whatever is
+ * releasable now". A negative release is a withholding, and there is a
+ * separate entry type for that.
+ */
+export const retentionReleaseSchema = z.object({
+  amount: z.coerce.number().finite().positive().optional(),
+  reason: z.string().trim().max(1000).optional(),
+});
+
 export const raBillDisputeSchema = z.object({
   disputed: z.boolean(),
   reason: z.string().trim().max(1000).optional(),
