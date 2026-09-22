@@ -54,6 +54,21 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
    // it can be turned on for an account and turned off again.
    must_change_password:z.boolean().optional()}),req.body);
   if(id===u.id&&i.auth_status==='DISABLED')fail('SELF_DISABLE','You cannot disable your own account');
+  /*
+   * Your own password and your own two-factor policy are not yours to set
+   * from here (AUTH-1).
+   *
+   * Account security asks for the current password before it will take a
+   * new one, because a token is far easier to come by than a password; this
+   * route does not, so whoever held a stolen administrator token could make
+   * the account theirs. And an administrator who may excuse themselves from
+   * two-factor authentication -- EXEMPT here, then "disable" on the security
+   * screen -- has quietly opted out of the organisation's policy without
+   * anybody else in the room. Both changes stay possible: the password on
+   * the security screen, the policy through another administrator, which is
+   * already the rule for your own roles.
+   */
+  if(id===u.id&&(i.password!==undefined||i.mfa_policy!==undefined))fail('SELF_SECURITY_CHANGE','Change your own password under Account security, and ask another administrator to change your two-factor policy');
   if(i.phone&&!isIndianMobile(i.phone))fail('VALIDATION_ERROR','Enter a ten-digit Indian mobile number',422);
   const phone=i.phone===undefined?undefined:(i.phone===null?null:formatIndianMobile(i.phone));
   const hash=i.password?await bcrypt.hash(i.password,12):null;

@@ -32,7 +32,7 @@ import {
   encodeCursor,
   toFieldErrors,
 } from "@silverline/shared";
-import { buildAuthenticate, requirePermission } from "../../common/auth.js";
+import { buildAuthenticate, requireAllPermissions, requirePermission } from "../../common/auth.js";
 import { mutate } from "../../common/domain.js";
 import { resolveScopes, employeeScopeClause } from "../../common/scopes.js";
 import { writeAudit } from "../../common/audit.js";
@@ -456,13 +456,26 @@ export async function registerEmployeeRoutes(
     authenticate,
     S1_PERMISSIONS.EMPLOYEE_IMPORT,
   );
-  const canReadDocs = requirePermission(
+  /*
+   * Somebody's personal file needs the right to read the person, not only
+   * the right to read documents.
+   *
+   * document.read was later reused for the company document register and
+   * handed to inventory managers, payroll officers and bid managers, none
+   * of whom may open the directory -- so an inventory manager could list
+   * and download another employee's identity documents while
+   * GET /employees/:id refused them. employee.read is checked second, so
+   * its scope is what the record check runs under: a team lead sees only
+   * their own team's files. Uploading is held to the same standard: you do
+   * not put papers into a file you may not open.
+   */
+  const canReadDocs = requireAllPermissions(
     authenticate,
-    S1_PERMISSIONS.DOCUMENT_READ,
+    [S1_PERMISSIONS.DOCUMENT_READ, S1_PERMISSIONS.EMPLOYEE_READ],
   );
-  const canUploadDocs = requirePermission(
+  const canUploadDocs = requireAllPermissions(
     authenticate,
-    S1_PERMISSIONS.DOCUMENT_UPLOAD,
+    [S1_PERMISSIONS.DOCUMENT_UPLOAD, S1_PERMISSIONS.EMPLOYEE_READ],
   );
 
   const metaOf = (req: {

@@ -218,3 +218,44 @@ describe("changing somebody else's account", () => {
     expect((await patchUser(root, admin.id, { password: "a-fresh-password-2026" })).statusCode).toBe(200);
   });
 });
+
+describe("changing your own account", () => {
+  /*
+   * The admin route takes no current password, and lets a policy be set on
+   * any account the caller may manage -- which includes their own. On the
+   * production system an administrator could set their own mfa_policy to
+   * EXEMPT and then switch their authenticator off on the security screen,
+   * and whoever held a stolen administrator token could set that account's
+   * password without knowing the old one. Both stay possible the proper
+   * way: the password under Account security, the policy through another
+   * administrator, as is already the rule for your own roles.
+   */
+  it("refuses an administrator setting their own password or two-factor policy here", async () => {
+    const me = await createUser("adm", ["ADMIN"]);
+    const headers = await headersFor(me.username);
+    const before = await passwordHash(me.id);
+
+    const password = await patchUser(headers, me.id, { password: "chosen-with-a-stolen-token" });
+    expect(password.statusCode, password.body).toBe(422);
+    expect((password.json() as { code: string }).code).toBe("SELF_SECURITY_CHANGE");
+    expect(await passwordHash(me.id)).toBe(before);
+
+    const policy = await patchUser(headers, me.id, { mfa_policy: "EXEMPT" });
+    expect(policy.statusCode, policy.body).toBe(422);
+    const row = (await pool.query("SELECT mfa_policy FROM users WHERE id = $1", [me.id])).rows[0];
+    expect(row.mfa_policy).toBe("INHERIT");
+
+    // The refusal is about those two fields, not about the account: their
+    // own mobile number is still theirs to correct here.
+    const phone = await patchUser(headers, me.id, { phone: "9876543210" });
+    expect(phone.statusCode, phone.body).toBe(200);
+  });
+
+  it("still lets another administrator set them", async () => {
+    const me = await createUser("adm", ["ADMIN"]);
+    const peer = await headersFor((await createUser("adm2", ["ADMIN"])).username);
+    expect((await patchUser(peer, me.id, { mfa_policy: "EXEMPT" })).statusCode).toBe(200);
+    expect((await patchUser(peer, me.id, { password: "set-by-a-colleague-2026" })).statusCode).toBe(200);
+    await headersFor(me.username, "set-by-a-colleague-2026");
+  });
+});
