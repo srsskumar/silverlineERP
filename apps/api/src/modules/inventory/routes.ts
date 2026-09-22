@@ -143,7 +143,10 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    return {...r.rows[0],available:String(available),low_stock:low};
   });return reply.code(201).send(row);
  });
- app.get('/api/v1/invoices',{preHandler:guard('inventory.read')},async req=>{const {limit,offset}=page(req),rows=(await pool.query('SELECT * FROM invoices WHERE org_id=$1 ORDER BY created_at DESC,id DESC LIMIT $2 OFFSET $3',[actor(req).orgId,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
+ // Read behind invoice.read, the permission granted for exactly this. It was
+ // gated on inventory.read, so the payables officer who holds invoice.read
+ // and invoice.manage could match and pay an invoice but never list one.
+ app.get('/api/v1/invoices',{preHandler:guard('invoice.read')},async req=>{const {limit,offset}=page(req),rows=(await pool.query('SELECT * FROM invoices WHERE org_id=$1 ORDER BY created_at DESC,id DESC LIMIT $2 OFFSET $3',[actor(req).orgId,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
  app.post('/api/v1/invoices',{preHandler:guard('inventory.manage')},async(req,reply)=>{
   const i=parse(invoiceSchema,req.body),u=actor(req);
   const row=await mutate(pool,req,'invoice.create','invoice',async db=>{
@@ -477,7 +480,10 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    return {...(await db.query('UPDATE assets SET status=$2,condition=$3,version=version+1,updated_at=now() WHERE id=$1 RETURNING *',[id,i.status,i.condition])).rows[0],reason:i.reason,evidence_id:i.evidence_id};
   });
  });
- app.get('/api/v1/asset-audits',{preHandler:guard('asset.manage')},async req=>{const {limit,offset}=page(req),u=actor(req),global=resolveScopes(u.scopes).global,rows=(await pool.query('SELECT * FROM asset_audits WHERE org_id=$1 AND ($4 OR created_by=$5) ORDER BY created_at DESC LIMIT $2 OFFSET $3',[u.orgId,limit+1,offset,global,u.id])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
+ // Reading past audits is a read. The list already narrows to the reader's
+ // own audits unless their scope is global, so asset.read is the right gate;
+ // asset.manage locked the auditor out of the one register they exist to check.
+ app.get('/api/v1/asset-audits',{preHandler:guard('asset.read')},async req=>{const {limit,offset}=page(req),u=actor(req),global=resolveScopes(u.scopes).global,rows=(await pool.query('SELECT * FROM asset_audits WHERE org_id=$1 AND ($4 OR created_by=$5) ORDER BY created_at DESC LIMIT $2 OFFSET $3',[u.orgId,limit+1,offset,global,u.id])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
  app.post('/api/v1/asset-audits',{preHandler:guard('asset.manage')},async(req,reply)=>{
   const i=parse(assetAuditSchema,req.body),u=actor(req);
   const result=await mutate(pool,req,'asset.audit','asset_audit',async db=>{
