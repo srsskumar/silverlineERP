@@ -14,6 +14,11 @@ const CORRIGENDUM_FIELDS = new Set([
   'closing_date', 'opening_date', 'submission_date', 'start_date',
   'estimated_value', 'bid_validity_days', 'reference_number', 'package_lot_no',
 ]);
+/** The amendable fields, validated exactly as the tender itself validates them. */
+const corrigendumChangesSchema = tenderBaseSchema.pick({
+  closing_date: true, opening_date: true, submission_date: true, start_date: true,
+  estimated_value: true, bid_validity_days: true, reference_number: true, package_lot_no: true,
+}).partial().strict();
 
 export async function registerTenderRoutes(app: FastifyInstance, opts: { pool: Pool; jwtSecret: string }) {
   const { pool } = opts;
@@ -213,12 +218,15 @@ export async function registerTenderRoutes(app: FastifyInstance, opts: { pool: P
     const input = parse(corrigendumSchema, req.body);
     const row = await mutate(pool, req, 'tender.corrigendum', 'tender', async db => {
       const tender = await inOrg(db, 'tenders', id, u.orgId, true);
-      const changes = Object.entries(input.changes ?? {});
-      for (const [field] of changes) {
+      for (const field of Object.keys(input.changes ?? {})) {
         if (!CORRIGENDUM_FIELDS.has(field)) {
           fail('VALIDATION_ERROR', `A corrigendum cannot change ${field}. Amendable fields: ${[...CORRIGENDUM_FIELDS].join(', ')}`);
         }
       }
+      // The new values obey the same rules as the fields they replace. Taken
+      // raw, "not-a-date" reached the database as a 500 and a negative
+      // estimate was written onto the tender as if the authority had said so.
+      const changes = Object.entries(parse(corrigendumChangesSchema, input.changes ?? {}));
       const priorValues: Record<string, unknown> = {};
       for (const [field] of changes) priorValues[field] = tender[field] ?? null;
 
