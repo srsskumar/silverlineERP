@@ -21,6 +21,7 @@ import {
   type ViewStyle,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { font, radius, space, TOUCH_TARGET, useTheme, type Palette } from "../theme";
 
 type Tone = "neutral" | "success" | "warning" | "danger" | "info";
@@ -52,9 +53,14 @@ export function Screen({
   padded?: boolean;
 }) {
   const t = useTheme();
+  // Every screen here hides the native header, and on Android 15 the app is
+  // drawn edge to edge, so without this the title sits under the status bar
+  // -- and on a phone with a camera cut-out, partly behind it.
+  const insets = useSafeAreaInsets();
   const style: ViewStyle = {
     flex: 1,
     backgroundColor: t.canvas,
+    paddingTop: insets.top,
     ...(padded ? { paddingHorizontal: space.lg } : null),
   };
   if (!scroll) return <View style={style}>{children}</View>;
@@ -63,7 +69,7 @@ export function Screen({
       style={{ flex: 1, backgroundColor: t.canvas }}
       contentContainerStyle={{
         ...(padded ? { paddingHorizontal: space.lg } : null),
-        paddingTop: space.lg,
+        paddingTop: insets.top + space.lg,
         // Clears the tab bar so the last row is never trapped under it.
         paddingBottom: space.xxl * 2,
       }}

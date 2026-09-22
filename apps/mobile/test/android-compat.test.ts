@@ -77,3 +77,41 @@ describe("Android compatibility", () => {
     assert.deepEqual(offenders, []);
   });
 });
+
+/**
+ * Android 15 draws the app edge to edge, and Expo SDK 57 no longer lets that
+ * be switched off. A screen that hides the native header and takes no inset
+ * puts its title under the status bar; a tab bar with a fixed height puts
+ * its labels under the gesture bar.
+ */
+describe("Edge to edge", () => {
+  const read = (rel: string) => readFileSync(path.join(mobileRoot, rel), "utf8");
+
+  it("keeps screen content below the status bar", () => {
+    const screen = read("src/ui/primitives.tsx");
+    assert.match(screen, /useSafeAreaInsets\(\)/);
+    assert.match(screen, /paddingTop: insets\.top/);
+  });
+
+  it("keeps the tab bar above the system navigation bar", () => {
+    const tabs = read("app/(tabs)/_layout.tsx");
+    assert.match(tabs, /useSafeAreaInsets\(\)/);
+    assert.match(tabs, /height: 60 \+ insets\.bottom/);
+    assert.match(tabs, /paddingBottom: 8 \+ insets\.bottom/);
+  });
+
+  it("does not ask for a microphone it never uses", () => {
+    const config = JSON.parse(read("app.json")) as { expo: { plugins: unknown[] } };
+    const camera = config.expo.plugins.find((p) => Array.isArray(p) && p[0] === "expo-camera") as
+      | [string, { recordAudioAndroid?: boolean }]
+      | undefined;
+    assert.ok(camera, "expo-camera must be configured through its plugin");
+    assert.equal(camera[1].recordAudioAndroid, false, "RECORD_AUDIO is declared unless this is off");
+  });
+
+  it("gives the lock screen the theme's colours, not a light-only hex", () => {
+    const auth = read("src/auth/AuthContext.tsx");
+    assert.doesNotMatch(auth, /#[0-9a-fA-F]{6}/, "hardcoded colours ignore dark mode");
+    assert.match(auth, /useTheme\(\)/);
+  });
+});

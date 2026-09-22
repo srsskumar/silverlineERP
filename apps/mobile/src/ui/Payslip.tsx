@@ -1,12 +1,14 @@
 import { useState } from "react";
+import { View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { randomUUID } from "expo-crypto";
 import { apiFetch, asItem, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import { Badge, Button, Card, Input, Muted, Row, Subtle } from "./primitives";
+import { Badge, Button, Card, Input, Muted, Row, SectionLabel, Subtle } from "./primitives";
 import { font, space, useTheme } from "../theme";
+import { formatRupees, payslipSections } from "./payslipRows";
 
 export function clearPayslipFiles() {
   try {
@@ -95,12 +97,34 @@ export function Payslip() {
           <Row style={{ justifyContent: "space-between", marginTop: space.sm }}>
             <Muted>Net pay</Muted>
             <Muted style={{ color: t.text, fontWeight: "700", fontSize: font.xl }}>
-              ₹{String(q.data.net_pay ?? "—")}
+              {formatRupees(q.data.net_pay)}
             </Muted>
           </Row>
           <Row gap={space.sm} style={{ marginTop: space.sm }}>
             <Badge text={String(q.data.run_status ?? q.data.status ?? "")} tone="info" />
             <Subtle>version {String(q.data.version)}</Subtle>
+          </Row>
+          {/*
+            The slip itself: days paid and unpaid (Sundays and holidays are
+            paid days now, and shown as such), what the pay was worked out
+            from, what came off, and loss of pay as the information it is --
+            already outside gross, not a deduction. Grouped by the same
+            function as the web slip and the PDF.
+          */}
+          {payslipSections(q.data).map((section) => (
+            <View key={section.title}>
+              <SectionLabel>{section.title}</SectionLabel>
+              {section.rows.map((row) => (
+                <Row key={row.key} style={{ justifyContent: "space-between", minHeight: 28 }}>
+                  <Muted style={{ flex: 1 }}>{row.label}</Muted>
+                  <Muted style={{ color: t.text, fontWeight: "600" }}>{row.value}</Muted>
+                </Row>
+              ))}
+            </View>
+          ))}
+          <Row style={{ justifyContent: "space-between", marginTop: space.sm }}>
+            <Muted>Gross</Muted>
+            <Muted style={{ color: t.text }}>{formatRupees(q.data.gross)}</Muted>
           </Row>
           <Button
             title={busy ? "Preparing PDF…" : "Save payslip PDF"}

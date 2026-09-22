@@ -30,3 +30,27 @@ test('production fails closed for HTTP and generates HTTPS-only policy', () => {
   assert.equal(policy.cleartextHost, null);
   assert.doesNotMatch(networkXml(policy), /cleartextTrafficPermitted="true"/);
 });
+test('a QA build may use cleartext to the one public host it names twice, never in production', () => {
+  const api = 'http://34.131.134.217';
+  // Named once: refused in every profile, as before.
+  assert.throws(() => resolvePolicy({ EXPO_PUBLIC_API_URL: api }));
+  assert.throws(() => resolvePolicy({ MOBILE_BUILD_PROFILE: 'preview', EXPO_PUBLIC_API_URL: api }));
+  // Named twice: allowed for development and preview, and only that host.
+  for (const profile of [undefined, 'development', 'preview']) {
+    const policy = resolvePolicy({ MOBILE_BUILD_PROFILE: profile, EXPO_PUBLIC_API_URL: api, MOBILE_QA_CLEARTEXT_HOST: '34.131.134.217' });
+    assert.equal(policy.cleartextHost, '34.131.134.217');
+    const xml = networkXml(policy);
+    assert.match(xml, /base-config cleartextTrafficPermitted="false"/);
+    assert.match(xml, /includeSubdomains="false">34\.131\.134\.217</);
+    assert.equal((xml.match(/<domain /g) ?? []).length, 1);
+  }
+  // A flag that names a different host opens nothing.
+  assert.throws(() => resolvePolicy({ EXPO_PUBLIC_API_URL: api, MOBILE_QA_CLEARTEXT_HOST: '34.131.134.218' }));
+  assert.throws(() => resolvePolicy({ EXPO_PUBLIC_API_URL: 'http://example.com', MOBILE_QA_CLEARTEXT_HOST: '34.131.134.217' }));
+  // Production is refused whatever the flag says.
+  for (const key of ['MOBILE_BUILD_PROFILE', 'EAS_BUILD_PROFILE']) {
+    assert.throws(() => resolvePolicy({ [key]: 'production', EXPO_PUBLIC_API_URL: api, MOBILE_QA_CLEARTEXT_HOST: '34.131.134.217' }));
+  }
+  // And the flag never lets loopback onto a device build.
+  assert.throws(() => resolvePolicy({ MOBILE_BUILD_PROFILE: 'preview', EXPO_PUBLIC_API_URL: 'http://127.0.0.1', MOBILE_QA_CLEARTEXT_HOST: '127.0.0.1' }));
+});

@@ -19,6 +19,7 @@ import {
   saveTokens,
 } from "../device/auth";
 import { DEVICE_REVOKED, isDeviceRevoked } from "./revocation";
+import { parseRetryAfter } from "./retryAfter";
 
 function baseUrl(): string {
   const raw =
@@ -111,6 +112,13 @@ export class ApiError extends Error {
   fieldErrors: ApiFieldError[];
   requestId: string | null;
   retryable: boolean;
+  /**
+   * How long the server asked us to wait before trying again, from a 429's
+   * Retry-After header or retry_after_ms body field. Null when it said
+   * nothing. A rate limit is not an auth failure: the tokens are fine, the
+   * clock is what has to move.
+   */
+  retryAfterMs: number | null;
 
   constructor(args: {
     status: number;
@@ -119,6 +127,7 @@ export class ApiError extends Error {
     fieldErrors?: ApiFieldError[];
     requestId?: string | null;
     retryable?: boolean;
+    retryAfterMs?: number | null;
   }) {
     super(args.message);
     this.name = "ApiError";
@@ -127,6 +136,7 @@ export class ApiError extends Error {
     this.fieldErrors = args.fieldErrors ?? [];
     this.requestId = args.requestId ?? null;
     this.retryable = args.retryable ?? false;
+    this.retryAfterMs = args.retryAfterMs ?? null;
   }
 }
 
@@ -175,7 +185,17 @@ async function tryRefresh(): Promise<boolean> {
           body: JSON.stringify({ refresh_token: rt }),
         }, DEFAULT_REQUEST_TIMEOUT_MS),
       );
-      if (res.status === 429 || res.status >= 500) throw new ApiError({ status: res.status, code: "REFRESH_UNAVAILABLE", message: "Connection unavailable. Retry when online.", retryable: true });
+      // A limited or failing refresh endpoint is not a dead session: the
+      // caller backs off and keeps its tokens, rather than signing out.
+      if (res.status === 429 || res.status >= 500) {
+        throw new ApiError({
+          status: res.status,
+          code: res.status === 429 ? "RATE_LIMITED" : "REFRESH_UNAVAILABLE",
+          message: res.status === 429 ? "Too many sign-in attempts, try again later" : "Connection unavailable. Retry when online.",
+          retryable: true,
+          retryAfterMs: parseRetryAfter(res.headers.get("retry-after"), await res.clone().json().catch(() => null)),
+        });
+      }
       if (!res.ok) {
         const error=await res.json().catch(()=>({})) as {code?:string};
         if(isDeviceRevoked(error))await revokeDevice();
@@ -326,6 +346,9 @@ export async function apiFetch<T>(
           ? env.request_id
           : (requestId ?? null),
       retryable: res.status === 429 || res.status >= 500,
+      retryAfterMs: res.status === 429 || res.status === 503
+        ? parseRetryAfter(res.headers.get("retry-after"), env)
+        : null,
     });
   }
   return { data: json as T, requestId: requestId ?? null, status: res.status };

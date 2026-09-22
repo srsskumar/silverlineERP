@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Redirect, Tabs } from "expo-router";
 import { StyleSheet } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../../src/auth/AuthContext";
 import { getMyVillages } from "../../src/api/endpoints";
@@ -20,6 +21,10 @@ const ICONS = {
 export default function TabsLayout() {
   const t = useTheme();
   const { ready, signedIn, user, canDo } = useAuth();
+  // A fixed tab bar height is used as given, with no room added for the
+  // system bar; edge to edge on Android 15 then draws the gesture bar over
+  // the labels. The inset is added back here.
+  const insets = useSafeAreaInsets();
 
   /*
    * The survey tab appears for the people who do survey work, not for
@@ -56,9 +61,9 @@ export default function TabsLayout() {
           backgroundColor: t.surface,
           borderTopWidth: StyleSheet.hairlineWidth,
           borderTopColor: t.border,
-          height: 60,
+          height: 60 + insets.bottom,
           paddingTop: 6,
-          paddingBottom: 8,
+          paddingBottom: 8 + insets.bottom,
         },
         tabBarLabelStyle: { fontSize: font.xs, fontWeight: "600" },
         tabBarActiveTintColor: t.primary,
