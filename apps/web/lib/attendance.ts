@@ -196,6 +196,23 @@ export async function listRecords(params: ListRecordsParams = {}): Promise<Curso
   return { ...normalizeRecordsPage(data), request_id };
 }
 
+/**
+ * Your own days, without the supervisor's grant.
+ *
+ * GET /attendance/records needs attendance.read, which an EMPLOYEE does not
+ * hold; the server answers their own history at /attendance/me instead. The
+ * punch clock read the register, was refused, and told everybody who could
+ * only punch that they had not punched in yet -- so their second press of
+ * the day was refused as a duplicate.
+ */
+export async function listMyRecords(
+  params: Omit<ListRecordsParams, 'employee_id' | 'violation'> = {},
+): Promise<CursorPage<AttendanceRecord>> {
+  const url = buildRecordsQuery(params).replace('/api/v1/attendance/records', '/api/v1/attendance/me');
+  const { data, request_id } = await apiRequest<unknown>(url, { method: 'GET' });
+  return { ...normalizeRecordsPage(data), request_id };
+}
+
 export interface RecordDetail {
   record: AttendanceRecord;
   events: AttendanceEvent[];

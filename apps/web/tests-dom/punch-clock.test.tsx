@@ -16,7 +16,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 const getMyEmployee = vi.fn(async () => ({ id: 'e1', emp_no: 'EMP1' }) as unknown);
-const listRecords = vi.fn(async (_p: unknown) => ({ data: [] as unknown[] }));
+const listMyRecords = vi.fn(async (_p: unknown) => ({ data: [] as unknown[] }));
 const punchEvent = vi.fn(async (_i: {
   employee_id: string; event_type: string;
   latitude?: number; longitude?: number; gps_accuracy?: number;
@@ -27,7 +27,7 @@ const punchEvent = vi.fn(async (_i: {
 
 vi.mock('@/lib/employees', () => ({ getMyEmployee: () => getMyEmployee() }));
 vi.mock('@/lib/attendance', () => ({
-  listRecords: (p: unknown) => listRecords(p),
+  listMyRecords: (p: unknown) => listMyRecords(p),
   punchEvent: (i: Parameters<typeof punchEvent>[0]) => punchEvent(i),
 }));
 vi.mock('@/components/AuthProvider', () => ({
@@ -75,7 +75,7 @@ function geolocation(mode: 'granted' | 'denied') {
 
 beforeEach(() => {
   getMyEmployee.mockReset().mockResolvedValue({ id: 'e1', emp_no: 'EMP1' });
-  listRecords.mockReset().mockResolvedValue({ data: [] });
+  listMyRecords.mockReset().mockResolvedValue({ data: [] });
   punchEvent.mockClear();
   here = { latitude: 15.83, longitude: 78.04, accuracy: 12 };
   geolocation('granted');
@@ -86,10 +86,14 @@ describe('which way the punch goes', () => {
     wrap(<PunchClock />);
     expect(await screen.findByRole('button', { name: /punch in/i })).toBeTruthy();
     expect(screen.getByText(/not punched in/i)).toBeTruthy();
+    // Today's record comes from the person's own history, which needs no
+    // grant -- never from the register, which an EMPLOYEE cannot read.
+    expect(listMyRecords).toHaveBeenCalled();
+    expect(listMyRecords.mock.calls[0][0]).not.toHaveProperty('employee_id');
   });
 
   it('offers to punch out once you are in, and says since when', async () => {
-    listRecords.mockResolvedValue({ data: [{
+    listMyRecords.mockResolvedValue({ data: [{
       id: 'r1', check_in_at: '2026-09-21T03:44:00.000Z', check_out_at: null, total_hours: null,
     }] });
     wrap(<PunchClock />);
@@ -99,7 +103,7 @@ describe('which way the punch goes', () => {
   });
 
   it('stops offering anything once the day is closed', async () => {
-    listRecords.mockResolvedValue({ data: [{
+    listMyRecords.mockResolvedValue({ data: [{
       id: 'r1', check_in_at: '2026-09-21T03:44:00.000Z',
       check_out_at: '2026-09-21T12:32:00.000Z', total_hours: 8.8,
     }] });
@@ -191,7 +195,7 @@ describe('where the punch was made', () => {
   });
 
   it('carries a position on the way out as well as the way in', async () => {
-    listRecords.mockResolvedValue({ data: [{
+    listMyRecords.mockResolvedValue({ data: [{
       id: 'r1', check_in_at: '2026-09-21T03:44:00.000Z', check_out_at: null, total_hours: null,
     }] });
     here = { latitude: 15.95, longitude: 78.22, accuracy: 15 };
@@ -204,7 +208,7 @@ describe('where the punch was made', () => {
   });
 
   it('still punches out when the location has stopped working since the morning', async () => {
-    listRecords.mockResolvedValue({ data: [{
+    listMyRecords.mockResolvedValue({ data: [{
       id: 'r1', check_in_at: '2026-09-21T03:44:00.000Z', check_out_at: null, total_hours: null,
     }] });
     wrap(<PunchClock />);

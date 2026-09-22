@@ -633,6 +633,7 @@ describe("leave request create", () => {
     const adminId = (adminRow.rows[0] as { id: string }).id;
     const lead = await mkUser(["TEAM_LEAD", "EMPLOYEE"], "leadself");
     const tId = await mkEmployee(adminH); // reports_to null → no step1
+    await activateEmployee(tId);
     await linkUser(lead.id, tId);
     const from = plusDays(30);
     await setBalance(adminH, tId, types["EL"] as string, yr(from), 15);

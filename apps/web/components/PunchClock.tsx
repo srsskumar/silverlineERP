@@ -10,7 +10,7 @@ import { useToast } from './ui/Toast';
 import { useAuth } from './AuthProvider';
 import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 import { getMyEmployee } from '@/lib/employees';
-import { listRecords, punchEvent, type PunchResult } from '@/lib/attendance';
+import { listMyRecords, punchEvent, type PunchResult } from '@/lib/attendance';
 import { clock, day, businessToday } from '@/lib/finance';
 
 /**
@@ -120,7 +120,9 @@ export function PunchClock() {
 
   const todayQuery = useQuery({
     queryKey: ['attendance', 'today', employeeId, today],
-    queryFn: () => listRecords({ employee_id: employeeId!, from: today, to: today, limit: 1 }),
+    // Own history, which needs no grant beyond being signed in: the
+    // register endpoint refuses anybody without attendance.read.
+    queryFn: () => listMyRecords({ from: today, to: today, limit: 1 }),
     enabled: !!employeeId,
     staleTime: 15_000,
   });
