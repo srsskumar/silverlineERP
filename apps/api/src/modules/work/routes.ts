@@ -14,7 +14,9 @@ import {
   ApiError,
   DEFAULT_TASK_WORKFLOW,
   MAX_EVIDENCE_BYTES,
+  PLANNED_DATES_MESSAGE,
   PROJECT_STATUS_TRANSITIONS,
+  plannedDatesInOrder,
   S4_PERMISSIONS,
   computeSlaStatus,
   cursorPageQuerySchema,
@@ -1359,6 +1361,19 @@ export async function registerWorkRoutes(
       });
     }
     const d = parsed.data;
+    // One date in the body, the other on the record: the schema can only
+    // check what it was sent.
+    if (!plannedDatesInOrder({
+      planned_start_date: d.planned_start_date ?? dateOnly(cur.planned_start_date),
+      planned_end_date: d.planned_end_date ?? dateOnly(cur.planned_end_date),
+    })) {
+      return sendError(reply, req.requestId, {
+        status: 422,
+        code: "VALIDATION_ERROR",
+        message: "Validation failed",
+        fieldErrors: [{ field: "planned_end_date", message: PLANNED_DATES_MESSAGE }],
+      });
+    }
     if (
       d.status &&
       d.status !== cur.status &&
@@ -2059,6 +2074,17 @@ export async function registerWorkRoutes(
       });
     }
     const d = parsed.data;
+    if (!plannedDatesInOrder({
+      planned_start_date: d.planned_start_date ?? dateOnly(cur.planned_start_date),
+      planned_end_date: d.planned_end_date ?? dateOnly(cur.planned_end_date),
+    })) {
+      return sendError(reply, req.requestId, {
+        status: 422,
+        code: "VALIDATION_ERROR",
+        message: "Validation failed",
+        fieldErrors: [{ field: "planned_end_date", message: PLANNED_DATES_MESSAGE }],
+      });
+    }
     if (d.village_id) {
       const ok = await checkVillage(reply, req.requestId, user.orgId, d.village_id);
       if (!ok) {

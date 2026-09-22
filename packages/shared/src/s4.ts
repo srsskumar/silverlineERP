@@ -323,13 +323,29 @@ const projectBase = {
   work_order_number: z.string().trim().max(100).optional(),
 };
 
+/**
+ * Planned dates in the right order, when both are given.
+ *
+ * A project or task whose planned end precedes its planned start is not a
+ * plan; it shows up as "overdue before it began" on every dashboard. When
+ * only one date is sent on a PATCH the route checks against the stored one.
+ */
+export const PLANNED_DATES_MESSAGE = "Planned end must not be before planned start";
+export function plannedDatesInOrder(v: {
+  planned_start_date?: string | null;
+  planned_end_date?: string | null;
+}): boolean {
+  return !v.planned_start_date || !v.planned_end_date || v.planned_end_date >= v.planned_start_date;
+}
+const plannedDatesRule = { message: PLANNED_DATES_MESSAGE, path: ["planned_end_date"] };
+
 /** POST /api/v1/projects */
 export const projectCreateSchema = z.object({
   workspace_id: z.string().uuid("workspace_id must be a UUID"),
   code: z.string().min(1, "Code is required").max(50),
   name: z.string().min(1, "Name is required").max(255),
   ...projectBase,
-});
+}).refine(plannedDatesInOrder, plannedDatesRule);
 
 export type ProjectCreateInput = z.infer<typeof projectCreateSchema>;
 
@@ -353,7 +369,8 @@ export const projectPatchSchema = z
   .refine(
     (v) => Object.values(v).some((field) => field !== undefined),
     { message: "Nothing to update" },
-  );
+  )
+  .refine(plannedDatesInOrder, plannedDatesRule);
 
 export type ProjectPatchInput = z.infer<typeof projectPatchSchema>;
 
@@ -388,7 +405,7 @@ export const taskCreateSchema = z.object({
   assignee_id: z.string().uuid("assignee_id must be a UUID").optional(),
   parent_task_id: z.string().uuid("parent_task_id must be a UUID").optional(),
   ...taskBase,
-});
+}).refine(plannedDatesInOrder, plannedDatesRule);
 
 export type TaskCreateInput = z.infer<typeof taskCreateSchema>;
 
@@ -417,7 +434,8 @@ export const taskPatchSchema = z
       v.estimated_hours !== undefined ||
       v.village_id !== undefined,
     { message: "Nothing to update" },
-  );
+  )
+  .refine(plannedDatesInOrder, plannedDatesRule);
 
 export type TaskPatchInput = z.infer<typeof taskPatchSchema>;
 

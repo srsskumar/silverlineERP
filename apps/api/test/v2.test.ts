@@ -102,6 +102,20 @@ describe('v2 delivery and authorization regression',()=>{
   const denied=await call('PATCH',`tasks/${t.id}/status`,{status:'IN_PROGRESS'},{'if-match':'1'});expect(denied.statusCode).toBe(422);
   expect((await call('PATCH',`tasks/${t.id}/status`,{status:'QUALITY_CHECK'},{'if-match':'1'})).statusCode).toBe(200);
  });
+ it('accepts the version the web editor sends and answers the project activity feed',async()=>{
+  // The browser moves If-Match into X-Record-Version; the editor's save was
+  // refused as "Workflow changed" every time because only If-Match was read.
+  const p=await project(),wf=(await call('GET',`projects/${p.id}/workflow`)).json();
+  const config={statuses:wf.statuses,allowed_transitions:wf.allowed_transitions};
+  const saved=await call('PUT',`projects/${p.id}/workflow`,config,{'x-record-version':'0'});expect(saved.statusCode).toBe(200);expect(saved.json().version).toBe(1);
+  expect((await call('PUT',`projects/${p.id}/workflow`,config,{'x-record-version':'0'})).statusCode).toBe(409);
+  expect((await call('PUT',`projects/${p.id}/workflow`,config,{'if-match':'"1"'})).statusCode).toBe(200);
+  expect((await call('PUT',`projects/${p.id}/workflow`,config)).statusCode).toBe(409);
+  // The activity feed compared a uuid column and a text payload field with one
+  // parameter, which Postgres refused, so the tab was a 500 for every project.
+  expect((await call('POST','tasks',{project_id:p.id,title:'Something happened'})).statusCode).toBe(201);
+  const activity=await call('GET',`projects/${p.id}/activity`);expect(activity.statusCode).toBe(200);expect(activity.json().data.length).toBeGreaterThan(0);
+ });
  it('gates custom executable statuses on dependencies and required fields',async()=>{
   const p=await project(),wf=(await call('GET',`projects/${p.id}/workflow`)).json();
   expect((await call('PUT',`projects/${p.id}/workflow`,{statuses:[...wf.statuses,'QUALITY_CHECK'],allowed_transitions:{...wf.allowed_transitions,TO_DO:['QUALITY_CHECK'],QUALITY_CHECK:['DONE']}},{'if-match':'0'})).statusCode).toBe(200);

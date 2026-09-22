@@ -8,6 +8,22 @@ import { buildAuthenticate,requirePermission,scopesForPermission } from '../../c
 import { actor,parse,page,inOrg,mutate,version,fail,projectAccess } from '../../common/domain.js';
 import { resolveScopes,taskScopeClause,employeeScopeClause } from '../../common/scopes.js';
 
+/**
+ * The workflow version the editor last saw.
+ *
+ * The web client moves If-Match into X-Record-Version before a request leaves
+ * the browser (a CDN may answer If-Match itself), so a route that read the
+ * raw If-Match header never saw what the editor sent and refused every save
+ * as "Workflow changed". Read both, the way parseIfMatch does -- but zero is a
+ * real version here: a project with no override yet reports version 0.
+ */
+export function workflowVersionOf(req:{headers:Record<string,unknown>}):number|null{
+ const raw=req.headers['x-record-version']??req.headers['if-match'];
+ if(typeof raw!=='string')return null;
+ const bare=raw.trim().replace(/^W\//,'').replace(/^"(.*)"$/,'$1');
+ return /^\d+$/.test(bare)?Number(bare):null;
+}
+
 export async function registerPlanningRoutes(app:FastifyInstance,opts:{pool:Pool;jwtSecret:string}) {
  const {pool}=opts,auth=buildAuthenticate(opts),guard=(p:string)=>requirePermission(auth,p);
  async function fullProject(req:FastifyRequest,id:string){const scope=resolveScopes(actor(req).scopes);if(!scope.global&&!scope.projects.includes(id))fail('FORBIDDEN','This change requires permission for the whole project',403);await projectAccess(pool,req,id);}
@@ -24,7 +40,7 @@ export async function registerPlanningRoutes(app:FastifyInstance,opts:{pool:Pool
   return mutate(pool,req,'project.workflow','project',async db=>{
    await inOrg(db,'projects',id,u.orgId,true);
    const current=(await db.query('SELECT version FROM project_workflow_overrides WHERE project_id=$1 FOR UPDATE',[id])).rows[0]??{version:0};
-   if(req.headers['if-match']!==String(current.version))fail('VERSION_CONFLICT','Workflow changed. Reload before editing',409);
+   if(workflowVersionOf(req)!==current.version)fail('VERSION_CONFLICT','Workflow changed. Reload before editing',409);
    // An archived board (083) is out of use: its columns no longer hold a status in place.
    const used=await db.query('SELECT DISTINCT status FROM tasks WHERE project_id=$1 UNION SELECT c.status_code AS status FROM board_columns c JOIN boards b ON b.id=c.board_id WHERE b.project_id=$1 AND b.archived_at IS NULL',[id]);
    if(used.rows.some(r=>!statuses.has(r.status)))fail('WORKFLOW_IN_USE','Keep statuses used by existing tasks or board columns',409);
@@ -136,7 +152,10 @@ export async function registerPlanningRoutes(app:FastifyInstance,opts:{pool:Pool
  });
  app.get('/api/v1/projects/:id/activity',{preHandler:guard('project.read')},async req=>{
   const id=(req.params as {id:string}).id,{limit,offset}=page(req);await projectAccess(pool,req,id);
-  return {data:(await pool.query("SELECT id,type,entity_type,entity_id,actor_id,created_at FROM domain_events WHERE org_id=$1 AND (entity_id=$2 OR payload->>'project_id'=$2) ORDER BY created_at DESC LIMIT $3 OFFSET $4",[actor(req).orgId,id,limit,offset])).rows};
+  // The id is matched against a uuid column and a text payload field, so it
+  // is passed twice with a type each: one parameter cannot be both, and
+  // asking Postgres to compare text with uuid was a 500 on every project.
+  return {data:(await pool.query("SELECT id,type,entity_type,entity_id,actor_id,created_at FROM domain_events WHERE org_id=$1 AND (entity_id=$2::uuid OR payload->>'project_id'=$3::text) ORDER BY created_at DESC LIMIT $4 OFFSET $5",[actor(req).orgId,id,id,limit,offset])).rows};
  });
  app.get('/api/v1/tasks/:id/activity',{preHandler:guard('task.read')},async req=>{const id=(req.params as {id:string}).id;await taskAccess(req,id);return {data:(await pool.query('SELECT id,type,actor_id,created_at FROM domain_events WHERE org_id=$1 AND entity_id=$2 ORDER BY created_at DESC LIMIT 100',[actor(req).orgId,id])).rows};});
  // Bulk actions reuse the same authenticated mutation routes and return each outcome.
