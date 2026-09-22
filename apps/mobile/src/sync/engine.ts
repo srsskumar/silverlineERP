@@ -17,8 +17,9 @@ import {
   postVillageGcp,
   postTask as apiPostTask,
 } from "../api/endpoints";
-import { enqueueOp, flushQueue, type OpExecutor } from "./queue";
+import { enqueueOp, flushQueue, rewriteOp, type OpExecutor } from "./queue";
 import { reviewMessage } from "./queueCore";
+import { punchBody } from "./replay";
 import { getRefreshToken } from "../device/auth";
 import { countPendingOps, countReadyOps, getAccount, getDb, type PendingOpRow } from "./db";
 
@@ -50,13 +51,6 @@ export async function probeOnline(timeoutMs = 5000): Promise<boolean> {
   }
 }
 
-/**
- * How long an op may sit in the outbox before its punch counts as history
- * rather than something the person can still be asked about. Matches the
- * server's live-punch window.
- */
-const REPLAY_AFTER_MS = 60 * 1000;
-
 /** Map one outbox op onto its endpoint call. Throws on transport failure. */
 export const defaultExecutor: OpExecutor = async (op) => {
   const payload = JSON.parse(op.payload) as Record<string, unknown>;
@@ -69,16 +63,18 @@ export const defaultExecutor: OpExecutor = async (op) => {
        * A field punch-out with no progress return filed is refused, so the
        * person is prompted to file it. That prompt only makes sense while
        * they are standing there with the app open. Once the op has waited in
-       * the queue -- no signal, a failed attempt -- the punch has already
-       * happened, and a refusal here would mark the op FAILED and delete a
-       * punch that physically occurred. The server accepts a replay and
-       * records the unfiled return instead.
+       * the queue -- no signal -- the punch has already happened, and a
+       * refusal here would mark the op FAILED and delete a punch that
+       * physically occurred. The server accepts a replay and records the
+       * unfiled return instead.
+       *
+       * Decided on the first attempt and written back to the row before the
+       * request goes, so a retry sends the same bytes: the server hashes the
+       * body under the idempotency key, and a retry with one field more was
+       * refused as a different request (see sync/replay.ts).
        */
-      const waited = Date.now() - op.created_at > REPLAY_AFTER_MS;
-      const body = {
-        ...payload,
-        ...(op.retry_count > 0 || waited ? { queued_offline: true } : {}),
-      };
+      const { body, frozen } = punchBody(payload, op);
+      if (frozen) await rewriteOp(op.client_uuid, JSON.stringify(body));
       const { result, status } = await postAttendanceEvent(
         body as unknown as Parameters<typeof postAttendanceEvent>[0],
         op.idempotency_key,

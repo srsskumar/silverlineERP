@@ -334,6 +334,20 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
   return result;
 }
 
+/**
+ * Replaces the stored payload of an operation that is being sent, so that
+ * every later attempt sends exactly this. Used by an executor that settles
+ * something about the request on the first attempt (see sync/replay.ts):
+ * the server hashes the body under the idempotency key, and a retry that
+ * differs by one field is refused as a different request. Sealed with the
+ * signed-in account's key like the original; a delivered row is left alone.
+ */
+async function rewriteOp(clientUuid:string,payload:string):Promise<void> {
+ const db=await getDb();
+ const account=await getAccount();if(!account)throw new Error("Sign in first");
+ await db.runAsync("UPDATE pending_ops SET payload=? WHERE client_uuid=? AND state IN ('QUEUED','SENDING','BACKOFF')",[await seal(account,payload),clientUuid]);
+}
+
 async function retryOp(clientUuid:string):Promise<void> {
  const db=await getDb();
  const row=await db.getFirstAsync<PendingOpRow>('SELECT * FROM pending_ops WHERE client_uuid=?',[clientUuid]);
@@ -359,5 +373,5 @@ async function listOps():Promise<PendingOpRow[]> {
  return (await getDb()).getAllAsync<PendingOpRow>(LIST_OPS_SQL,[]);
 }
 
-return {enqueueOp,flushQueue,retryOp,discardOp,listOps};
+return {enqueueOp,flushQueue,rewriteOp,retryOp,discardOp,listOps};
 }
