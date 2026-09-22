@@ -8,8 +8,10 @@ import {
   ALLOCATION_ROLE_GRANTS, LEDGER_ROLE_GRANTS, DOCUMENT_ROLE_GRANTS, SURVEY_ROLE_GRANTS,
   type RoleCode,
 } from '@silverline/shared';
-import { NAV_GROUPS, QUICK_CREATE } from '../lib/nav';
-import { landingRoute, canOpen } from '../lib/landing';
+import { Clock } from 'lucide-react';
+import { NAV_GROUPS, QUICK_CREATE, type NavItem } from '../lib/nav';
+import { landingRoute, canOpen, navItemVisible } from '../lib/landing';
+import { attendanceView } from '../lib/attendance-view';
 import { hasPermission, PERMISSIONS } from '../lib/permissions';
 
 /**
@@ -190,5 +192,36 @@ describe('permission codes the API actually enforces', () => {
       if (!String(code).startsWith('employee')) continue;
       expect(known.has(String(code)), `${name} = ${code}`).toBe(true);
     }
+  });
+});
+
+describe('the attendance page and the person punching', () => {
+  /*
+   * The punch clock lives on /attendance and needs only attendance.punch;
+   * the page was gated on attendance.read, so an EMPLOYEE -- the role the
+   * clock was built for -- was refused at the door and never saw it.
+   */
+  it('is offered to an EMPLOYEE, who can punch but not read the register', () => {
+    const perms = permissionsFor('EMPLOYEE');
+    expect(hasPermission({ permissions: perms }, PERMISSIONS.ATTENDANCE_PUNCH)).toBe(true);
+    expect(hasPermission({ permissions: perms }, PERMISSIONS.ATTENDANCE_READ)).toBe(false);
+    expect(canOpen(perms, '/attendance')).toBe(true);
+    // The exceptions queue is still the supervisor's.
+    expect(canOpen(perms, '/attendance/exceptions')).toBe(false);
+  });
+
+  it('shows the clock alone to a puncher, the register to a reader, nothing to neither', () => {
+    expect(attendanceView([PERMISSIONS.ATTENDANCE_PUNCH])).toBe('punch');
+    expect(attendanceView([PERMISSIONS.ATTENDANCE_READ])).toBe('full');
+    expect(attendanceView([PERMISSIONS.ATTENDANCE_READ, PERMISSIONS.ATTENDANCE_PUNCH])).toBe('full');
+    expect(attendanceView(['leave.request'])).toBe('none');
+    expect(attendanceView(undefined)).toBe('none');
+  });
+
+  it('keeps an alternative grant from opening a page whose other needs are unmet', () => {
+    const item: NavItem = { href: '/x', label: 'x', permission: 'a.read', anyOf: ['a.punch'], requires: ['b.read'], icon: Clock };
+    expect(navItemVisible(['a.punch'], item)).toBe(false);
+    expect(navItemVisible(['a.punch', 'b.read'], item)).toBe(true);
+    expect(navItemVisible(['b.read'], item)).toBe(false);
   });
 });

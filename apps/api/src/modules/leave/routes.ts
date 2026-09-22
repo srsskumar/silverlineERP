@@ -558,7 +558,7 @@ export async function registerLeaveRoutes(
           status: 403,
           code: "FORBIDDEN",
           message:
-            `Adjusting leave balances needs the "leave.admin" permission, which is held by HR. Ask them to make the adjustment.`,
+            `Filing leave for somebody else needs the "leave.admin" permission, which is held by HR. Leave employee_id out to file your own.`,
         });
       }
       const other = await db.query(

@@ -10,7 +10,9 @@ import { hasPermission } from './permissions';
  */
 export function navItemVisible(permissions: string[] | undefined, item: NavItem): boolean {
   const actor = { permissions };
-  if (item.permission && !hasPermission(actor, item.permission)) return false;
+  const named = !item.permission || hasPermission(actor, item.permission);
+  const alternative = (item.anyOf ?? []).some((code) => hasPermission(actor, code));
+  if (!named && !alternative) return false;
   return (item.requires ?? []).every((code) => hasPermission(actor, code));
 }
 

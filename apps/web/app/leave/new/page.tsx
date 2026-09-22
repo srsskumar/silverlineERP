@@ -66,7 +66,21 @@ function NewRequestPanel() {
     [router],
   );
 
-  if (typesQuery.isLoading) return <Skeleton className="h-96 w-full" />;
+  if (typesQuery.isLoading || meQuery.isLoading) return <Skeleton className="h-96 w-full" />;
+  /*
+   * A login with no employee record behind it. The server refuses the
+   * request with the same words; saying so before the form is filled in
+   * saves somebody typing a reason for leave they cannot file.
+   */
+  if (meQuery.isError && !myEmployeeId) {
+    return (
+      <div className="max-w-2xl rounded-lg border border-border bg-surface p-4 text-sm text-text-muted">
+        Your login is not linked to an employee record, so there is nobody to file leave for.
+        An administrator can link it under Administration → Users.
+        <p className="mt-3"><Link href="/leave" className="text-primary hover:underline">Back to requests</Link></p>
+      </div>
+    );
+  }
   if (typesQuery.isError) {
     return <ErrorCard title="Could not load leave types" error={typesQuery.error} onRetry={() => typesQuery.refetch()} />;
   }

@@ -34,6 +34,17 @@ export interface NavItem {
    * destination has to declare what it needs, not what it is called.
    */
   requires?: string[];
+  /**
+   * Other permissions that, on their own, make the destination worth
+   * opening.
+   *
+   * The attendance page is the case: it is named after `attendance.read`,
+   * the register a supervisor reads, but it is also where a person marks
+   * their own day, which needs only `attendance.punch`. Gated on the read
+   * grant alone, the one role the punch clock was built for -- EMPLOYEE --
+   * never saw the page it was on.
+   */
+  anyOf?: string[];
   icon: LucideIcon;
 }
 
@@ -101,7 +112,7 @@ export const NAV_GROUPS: NavGroup[] = [
     title: 'People',
     items: [
       { href: '/employees', label: 'Directory', permission: PERMISSIONS.EMPLOYEE_READ, icon: Users },
-      { href: '/attendance', label: 'Attendance', permission: PERMISSIONS.ATTENDANCE_READ, icon: Clock },
+      { href: '/attendance', label: 'Attendance', permission: PERMISSIONS.ATTENDANCE_READ, anyOf: [PERMISSIONS.ATTENDANCE_PUNCH], icon: Clock },
       { href: '/attendance/exceptions', label: 'Exceptions', permission: PERMISSIONS.ATTENDANCE_READ, icon: Activity },
       { href: '/leave', label: 'Leave', permission: PERMISSIONS.LEAVE_REQUEST, icon: PlaneTakeoff },
       { href: '/payroll', label: 'Payroll', permission: PERMISSIONS.PAYROLL_READ, icon: Wallet },

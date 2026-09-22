@@ -336,6 +336,24 @@ describe("leave balances", () => {
     expect((second.json() as { opening_balance: number }).opening_balance).toBe(4);
   });
 
+  it("names the right action when an employee files leave for somebody else", async () => {
+    // The refusal used to talk about adjusting balances, which is not what
+    // was attempted; the person then went looking for the wrong screen.
+    const { adminH, emp, types } = await chainFixture();
+    const otherEmp = await mkEmployee(adminH);
+    const res = await fileLeave(emp.headers, {
+      employee_id: otherEmp,
+      leave_type_id: types["CL"],
+      from_date: plusDays(40),
+      to_date: plusDays(40),
+    });
+    expect(res.statusCode).toBe(403);
+    const body = res.json() as { code: string; message: string };
+    expect(body.code).toBe("FORBIDDEN");
+    expect(body.message).toMatch(/filing leave for somebody else/i);
+    expect(body.message).toMatch(/leave\.admin/);
+  });
+
   it("rejects upserts without leave.admin (403 EMPLOYEE)", async () => {
     const { emp, eId, types } = await chainFixture();
     const res = await setBalance(emp.headers, eId, types["CL"] as string, yr(plusDays(30)), 5);
