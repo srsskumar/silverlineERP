@@ -94,19 +94,36 @@ export default function SurveyEntryPage() {
     staleTime: 300_000,
   });
 
+  /*
+   * The names, for the picker; the village chosen, in full.
+   *
+   * This screen fetched every village's whole position -- stages, targets,
+   * each measure's completion -- to fill a dropdown it read four fields of.
+   * On the live contract that was two and a half megabytes before anybody
+   * had chosen a village, on a form filled in from the field. The list is
+   * now names alone, and the one village picked is read on its own.
+   */
   const villages = useQuery({
-    queryKey: ['survey-villages', projectId],
+    queryKey: ['survey-villages', projectId, 'picker'],
     enabled: canEnter && !!projectId,
     queryFn: async () =>
       ((await apiRequestRaw(
-        `/api/v1/survey/projects/${projectId}/villages`)).body as { data: Row[] }).data,
+        `/api/v1/survey/projects/${projectId}/villages?fields=picker`)).body as { data: Row[] }).data,
+    staleTime: 300_000,
+  });
+
+  const chosen = useQuery({
+    queryKey: ['survey-village', villageId],
+    enabled: canEnter && !!villageId,
+    queryFn: async () =>
+      ((await apiRequestRaw(`/api/v1/survey/villages/${villageId}`)).body as { data: Row }).data,
   });
 
   React.useEffect(() => {
     if (!projectId && projects.data?.length) setProjectId(String(projects.data[0].id));
   }, [projects.data, projectId]);
 
-  const village = villages.data?.find((v) => String(v.id) === villageId);
+  const village = chosen.data && String(chosen.data.id) === villageId ? chosen.data : undefined;
 
   // The instruments out on this village, so the form lists the real ones
   // rather than asking somebody to remember which.
@@ -264,6 +281,7 @@ export default function SurveyEntryPage() {
       setLowReason('');
       setLowRemarks('');
       qc.invalidateQueries({ queryKey: ['survey-villages'] });
+      qc.invalidateQueries({ queryKey: ['survey-village', villageId] });
       qc.invalidateQueries({ queryKey: ['survey-progress'] });
       /*
        * And the list of what is already recorded.
@@ -895,6 +913,7 @@ function AmendEntry({
         'The change is on the audit trail with what it was before.');
       void qc.invalidateQueries({ queryKey: ['survey-entries', villageId] });
       void qc.invalidateQueries({ queryKey: ['survey-villages'] });
+      void qc.invalidateQueries({ queryKey: ['survey-village'] });
       void qc.invalidateQueries({ queryKey: ['survey-progress'] });
       onDone();
     },

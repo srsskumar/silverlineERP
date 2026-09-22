@@ -14,6 +14,7 @@ import * as React from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { apiRequestRaw } from '@/lib/apiClient';
+import { Paged } from '@/components/ui/Paged';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -971,6 +972,7 @@ export function SurveyDashboard({
           <h3 className="text-sm font-semibold text-text">Villages</h3>
           <span className="text-2xs text-text-subtle">{num(d.villages.length)} shown</span>
         </div>
+        <Paged rows={d.villages} noun="villages">{(shown) => (
         <TableWrap tall>
           <Table>
             <THead>
@@ -993,7 +995,7 @@ export function SurveyDashboard({
               </TR>
             </THead>
             <TBody>
-              {d.villages.map((v: DashboardVillage) => (
+              {shown.map((v: DashboardVillage) => (
                 <TR key={v.id}>
                   <TD>
                     {canDrill && onOpenVillage ? (
@@ -1088,6 +1090,7 @@ export function SurveyDashboard({
             </TBody>
           </Table>
         </TableWrap>
+        )}</Paged>
       </Card>
     </div>
   );
