@@ -4,7 +4,7 @@ This catalogue defines what the unit and end-to-end suites should verify. It is 
 
 ## Test data baseline
 
-Use two organizations to prove tenant isolation. In the primary organization create all nine seeded roles, two districts, two complete District to Mandal to Village to Site chains, two active employees, one suspended employee and one exited employee. Give one active employee a direct fence and the other only a site assignment. Create circular and polygon fences, an active project with a configurable workflow, an inactive project, leave balances, an open payroll period, assets and stock with quantity one. Fix the organization timezone to Asia Kolkata and freeze the test clock where dates affect results.
+Use two organizations to prove tenant isolation. In the primary organization create all nine seeded roles, two districts, two complete District to Mandal to Village to Site chains, two active employees (one on each chain's site), one suspended employee and one exited employee. Create an active project with a configurable workflow, an inactive project, leave balances, an open payroll period, assets and stock with quantity one. There are no geo-fences: Silverline has no geo-fencing (decision 2026-09-22). Fix the organization timezone to Asia Kolkata and freeze the test clock where dates affect results.
 
 Every write assertion should also verify the response code, stable business code, database effect, audit event and absence of sensitive values in logs. Every retryable write should reuse the same Idempotency Key and assert exactly one business effect.
 
@@ -36,26 +36,28 @@ Every write assertion should also verify the response code, stable business code
 | UT-EMP-07 | P1 | Update sensitive fields | Ciphertext changes, output stays masked, audit values stay protected | 14.3, 14.4 |
 | UT-EMP-08 | P0 | Assign site references from another organization or wrong unit type | Both are rejected server-side | 4.1, 20.1 |
 
-### Geofence geometry assignment and attendance decisions
+### Geocoding and attendance decisions
+
+Silverline has no geo-fencing (owner decision, 2026-09-22). The UT-GEO-01..11 rows below, and UT-ATT-02/03, specified fence geometry, assignment, resolution and fence-based punch review; they are marked RETIRED, their tests have been deleted, and the coverage report ignores a RETIRED row. A punch is accepted with or without a position, the position is stored as evidence, and the anti-fraud rules (UT-ATT-04/05) are unchanged.
 
 | ID | Priority | Test | Expected result | Requirement |
 |---|---|---|---|---|
-| UT-GEO-01 | P0 | Point at centre, boundary and outside a circular fence | Centre and boundary including tolerance are inside; outside is false | 9.1 |
-| UT-GEO-02 | P0 | Point inside, on edge and outside a polygon | Deterministic inside/edge/outside decision | 9.1 |
-| UT-GEO-03 | P0 | Validate malformed circle and polygon geometry | Invalid latitude, longitude, radius and fewer than three points reject | 6.1 GeoFence |
-| UT-GEO-04 | P0 | Apply tolerance | Accepted area equals geometry plus configured tolerance | 9.1 |
-| UT-GEO-05 | P0 | Resolve direct employee fence and site fence together | Active direct assignment wins | 9.1 |
-| UT-GEO-06 | P0 | Resolve without direct assignment | Site then village then mandal then district precedence applies | 9.1, decision item 27 |
-| UT-GEO-07 | P0 | Deactivate direct fence | Direct fence is ignored and location hierarchy becomes effective | BR-13 |
-| UT-GEO-08 | P0 | Reassign employee to a second direct fence | Previous assignment becomes inactive; exactly one direct fence remains active | 9.1 |
-| UT-GEO-09 | P0 | Assign inactive, exited or cross-organization employee | Assignment is rejected with employee_ids field error | 4.1, BR-01 |
-| UT-GEO-10 | P0 | Read effective fences as an employee | Only the employee's direct and location-chain active fences are returned | 4.1, 9.1 |
-| UT-GEO-11 | P0 | Read organization fence list as ordinary employee | Request is forbidden and does not reveal fence existence | 14.2 |
+| UT-GEO-01 | RETIRED | Point at centre, boundary and outside a circular fence | No geo-fencing | 9.1 (withdrawn) |
+| UT-GEO-02 | RETIRED | Point inside, on edge and outside a polygon | No geo-fencing | 9.1 (withdrawn) |
+| UT-GEO-03 | RETIRED | Validate malformed circle and polygon geometry | No geo-fencing | 6.1 GeoFence (withdrawn) |
+| UT-GEO-04 | RETIRED | Apply tolerance | No geo-fencing | 9.1 (withdrawn) |
+| UT-GEO-05 | RETIRED | Resolve direct employee fence and site fence together | No geo-fencing | 9.1 (withdrawn) |
+| UT-GEO-06 | RETIRED | Resolve without direct assignment | No geo-fencing | 9.1, decision item 27 (withdrawn) |
+| UT-GEO-07 | RETIRED | Deactivate direct fence | No geo-fencing | BR-13 (withdrawn) |
+| UT-GEO-08 | RETIRED | Reassign employee to a second direct fence | No geo-fencing | 9.1 (withdrawn) |
+| UT-GEO-09 | RETIRED | Assign inactive, exited or cross-organization employee | No geo-fencing | 4.1, BR-01 (withdrawn) |
+| UT-GEO-10 | RETIRED | Read effective fences as an employee | No geo-fencing | 4.1, 9.1 (withdrawn) |
+| UT-GEO-11 | RETIRED | Read organization fence list as ordinary employee | No geo-fencing | 14.2 (withdrawn) |
 | UT-GEO-12 | P1 | Normalize geocoder result and invalid provider rows | Only finite coordinates are returned; provider payload is not leaked | 15.3, 20 |
 | UT-GEO-13 | P1 | Exercise geocoder rate slot and cache | Same query is cached; uncached provider calls serialize to at most one per second | 15.3 |
-| UT-ATT-01 | P0 | Check in as active eligible employee inside fence | Immutable event and workday record created with INSIDE and effective fence ID/version | 8.1, 9.1 |
-| UT-ATT-02 | P0 | Check in outside effective fence | Normal attendance is not silently accepted; review exception is created | 9.1, 23.2 |
-| UT-ATT-03 | P0 | Punch with accuracy above threshold | Reject or review according to configured exception policy with stable code | 9.1 |
+| UT-ATT-01 | P0 | Check in as active eligible employee with a position | Immutable event and workday record created; position and accuracy stored, no fence verdict | 8.1 |
+| UT-ATT-02 | RETIRED | Check in outside effective fence | No geo-fencing: a punch is accepted from anywhere | 9.1, 23.2 (withdrawn) |
+| UT-ATT-03 | RETIRED | Punch with accuracy above threshold | No geo-fencing: accuracy is stored, never judged | 9.1 (withdrawn) |
 | UT-ATT-04 | P0 | Punch with mock-location indicator | Reject or flag according to policy; evidence and reason are retained | 9.3 |
 | UT-ATT-05 | P0 | Detect impossible travel | Creates review signal and does not accuse or autonomously reject outside policy | 9.3 |
 | UT-ATT-06 | P0 | Retry identical punch and retry same Idempotency Key | Returns ALREADY_APPLIED and creates one event and one payroll effect | 8.1, BR-07 |
@@ -120,16 +122,16 @@ Use real PostgreSQL, API, Web and an Android 9 or newer emulator/device. Stub on
 | ID | Priority | Workflow | Expected business outcome | Requirement |
 |---|---|---|---|---|
 | E2E-01 | P0 | Admin signs in, completes MFA and opens scoped dashboard | Session established; correct navigation and data scope shown; login audited | 4, 14.1 |
-| E2E-02 | P0 | Employee signs in without admin permissions | Mobile opens within two actions to Attendance; admin pages and org-wide fences remain inaccessible | 14.2, 21.3 |
+| E2E-02 | P0 | Employee signs in without admin permissions | Mobile opens within two actions to Attendance; admin pages remain inaccessible | 14.2, 21.3 |
 | E2E-03 | P0 | Admin creates employee, links user and assigns District to Site | Employee can read self profile and assigned site; unrelated tenant data is absent | 7, 4.1 |
-| E2E-04 | P0 | Admin opens New fence, searches a place, selects result and clicks map | Map recenters; coordinates populate; radius/polygon preview matches selected location | 9, 15.3 |
-| E2E-05 | P0 | Admin creates fence and selects one employee directly | Fence and active assignment are saved and audited; table shows employee; phone fetches it after Refresh location | 9.1, 14.3 |
-| E2E-06 | P0 | Employee has direct fence and a different site fence | Mobile displays direct fence; server evaluates the same fence/version | 9.1 |
-| E2E-07 | P0 | Employee has no direct fence but has Site Village Mandal District fences | Site fence is effective; each fallback works when the finer level is inactive or absent | 9.1 |
-| E2E-08 | P0 | Employee stands inside circular boundary and checks in/out | Both immutable events and one complete workday record exist with INSIDE | 8.1, 9.1 |
-| E2E-09 | P0 | Employee stands inside polygon and on tolerated edge | Punch accepted consistently by preview and server | 9.1 |
-| E2E-10 | P0 | Employee punches outside boundary and submits reason/photo | Result requires review; exception reaches TL/PM; normal attendance is not silently accepted | 9.1, 23.2 |
-| E2E-11 | P0 | Device reports poor accuracy, mock location or impossible travel | UI explains the stable decision; configured reject/review behavior and evidence are present | 9.1, 9.3 |
+| E2E-04 | RETIRED | Admin opens New fence, searches a place, selects result and clicks map | No geo-fencing (decision 2026-09-22); the place search itself is UT-GEO-12/13 | 9, 15.3 (withdrawn) |
+| E2E-05 | RETIRED | Admin creates fence and selects one employee directly | No geo-fencing | 9.1, 14.3 (withdrawn) |
+| E2E-06 | RETIRED | Employee has direct fence and a different site fence | No geo-fencing | 9.1 (withdrawn) |
+| E2E-07 | RETIRED | Employee has no direct fence but has Site Village Mandal District fences | No geo-fencing | 9.1 (withdrawn) |
+| E2E-08 | P0 | Employee checks in and out from the site | Both immutable events and one complete workday record exist; each punch keeps its position | 8.1 |
+| E2E-09 | RETIRED | Employee stands inside polygon and on tolerated edge | No geo-fencing | 9.1 (withdrawn) |
+| E2E-10 | RETIRED | Employee punches outside boundary and submits reason/photo | No geo-fencing; a held-back punch explained and decided is covered by E2E-11 and HR-1 | 9.1, 23.2 (withdrawn) |
+| E2E-11 | P0 | Device reports mock location or impossible travel | UI explains the stable decision; configured review behavior and evidence are present; poor accuracy is stored, not held | 9.3 |
 | E2E-12 | P0 | Employee checks in offline, force-closes app, reopens and reconnects | Queue is visible; event syncs exactly once; final attendance becomes visible | 13.1, 23.2 |
 | E2E-13 | P0 | Network drops after server commits but before client receives response | Retry returns ALREADY_APPLIED; one attendance event exists | BR-07, 20 |
 | E2E-14 | P0 | Admin exits employee, then employee attempts punch/task/asset workflows | All three fail with useful reason; audit records exit and denied effects | BR-01 |
