@@ -18,6 +18,7 @@ import {
   postTask as apiPostTask,
 } from "../api/endpoints";
 import { enqueueOp, flushQueue, type OpExecutor } from "./queue";
+import { reviewMessage } from "./queueCore";
 import { getRefreshToken } from "../device/auth";
 import { countPendingOps, countReadyOps, getAccount, getDb, type PendingOpRow } from "./db";
 
@@ -296,6 +297,6 @@ export async function submitQueued(args: Parameters<typeof enqueueOp>[0]): Promi
  await syncNow();
  const saved = await (await getDb()).getFirstAsync<PendingOpRow>('SELECT * FROM pending_ops WHERE client_uuid=?',[op.client_uuid]);
  if (saved?.state === 'FAILED') throw new Error(saved.error ?? 'The server rejected this change. Review it in More → Sync queue.');
- if (saved?.state === 'SUCCEEDED') return saved.decision === 'REVIEW' ? 'Submitted for review.' : 'Saved.';
+ if (saved?.state === 'SUCCEEDED') return saved.decision === 'REVIEW' ? reviewMessage(saved.error) : 'Saved.';
  return 'Saved on this device. Waiting to sync; keep this account signed in.';
 }

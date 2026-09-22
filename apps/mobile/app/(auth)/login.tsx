@@ -4,6 +4,7 @@ import { router } from "expo-router";
 import { useForm, Controller } from "react-hook-form";
 import { Ionicons } from "@expo/vector-icons";
 import { ApiError } from "../../src/api/client";
+import { retryAfterText } from "../../src/api/retryAfter";
 import { useAuth } from "../../src/auth/AuthContext";
 import { validateLogin } from "../../src/validators";
 import { Banner, Button, Input, Muted, Screen, Subtle, Title } from "../../src/ui/primitives";
@@ -39,7 +40,11 @@ export default function LoginScreen() {
     } catch (e) {
       if (e instanceof ApiError) {
         const fields = e.fieldErrors.map((x) => `${x.field}: ${x.message}`).join("\n");
-        setServerError(fields || e.message);
+        // A rate limit is not a wrong password: the server names a wait, and
+        // a person told how long is a person who does not keep trying and
+        // keep being refused.
+        const wait = e.status === 429 ? retryAfterText(e.retryAfterMs) : null;
+        setServerError([fields || e.message, wait].filter(Boolean).join(" "));
         setRequestId(e.requestId);
       } else {
         setServerError(e instanceof Error ? e.message : "Sign-in failed");

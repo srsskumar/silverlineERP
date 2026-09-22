@@ -17,6 +17,7 @@
  */
 
 import { classifySyncResponse, resolveOutcome } from "../api/sync";
+import { nextAttemptDelayMs } from "../api/retryAfter";
 import {
   computeBackoffMs,
   dedupeKey,
@@ -63,7 +64,51 @@ export interface QueueDatabase {
  getAllAsync<T>(sql:string,params:(string|number|null)[]):Promise<T[]>;
  runAsync(sql:string,params:(string|number|null)[]):Promise<unknown>;
 }
-type RequestError=Error&{status:number;retryable:boolean;code:string};
+type RequestError=Error&{status:number;retryable:boolean;code:string;retryAfterMs?:number|null;fieldErrors?:{field:string;message:string}[]};
+
+/**
+ * What the server said, in the words it said it. The code alone
+ * ("VALIDATION_ERROR") told a person at a leave form nothing about which date
+ * was wrong; the field errors are where that is.
+ */
+export function describeRequestError(err: RequestError): string {
+  const fields = (err.fieldErrors ?? [])
+    .map((f) => `${f.field}: ${f.message}`)
+    .join("; ");
+  return fields ? `${err.code}: ${err.message} (${fields})` : `${err.code}: ${err.message}`;
+}
+
+/**
+ * The server's review verdict on a delivered operation, kept on the row.
+ *
+ * A 202 means the server has the punch but a person has to look at it, and
+ * it says why -- clock skew, no location, a day on approved leave. That
+ * message used to be dropped on the floor: the row went SUCCEEDED, its
+ * payload was blanked, and the person saw "Submitted for review" with no
+ * reason, or nothing at all when the queue replayed it later. It goes in the
+ * error column, which is the one free-text column the row has; a SUCCEEDED
+ * row with text there is a delivered operation with something to say.
+ */
+export function reviewNote(body: unknown): string | null {
+  if (typeof body !== "object" || body === null) return null;
+  const { code, message } = body as { code?: unknown; message?: unknown };
+  const c = typeof code === "string" ? code : null;
+  const m = typeof message === "string" ? message : null;
+  if (!c && !m) return null;
+  return c && m ? `${c}: ${m}` : (c ?? m);
+}
+
+/**
+ * What to tell the person whose punch the server has held for review: the
+ * server's own reason when the row kept one. "No location", "on approved
+ * leave", "clock differs by more than 15 minutes" are each something they
+ * can act on; "submitted for review" is not.
+ */
+export function reviewMessage(note: string | null | undefined): string {
+  if (!note) return "Submitted for review.";
+  const text = note.includes(": ") ? note.slice(note.indexOf(": ") + 2) : note;
+  return `Submitted for review: ${text}`;
+}
 
 /**
  * How long a delivered operation stays visible in the sync queue. Long enough
@@ -219,7 +264,10 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
         // The server has it now, so the sealed body -- a photo can be megabytes
         // of base64 -- has no further use on the device. The row itself stays
         // for a while so the queue screen can show that it went.
-        await update(op.client_uuid, { state: "SUCCEEDED", decision, payload: "{}" });
+        await update(op.client_uuid, {
+          state: "SUCCEEDED", decision, payload: "{}",
+          error: decision === "REVIEW" ? reviewNote(body) : null,
+        });
       } else if (outcome.state === "BACKOFF") {
         const retryCount = op.retry_count + 1;
         if (maxRetriesExceeded(retryCount, MAX_QUEUE_RETRIES)) {
@@ -248,14 +296,15 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
     } catch (err) {
       if (isApiError(err) && !err.retryable && err.status !== 401) {
         result.failed += 1;
-        await update(op.client_uuid, { state: "FAILED", decision: err.status === 409 ? "CONFLICT" : "REJECTED", error: `${err.code}: ${err.message}` });
+        await update(op.client_uuid, { state: "FAILED", decision: err.status === 409 ? "CONFLICT" : "REJECTED", error: describeRequestError(err) });
         continue;
       }
-      // Transport failure (network down, timeout): back off, keep op.
+      // Transport failure (network down, timeout) or a server that asked us
+      // to wait (429, 503): back off, keep op.
       const retryCount = op.retry_count + 1;
       const message =
         isApiError(err)
-          ? `${err.code}: ${err.message}`
+          ? describeRequestError(err)
           : err instanceof Error
             ? err.message
             : "unknown error";
@@ -266,9 +315,16 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
         });
       } else {
         result.deferred += 1;
+        // A rate limit names its own wait, and a refused attempt is not
+        // counted, so honouring it is what stops one 429 becoming eight and
+        // the row going FAILED for "max retries" while the server was fine.
+        const wait = nextAttemptDelayMs(
+          computeBackoffMs(retryCount),
+          isApiError(err) ? err.retryAfterMs : null,
+        );
         await update(op.client_uuid, {
           state: "BACKOFF", retry_count: retryCount,
-          next_retry_at: Date.now() + computeBackoffMs(retryCount),
+          next_retry_at: Date.now() + wait,
           error: message,
         });
       }

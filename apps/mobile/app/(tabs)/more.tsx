@@ -230,7 +230,11 @@ function MoreScreen() {
             <ListRow
               key={op.client_uuid}
               title={op.entity.replaceAll("_", " ")}
-              subtitle={op.state === "FAILED" && op.error ? `${op.op} · ${op.error}` : op.op}
+              // A delivered row with text on it is one the server holds for
+              // review, and the text is its reason -- shown, so a punch the
+              // queue replayed after the signal came back still tells the
+              // person why a supervisor will be asking about it.
+              subtitle={(op.state === "FAILED" || op.state === "SUCCEEDED") && op.error ? `${op.op} · ${op.error}` : op.op}
               right={
                 <Row gap={space.sm}>
                   {op.state === "FAILED" &&
@@ -251,10 +255,10 @@ function MoreScreen() {
                     />
                   ) : null}
                   <Badge
-                    text={op.state}
+                    text={op.state === "SUCCEEDED" && op.decision === "REVIEW" ? "REVIEW" : op.state}
                     tone={
                       op.state === "SUCCEEDED"
-                        ? "success"
+                        ? op.decision === "REVIEW" ? "warning" : "success"
                         : op.state === "FAILED"
                           ? "danger"
                           : "warning"
