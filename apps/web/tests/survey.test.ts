@@ -642,3 +642,14 @@ describe('extent in square kilometres', () => {
     expect(sqKm(undefined)).toBe('—');
   });
 });
+
+describe('milestone counts an outside viewer is not sent', () => {
+  it('reads a missing map as empty instead of throwing', async () => {
+    const { milestoneCounts } = await import('../lib/survey');
+    // The observer's dashboard payload has no earned / claimed_unearned;
+    // Object.entries(undefined) took the whole page down for that role.
+    expect(milestoneCounts(undefined)).toEqual([]);
+    expect(milestoneCounts(null)).toEqual([]);
+    expect(milestoneCounts({ '1': 2, '2': 0 })).toEqual([['1', 2], ['2', 0]]);
+  });
+});

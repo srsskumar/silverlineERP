@@ -17,6 +17,7 @@ import { hasPermission } from '@/lib/permissions';
 import { apiRequestRaw } from '@/lib/apiClient';
 import { peopleIndex, personLabel, listPeople } from '@/lib/people';
 import { dayTime } from '@/lib/finance';
+import { auditQuery } from '@/lib/admin-forms';
 
 /**
  * The audit trail (§note 6).
@@ -41,20 +42,27 @@ export default function AuditPage() {
 
   const [action, setAction] = React.useState('');
   const [entity, setEntity] = React.useState('');
+  /*
+   * The two questions a trail is actually consulted for -- what did this
+   * person do, what happened to this record -- and a span of days to ask
+   * them over. The API has taken these for a while; the screen offered
+   * only the action and the entity type, which left both questions to be
+   * answered by paging through everything.
+   */
+  const [actorId, setActorId] = React.useState('');
+  const [entityId, setEntityId] = React.useState('');
+  const [from, setFrom] = React.useState('');
+  const [to, setTo] = React.useState('');
   const [pages, setPages] = React.useState<string[]>([]);
 
   const cursor = pages[pages.length - 1] ?? '';
+  const filtered = Boolean(action || entity || actorId || entityId || from || to);
 
   const events = useQuery({
-    queryKey: ['audit', action, entity, cursor],
+    queryKey: ['audit', action, entity, actorId, entityId, from, to, cursor],
     enabled: canRead,
-    queryFn: async () => {
-      const q = new URLSearchParams({ limit: '50' });
-      if (action) q.set('action', action);
-      if (entity) q.set('entity', entity);
-      if (cursor) q.set('cursor', cursor);
-      return (await apiRequestRaw(`/api/v1/audit?${q}`)).body as Row;
-    },
+    queryFn: async () =>
+      (await apiRequestRaw(`/api/v1/audit?${auditQuery({ action, entity, actorId, entityId, from, to, cursor })}`)).body as Row,
   });
 
   // Names, not identifiers: an actor id answers nobody's question.
@@ -106,9 +114,39 @@ export default function AuditPage() {
               placeholder="Entity, e.g. asset"
               className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
             />
-            {(action || entity) ? (
+            <select
+              aria-label="Who"
+              value={actorId}
+              onChange={(e) => reset(() => setActorId(e.target.value))}
+              className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+            >
+              <option value="">Anybody</option>
+              {(people.data ?? []).map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            <input
+              value={entityId}
+              onChange={(e) => reset(() => setEntityId(e.target.value))}
+              placeholder="Record id"
+              aria-label="Record id"
+              className="w-40 rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-xs text-text"
+            />
+            <label className="flex items-center gap-1 text-xs text-text-muted">
+              From
+              <input type="date" value={from} max={to || undefined}
+                onChange={(e) => reset(() => setFrom(e.target.value))}
+                className="rounded-md border border-border bg-surface px-2 py-1 text-sm text-text" />
+            </label>
+            <label className="flex items-center gap-1 text-xs text-text-muted">
+              to
+              <input type="date" value={to} min={from || undefined}
+                onChange={(e) => reset(() => setTo(e.target.value))}
+                className="rounded-md border border-border bg-surface px-2 py-1 text-sm text-text" />
+            </label>
+            {filtered ? (
               <Button type="button" variant="ghost"
-                onClick={() => reset(() => { setAction(''); setEntity(''); })}>
+                onClick={() => reset(() => { setAction(''); setEntity(''); setActorId(''); setEntityId(''); setFrom(''); setTo(''); })}>
                 Clear
               </Button>
             ) : null}
@@ -133,8 +171,8 @@ export default function AuditPage() {
           {events.isSuccess && rows.length === 0 ? (
             <EmptyState
               title="Nothing matches"
-              description={action || entity
-                ? 'No entry matches those filters. Actions read like asset.transfer or survey.village.add.'
+              description={filtered
+                ? 'No entry matches those filters. Actions read like asset.transfer or survey.village.add; the days are calendar days in the organisation\u2019s timezone, both ends included.'
                 : 'No changes have been recorded yet.'}
             />
           ) : null}

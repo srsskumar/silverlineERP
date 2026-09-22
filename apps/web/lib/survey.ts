@@ -91,6 +91,22 @@ export function sqKm(value: number | null | undefined): string {
 }
 
 /** A plain count, grouped the Indian way. */
+/**
+ * The milestones in a count-by-milestone map, as entries.
+ *
+ * The dashboard payload withholds the billing figures -- what is earned,
+ * what was claimed without a sign-off -- from an outside viewer such as a
+ * department observer or a client, and sends the rest. The screen called
+ * Object.entries on the missing field and threw, which took the whole page
+ * down for the one role whose only page it is. A missing map is an empty
+ * one here; the reader simply sees no billing badges, which is the point.
+ */
+export function milestoneCounts(
+  map: Record<string, number> | null | undefined,
+): Array<[string, number]> {
+  return Object.entries(map ?? {});
+}
+
 export function count(value: number | null | undefined): string {
   if (value === null || value === undefined) return '—';
   return Math.round(value).toLocaleString('en-IN');

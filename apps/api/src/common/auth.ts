@@ -253,25 +253,49 @@ export function requirePermission(
   authenticate: (req: FastifyRequest) => Promise<void>,
   permission: string,
 ) {
+  return requireAllPermissions(authenticate, [permission]);
+}
+
+/**
+ * A gate that needs every one of several permissions.
+ *
+ * Exists for the routes where one permission names the action and another
+ * names the thing it is done to. Somebody's personal file is the case that
+ * forced it: `document.read` says you may read documents, and after the
+ * company document register reused that code it was handed to inventory
+ * managers, payroll officers and bid managers -- none of whom may open the
+ * staff directory. So an inventory manager could list and download another
+ * employee's identity documents while `/employees/:id` refused them.
+ *
+ * Each permission is checked, scoped and record-checked in turn, so a team
+ * lead whose `employee.read` covers their own team sees only their team's
+ * files. The scopes left on the request are those of the last permission.
+ */
+export function requireAllPermissions(
+  authenticate: (req: FastifyRequest) => Promise<void>,
+  permissions: readonly string[],
+) {
   return async function guard(req: FastifyRequest): Promise<void> {
     await authenticate(req);
-    if (!req.authUser?.permissions.includes(permission)) {
-      /*
-       * Still generic about the resource — naming it would reveal whether it
-       * exists — but specific about the permission, which is the one thing
-       * the person can actually act on. "Insufficient permissions" left them
-       * with nothing to ask for and nobody to ask.
-       */
-      throw new ApiError({
-        status: 403,
-        code: "FORBIDDEN",
-        message: `This needs the "${permission}" permission, which your roles do not include. `
-          + "An administrator can add it to your role under Administration \u2192 Roles.",
-      });
+    for (const permission of permissions) {
+      if (!req.authUser?.permissions.includes(permission)) {
+        /*
+         * Still generic about the resource — naming it would reveal whether it
+         * exists — but specific about the permission, which is the one thing
+         * the person can actually act on. "Insufficient permissions" left them
+         * with nothing to ask for and nobody to ask.
+         */
+        throw new ApiError({
+          status: 403,
+          code: "FORBIDDEN",
+          message: `This needs the "${permission}" permission, which your roles do not include. `
+            + "An administrator can add it to your role under Administration \u2192 Roles.",
+        });
+      }
+      req.authUser!.scopes=await scopesForPermission(req,permission);
+      if((permission.startsWith('payroll.')||permission.startsWith('inventory.')||permission==='webhook.manage'||permission==='admin.configure'||permission==='users.manage'||permission==='users.read')&&req.authUser!.scopes.length&&!req.authUser!.scopes.some(s=>!s.scope_type||!s.scope_id))throw new ApiError({status:403,code:'FORBIDDEN',message:'This organization-wide action requires organization-wide permission'});
+      await enforceRecordScope(req, permission);
     }
-    req.authUser!.scopes=await scopesForPermission(req,permission);
-    if((permission.startsWith('payroll.')||permission.startsWith('inventory.')||permission==='webhook.manage'||permission==='admin.configure'||permission==='users.manage'||permission==='users.read')&&req.authUser!.scopes.length&&!req.authUser!.scopes.some(s=>!s.scope_type||!s.scope_id))throw new ApiError({status:403,code:'FORBIDDEN',message:'This organization-wide action requires organization-wide permission'});
-    await enforceRecordScope(req, permission);
   };
 }
 
