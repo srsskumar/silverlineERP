@@ -335,7 +335,8 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
         if (body.certified_amount !== undefined && next !== 'CERTIFIED') {
           fail('VALIDATION_ERROR', 'A certified amount is recorded when the bill is certified, not on other moves');
         }
-        if (body.certified_amount !== undefined && !certifiableAmount(bill, body.certified_amount)) {
+        if (body.certified_amount !== undefined
+            && !certifiableAmount({ gross_value: bill.gross_value, gst_amount: bill.gst_amount }, body.certified_amount)) {
           fail('EXCEEDS_CLAIM',
             `The certified amount cannot exceed the bill's value of ${(Number(bill.gross_value) + Number(bill.gst_amount ?? 0)).toFixed(2)} including GST`);
         }
