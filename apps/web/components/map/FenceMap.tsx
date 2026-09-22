@@ -11,6 +11,7 @@ import {
   type MapMouseEvent,
 } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import './worker';
 import { baseMapStyle, tokenColor } from './mapStyle';
 import { circleToRing, pointsToRing } from './geometry';
 import { hasWebGL2 } from './webgl';
