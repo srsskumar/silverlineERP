@@ -379,13 +379,12 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
     return {
       data: await mutate(pool, req, 'payable.hold', 'invoice', async db => {
         await inOrg(db, 'invoices', id, u.orgId, true);
-        // Stamped like every other mutation: a hold is a decision somebody
-        // took, and the row's version has to move so a concurrent edit sees it.
+        // The invoice table carries no version or updated_by column, so the
+        // hold is the one mutation here that cannot be stamped; the audit
+        // event written by mutate() is the record of who held it and when.
         return (await db.query(
-          `UPDATE invoices SET on_hold = $2, hold_reason = $3,
-             version = COALESCE(version, 0) + 1, updated_at = now(), updated_by = $4
-           WHERE id = $1 RETURNING *`,
-          [id, input.on_hold, input.on_hold ? input.reason : null, u.id])).rows[0];
+          'UPDATE invoices SET on_hold = $2, hold_reason = $3 WHERE id = $1 RETURNING *',
+          [id, input.on_hold, input.on_hold ? input.reason : null])).rows[0];
       }),
     };
   });

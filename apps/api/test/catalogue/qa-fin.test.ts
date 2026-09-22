@@ -135,15 +135,16 @@ describe("payables", () => {
     expect(matchAllowsPayment({ matchStatus: "EXCEPTION", hasPurchaseOrder: false })).toBe(false);
   });
 
-  it("moves the invoice's version when it is held, and lists invoices for invoice.read", async () => {
+  it("holds an invoice, and lists invoices for invoice.read", async () => {
     const invoice = (await w.pool.query(
       `INSERT INTO invoices(org_id, serial_number, vendor_id, hsn, gst_enabled, gst_rate,
          subtotal, tax, total, payment_mode, reference)
-       VALUES($1,$2,$3,'9954',false,0,1000,0,1000,'BANK','ref') RETURNING id, version`,
+       VALUES($1,$2,$3,'9954',false,0,1000,0,1000,'BANK','ref') RETURNING id`,
       [w.orgId, uniq("INV"), w.vendorId])).rows[0];
     const held = await post(w.admin, `/api/v1/ap/invoices/${invoice.id}/hold`, { on_hold: true, reason: "query on quantity" });
     expect(held.status, JSON.stringify(held.body)).toBe(200);
-    expect(Number(held.data.version)).toBe(Number(invoice.version ?? 0) + 1);
+    expect(held.data.on_hold).toBe(true);
+    expect(held.data.hold_reason).toBe("query on quantity");
     // The payables officer holds invoice.read and invoice.manage but no stores permission.
     const list = await get(w.role.PAYROLL_OFFICER, "/api/v1/invoices");
     expect(list.status).toBe(200);
