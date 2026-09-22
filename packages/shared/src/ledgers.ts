@@ -308,7 +308,12 @@ export interface RunSelection {
  */
 export function matchAllowsPayment(c: Pick<PayableCandidate, 'matchStatus' | 'hasPurchaseOrder'>): boolean {
   if (c.matchStatus === 'MATCHED' || c.matchStatus === 'OVERRIDDEN') return true;
-  return !c.matchStatus && !c.hasPurchaseOrder;
+  // An invoice with no purchase order has nothing to match against -- a
+  // utility bill, a one-off service. The ledger stores UNMATCHED as the
+  // default rather than null, so "no match recorded" reads either way;
+  // reading only null made every such invoice unpayable without an override.
+  const unrecorded = !c.matchStatus || c.matchStatus === 'UNMATCHED';
+  return unrecorded && !c.hasPurchaseOrder;
 }
 
 /**
