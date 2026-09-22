@@ -1510,7 +1510,7 @@ export async function registerEmployeeRoutes(
    * POST /api/v1/employees/:id/activate — DRAFT → ACTIVE.
    *
    * Creation lands an employee in DRAFT on purpose, so an incomplete record
-   * cannot punch, be assigned a fence or enter a payroll run. Without this
+   * cannot punch or enter a payroll run. Without this
    * transition that draft was terminal: nothing in the product could put a
    * newly created employee on the roster. Authorized by employee.reactivate,
    * which is already the grant for "put this person on the active roster".

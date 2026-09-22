@@ -2,8 +2,13 @@ import { z } from "zod";
 import type { RoleCode } from "./rbac.js";
 
 /**
- * S2 contracts (Silverline ERP sprint S2): geo-fences + attendance.
+ * S2 contracts (Silverline ERP sprint S2): attendance.
  * ADDITIVE module — existing exports in other files are untouched.
+ *
+ * Geo-fencing was removed on 2026-09-22 (owner decision). The `geo.read` and
+ * `geo.manage` permissions, the fence schemas and the fence review codes are
+ * gone; migration 084 deletes the permission rows. The attendance tables keep
+ * their fence columns so history stays readable, but nothing writes them.
  */
 
 // ---------------------------------------------------------------------------
@@ -11,8 +16,6 @@ import type { RoleCode } from "./rbac.js";
 // ---------------------------------------------------------------------------
 
 export const S2_PERMISSIONS = {
-  GEO_READ: "geo.read",
-  GEO_MANAGE: "geo.manage",
   ATTENDANCE_PUNCH: "attendance.punch",
   ATTENDANCE_READ: "attendance.read",
   ATTENDANCE_DECIDE: "attendance.decide",
@@ -35,13 +38,11 @@ export const S2_ROLE_GRANTS: Record<RoleCode, string[]> = {
     S2_PERMISSIONS.ATTENDANCE_READ,
     S2_PERMISSIONS.ATTENDANCE_DECIDE,
     S2_PERMISSIONS.ATTENDANCE_PUNCH,
-    S2_PERMISSIONS.GEO_READ,
   ],
   TEAM_LEAD: [
     S2_PERMISSIONS.ATTENDANCE_READ,
     S2_PERMISSIONS.ATTENDANCE_DECIDE,
     S2_PERMISSIONS.ATTENDANCE_PUNCH,
-    S2_PERMISSIONS.GEO_READ,
   ],
   PAYROLL_OFFICER: [],
   INVENTORY_MANAGER: [],
@@ -62,25 +63,8 @@ export const DUP_WINDOW_MIN = 5;
 export const SKEW_WINDOW_MIN = 15;
 
 // ---------------------------------------------------------------------------
-// Geo-fences
+// Coordinates
 // ---------------------------------------------------------------------------
-
-export const geoScopeTypeSchema = z.enum([
-  "district",
-  "mandal",
-  "village",
-  "site",
-]);
-
-export type GeoScopeType = z.infer<typeof geoScopeTypeSchema>;
-
-export const geoGeometryTypeSchema = z.enum(["circle", "polygon"]);
-
-export type GeoGeometryType = z.infer<typeof geoGeometryTypeSchema>;
-
-export const geoFenceStatusSchema = z.enum(["ACTIVE", "INACTIVE"]);
-
-export type GeoFenceStatus = z.infer<typeof geoFenceStatusSchema>;
 
 const latSchema = z
   .number({ invalid_type_error: "latitude must be a number" })
@@ -92,67 +76,6 @@ const lngSchema = z
   .min(-180, "longitude must be <= 180")
   .max(180, "longitude must be <= 180");
 
-export const circleGeometrySchema = z.object({
-  lat: latSchema,
-  lng: lngSchema,
-  radius_m: z.number().positive("radius_m must be positive").max(100000),
-});
-
-export type CircleGeometry = z.infer<typeof circleGeometrySchema>;
-
-export const polygonGeometrySchema = z.object({
-  points: z
-    .array(z.tuple([latSchema, lngSchema]))
-    .min(3, "polygon needs at least 3 points")
-    .max(1000),
-});
-
-export type PolygonGeometry = z.infer<typeof polygonGeometrySchema>;
-
-const fenceBase = {
-  name: z.string().min(1, "Name is required").max(255),
-  scope_type: geoScopeTypeSchema,
-  scope_id: z.string().uuid("scope_id must be a UUID"),
-  employee_ids: z.array(z.string().uuid("employee_id must be a UUID")).max(500).default([]),
-  tolerance_meters: z.number().min(0).max(100000).default(0),
-  accuracy_threshold_meters: z.number().positive().max(100000).optional(),
-};
-
-/** POST /api/v1/geo-fences (discriminated by geometry_type). */
-export const geoFenceCreateSchema = z.union([
-  z.object({
-    ...fenceBase,
-    geometry_type: z.literal("circle"),
-    geometry: circleGeometrySchema,
-  }),
-  z.object({
-    ...fenceBase,
-    geometry_type: z.literal("polygon"),
-    geometry: polygonGeometrySchema,
-  }),
-]);
-
-export type GeoFenceCreateInput = z.infer<typeof geoFenceCreateSchema>;
-
-/** PATCH /api/v1/geo-fences/:id — geometry is immutable in S2. */
-export const geoFencePatchSchema = z
-  .object({
-    name: z.string().min(1).max(255).optional(),
-    tolerance_meters: z.number().min(0).max(100000).optional(),
-    accuracy_threshold_meters: z.number().positive().max(100000).optional(),
-    status: geoFenceStatusSchema.optional(),
-  })
-  .refine(
-    (v) =>
-      v.name !== undefined ||
-      v.tolerance_meters !== undefined ||
-      v.accuracy_threshold_meters !== undefined ||
-      v.status !== undefined,
-    { message: "Nothing to update" },
-  );
-
-export type GeoFencePatchInput = z.infer<typeof geoFencePatchSchema>;
-
 // ---------------------------------------------------------------------------
 // Attendance events / records / exceptions
 // ---------------------------------------------------------------------------
@@ -161,10 +84,6 @@ export const attendanceEventTypeSchema = z.enum(["CHECK_IN", "CHECK_OUT"]);
 
 export type AttendanceEventType = z.infer<typeof attendanceEventTypeSchema>;
 
-export const geofenceResultSchema = z.enum(["INSIDE", "OUTSIDE", "NO_FENCE"]);
-
-export type GeofenceResult = z.infer<typeof geofenceResultSchema>;
-
 /** Punch decision union (202 review carries a machine-readable code). */
 export const attendanceDecisionSchema = z.enum(["ACCEPTED", "REQUIRES_REVIEW"]);
 
@@ -172,15 +91,19 @@ export type AttendanceDecision = z.infer<typeof attendanceDecisionSchema>;
 
 export const attendanceReviewCodeSchema = z.enum([
   "TIMESTAMP_SKEW",
-  "POOR_ACCURACY",
   "MOCK_LOCATION",
-  "OUTSIDE_GEOFENCE",
   "DEVICE_SIGNAL",
-  /** A fenced employee punched with no position (or no accuracy to check). */
-  "NO_LOCATION",
   /** The punch falls on a day of approved leave. */
   "ON_APPROVED_LEAVE",
 ]);
+
+/**
+ * Review codes a punch could once be answered with, kept so a client can
+ * still label an old exception. `OUTSIDE_GEOFENCE`, `NO_LOCATION` and
+ * `POOR_ACCURACY` were the geo-fence outcomes; no punch is answered with
+ * them any more.
+ */
+export const LEGACY_REVIEW_CODES = ["OUTSIDE_GEOFENCE", "NO_LOCATION", "POOR_ACCURACY"] as const;
 
 export type AttendanceReviewCode = z.infer<typeof attendanceReviewCodeSchema>;
 
@@ -289,17 +212,38 @@ export const attendanceEventSchema = z
 
 export type AttendanceEventInput = z.infer<typeof attendanceEventSchema>;
 
+/**
+ * Exception types that can still be filed.
+ *
+ * `OUTSIDE_GEOFENCE` is deliberately absent: the geo-fence was removed and no
+ * new exception of that type is raised, by the system or by hand.
+ */
 export const attendanceExceptionTypeSchema = z.enum([
   "MISSED_PUNCH",
   "LATE_CHECKIN",
   "EARLY_CHECKOUT",
-  "OUTSIDE_GEOFENCE",
   "REGULARIZATION",
   "SYSTEM_FLAG",
 ]);
 
 export type AttendanceExceptionType = z.infer<
   typeof attendanceExceptionTypeSchema
+>;
+
+/**
+ * Exception types a stored row may still carry but that can no longer be
+ * filed. Rows raised before the geo-fence was removed keep it, stay
+ * decidable, and must still render with a label.
+ */
+export const LEGACY_EXCEPTION_TYPES = ["OUTSIDE_GEOFENCE"] as const;
+
+export const storedAttendanceExceptionTypeSchema = z.enum([
+  ...attendanceExceptionTypeSchema.options,
+  ...LEGACY_EXCEPTION_TYPES,
+]);
+
+export type StoredAttendanceExceptionType = z.infer<
+  typeof storedAttendanceExceptionTypeSchema
 >;
 
 export const attendanceExceptionStatusSchema = z.enum([

@@ -754,28 +754,7 @@ async function main(): Promise<void> {
   }
   console.log(`leave: ${JSON.stringify(counts)}`);
 
-  // ---- 6. Geo fences (8 circles, 500 m, one per site) ----------------------
-  for (const s of SITES) {
-    const existing = await listAll(
-      `/api/v1/geo-fences?scope_type=site&scope_id=${idOf(s.code)}`,
-    );
-    if (!existing.some((g) => g.name === `AP ${s.name} Fence`)) {
-      const r = await api("POST", "/api/v1/geo-fences", {
-        name: `AP ${s.name} Fence`,
-        scope_type: "site",
-        scope_id: idOf(s.code),
-        geometry_type: "circle",
-        geometry: { lat: s.lat, lng: s.lng, radius_m: 500 },
-      });
-      if (r.status === 201) bump("geo_fences");
-      else if (r.status !== 409 && r.status !== 422) {
-        fail(`fence ${s.code}`, r.status, r.body);
-      }
-    }
-  }
-  console.log(`fences: ${JSON.stringify(counts)}`);
-
-  // ---- 7. Attendance punches (admin token, <=25/min => 2.5 s pacing) -------
+  // ---- 6. Attendance punches (admin token, <=25/min => 2.5 s pacing) -------
   const nowIso = (): string => new Date().toISOString();
   async function punch(empNo: string, event: "CHECK_IN" | "CHECK_OUT"): Promise<void> {
     const empRow = empByNo.get(empNo) as { id: string };

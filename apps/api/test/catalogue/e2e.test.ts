@@ -8,11 +8,14 @@
  *
  * The Web and Android halves live with the code they exercise, tagged with the
  * same catalogue IDs so the traceability report joins them up:
- *   - apps/web/tests/catalogue-e2e.test.ts   — E2E-02, 04, 20, 26, 30, 31
+ *   - apps/web/tests/catalogue-e2e.test.ts   — E2E-02, 20, 26, 30, 31
  *   - apps/mobile/test/catalogue.test.ts     — E2E-12, 13, 28
- * Steps that genuinely need a physical handset (camera burn-in on-device, OS
- * geofence callbacks) are called out in the catalogue report rather than
- * simulated here.
+ * Steps that genuinely need a physical handset (camera burn-in on-device) are
+ * called out in the catalogue report rather than simulated here.
+ *
+ * E2E-04..07 and E2E-09 were the geo-fence workflows. Silverline has no
+ * geo-fencing since 2026-09-22, so those rows are retired in the catalogue and
+ * their tests are gone rather than kept green against nothing.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -27,7 +30,6 @@ import {
   createActiveEmployee,
   createChain,
   createEmployee,
-  createFence,
   createUser,
   grantLeaveBalance,
   headersForUserId,
@@ -35,9 +37,9 @@ import {
   ifMatch,
   leaveTypeIds,
   loginAs,
-  metresNorth,
   post,
   uniq,
+  uniquePhone,
   workDate,
   type CatalogueWorld,
   type Headers,
@@ -68,12 +70,11 @@ function plusDays(days: number): string {
   return base.toISOString().slice(0, 10);
 }
 
-/** A signed-in field employee on their own chain, with a fence they stand in. */
+/** A signed-in field employee on their own chain. */
 async function fieldWorker(over: Record<string, unknown> = {}): Promise<{
   employeeId: string;
   userId: string;
   headers: Headers;
-  fenceId: string;
   site: string;
   chain: Awaited<ReturnType<typeof createChain>>;
 }> {
@@ -86,14 +87,6 @@ async function fieldWorker(over: Record<string, unknown> = {}): Promise<{
     salary_basic: 30000,
     ...over,
   });
-  const fenceId = await createFence(w.app, w.admin, {
-    name: `Fence ${uniq()}`,
-    scope_type: "site",
-    scope_id: chain.site,
-    geometry_type: "circle",
-    geometry: { ...GEO.circleCentre, radius_m: GEO.circleRadiusM },
-    tolerance_meters: 0,
-  });
   const username = `cat_e2e_${uniq()}`;
   const userId = await createUser(w.pool, w.orgId, {
     username,
@@ -104,7 +97,6 @@ async function fieldWorker(over: Record<string, unknown> = {}): Promise<{
     employeeId,
     userId,
     headers: await loginAs(w.app, username),
-    fenceId,
     site: chain.site,
     chain,
   };
@@ -213,21 +205,23 @@ describe("E2E-01 admin signs in, completes MFA and opens scoped dashboard", () =
 // ===========================================================================
 
 describe("E2E-02 employee signs in without admin permissions", () => {
-  it("reaches their own attendance but not admin pages or org-wide fences", async () => {
+  it("reaches their own attendance but not admin pages", async () => {
     const worker = await fieldWorker();
 
-    // Their own attendance history and effective fences are reachable.
-    for (const url of ["/api/v1/attendance/me", "/api/v1/geo-fences/effective"]) {
-      const res = await w.app.inject({ method: "GET", url, headers: worker.headers });
-      expect(res.statusCode, url).toBe(200);
-    }
+    // Their own attendance history is reachable.
+    const history = await w.app.inject({
+      method: "GET",
+      url: "/api/v1/attendance/me",
+      headers: worker.headers,
+    });
+    expect(history.statusCode).toBe(200);
     // And they can punch for themselves.
     expect(
       (
         await punch(worker.headers, {
           employee_id: worker.employeeId,
-          latitude: GEO.insideCircle.lat,
-          longitude: GEO.insideCircle.lng,
+          latitude: GEO.atSite.lat,
+          longitude: GEO.atSite.lng,
         })
       ).statusCode,
     ).toBe(201);
@@ -237,7 +231,6 @@ describe("E2E-02 employee signs in without admin permissions", () => {
       "/api/v1/admin/users",
       "/api/v1/admin/settings",
       "/api/v1/admin/devices",
-      "/api/v1/geo-fences",
       "/api/v1/employees",
       "/api/v1/audit",
       "/api/v1/payroll/runs",
@@ -251,8 +244,8 @@ describe("E2E-02 employee signs in without admin permissions", () => {
     const worker = await fieldWorker();
     const res = await punch(worker.headers, {
       employee_id: w.directEmployee,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     });
     expect(res.statusCode).toBe(403);
   });
@@ -315,257 +308,13 @@ describe("E2E-03 admin creates employee, links user and assigns District to Site
 });
 
 // ===========================================================================
-// E2E-04  (map recentre/preview is asserted in the web suite)
-// ===========================================================================
-
-describe("E2E-04 admin opens New fence, searches a place, selects result and clicks map", () => {
-  const realFetch = globalThis.fetch;
-  afterAll(() => {
-    globalThis.fetch = realFetch;
-  });
-
-  it("returns a selectable coordinate from the place search that a fence can be built on", async () => {
-    globalThis.fetch = (async () =>
-      ({
-        ok: true,
-        status: 200,
-        json: async () => [
-          {
-            osm_type: "node",
-            osm_id: 42,
-            lat: String(GEO.circleCentre.lat),
-            lon: String(GEO.circleCentre.lng),
-            display_name: "Kondapur, Telangana, India",
-            type: "suburb",
-          },
-        ],
-      }) as unknown as Response) as typeof fetch;
-
-    const search = await w.app.inject({
-      method: "GET",
-      url: `/api/v1/geo/search?q=${encodeURIComponent(`kondapur-${uniq()}`)}`,
-      headers: w.admin,
-    });
-    expect(search.statusCode).toBe(200);
-    const result = (
-      search.json() as { data: Array<{ lat: number; lng: number; display_name: string }> }
-    ).data[0]!;
-    expect(result.display_name).toContain("Kondapur");
-
-    // The selected coordinate is exactly what the fence form submits, and the
-    // fence that comes back previews at the same place.
-    const chain = await createChain(w.app, w.admin, `S${uniq().slice(-4)}`);
-    const fenceId = await createFence(w.app, w.admin, {
-      name: "Fence from search",
-      scope_type: "site",
-      scope_id: chain.site,
-      geometry_type: "circle",
-      geometry: { lat: result.lat, lng: result.lng, radius_m: 250 },
-      tolerance_meters: 10,
-    });
-
-    const stored = await w.pool.query(
-      "SELECT geometry, tolerance_meters FROM geo_fences WHERE id = $1",
-      [fenceId],
-    );
-    const geometry = stored.rows[0].geometry as { lat: number; lng: number; radius_m: number };
-    expect(geometry.lat).toBeCloseTo(result.lat, 6);
-    expect(geometry.lng).toBeCloseTo(result.lng, 6);
-    expect(geometry.radius_m).toBe(250);
-    expect(Number(stored.rows[0].tolerance_meters)).toBe(10);
-  });
-
-  it("accepts a polygon drawn by clicking the map", async () => {
-    const chain = await createChain(w.app, w.admin, `D${uniq().slice(-4)}`);
-    const fenceId = await createFence(w.app, w.admin, {
-      name: "Drawn polygon",
-      scope_type: "site",
-      scope_id: chain.site,
-      geometry_type: "polygon",
-      geometry: { points: GEO.polygon },
-    });
-    const stored = await w.pool.query("SELECT geometry FROM geo_fences WHERE id = $1", [
-      fenceId,
-    ]);
-    expect((stored.rows[0].geometry as { points: number[][] }).points).toHaveLength(
-      GEO.polygon.length,
-    );
-  });
-});
-
-// ===========================================================================
-// E2E-05
-// ===========================================================================
-
-describe("E2E-05 admin creates fence and selects one employee directly", () => {
-  it("saves and audits the assignment, lists it, and the phone then fetches it", async () => {
-    const worker = await fieldWorker();
-
-    const fenceId = await createFence(w.app, w.admin, {
-      name: `Direct fence ${uniq()}`,
-      scope_type: "site",
-      scope_id: w.chainB.site,
-      geometry_type: "circle",
-      geometry: { lat: 17.9, lng: 78.9, radius_m: 300 },
-      employee_ids: [worker.employeeId],
-    });
-
-    // The fence table shows the assigned employee.
-    const listed = await w.app.inject({
-      method: "GET",
-      url: `/api/v1/geo-fences?scope_type=site&scope_id=${w.chainB.site}&limit=100`,
-      headers: w.admin,
-    });
-    const row = (
-      listed.json() as { data: Array<{ id: string; employee_ids: string[] }> }
-    ).data.find((f) => f.id === fenceId)!;
-    expect(row.employee_ids).toContain(worker.employeeId);
-
-    const assignment = await w.pool.query(
-      `SELECT status, created_by FROM geo_fence_employee_assignments
-        WHERE geo_fence_id = $1 AND employee_id = $2`,
-      [fenceId, worker.employeeId],
-    );
-    expect(assignment.rows[0].status).toBe("ACTIVE");
-    expect(assignment.rows[0].created_by).toBe(w.adminId);
-
-    const audit = await w.pool.query(
-      "SELECT action, after_state FROM audit_events WHERE entity_id = $1 AND action = 'geo_fence.create'",
-      [fenceId],
-    );
-    expect(audit.rowCount).toBe(1);
-    expect(JSON.stringify(audit.rows[0].after_state)).toContain(worker.employeeId);
-
-    // "Refresh location" on the phone is this call.
-    const effective = await w.app.inject({
-      method: "GET",
-      url: "/api/v1/geo-fences/effective",
-      headers: worker.headers,
-    });
-    const ids = (effective.json() as { data: Array<{ id: string }> }).data.map((f) => f.id);
-    expect(ids[0]).toBe(fenceId);
-  });
-});
-
-// ===========================================================================
-// E2E-06
-// ===========================================================================
-
-describe("E2E-06 employee has direct fence and a different site fence", () => {
-  it("shows the direct fence on the phone and evaluates the same one on the server", async () => {
-    const worker = await fieldWorker();
-    // A direct fence somewhere else entirely, so the two cannot be confused.
-    const directFence = await createFence(w.app, w.admin, {
-      name: `Direct ${uniq()}`,
-      scope_type: "site",
-      scope_id: w.chainB.site,
-      geometry_type: "circle",
-      geometry: { lat: 17.9, lng: 78.9, radius_m: 300 },
-      employee_ids: [worker.employeeId],
-    });
-
-    // The phone's own list puts the direct fence first.
-    const effective = await w.app.inject({
-      method: "GET",
-      url: "/api/v1/geo-fences/effective",
-      headers: worker.headers,
-    });
-    const phoneFences = (effective.json() as {
-      data: Array<{ id: string; version: number }>;
-    }).data;
-    expect(phoneFences[0]!.id).toBe(directFence);
-
-    // A punch at the *site* fence's location is now OUTSIDE, because the
-    // direct fence — not the site fence — is the one that applies.
-    const res = await punch(w.admin, {
-      employee_id: worker.employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
-    });
-    expect(res.statusCode).toBe(202);
-
-    const event = await w.pool.query(
-      `SELECT geofence_id, geofence_version, geofence_result FROM attendance_events
-        WHERE employee_id = $1 ORDER BY server_timestamp DESC LIMIT 1`,
-      [worker.employeeId],
-    );
-    // The server evaluated the same fence, at the same version, the phone showed.
-    expect(event.rows[0].geofence_id).toBe(directFence);
-    expect(event.rows[0].geofence_version).toBe(phoneFences[0]!.version);
-    expect(event.rows[0].geofence_result).toBe("OUTSIDE");
-  });
-});
-
-// ===========================================================================
-// E2E-07
-// ===========================================================================
-
-describe("E2E-07 employee has no direct fence but has Site Village Mandal District fences", () => {
-  it("uses the site fence, and each coarser one as the finer level goes away", async () => {
-    const chain = await createChain(w.app, w.admin, `H${uniq().slice(-4)}`);
-    const employeeId = await createActiveEmployee(w.app, w.admin, {
-      district_id: chain.district,
-      mandal_id: chain.mandal,
-      village_id: chain.village,
-      site_id: chain.site,
-    });
-    const levels: Array<["site" | "village" | "mandal" | "district", string, string]> = [
-      ["site", chain.site, ""],
-      ["village", chain.village, ""],
-      ["mandal", chain.mandal, ""],
-      ["district", chain.district, ""],
-    ];
-    const fences: Record<string, string> = {};
-    for (const [index, [scope, scopeId]] of levels.entries()) {
-      fences[scope] = await createFence(w.app, w.admin, {
-        name: `${scope} fence`,
-        scope_type: scope,
-        scope_id: scopeId,
-        geometry_type: "circle",
-        geometry: { lat: 17 + index / 10, lng: 78 + index / 10, radius_m: 150 },
-      });
-    }
-
-    const effectiveFence = async (): Promise<string | null> => {
-      await w.pool.query("DELETE FROM attendance_records WHERE employee_id = $1", [employeeId]);
-      await w.pool.query("DELETE FROM attendance_events WHERE employee_id = $1", [employeeId]);
-      await punch(w.admin, { employee_id: employeeId });
-      const row = await w.pool.query(
-        `SELECT geofence_id FROM attendance_events
-          WHERE employee_id = $1 ORDER BY server_timestamp DESC LIMIT 1`,
-        [employeeId],
-      );
-      return row.rows[0]?.geofence_id ?? null;
-    };
-
-    const deactivate = async (fenceId: string) => {
-      const res = await w.app.inject({
-        method: "PATCH",
-        url: `/api/v1/geo-fences/${fenceId}`,
-        headers: { ...w.admin, ...(await ifMatch(w, "geo_fences", fenceId)), ...idem() },
-        payload: { status: "INACTIVE" },
-      });
-      expect(res.statusCode).toBe(200);
-    };
-
-    expect(await effectiveFence()).toBe(fences.site);
-    await deactivate(fences.site!);
-    expect(await effectiveFence()).toBe(fences.village);
-    await deactivate(fences.village!);
-    expect(await effectiveFence()).toBe(fences.mandal);
-    await deactivate(fences.mandal!);
-    expect(await effectiveFence()).toBe(fences.district);
-  });
-});
-
-// ===========================================================================
 // E2E-08
 // ===========================================================================
 
-describe("E2E-08 employee stands inside circular boundary and checks in/out", () => {
-  it("produces two immutable events and one complete workday marked INSIDE", async () => {
+describe("E2E-08 employee checks in and out from the site", () => {
+  it("produces two immutable events and one complete workday, each punch keeping its position", async () => {
     const worker = await fieldWorker();
-    const position = { latitude: GEO.insideCircle.lat, longitude: GEO.insideCircle.lng };
+    const position = { latitude: GEO.atSite.lat, longitude: GEO.atSite.lng };
 
     const checkIn = await punch(worker.headers, {
       employee_id: worker.employeeId,
@@ -582,20 +331,19 @@ describe("E2E-08 employee stands inside circular boundary and checks in/out", ()
     expect(checkOut.statusCode).toBe(201);
 
     const events = await w.pool.query(
-      `SELECT id, event_type, geofence_result, geofence_id FROM attendance_events
+      `SELECT id, event_type, lat, lng, gps_accuracy FROM attendance_events
         WHERE employee_id = $1 ORDER BY server_timestamp`,
       [worker.employeeId],
     );
     expect(events.rowCount).toBe(2);
     expect(events.rows.map((e) => e.event_type)).toEqual(["CHECK_IN", "CHECK_OUT"]);
     for (const event of events.rows) {
-      expect(event.geofence_result).toBe("INSIDE");
-      expect(event.geofence_id).toBe(worker.fenceId);
+      expect(Number(event.lat)).toBeCloseTo(position.latitude, 5);
+      expect(Number(event.gps_accuracy)).toBe(6);
     }
 
     const record = await w.pool.query(
-      `SELECT status, work_date, check_in_event_id, check_out_event_id, total_hours,
-              geofence_violation
+      `SELECT status, work_date, check_in_event_id, check_out_event_id, total_hours
          FROM attendance_records WHERE employee_id = $1`,
       [worker.employeeId],
     );
@@ -604,7 +352,6 @@ describe("E2E-08 employee stands inside circular boundary and checks in/out", ()
     expect(String(record.rows[0].work_date).slice(0, 10)).toBe(workDate());
     expect(record.rows[0].check_in_event_id).toBe(events.rows[0].id);
     expect(record.rows[0].check_out_event_id).toBe(events.rows[1].id);
-    expect(record.rows[0].geofence_violation).toBe(false);
 
     // The employee sees the finished day in their own history.
     const history = await w.app.inject({
@@ -618,87 +365,23 @@ describe("E2E-08 employee stands inside circular boundary and checks in/out", ()
 });
 
 // ===========================================================================
-// E2E-09
-// ===========================================================================
-
-describe("E2E-09 employee stands inside polygon and on tolerated edge", () => {
-  it("accepts both, and the server agrees with the on-device preview", async () => {
-    const chain = await createChain(w.app, w.admin, `G${uniq().slice(-4)}`);
-    const fenceId = await createFence(w.app, w.admin, {
-      name: "Polygon site",
-      scope_type: "site",
-      scope_id: chain.site,
-      geometry_type: "polygon",
-      geometry: { points: GEO.polygon },
-      tolerance_meters: 50,
-    });
-
-    const interior = await createActiveEmployee(w.app, w.admin, {
-      district_id: chain.district,
-      mandal_id: chain.mandal,
-      village_id: chain.village,
-      site_id: chain.site,
-    });
-    const edge = await createActiveEmployee(w.app, w.admin, {
-      district_id: chain.district,
-      mandal_id: chain.mandal,
-      village_id: chain.village,
-      site_id: chain.site,
-    });
-
-    // The phone previews against the same geometry the server stores.
-    const stored = await w.pool.query(
-      "SELECT geometry_type, geometry, tolerance_meters FROM geo_fences WHERE id = $1",
-      [fenceId],
-    );
-    const shape = {
-      geometry_type: stored.rows[0].geometry_type as "polygon",
-      geometry: stored.rows[0].geometry as { points: Array<[number, number]> },
-      tolerance_meters: Number(stored.rows[0].tolerance_meters),
-    };
-    const { isInsideFence } = await import("@silverline/shared");
-
-    const inside = await punch(w.admin, {
-      employee_id: interior,
-      latitude: GEO.insidePolygon.lat,
-      longitude: GEO.insidePolygon.lng,
-    });
-    expect(inside.statusCode).toBe(201);
-    expect(isInsideFence(shape, GEO.insidePolygon.lat, GEO.insidePolygon.lng)).toBe(true);
-
-    // 30 m outside the southern edge, inside the 50 m tolerance.
-    const tolerated = { lat: 17.4 - metresNorth(30), lng: 78.505 };
-    const onEdge = await punch(w.admin, {
-      employee_id: edge,
-      latitude: tolerated.lat,
-      longitude: tolerated.lng,
-    });
-    expect(onEdge.statusCode).toBe(201);
-    // Preview and server reach the same conclusion — the point of sharing the
-    // implementation is that the app never promises what the server refuses.
-    expect(isInsideFence(shape, tolerated.lat, tolerated.lng)).toBe(true);
-
-    const results = await w.pool.query(
-      "SELECT geofence_result FROM attendance_events WHERE employee_id = ANY($1::uuid[])",
-      [[interior, edge]],
-    );
-    expect(results.rows.map((r) => r.geofence_result)).toEqual(["INSIDE", "INSIDE"]);
-  });
-});
-
-// ===========================================================================
 // E2E-10
 // ===========================================================================
 
-describe("E2E-10 employee punches outside boundary and submits reason/photo", () => {
+// E2E-10 (punch outside the boundary) is retired with the geo-fence. The
+// second half of that workflow -- a held-back punch the employee explains
+// and an approver decides -- still exists for the holds that remain, and is
+// kept here against the mock-location hold.
+describe("employee's held-back punch is explained and decided", () => {
   it("requires review, reaches an approver, and is not counted as normal attendance", async () => {
     const worker = await fieldWorker();
 
     const res = await punch(worker.headers, {
       employee_id: worker.employeeId,
-      latitude: GEO.outsideCircle.lat,
-      longitude: GEO.outsideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
       gps_accuracy: 8,
+      mock_location: true,
     });
     expect(res.statusCode).toBe(202);
     const systemExceptionId = (res.json() as { exception_id: string }).exception_id;
@@ -717,8 +400,8 @@ describe("E2E-10 employee punches outside boundary and submits reason/photo", ()
       headers: { ...worker.headers, ...idem() },
       payload: {
         employee_id: worker.employeeId,
-        exception_type: "OUTSIDE_GEOFENCE",
-        reason: "Supervisor moved the muster point to the far gate today",
+        exception_type: "REGULARIZATION",
+        reason: "The phone's developer settings were left on from testing a survey app",
       },
     });
     expect(explained.statusCode).toBe(201);
@@ -769,31 +452,21 @@ describe("E2E-10 employee punches outside boundary and submits reason/photo", ()
 // E2E-11
 // ===========================================================================
 
-describe("E2E-11 device reports poor accuracy, mock location or impossible travel", () => {
+describe("E2E-11 device reports mock location or impossible travel", () => {
+  // Poor accuracy was judged against the fence's threshold and went with the
+  // fence: a wide accuracy circle is stored as evidence, not held.
   const cases: Array<{
     label: string;
     code: string;
     build: (employeeId: string) => Record<string, unknown>;
-    fence?: Record<string, unknown>;
   }> = [
-    {
-      label: "poor accuracy",
-      code: "POOR_ACCURACY",
-      fence: { accuracy_threshold_meters: 40 },
-      build: (employeeId) => ({
-        employee_id: employeeId,
-        latitude: GEO.insideCircle.lat,
-        longitude: GEO.insideCircle.lng,
-        gps_accuracy: 400,
-      }),
-    },
     {
       label: "mock location",
       code: "MOCK_LOCATION",
       build: (employeeId) => ({
         employee_id: employeeId,
-        latitude: GEO.insideCircle.lat,
-        longitude: GEO.insideCircle.lng,
+        latitude: GEO.atSite.lat,
+        longitude: GEO.atSite.lng,
         mock_location: true,
       }),
     },
@@ -802,18 +475,6 @@ describe("E2E-11 device reports poor accuracy, mock location or impossible trave
   for (const probe of cases) {
     it(`explains the ${probe.label} decision and keeps the evidence`, async () => {
       const worker = await fieldWorker();
-      if (probe.fence) {
-        await w.app.inject({
-          method: "PATCH",
-          url: `/api/v1/geo-fences/${worker.fenceId}`,
-          headers: {
-            ...w.admin,
-            ...(await ifMatch(w, "geo_fences", worker.fenceId)),
-            ...idem(),
-          },
-          payload: probe.fence,
-        });
-      }
 
       const res = await punch(worker.headers, probe.build(worker.employeeId));
       expect(res.statusCode).toBe(202);
@@ -831,12 +492,28 @@ describe("E2E-11 device reports poor accuracy, mock location or impossible trave
     });
   }
 
+  it("stores a wide accuracy circle as evidence rather than holding the punch", async () => {
+    const worker = await fieldWorker();
+    const res = await punch(worker.headers, {
+      employee_id: worker.employeeId,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
+      gps_accuracy: 400,
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    const event = await w.pool.query(
+      "SELECT gps_accuracy FROM attendance_events WHERE employee_id = $1",
+      [worker.employeeId],
+    );
+    expect(Number(event.rows[0].gps_accuracy)).toBe(400);
+  });
+
   it("explains an impossible-travel decision and keeps the derived evidence", async () => {
     const worker = await fieldWorker();
     await punch(worker.headers, {
       employee_id: worker.employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
       gps_accuracy: 5,
       client_timestamp: new Date(Date.now() - 60_000).toISOString(),
     });
@@ -878,8 +555,8 @@ describe("E2E-12 employee checks in offline, force-closes app, reopens and recon
       employee_id: worker.employeeId,
       event_type: "CHECK_IN",
       client_timestamp: new Date(Date.now() - 120_000).toISOString(),
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
       gps_accuracy: 7,
     };
 
@@ -929,8 +606,8 @@ describe("E2E-13 network drops after server commits but before client receives r
       employee_id: worker.employeeId,
       event_type: "CHECK_IN",
       client_timestamp: new Date().toISOString(),
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     };
 
     // The server committed this one; the client never saw the answer.
@@ -977,8 +654,8 @@ describe("E2E-13 network drops after server commits but before client receives r
         employee_id: worker.employeeId,
         event_type: "CHECK_IN",
         client_timestamp: new Date().toISOString(),
-        latitude: GEO.insideCircle.lat,
-        longitude: GEO.insideCircle.lng,
+        latitude: GEO.atSite.lat,
+        longitude: GEO.atSite.lng,
       },
     });
 
@@ -1019,8 +696,8 @@ describe("E2E-14 admin exits employee, then employee attempts punch/task/asset w
     // 1. Attendance.
     const attendance = await punch(w.admin, {
       employee_id: worker.employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     });
     expect(attendance.statusCode).toBe(422);
     const attendanceBody = attendance.json() as ErrorBody;
@@ -2006,8 +1683,8 @@ describe("E2E-26 auditor exports attendance/audit report; viewer exports project
     const worker = await fieldWorker();
     await punch(w.admin, {
       employee_id: worker.employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     });
 
     const attendance = await download(w.role.AUDITOR, "attendance");
@@ -2404,22 +2081,23 @@ describe("E2E-29 use organization A identifiers while authenticated to organizat
   it("refuses to reference another tenant's rows in a write", async () => {
     const crossTenant = await w.app.inject({
       method: "POST",
-      url: "/api/v1/geo-fences",
+      url: "/api/v1/employees",
       headers: { ...w.admin, ...idem() },
       payload: {
-        name: "Cross-tenant fence",
-        scope_type: "site",
-        scope_id: w.other.site,
-        geometry_type: "circle",
-        geometry: { lat: 17.4, lng: 78.4, radius_m: 100 },
+        emp_no: `X${uniq().toUpperCase().slice(-8)}`,
+        first_name: "Cross",
+        last_name: "Tenant",
+        phone: uniquePhone(),
+        date_of_joining: "2024-01-15",
+        site_id: w.other.site,
       },
     });
     expect(crossTenant.statusCode).toBe(422);
 
     const punchOther = await punch(w.admin, {
       employee_id: w.other.employee,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     });
     expect(punchOther.statusCode).toBe(422);
     expect((punchOther.json() as ErrorBody).code).toBe("EMPLOYEE_INACTIVE");
@@ -2436,7 +2114,6 @@ describe("E2E-29 use organization A identifiers while authenticated to organizat
     const lists: Array<[string, string]> = [
       ["/api/v1/employees?limit=100", w.other.employee],
       ["/api/v1/org/units?limit=100", w.other.site],
-      ["/api/v1/geo-fences?limit=100", w.other.fence],
     ];
     for (const [url, foreignId] of lists) {
       const res = await w.app.inject({ method: "GET", url, headers: w.admin });
@@ -2465,13 +2142,6 @@ describe("E2E-32 run 200 or more concurrent field users punching and syncing", (
 
     // Build the cohort on one shared site, the way a real shift arrives.
     const chain = await createChain(w.app, w.admin, `L${uniq().slice(-4)}`);
-    await createFence(w.app, w.admin, {
-      name: "Load-test site",
-      scope_type: "site",
-      scope_id: chain.site,
-      geometry_type: "circle",
-      geometry: { ...GEO.circleCentre, radius_m: 500 },
-    });
 
     const employees: string[] = [];
     for (let i = 0; i < USERS; i += 1) {
@@ -2494,8 +2164,8 @@ describe("E2E-32 run 200 or more concurrent field users punching and syncing", (
           employee_id: employeeId,
           event_type: "CHECK_IN",
           client_timestamp: new Date().toISOString(),
-          latitude: GEO.insideCircle.lat,
-          longitude: GEO.insideCircle.lng,
+          latitude: GEO.atSite.lat,
+          longitude: GEO.atSite.lng,
           gps_accuracy: 9,
         };
         const send = () =>
@@ -2598,13 +2268,6 @@ describe("E2E-33 restore production-like backup and reconcile migrated master da
     );
     expect(doubleAssigned.rowCount).toBe(0);
 
-    // At most one active direct fence per employee.
-    const doubleFenced = await w.pool.query(
-      `SELECT employee_id FROM geo_fence_employee_assignments WHERE status = 'ACTIVE'
-        GROUP BY org_id, employee_id HAVING COUNT(*) > 1`,
-    );
-    expect(doubleFenced.rowCount).toBe(0);
-
     // No stock ledger has gone negative.
     const negativeStock = await w.pool.query(
       `SELECT item_id FROM stock_transactions GROUP BY item_id
@@ -2638,7 +2301,6 @@ describe("E2E-33 restore production-like backup and reconcile migrated master da
       SELECT
         (SELECT COUNT(*)::int FROM employees) AS employees,
         (SELECT COUNT(*)::int FROM org_units) AS org_units,
-        (SELECT COUNT(*)::int FROM geo_fences) AS geo_fences,
         (SELECT COUNT(*)::int FROM attendance_events) AS attendance_events,
         (SELECT COUNT(*)::int FROM attendance_records) AS attendance_records,
         (SELECT COUNT(*)::int FROM tasks) AS tasks,

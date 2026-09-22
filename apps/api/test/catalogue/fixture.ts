@@ -4,10 +4,14 @@
  * Implements the catalogue's "Test data baseline" verbatim: two organizations
  * to prove tenant isolation; in the primary organization all seeded roles, two
  * districts, two complete District→Mandal→Village→Site chains, two active
- * employees, one suspended and one exited employee, one employee with a direct
- * fence and one with only a site assignment, circular and polygon fences, an
- * active project with a configurable workflow, an inactive project, leave
+ * employees (one on each chain's site), one suspended and one exited employee,
+ * an active project with a configurable workflow, an inactive project, leave
  * balances, an open payroll period, assets, and stock with quantity one.
+ *
+ * There are no geo-fences in the world: Silverline has no geo-fencing
+ * (decision 2026-09-22). The two active employees keep their historical names
+ * -- `directEmployee` used to hold a direct fence assignment -- because every
+ * suite refers to them by those names.
  *
  * The world is built through the real HTTP surface wherever an endpoint exists,
  * so the fixture itself is a smoke test of the product rather than a parallel
@@ -110,9 +114,9 @@ export interface CatalogueWorld {
   chainA: UnitChain;
   chainB: UnitChain;
 
-  /** ACTIVE, sits on chainA's site, and holds a direct fence assignment. */
+  /** ACTIVE, sits on chainA's site. */
   directEmployee: string;
-  /** ACTIVE, sits on chainB's site, and has no direct fence. */
+  /** ACTIVE, sits on chainB's site. */
   siteEmployee: string;
   /** SUSPENDED. */
   suspendedEmployee: string;
@@ -125,15 +129,6 @@ export interface CatalogueWorld {
   /** Signed-in user linked to `siteEmployee` (EMPLOYEE role). */
   siteUser: Headers;
   siteUserId: string;
-
-  /** Circular fence over chainA's site; holds `directEmployee`'s assignment. */
-  circleFence: string;
-  /** Polygon fence over chainB's site. */
-  polygonFence: string;
-  /** Circular fences at the coarser levels of chainB, for precedence tests. */
-  villageFence: string;
-  mandalFence: string;
-  districtFence: string;
 
   workspaceId: string;
   projectTypeId: string;
@@ -159,38 +154,22 @@ export interface CatalogueWorld {
     district: string;
     site: string;
     employee: string;
-    fence: string;
   };
 }
 
-/** Geometry the whole catalogue shares, so "inside" means the same everywhere. */
+/**
+ * Positions the catalogue punches from, so "at the site" means the same
+ * everywhere. None of them is judged against a boundary -- there is no
+ * geo-fence -- but the anti-fraud rules compare consecutive punches, so the
+ * distances between these still matter.
+ */
 export const GEO = {
-  /** Centre of the circular fence on chainA's site. */
-  circleCentre: { lat: 17.385, lng: 78.4867 },
-  circleRadiusM: 200,
-  /** ~150 m north of the centre — comfortably inside. */
-  insideCircle: { lat: 17.38635, lng: 78.4867 },
-  /** Exactly on the 200 m boundary, due north. */
-  boundaryCircle: { lat: 17.385 + 200 / 111_320, lng: 78.4867 },
-  /** ~2 km away — outside by any tolerance the fixture uses. */
-  outsideCircle: { lat: 17.405, lng: 78.4867 },
-
-  /** Square polygon on chainB's site, ~1.1 km on a side. */
-  polygon: [
-    [17.4, 78.5],
-    [17.41, 78.5],
-    [17.41, 78.51],
-    [17.4, 78.51],
-  ] as Array<[number, number]>,
-  insidePolygon: { lat: 17.405, lng: 78.505 },
-  /** A vertex — "on the edge" in the catalogue's sense. */
-  edgePolygon: { lat: 17.4, lng: 78.5 },
-  outsidePolygon: { lat: 17.42, lng: 78.52 },
-
-  /** Centres for the coarser fences of chainB, deliberately far apart. */
-  villageCentre: { lat: 17.45, lng: 78.55 },
-  mandalCentre: { lat: 17.5, lng: 78.6 },
-  districtCentre: { lat: 17.6, lng: 78.7 },
+  /** The site on chainA. */
+  site: { lat: 17.385, lng: 78.4867 },
+  /** ~150 m north of the site: where somebody working there stands. */
+  atSite: { lat: 17.38635, lng: 78.4867 },
+  /** ~2 km away: elsewhere in town. */
+  awayFromSite: { lat: 17.405, lng: 78.4867 },
 } as const;
 
 /** Metres per degree of latitude — good to ~0.1% at these latitudes. */
@@ -343,48 +322,6 @@ export async function buildWorld(): Promise<CatalogueWorld> {
     employeeId: world.siteEmployee,
   });
   world.siteUser = await login(siteUsername, PASSWORD);
-
-  // --- fences --------------------------------------------------------------
-  // Circle on chainA's site, directly assigned to `directEmployee`.
-  world.circleFence = await createFence(app, world.admin, {
-    name: "Catalogue circle (site A)",
-    scope_type: "site",
-    scope_id: world.chainA.site,
-    geometry_type: "circle",
-    geometry: { ...GEO.circleCentre, radius_m: GEO.circleRadiusM },
-    tolerance_meters: 0,
-    employee_ids: [world.directEmployee],
-  });
-  // Polygon on chainB's site — `siteEmployee` reaches it through the hierarchy.
-  world.polygonFence = await createFence(app, world.admin, {
-    name: "Catalogue polygon (site B)",
-    scope_type: "site",
-    scope_id: world.chainB.site,
-    geometry_type: "polygon",
-    geometry: { points: GEO.polygon },
-    tolerance_meters: 0,
-  });
-  world.villageFence = await createFence(app, world.admin, {
-    name: "Catalogue village fence (B)",
-    scope_type: "village",
-    scope_id: world.chainB.village,
-    geometry_type: "circle",
-    geometry: { ...GEO.villageCentre, radius_m: 300 },
-  });
-  world.mandalFence = await createFence(app, world.admin, {
-    name: "Catalogue mandal fence (B)",
-    scope_type: "mandal",
-    scope_id: world.chainB.mandal,
-    geometry_type: "circle",
-    geometry: { ...GEO.mandalCentre, radius_m: 400 },
-  });
-  world.districtFence = await createFence(app, world.admin, {
-    name: "Catalogue district fence (B)",
-    scope_type: "district",
-    scope_id: world.chainB.district,
-    geometry_type: "circle",
-    geometry: { ...GEO.districtCentre, radius_m: 500 },
-  });
 
   // --- projects ------------------------------------------------------------
   world.workspaceId = await post(app, world.admin, "/api/v1/workspaces", {
@@ -558,15 +495,7 @@ async function buildOtherOrg(
     village_id: village,
     site_id: site,
   });
-  const fence = await createFence(app, headers, {
-    name: "Other org fence",
-    scope_type: "site",
-    scope_id: site,
-    geometry_type: "circle",
-    geometry: { lat: 19.076, lng: 72.8777, radius_m: 150 },
-  });
-
-  return { orgId: otherOrgId, adminId, admin: headers, district, site, employee, fence };
+  return { orgId: otherOrgId, adminId, admin: headers, district, site, employee };
 }
 
 // ---------------------------------------------------------------------------
@@ -667,7 +596,6 @@ export async function versionOf(
 ): Promise<number> {
   const allowed = new Set([
     "employees",
-    "geo_fences",
     "projects",
     "tasks",
     "leave_requests",
@@ -862,14 +790,6 @@ export async function patchProject(
   if (res.statusCode >= 400) {
     throw new Error(`patch project ${projectId} failed: ${res.statusCode} ${res.body}`);
   }
-}
-
-export async function createFence(
-  app: FastifyInstance,
-  headers: Headers,
-  payload: Record<string, unknown>,
-): Promise<string> {
-  return post(app, headers, "/api/v1/geo-fences", payload);
 }
 
 let phoneSeq = 0;

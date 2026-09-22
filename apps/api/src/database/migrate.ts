@@ -90,6 +90,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "081_receivable_terms", file: "081_receivable_terms.sql" },
   { version: "082_document_hold_release", file: "082_document_hold_release.sql" },
   { version: "083_archive_boards_and_views", file: "083_archive_boards_and_views.sql" },
+  { version: "084_remove_geofencing", file: "084_remove_geofencing.sql" },
 ];
 
 /**

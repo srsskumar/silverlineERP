@@ -114,7 +114,7 @@ every response carries `x-request-id`. CORS allows `http://localhost:3000`.
     (PII follows the caller's masking rules: full values only with
     `employee.pii.read`, otherwise masked last-4; `salary_basic` has no
     last-4 and is emitted empty without `pii.read`)
-  - attendance: `id,employee_id,work_date,status,check_in_at,check_out_at,total_hours,geofence_violation`
+  - attendance: `id,employee_id,work_date,status,check_in_at,check_out_at,total_hours`
     (filters: `employee_id`, `from`, `to`, `status`)
   - tasks: `id,project_id,title,status,assignee_id,priority,planned_start_date,planned_end_date`
     (filters: `project_id`, `status`, `assignee_id`)

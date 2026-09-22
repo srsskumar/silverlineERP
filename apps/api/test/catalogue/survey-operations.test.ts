@@ -13,9 +13,9 @@ import {
   type CatalogueWorld, type Headers,
 } from "./fixture.js";
 
-/** Where directEmployee stands to punch: inside their assigned circle fence. */
-const INSIDE_FENCE = {
-  latitude: GEO.insideCircle.lat, longitude: GEO.insideCircle.lng, gps_accuracy: 8,
+/** Where directEmployee stands to punch: at their site. */
+const AT_SITE = {
+  latitude: GEO.atSite.lat, longitude: GEO.atSite.lng, gps_accuracy: 8,
 };
 import { runSurveyAlerts } from "../../src/modules/jobs/surveyAlerts.js";
 
@@ -548,13 +548,9 @@ describe("project-scoped visibility", () => {
 
 describe("punching in and out against a village", () => {
   /**
-   * A punch, as the mobile app sends one: from inside this employee's fence.
-   *
-   * These tests used to punch without coordinates, because a punch outside
-   * the fence is queued for review rather than opening the day. That only
-   * worked because a punch with no position skipped the fence altogether --
-   * the bypass HR-5 closed. Standing inside the fence is what a crew member
-   * who can open the day actually does, so that is what is sent.
+   * A punch, as the mobile app sends one: with the position of the person
+   * making it. There is no geo-fence to pass, but a crew member's phone
+   * always has a position, so that is what is sent.
    */
   async function punch(
     type: "CHECK_IN" | "CHECK_OUT", extra: Record<string, unknown> = {},
@@ -563,7 +559,7 @@ describe("punching in and out against a village", () => {
       employee_id: w.directEmployee,
       event_type: type,
       client_timestamp: new Date().toISOString(),
-      ...INSIDE_FENCE,
+      ...AT_SITE,
       ...extra,
     });
   }
@@ -593,8 +589,8 @@ describe("punching in and out against a village", () => {
   }
 
   it("records which village the punch was for", async () => {
-    // Attendance already captured the time, the position and the geofence.
-    // Which village the person turned up *for* was the missing piece.
+    // Attendance already captured the time and the position. Which village
+    // the person turned up *for* was the missing piece.
     const r = await punch("CHECK_IN", { survey_village_id: villageA });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
 
@@ -606,8 +602,7 @@ describe("punching in and out against a village", () => {
   });
 
   it("still captures the position, which it always did", async () => {
-    // A punch outside the fence is queued for review; either way the event
-    // is stored with its coordinates, and the village travels with it.
+    // The event is stored with its coordinates, and the village travels with it.
     const r = await post(w.siteUser, "/api/v1/attendance/events", {
       employee_id: w.siteEmployee,
       event_type: "CHECK_IN",
@@ -740,7 +735,7 @@ describe("punching in and out against a village", () => {
       event_type: "CHECK_OUT",
       client_timestamp: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
       survey_village_id: unfiled.data.id,
-      ...INSIDE_FENCE,
+      ...AT_SITE,
     });
     expect(r.status, JSON.stringify(r.body)).not.toBe(422);
   });

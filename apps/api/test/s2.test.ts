@@ -151,32 +151,6 @@ async function activeEmployee(headers: Record<string, string>, over: Record<stri
   return (re.json() as { id: string }).id;
 }
 
-async function createFence(
-  headers: Record<string, string>,
-  body: Record<string, unknown>,
-  key?: string,
-) {
-  return app.inject({
-    method: "POST",
-    url: "/api/v1/geo-fences",
-    headers: { ...headers, ...(key ? { "Idempotency-Key": key } : {}) },
-    payload: body,
-  });
-}
-
-function circleFenceBody(scopeType: string, scopeId: string, over: Record<string, unknown> = {}) {
-  return {
-    name: `Fence ${scopeType}`,
-    scope_type: scopeType,
-    scope_id: scopeId,
-    geometry_type: "circle",
-    geometry: { lat: CENTER.lat, lng: CENTER.lng, radius_m: 500 },
-    tolerance_meters: 50,
-    accuracy_threshold_meters: 100,
-    ...over,
-  };
-}
-
 async function punch(
   headers: Record<string, string>,
   body: Record<string, unknown>,
@@ -223,270 +197,125 @@ beforeEach(async () => {
   seq = 0;
 });
 
-// ------------------------------------------------------------------ fences
+// ---------------------------------------------------------- fence routes
 
-describe("geo-fences", () => {
-  it("lets an employee read only fences in their assigned location chain", async () => {
-    const admin = await adminHeaders();
-    const assigned = await unitChain(admin, "SELF");
-    const other = await unitChain(admin, "OTHER");
-    const assignedFence = await createFence(
-      admin,
-      circleFenceBody("site", assigned.site, { name: "Assigned site" }),
-      nextKey(),
-    );
-    await createFence(admin, circleFenceBody("site", other.site, { name: "Other site" }), nextKey());
-    const employeeId = await activeEmployee(admin, {
-      district_id: assigned.district,
-      mandal_id: assigned.mandal,
-      village_id: assigned.village,
-      site_id: assigned.site,
+describe("geo-fence routes", () => {
+  // Silverline has no geo-fencing (decision 2026-09-22). The routes are gone,
+  // not merely closed: an administrator gets the same 404 as anybody else.
+  it("no longer exist, for anybody", async () => {
+    const h = await adminHeaders();
+    for (const url of ["/api/v1/geo-fences", "/api/v1/geo-fences/effective"]) {
+      const res = await app.inject({ method: "GET", url, headers: h });
+      expect(res.statusCode, url).toBe(404);
+    }
+    const post = await app.inject({
+      method: "POST",
+      url: "/api/v1/geo-fences",
+      headers: { ...h, "Idempotency-Key": nextKey() },
+      payload: { name: "Gate", geometry_type: "circle", geometry: { lat: 1, lng: 1, radius_m: 10 } },
     });
-    const username = `effective_${Date.now()}`;
-    const userId = await createUser({ username, password: "Pass1234!", roles: ["EMPLOYEE"] });
-    await pool.query("UPDATE users SET employee_id=$1::uuid WHERE id=$2::uuid", [employeeId, userId]);
-    const employeeHeaders = await headersFor(username, "Pass1234!");
+    expect(post.statusCode).toBe(404);
+  });
 
-    const res = await app.inject({
+  it("no longer seed the fence permissions", async () => {
+    const codes = await pool.query(
+      "SELECT code FROM permissions WHERE code IN ('geo.read', 'geo.manage')",
+    );
+    expect(codes.rowCount).toBe(0);
+    const grants = await pool.query(
+      "SELECT 1 FROM role_permissions WHERE permission_code IN ('geo.read', 'geo.manage')",
+    );
+    expect(grants.rowCount).toBe(0);
+  });
+
+  it("keep the place search for the people who read the register", async () => {
+    // Kept for the place names attendance is about to attach to punches. The
+    // fence permissions went with the fences, so the register's read grant
+    // is what opens it; an EMPLOYEE, who reads nobody's register, is refused.
+    const employee = await roleHeaders("EMPLOYEE");
+    const denied = await app.inject({
       method: "GET",
-      url: "/api/v1/geo-fences/effective",
-      headers: employeeHeaders,
+      url: "/api/v1/geo/search?q=hyderabad",
+      headers: employee,
     });
-    expect(res.statusCode).toBe(200);
-    const rows = (res.json() as { data: Array<{ id: string }> }).data;
-    expect(rows.map((row) => row.id)).toEqual([
-      (assignedFence.json() as { id: string }).id,
-    ]);
-  });
-
-  it("creates a circle fence (201, version 1, ACTIVE)", async () => {
+    expect(denied.statusCode).toBe(403);
     const h = await adminHeaders();
-    const ids = await unitChain(h, "A");
-    const res = await createFence(h, circleFenceBody("village", ids.village), nextKey());
-    expect(res.statusCode).toBe(201);
-    const body = res.json() as Record<string, unknown>;
-    expect(body["version"]).toBe(1);
-    expect(body["status"]).toBe("ACTIVE");
-    expect(body["geometry_type"]).toBe("circle");
-    expect(typeof body["id"]).toBe("string");
-  });
-
-  it("creates a polygon fence and rejects <3 points (422)", async () => {
-    const h = await adminHeaders();
-    const ids = await unitChain(h, "B");
-    const ok = await createFence(
-      h,
-      {
-        name: "Poly",
-        scope_type: "mandal",
-        scope_id: ids.mandal,
-        geometry_type: "polygon",
-        geometry: {
-          points: [
-            [12.97, 77.59],
-            [12.98, 77.59],
-            [12.98, 77.6],
-          ],
-        },
-      },
-      nextKey(),
-    );
-    expect(ok.statusCode).toBe(201);
-    const bad = await createFence(
-      h,
-      {
-        name: "Bad poly",
-        scope_type: "mandal",
-        scope_id: ids.mandal,
-        geometry_type: "polygon",
-        geometry: {
-          points: [
-            [12.97, 77.59],
-            [12.98, 77.59],
-          ],
-        },
-      },
-      nextKey(),
-    );
-    expect(bad.statusCode).toBe(422);
-  });
-
-  it("lists with the envelope + scope filters", async () => {
-    const h = await adminHeaders();
-    const ids = await unitChain(h, "C");
-    await createFence(h, circleFenceBody("village", ids.village), nextKey());
-    await createFence(h, circleFenceBody("district", ids.district), nextKey());
-    const list = await app.inject({ method: "GET", url: "/api/v1/geo-fences", headers: h });
-    expect(list.statusCode).toBe(200);
-    const page = list.json() as { data: unknown[]; next_cursor: unknown; has_more: boolean };
-    expect(page.data.length).toBe(2);
-    expect(page.has_more).toBe(false);
-    expect(page.next_cursor).toBeNull();
-    const filtered = await app.inject({
-      method: "GET",
-      url: `/api/v1/geo-fences?scope_type=village&scope_id=${ids.village}`,
-      headers: h,
-    });
-    expect((filtered.json() as { data: unknown[] }).data.length).toBe(1);
-  });
-
-  it("patches with If-Match (version bump) and 409s stale versions", async () => {
-    const h = await adminHeaders();
-    const ids = await unitChain(h, "D");
-    const created = await createFence(h, circleFenceBody("village", ids.village), nextKey());
-    const id = (created.json() as { id: string }).id;
-    const patched = await app.inject({
-      method: "PATCH",
-      url: `/api/v1/geo-fences/${id}`,
-      headers: { ...h, "If-Match": "1" },
-      payload: { name: "Renamed", tolerance_meters: 75 },
-    });
-    expect(patched.statusCode).toBe(200);
-    const body = patched.json() as { name: string; tolerance_meters: number; version: number };
-    expect(body.name).toBe("Renamed");
-    expect(body.tolerance_meters).toBe(75);
-    expect(body.version).toBe(2);
-    const stale = await app.inject({
-      method: "PATCH",
-      url: `/api/v1/geo-fences/${id}`,
-      headers: { ...h, "If-Match": "1" },
-      payload: { name: "Stale" },
-    });
-    expect(stale.statusCode).toBe(409);
-    expect((stale.json() as { code: string }).code).toBe("VERSION_CONFLICT");
-    const missing = await app.inject({
-      method: "PATCH",
-      url: `/api/v1/geo-fences/${id}`,
-      headers: h,
-      payload: { name: "No version" },
-    });
-    expect(missing.statusCode).toBe(422);
-  });
-
-  it("replays an Idempotency-Key without duplicating", async () => {
-    const h = await adminHeaders();
-    const ids = await unitChain(h, "E");
-    const key = nextKey();
-    const first = await createFence(h, circleFenceBody("village", ids.village), key);
-    const second = await createFence(h, circleFenceBody("village", ids.village), key);
-    expect(first.statusCode).toBe(201);
-    expect(second.statusCode).toBe(201);
-    expect((second.json() as { id: string }).id).toBe((first.json() as { id: string }).id);
-    const count = await pool.query("SELECT COUNT(*)::int AS n FROM geo_fences");
-    expect((count.rows[0] as { n: number }).n).toBe(1);
-  });
-
-  it("enforces geo RBAC (401 anon, 403 EMPLOYEE)", async () => {
-    const anon = await app.inject({ method: "GET", url: "/api/v1/geo-fences" });
-    expect(anon.statusCode).toBe(401);
-    const eh = await roleHeaders("EMPLOYEE");
-    const list = await app.inject({ method: "GET", url: "/api/v1/geo-fences", headers: eh });
-    expect(list.statusCode).toBe(403);
-    const post = await createFence(
-      eh,
-      {
-        name: "X",
-        scope_type: "district",
-        scope_id: "00000000-0000-0000-0000-000000000000",
-        geometry_type: "circle",
-        geometry: { lat: 1, lng: 1, radius_m: 10 },
-      },
-      nextKey(),
-    );
-    expect(post.statusCode).toBe(403);
+    const tooShort = await app.inject({ method: "GET", url: "/api/v1/geo/search?q=a", headers: h });
+    expect(tooShort.statusCode).toBe(422);
   });
 });
 
 // ------------------------------------------------------------------ punches
 
 describe("attendance punches", () => {
-  it("uses the assigned site fence before broader village fences", async () => {
-    const h = await adminHeaders();
-    const ids = await unitChain(h, "SITE");
-    await createFence(h, circleFenceBody("village", ids.village), nextKey());
-    const siteFence = await createFence(h, circleFenceBody("site", ids.site), nextKey());
-    const empId = await activeEmployee(h, {
-      district_id: ids.district,
-      mandal_id: ids.mandal,
-      village_id: ids.village,
-      site_id: ids.site,
-    });
-    const res = await punch(h, checkinBody(empId), nextKey());
-    expect(res.statusCode).toBe(201);
-    expect((res.json() as { event: { geofence_id: string } }).event.geofence_id).toBe(
-      (siteFence.json() as { id: string }).id,
-    );
-  });
-
-  it("accepts an inside check-in (201 ACCEPTED + PARTIAL record)", async () => {
+  it("accepts a positioned check-in (201 ACCEPTED + PARTIAL record)", async () => {
     const h = await adminHeaders();
     const ids = await unitChain(h, "F");
-    await createFence(h, circleFenceBody("village", ids.village), nextKey());
     const empId = await activeEmployee(h, { village_id: ids.village });
     const res = await punch(h, checkinBody(empId), nextKey());
     expect(res.statusCode).toBe(201);
     const body = res.json() as {
       decision: string;
-      event: { geofence_result: string; id: string };
+      event: { id: string; latitude: number; gps_accuracy: number };
       record: { status: string; work_date: string };
     };
     expect(body.decision).toBe("ACCEPTED");
-    expect(body.event.geofence_result).toBe("INSIDE");
+    expect(body.event.latitude).toBeCloseTo(CENTER.lat, 5);
+    expect(body.event.gps_accuracy).toBe(10);
+    expect(body.event).not.toHaveProperty("geofence_result");
     expect(body.record.status).toBe("PARTIAL");
   });
 
-  it("accepts with NO_FENCE when no fence covers the employee", async () => {
+  it("accepts a check-in with no position the same way", async () => {
     const h = await adminHeaders();
     const ids = await unitChain(h, "G");
     const empId = await activeEmployee(h, { village_id: ids.village });
-    const res = await punch(h, checkinBody(empId), nextKey());
+    const body = checkinBody(empId) as Record<string, unknown>;
+    delete body.latitude;
+    delete body.longitude;
+    delete body.gps_accuracy;
+    const res = await punch(h, body, nextKey());
     expect(res.statusCode).toBe(201);
-    const body = res.json() as { event: { geofence_result: string } };
-    expect(body.event.geofence_result).toBe("NO_FENCE");
+    const json = res.json() as { decision: string; event: { latitude: number | null } };
+    expect(json.decision).toBe("ACCEPTED");
+    expect(json.event.latitude).toBeNull();
   });
 
-  it("resolves the parent mandal fence when the village has none", async () => {
-    const h = await adminHeaders();
-    const ids = await unitChain(h, "H");
-    const mandalFence = await createFence(h, circleFenceBody("mandal", ids.mandal), nextKey());
-    const fenceId = (mandalFence.json() as { id: string }).id;
-    const empId = await activeEmployee(h, { village_id: ids.village });
-    const res = await punch(h, checkinBody(empId), nextKey());
-    expect(res.statusCode).toBe(201);
-    const body = res.json() as { event: { geofence_result: string; geofence_id: string } };
-    expect(body.event.geofence_result).toBe("INSIDE");
-    expect(body.event.geofence_id).toBe(fenceId);
-  });
-
-  it("reviews outside punches (202 OUTSIDE_GEOFENCE + exception row)", async () => {
+  it("accepts a punch from anywhere: there is no boundary to be outside of", async () => {
+    // Before 2026-09-22 this position, 550 km from the village, was a 202
+    // OUTSIDE_GEOFENCE with a pending exception. Now it is an ordinary punch
+    // whose position is kept as evidence; the retired columns stay default.
     const h = await adminHeaders();
     const ids = await unitChain(h, "I");
-    await createFence(h, circleFenceBody("village", ids.village), nextKey());
     const empId = await activeEmployee(h, { village_id: ids.village });
     const res = await punch(
       h,
       checkinBody(empId, { latitude: FAR.lat, longitude: FAR.lng }),
       nextKey(),
     );
-    expect(res.statusCode).toBe(202);
-    const body = res.json() as { review: string; code: string; exception_id: string };
-    expect(body.review).toBe("REQUIRES_REVIEW");
-    expect(body.code).toBe("OUTSIDE_GEOFENCE");
-    const db = await pool.query(
-      "SELECT exception_type, source, status FROM attendance_exceptions WHERE id = $1::uuid",
-      [body.exception_id],
+    expect(res.statusCode).toBe(201);
+    const stored = await pool.query(
+      `SELECT lat, geofence_result, geofence_id, geofence_version FROM attendance_events
+        WHERE employee_id = $1::uuid`,
+      [empId],
     );
-    expect(db.rowCount).toBe(1);
-    const row = db.rows[0] as { exception_type: string; source: string; status: string };
-    expect(row.exception_type).toBe("OUTSIDE_GEOFENCE");
-    expect(row.source).toBe("SYSTEM");
-    expect(row.status).toBe("PENDING");
+    const row = stored.rows[0] as {
+      lat: string; geofence_result: string; geofence_id: string | null; geofence_version: number | null;
+    };
+    expect(Number(row.lat)).toBeCloseTo(FAR.lat, 5);
+    expect(row.geofence_result).toBe("NO_FENCE");
+    expect(row.geofence_id).toBeNull();
+    expect(row.geofence_version).toBeNull();
+    const exceptions = await pool.query(
+      "SELECT COUNT(*)::int AS n FROM attendance_exceptions WHERE employee_id = $1::uuid",
+      [empId],
+    );
+    expect((exceptions.rows[0] as { n: number }).n).toBe(0);
   });
 
   it("flags an emulator device for review (202 DEVICE_SIGNAL)", async () => {
     const h = await adminHeaders();
     const ids = await unitChain(h, "EMU");
-    await createFence(h, circleFenceBody("village", ids.village), nextKey());
     const empId = await activeEmployee(h, { village_id: ids.village });
     const res = await punch(
       h,
@@ -513,7 +342,6 @@ describe("attendance punches", () => {
   it("derives impossible travel from its own history, not the client's claim", async () => {
     const h = await adminHeaders();
     const ids = await unitChain(h, "TRV");
-    await createFence(h, circleFenceBody("village", ids.village), nextKey());
     const empId = await activeEmployee(h, { village_id: ids.village });
 
     // First punch establishes the reference position, backdated 30s so the
@@ -562,7 +390,6 @@ describe("attendance punches", () => {
   it("accepts a clean punch from a physical device without flagging", async () => {
     const h = await adminHeaders();
     const ids = await unitChain(h, "OK");
-    await createFence(h, circleFenceBody("village", ids.village), nextKey());
     const empId = await activeEmployee(h, { village_id: ids.village });
     const res = await punch(
       h,
@@ -587,14 +414,12 @@ describe("attendance punches", () => {
   it("serves positioned punches to the operations map with an outcome", async () => {
     const h = await adminHeaders();
     const ids = await unitChain(h, "MAP");
-    await createFence(h, circleFenceBody("village", ids.village), nextKey());
-    const inside = await activeEmployee(h, { village_id: ids.village });
-    const outside = await activeEmployee(h, { village_id: ids.village });
+    const clean = await activeEmployee(h, { village_id: ids.village });
+    const mocked = await activeEmployee(h, { village_id: ids.village });
 
-    expect((await punch(h, checkinBody(inside), nextKey())).statusCode).toBe(201);
+    expect((await punch(h, checkinBody(clean), nextKey())).statusCode).toBe(201);
     expect(
-      (await punch(h, checkinBody(outside, { latitude: FAR.lat, longitude: FAR.lng }), nextKey()))
-        .statusCode,
+      (await punch(h, checkinBody(mocked, { mock_location: true }), nextKey())).statusCode,
     ).toBe(202);
 
     const res = await app.inject({
@@ -604,7 +429,7 @@ describe("attendance punches", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as {
-      data: Array<{ id: string; lat: number; lng: number; outcome: string }>;
+      data: Array<{ id: string; lat: number; lng: number; outcome: string; geofence_result?: string }>;
       truncated: boolean;
     };
     expect(body.truncated).toBe(false);
@@ -615,7 +440,11 @@ describe("attendance punches", () => {
       expect(typeof row.lng).toBe("number");
     }
     const outcomes = body.data.map((r) => r.outcome).sort();
-    expect(outcomes).toEqual(["ok", "outside"]);
+    expect(outcomes).toEqual(["ok", "review"]);
+    // The fence verdict is gone from the marker, not merely blank.
+    for (const row of body.data) {
+      expect(row).not.toHaveProperty("geofence_result");
+    }
   });
 
   it("omits punches with no coordinates from the map", async () => {
@@ -647,70 +476,19 @@ describe("attendance punches", () => {
     expect(res.statusCode).toBe(422);
   });
 
-  it("accepts a punch inside any active fence for the scope, not just the newest", async () => {
-    const h = await adminHeaders();
-    const ids = await unitChain(h, "MULTI");
-    // Two sites in one village is ordinary — a depot and a site office. The
-    // older fence used to be unreachable because resolution took only the most
-    // recently created one, so anyone standing in it was recorded OUTSIDE.
-    await createFence(h, circleFenceBody("village", ids.village, { name: "Older site" }), nextKey());
-    await createFence(
-      h,
-      circleFenceBody("village", ids.village, {
-        name: "Newer site",
-        geometry: { lat: FAR.lat, lng: FAR.lng, radius_m: 500 },
-      }),
-      nextKey(),
-    );
-    const empId = await activeEmployee(h, { village_id: ids.village });
-
-    // CENTER is inside the OLDER fence only.
-    const res = await punch(h, checkinBody(empId), nextKey());
-    expect(res.statusCode).toBe(201);
-
-    const event = await pool.query(
-      "SELECT geofence_result FROM attendance_events WHERE employee_id = $1::uuid",
-      [empId],
-    );
-    expect((event.rows[0] as { geofence_result: string }).geofence_result).toBe("INSIDE");
-  });
-
-  it("still reviews a punch that is inside none of the scope's fences", async () => {
-    const h = await adminHeaders();
-    const ids = await unitChain(h, "MULTIOUT");
-    await createFence(h, circleFenceBody("village", ids.village, { name: "Site A" }), nextKey());
-    await createFence(
-      h,
-      circleFenceBody("village", ids.village, {
-        name: "Site B",
-        geometry: { lat: CENTER.lat + 0.05, lng: CENTER.lng + 0.05, radius_m: 300 },
-      }),
-      nextKey(),
-    );
-    const empId = await activeEmployee(h, { village_id: ids.village });
-    const res = await punch(
-      h,
-      checkinBody(empId, { latitude: FAR.lat, longitude: FAR.lng }),
-      nextKey(),
-    );
-    expect(res.statusCode).toBe(202);
-    expect((res.json() as { code: string }).code).toBe("OUTSIDE_GEOFENCE");
-  });
-
-  it("reviews poor-accuracy punches (202 POOR_ACCURACY)", async () => {
+  it("stores poor accuracy as evidence rather than holding the punch", async () => {
+    // The accuracy threshold belonged to the fence and went with it.
     const h = await adminHeaders();
     const ids = await unitChain(h, "J");
-    await createFence(h, circleFenceBody("village", ids.village), nextKey());
     const empId = await activeEmployee(h, { village_id: ids.village });
     const res = await punch(h, checkinBody(empId, { gps_accuracy: 500 }), nextKey());
-    expect(res.statusCode).toBe(202);
-    expect((res.json() as { code: string }).code).toBe("POOR_ACCURACY");
+    expect(res.statusCode).toBe(201);
+    expect((res.json() as { event: { gps_accuracy: number } }).event.gps_accuracy).toBe(500);
   });
 
   it("reviews mock locations (202 MOCK_LOCATION, never auto-accepts)", async () => {
     const h = await adminHeaders();
     const ids = await unitChain(h, "K");
-    await createFence(h, circleFenceBody("village", ids.village), nextKey());
     const empId = await activeEmployee(h, { village_id: ids.village });
     const res = await punch(h, checkinBody(empId, { mock_location: true }), nextKey());
     expect(res.statusCode).toBe(202);
@@ -788,8 +566,6 @@ describe("attendance punches", () => {
     const h = await adminHeaders();
     const ids = await unitChain(h, "CB");
     const empId = await activeEmployee(h, { village_id: ids.village });
-    const fence = await createFence(h, circleFenceBody("village", ids.village), nextKey());
-    expect(fence.statusCode).toBe(201);
     const results = await Promise.all(
       Array.from({ length: 10 }, () => punch(h, checkinBody(empId), nextKey())),
     );
@@ -818,8 +594,8 @@ describe("attendance punches", () => {
     const workDate = (wdRes.rows[0] as { wd: string }).wd;
     const again = await pool.query(
       `INSERT INTO attendance_records
-         (employee_id, work_date, check_in_event_id, check_in_at, status, geofence_violation)
-       VALUES ($1::uuid, $3::date, $2::uuid, NOW(), 'PARTIAL', false)
+         (employee_id, work_date, check_in_event_id, check_in_at, status)
+       VALUES ($1::uuid, $3::date, $2::uuid, NOW(), 'PARTIAL')
        ON CONFLICT (employee_id, work_date) DO NOTHING
        RETURNING id`,
       [empId, firstBody.event.id, workDate],
@@ -999,26 +775,19 @@ describe("attendance records + exceptions", () => {
         check_in_at: string;
         check_out_at: string | null;
         total_hours: number | null;
-        geofence_violation: boolean;
       }>;
       next_cursor: unknown;
       has_more: boolean;
     };
     expect(page.data.length).toBe(1);
     expect(page.data[0]?.status).toBe("PARTIAL");
-    expect(page.data[0]?.geofence_violation).toBe(false);
+    expect(page.data[0]).not.toHaveProperty("geofence_violation");
     const byStatus = await app.inject({
       method: "GET",
       url: `/api/v1/attendance/records?status=COMPLETE`,
       headers: h,
     });
     expect((byStatus.json() as { data: unknown[] }).data.length).toBe(0);
-    const byViolation = await app.inject({
-      method: "GET",
-      url: `/api/v1/attendance/records?violation=false`,
-      headers: h,
-    });
-    expect((byViolation.json() as { data: unknown[] }).data.length).toBe(1);
   });
 
   it("gates records listing (401 anon, 403 without attendance.read)", async () => {

@@ -168,7 +168,6 @@ export const REPORT_COLUMNS: Record<ReportType, string[]> = {
     "check_in_at",
     "check_out_at",
     "total_hours",
-    "geofence_violation",
   ],
   tasks: [
     "id",

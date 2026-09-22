@@ -12,7 +12,6 @@ import {
   buildWorld,
   createActiveEmployee,
   createChain,
-  createFence,
   idem,
   metresNorth,
   monthEnd,
@@ -35,12 +34,7 @@ afterAll(async () => {
 });
 
 interface PunchBody {
-  event?: {
-    id: string;
-    geofence_result: string;
-    geofence_id: string | null;
-    geofence_version: number | null;
-  };
+  event?: { id: string; latitude: number | null; gps_accuracy: number | null };
   record?: { id: string; status: string; work_date: string };
   decision?: string;
   applied?: boolean;
@@ -68,13 +62,10 @@ async function punch(
 }
 
 /**
- * A fresh employee on their own chain with a circular site fence, so each test
- * owns its attendance history (impossible-travel compares against the
- * employee's previous punch).
+ * A fresh employee on their own chain, so each test owns its attendance
+ * history (impossible-travel compares against the employee's previous punch).
  */
-async function freshWorker(
-  fence: Record<string, unknown> = {},
-): Promise<{ employeeId: string; fenceId: string }> {
+async function freshWorker(): Promise<{ employeeId: string }> {
   const chain = await createChain(w.app, w.admin, `A${uniq().slice(-4)}`);
   const employeeId = await createActiveEmployee(w.app, w.admin, {
     district_id: chain.district,
@@ -82,40 +73,28 @@ async function freshWorker(
     village_id: chain.village,
     site_id: chain.site,
   });
-  const fenceId = await createFence(w.app, w.admin, {
-    name: "Worker fence",
-    scope_type: "site",
-    scope_id: chain.site,
-    geometry_type: "circle",
-    geometry: { ...GEO.circleCentre, radius_m: GEO.circleRadiusM },
-    tolerance_meters: 0,
-    ...fence,
-  });
-  return { employeeId, fenceId };
+  return { employeeId };
 }
 
-describe("UT-ATT-01 check in as active eligible employee inside fence", () => {
-  it("creates one event and one workday record with INSIDE and the effective fence", async () => {
-    const { employeeId, fenceId } = await freshWorker();
+describe("UT-ATT-01 check in as active eligible employee with a position", () => {
+  it("creates one event and one workday record, keeping the position as evidence", async () => {
+    const { employeeId } = await freshWorker();
 
     const res = await punch({
       employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
       gps_accuracy: 8,
     });
     expect(res.statusCode).toBe(201);
     const body = res.json() as PunchBody;
     expect(body.decision).toBe("ACCEPTED");
-    expect(body.event!.geofence_result).toBe("INSIDE");
-    expect(body.event!.geofence_id).toBe(fenceId);
-
-    // The fence *version* is pinned too, so a later edit to the fence cannot
-    // change what this punch is understood to have meant.
-    const fenceVersion = await w.pool.query("SELECT version FROM geo_fences WHERE id = $1", [
-      fenceId,
-    ]);
-    expect(body.event!.geofence_version).toBe(fenceVersion.rows[0].version);
+    // There is no fence to pass: the position is stored, not judged, and the
+    // response no longer carries a fence verdict at all.
+    expect(body.event!.latitude).toBeCloseTo(GEO.atSite.lat, 5);
+    expect(body.event!.gps_accuracy).toBe(8);
+    expect(body.event).not.toHaveProperty("geofence_result");
+    expect(body.event).not.toHaveProperty("geofence_id");
 
     expect(body.record!.status).toBe("PARTIAL");
     expect(body.record!.work_date).toBe(workDate());
@@ -136,8 +115,8 @@ describe("UT-ATT-01 check in as active eligible employee inside fence", () => {
     const { employeeId } = await freshWorker();
     const checkIn = await punch({
       employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     });
     expect(checkIn.statusCode).toBe(201);
     const checkInEventId = (checkIn.json() as PunchBody).event!.id;
@@ -145,8 +124,8 @@ describe("UT-ATT-01 check in as active eligible employee inside fence", () => {
     const checkOut = await punch({
       employee_id: employeeId,
       event_type: "CHECK_OUT",
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     });
     expect(checkOut.statusCode).toBe(201);
     const body = checkOut.json() as PunchBody;
@@ -162,24 +141,42 @@ describe("UT-ATT-01 check in as active eligible employee inside fence", () => {
 
     // The check-in event itself is untouched by the check-out.
     const original = await w.pool.query(
-      "SELECT geofence_result, client_timestamp FROM attendance_events WHERE id = $1",
+      "SELECT lat, client_timestamp FROM attendance_events WHERE id = $1",
       [checkInEventId],
     );
-    expect(original.rows[0].geofence_result).toBe("INSIDE");
+    expect(Number(original.rows[0].lat)).toBeCloseTo(GEO.atSite.lat, 5);
   });
 
-  it("records NO_FENCE rather than failing when no fence applies", async () => {
+  it("accepts a punch with no position exactly as it accepts one with", async () => {
     const employeeId = await createActiveEmployee(w.app, w.admin);
+    const res = await punch({ employee_id: employeeId });
+    expect(res.statusCode, res.body).toBe(201);
+    const body = res.json() as PunchBody;
+    expect(body.decision).toBe("ACCEPTED");
+    expect(body.event!.latitude).toBeNull();
+    expect(body.record!.status).toBe("PARTIAL");
+  });
+
+  it("leaves the retired fence columns at their defaults", async () => {
+    // The columns stay for the rows written while fencing existed; a new
+    // punch must not look like it was ever judged against a boundary.
+    const { employeeId } = await freshWorker();
     const res = await punch({
       employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.awayFromSite.lat,
+      longitude: GEO.awayFromSite.lng,
     });
     expect(res.statusCode).toBe(201);
-    const body = res.json() as PunchBody;
-    expect(body.event!.geofence_result).toBe("NO_FENCE");
-    expect(body.event!.geofence_id).toBeNull();
-    expect(body.event!.geofence_version).toBeNull();
+    const event = await w.pool.query(
+      "SELECT geofence_result, geofence_id, geofence_version FROM attendance_events WHERE id = $1",
+      [(res.json() as PunchBody).event!.id],
+    );
+    expect(event.rows[0]).toEqual({ geofence_result: "NO_FENCE", geofence_id: null, geofence_version: null });
+    const record = await w.pool.query(
+      "SELECT geofence_violation FROM attendance_records WHERE employee_id = $1",
+      [employeeId],
+    );
+    expect(record.rows[0].geofence_violation).toBe(false);
   });
 
   it("refuses a punch for an employee who is not ACTIVE", async () => {
@@ -191,32 +188,30 @@ describe("UT-ATT-01 check in as active eligible employee inside fence", () => {
   });
 });
 
-describe("UT-ATT-02 check in outside effective fence", () => {
+describe("a punch held back for review", () => {
+  // UT-ATT-02 (outside the fence) and UT-ATT-03 (accuracy above the fence's
+  // threshold) are retired with the geo-fence. What they also pinned -- that
+  // a held-back punch raises a PENDING system exception somebody with
+  // attendance.decide can act on -- still holds for the holds that remain,
+  // and is kept here against the mock-location hold.
   it("does not silently accept, and raises a review exception", async () => {
-    const { employeeId, fenceId } = await freshWorker();
+    const { employeeId } = await freshWorker();
 
     const res = await punch({
       employee_id: employeeId,
-      latitude: GEO.outsideCircle.lat,
-      longitude: GEO.outsideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
       gps_accuracy: 8,
+      mock_location: true,
     });
     // 202, not 201: the punch is recorded but not accepted as normal attendance.
     expect(res.statusCode).toBe(202);
     const body = res.json() as PunchBody;
     expect(body.review).toBe("REQUIRES_REVIEW");
-    expect(body.code).toBe("OUTSIDE_GEOFENCE");
+    expect(body.code).toBe("MOCK_LOCATION");
     expect(body.exception_id).toBeTruthy();
 
-    const event = await w.pool.query(
-      `SELECT geofence_result, geofence_id FROM attendance_events
-        WHERE employee_id = $1 ORDER BY server_timestamp DESC LIMIT 1`,
-      [employeeId],
-    );
-    expect(event.rows[0].geofence_result).toBe("OUTSIDE");
-    expect(event.rows[0].geofence_id).toBe(fenceId);
-
-    // No complete workday record was manufactured from a rejected punch.
+    // No complete workday record was manufactured from a held punch.
     const records = await w.pool.query(
       "SELECT COUNT(*)::int AS n FROM attendance_records WHERE employee_id = $1",
       [employeeId],
@@ -227,7 +222,7 @@ describe("UT-ATT-02 check in outside effective fence", () => {
       "SELECT exception_type, status, source FROM attendance_exceptions WHERE id = $1",
       [body.exception_id],
     );
-    expect(exception.rows[0].exception_type).toBe("OUTSIDE_GEOFENCE");
+    expect(exception.rows[0].exception_type).toBe("SYSTEM_FLAG");
     expect(exception.rows[0].status).toBe("PENDING");
     expect(exception.rows[0].source).toBe("SYSTEM");
   });
@@ -236,8 +231,9 @@ describe("UT-ATT-02 check in outside effective fence", () => {
     const { employeeId } = await freshWorker();
     const res = await punch({
       employee_id: employeeId,
-      latitude: GEO.outsideCircle.lat,
-      longitude: GEO.outsideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
+      mock_location: true,
     });
     const exceptionId = (res.json() as PunchBody).exception_id!;
 
@@ -267,61 +263,28 @@ describe("UT-ATT-02 check in outside effective fence", () => {
   });
 });
 
-describe("UT-ATT-03 punch with accuracy above threshold", () => {
-  it("routes to review with a stable code when accuracy exceeds the fence threshold", async () => {
-    const { employeeId } = await freshWorker({ accuracy_threshold_meters: 50 });
-
-    const res = await punch({
-      employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
-      gps_accuracy: 120,
-    });
-    expect(res.statusCode).toBe(202);
-    const body = res.json() as PunchBody;
-    expect(body.code).toBe("POOR_ACCURACY");
-    // The message names both numbers so the field user can act on it.
-    expect(body.message).toContain("120");
-    expect(body.message).toContain("50");
-
-    const exception = await w.pool.query(
-      "SELECT exception_type, reason FROM attendance_exceptions WHERE id = $1",
-      [body.exception_id],
-    );
-    expect(exception.rows[0].exception_type).toBe("SYSTEM_FLAG");
-    expect(exception.rows[0].reason).toContain("accuracy");
-  });
-
-  it("accepts a punch whose accuracy is within the threshold", async () => {
-    const { employeeId } = await freshWorker({ accuracy_threshold_meters: 50 });
-    const res = await punch({
-      employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
-      gps_accuracy: 20,
-    });
-    expect(res.statusCode).toBe(201);
-  });
-
-  it("applies no accuracy rule when the fence configures no threshold", async () => {
+describe("GPS accuracy", () => {
+  it("is stored, never judged: a wide accuracy circle is still an accepted punch", async () => {
+    // The accuracy threshold belonged to the fence and went with it.
     const { employeeId } = await freshWorker();
     const res = await punch({
       employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
       gps_accuracy: 5000,
     });
-    // A fence with no configured threshold must not invent one.
-    expect(res.statusCode).toBe(201);
+    expect(res.statusCode, res.body).toBe(201);
+    expect((res.json() as PunchBody).event!.gps_accuracy).toBe(5000);
   });
 
-  it("still records the position and accuracy on a reviewed punch", async () => {
-    const { employeeId } = await freshWorker({ accuracy_threshold_meters: 25 });
+  it("still records the position and accuracy on a held-back punch", async () => {
+    const { employeeId } = await freshWorker();
     await punch({
       employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
       gps_accuracy: 300,
+      mock_location: true,
     });
     const event = await w.pool.query(
       `SELECT lat, lng, gps_accuracy FROM attendance_events
@@ -329,7 +292,7 @@ describe("UT-ATT-03 punch with accuracy above threshold", () => {
       [employeeId],
     );
     expect(Number(event.rows[0].gps_accuracy)).toBe(300);
-    expect(Number(event.rows[0].lat)).toBeCloseTo(GEO.insideCircle.lat, 5);
+    expect(Number(event.rows[0].lat)).toBeCloseTo(GEO.atSite.lat, 5);
   });
 });
 
@@ -339,8 +302,8 @@ describe("UT-ATT-04 punch with mock-location indicator", () => {
 
     const res = await punch({
       employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
       mock_location: true,
     });
     // Inside the fence, good accuracy — and still not accepted, because the
@@ -355,7 +318,7 @@ describe("UT-ATT-04 punch with mock-location indicator", () => {
       [employeeId],
     );
     expect(event.rows[0].mock_location).toBe(true);
-    expect(Number(event.rows[0].lat)).toBeCloseTo(GEO.insideCircle.lat, 5);
+    expect(Number(event.rows[0].lat)).toBeCloseTo(GEO.atSite.lat, 5);
 
     const exception = await w.pool.query(
       "SELECT reason FROM attendance_exceptions WHERE id = $1",
@@ -368,8 +331,8 @@ describe("UT-ATT-04 punch with mock-location indicator", () => {
     const { employeeId } = await freshWorker();
     const res = await punch({
       employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
       mock_location: true,
       device_signals: { device: { suspected_emulator: true } },
     });
@@ -382,8 +345,8 @@ describe("UT-ATT-04 punch with mock-location indicator", () => {
     const { employeeId } = await freshWorker();
     const res = await punch({
       employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
       device_signals: {
         device: { suspected_emulator: true, model_name: "sdk_gphone64_arm64" },
       },
@@ -407,8 +370,8 @@ describe("UT-ATT-05 detect impossible travel", () => {
     // First punch establishes a position.
     const first = await punch({
       employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
       gps_accuracy: 5,
       client_timestamp: new Date(Date.now() - 60_000).toISOString(),
     });
@@ -456,8 +419,8 @@ describe("UT-ATT-05 detect impossible travel", () => {
     const { employeeId } = await freshWorker();
     await punch({
       employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
       gps_accuracy: 5,
       client_timestamp: new Date(Date.now() - 60_000).toISOString(),
     });
@@ -492,8 +455,8 @@ describe("UT-ATT-05 detect impossible travel", () => {
     const { employeeId } = await freshWorker();
     await punch({
       employee_id: employeeId,
-      latitude: GEO.circleCentre.lat,
-      longitude: GEO.circleCentre.lng,
+      latitude: GEO.site.lat,
+      longitude: GEO.site.lng,
       gps_accuracy: 5,
       client_timestamp: new Date(Date.now() - 600_000).toISOString(),
     });
@@ -501,8 +464,8 @@ describe("UT-ATT-05 detect impossible travel", () => {
     const second = await punch({
       employee_id: employeeId,
       event_type: "CHECK_OUT",
-      latitude: GEO.circleCentre.lat + metresNorth(150),
-      longitude: GEO.circleCentre.lng,
+      latitude: GEO.site.lat + metresNorth(150),
+      longitude: GEO.site.lng,
       gps_accuracy: 5,
     });
     expect(second.statusCode).toBe(201);
@@ -517,8 +480,8 @@ describe("UT-ATT-06 retry identical punch and retry same Idempotency-Key", () =>
       employee_id: employeeId,
       event_type: "CHECK_IN",
       client_timestamp: new Date().toISOString(),
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     };
 
     const first = await w.app.inject({
@@ -561,8 +524,8 @@ describe("UT-ATT-06 retry identical punch and retry same Idempotency-Key", () =>
     const { employeeId } = await freshWorker();
     const payload = {
       employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     };
     const first = await punch(payload);
     expect(first.statusCode).toBe(201);
@@ -603,8 +566,8 @@ describe("UT-ATT-06 retry identical punch and retry same Idempotency-Key", () =>
       employee_id: employeeId,
       event_type: "CHECK_IN",
       client_timestamp: new Date().toISOString(),
-      latitude: GEO.outsideCircle.lat,
-      longitude: GEO.outsideCircle.lng,
+      latitude: GEO.awayFromSite.lat,
+      longitude: GEO.awayFromSite.lng,
     };
     const first = await w.app.inject({
       method: "POST",
@@ -648,8 +611,8 @@ describe("UT-ATT-07 check out without check in and duplicate check in", () => {
     const res = await punch({
       employee_id: employeeId,
       event_type: "CHECK_OUT",
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     });
     expect(res.statusCode).toBe(422);
     expect((res.json() as { code: string }).code).toBe("CHECKOUT_WITHOUT_CHECKIN");
@@ -667,8 +630,8 @@ describe("UT-ATT-07 check out without check in and duplicate check in", () => {
       (
         await punch({
           employee_id: employeeId,
-          latitude: GEO.insideCircle.lat,
-          longitude: GEO.insideCircle.lng,
+          latitude: GEO.atSite.lat,
+          longitude: GEO.atSite.lng,
         })
       ).statusCode,
     ).toBe(201);
@@ -683,8 +646,8 @@ describe("UT-ATT-07 check out without check in and duplicate check in", () => {
 
     const res = await punch({
       employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     });
     expect(res.statusCode).toBe(422);
     expect((res.json() as { code: string }).code).toBe("DUPLICATE_CHECKIN");
@@ -694,14 +657,14 @@ describe("UT-ATT-07 check out without check in and duplicate check in", () => {
     const { employeeId } = await freshWorker();
     await punch({
       employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     });
     await punch({
       employee_id: employeeId,
       event_type: "CHECK_OUT",
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     });
     await w.pool.query(
       "UPDATE attendance_events SET server_timestamp = NOW() - INTERVAL '30 minutes' WHERE employee_id = $1",
@@ -711,8 +674,8 @@ describe("UT-ATT-07 check out without check in and duplicate check in", () => {
     const res = await punch({
       employee_id: employeeId,
       event_type: "CHECK_OUT",
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     });
     expect(res.statusCode).toBe(422);
     expect((res.json() as { code: string }).code).toBe("RECORD_CLOSED");
@@ -741,8 +704,8 @@ describe("UT-ATT-08 punch with client clock beyond skew window", () => {
     const res = await punch({
       employee_id: employeeId,
       client_timestamp: clientTime.toISOString(),
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     });
     expect(res.statusCode).toBe(202);
     const body = res.json() as PunchBody;
@@ -771,8 +734,8 @@ describe("UT-ATT-08 punch with client clock beyond skew window", () => {
     const res = await punch({
       employee_id: employeeId,
       client_timestamp: new Date(Date.now() - 60_000).toISOString(),
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     });
     expect(res.statusCode).toBe(201);
   });
@@ -782,8 +745,8 @@ describe("UT-ATT-08 punch with client clock beyond skew window", () => {
     const res = await punch({
       employee_id: employeeId,
       client_timestamp: new Date(Date.now() + 60_000).toISOString(),
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     });
     // Not a review: a punch cannot have happened yet.
     expect(res.statusCode).toBe(422);
@@ -825,8 +788,8 @@ describe("UT-ATT-09 punch after payroll lock", () => {
     const res = await punch(
       {
         employee_id: employeeId,
-        latitude: GEO.insideCircle.lat,
-        longitude: GEO.insideCircle.lng,
+        latitude: GEO.atSite.lat,
+        longitude: GEO.atSite.lng,
       },
       w.role.HR_MANAGER,
     );
@@ -848,8 +811,8 @@ describe("UT-ATT-09 punch after payroll lock", () => {
     // only once it carries a reason worth auditing.
     const res = await punch({
       employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     });
     expect(res.statusCode).toBe(422);
     const body = res.json() as { code: string; field_errors?: Array<{ field: string }> };
@@ -862,8 +825,8 @@ describe("UT-ATT-09 punch after payroll lock", () => {
     const res = await punch(
       {
         employee_id: employeeId,
-        latitude: GEO.insideCircle.lat,
-        longitude: GEO.insideCircle.lng,
+        latitude: GEO.atSite.lat,
+        longitude: GEO.atSite.lng,
         payroll_override_reason: "I would like to bypass this",
       },
       w.role.HR_MANAGER,
@@ -887,8 +850,8 @@ describe("UT-ATT-09 punch after payroll lock", () => {
 
     const res = await punch({
       employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
       payroll_override_reason: reason,
     });
     expect(res.statusCode).toBe(201);
@@ -946,8 +909,8 @@ describe("UT-ATT-09 punch after payroll lock", () => {
     const { employeeId } = await freshWorker();
     const res = await punch({
       employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
     });
     expect(res.statusCode).toBe(201);
   });
