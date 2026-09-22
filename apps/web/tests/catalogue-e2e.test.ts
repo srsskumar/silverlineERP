@@ -95,7 +95,6 @@ describe('E2E-02 employee signs in without admin permissions', () => {
     // and the money.
     for (const adminHref of [
       '/employees',
-      '/attendance',
       '/attendance/exceptions',
       '/payroll',
       '/geo-fences',
@@ -126,6 +125,9 @@ describe('E2E-02 employee signs in without admin permissions', () => {
     expect(visible).toContain('/inbox');
     expect(visible).toContain('/leave');
     expect(visible).toContain('/my-payslip');
+    // Their own punch clock lives at /attendance; the register on the same
+    // page needs attendance.read and is not rendered for them.
+    expect(visible).toContain('/attendance');
   });
 
   it('hides every quick-create action an employee cannot perform', () => {
