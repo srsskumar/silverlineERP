@@ -1453,3 +1453,36 @@ describe("a failed notification never takes the business write with it (OPS-9)",
     }
   });
 });
+
+
+describe("planned dates stay in order (QA-WORK)", () => {
+  // A plan whose end precedes its start reads as overdue before it began. The
+  // create and patch schemas refuse it when both dates are sent; the routes
+  // check the mixed case, one date in the body and the other on the record.
+  it("refuses a project or task whose planned end is before its planned start", async () => {
+    const h = await adminHeaders();
+    const ws = await mkWorkspace(h);
+    const bad = await app.inject({ method: "POST", url: "/api/v1/projects", headers: h,
+      payload: { workspace_id: ws.id, code: "QAW-DATES", name: "Backwards", planned_start_date: "2026-12-01", planned_end_date: "2026-01-01" } });
+    expect(bad.statusCode).toBe(422);
+    expect((bad.json() as { field_errors: Array<{ field: string }> }).field_errors.map((f) => f.field)).toContain("planned_end_date");
+
+    const project = await mkProject(h, { planned_start_date: "2026-09-01", planned_end_date: "2026-12-31" });
+    const badTask = await app.inject({ method: "POST", url: "/api/v1/tasks", headers: h,
+      payload: { project_id: project.id, title: "Backwards", planned_start_date: "2026-09-10", planned_end_date: "2026-09-01" } });
+    expect(badTask.statusCode).toBe(422);
+
+    // Only the end date is sent; the stored start is later than it.
+    const patched = await app.inject({ method: "PATCH", url: `/api/v1/projects/${project.id}`, headers: { ...h, "if-match": String(project.version) },
+      payload: { planned_end_date: "2026-08-01" } });
+    expect(patched.statusCode).toBe(422);
+    const fine = await app.inject({ method: "PATCH", url: `/api/v1/projects/${project.id}`, headers: { ...h, "if-match": String(project.version) },
+      payload: { planned_end_date: "2026-10-01" } });
+    expect(fine.statusCode).toBe(200);
+
+    const task = await mkTask(h, project.id, { planned_start_date: "2026-09-05", planned_end_date: "2026-09-20" });
+    const taskPatched = await app.inject({ method: "PATCH", url: `/api/v1/tasks/${task.id}`, headers: { ...h, "if-match": String(task.version) },
+      payload: { planned_start_date: "2026-09-25" } });
+    expect(taskPatched.statusCode).toBe(422);
+  });
+});
