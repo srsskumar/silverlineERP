@@ -92,6 +92,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "083_archive_boards_and_views", file: "083_archive_boards_and_views.sql" },
   { version: "084_remove_geofencing", file: "084_remove_geofencing.sql" },
   { version: "085_punch_coordinates_and_place", file: "085_punch_coordinates_and_place.sql" },
+  { version: "086_notification_stage", file: "086_notification_stage.sql" },
 ];
 
 /**

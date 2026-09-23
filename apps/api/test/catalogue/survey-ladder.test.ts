@@ -1,10 +1,11 @@
 /**
- * One village, one position (§071).
+ * One village, one position (§071, extended by §086).
  *
  * The module tracked seven stages with four states each and asked a reader to
- * hold the combinations in their head. The contract reports eleven positions,
- * and this is the screen a government official is shown — so what it may and
- * may not contain is tested as carefully as what it says.
+ * hold the combinations in their head. The contract reports eleven positions
+ * plus the two notification adds, and this is the screen a government
+ * official is shown — so what it may and may not contain is tested as
+ * carefully as what it says.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -67,12 +68,12 @@ beforeAll(async () => {
 
 afterAll(async () => { await w.app.close(); });
 
-describe("the five-stage pipeline", () => {
-  it("offers exactly the stages the eleven positions are made of", async () => {
+describe("the six-stage pipeline", () => {
+  it("offers exactly the stages the thirteen positions are made of", async () => {
     const r = await get(w.admin, "/api/v1/survey/measures");
     const codes = (r.data.stages as Array<{ code: string }>).map(s => s.code);
     for (const live of ["GROUND_TRUTHING", "GT_QC", "VECTORIZATION",
-      "DATA_SUBMISSION", "FINAL_DELIVERABLES"]) {
+      "DATA_SUBMISSION", "FINAL_DELIVERABLES", "NOTIFICATION"]) {
       expect(codes, live).toContain(live);
     }
     // Retired by §071. The rows survive; the stage stops being offered, so
@@ -107,7 +108,7 @@ describe("the dashboard", () => {
     const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     const d = r.data;
-    expect(d.ladder).toHaveLength(11);
+    expect(d.ladder).toHaveLength(13);
     const counted = Object.values(d.totals.by_position as Record<string, number>)
       .reduce((a, b) => a + b, 0);
     expect(counted).toBe(d.totals.villages);
@@ -684,7 +685,7 @@ describe("how long, and sitting with whom (§074)", () => {
     // A handful stuck for months drags a mean somewhere no village is.
     expect(gt!.median_days).not.toBeNull();
     expect(gt!.max_days).toBeGreaterThanOrEqual(gt!.median_days);
-    expect((r.data.stage_days as unknown[]).length).toBe(5);
+    expect((r.data.stage_days as unknown[]).length).toBe(6);
   });
 
   it("names who each village is with, and who has nobody", async () => {
@@ -782,17 +783,18 @@ describe("the mandal roll-up (§075)", () => {
   });
 });
 
-describe("the eleven rungs as figures (§076)", () => {
+describe("the thirteen rungs as figures (§076, extended by §086)", () => {
   it("sends every rung with its extent, in the order of the work", async () => {
     const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
     const rows = r.data.totals.positions as Array<Record<string, number | string>>;
-    expect(rows).toHaveLength(11);
+    expect(rows).toHaveLength(13);
     expect(rows.map(x => x.key)).toEqual([
       "NOT_STARTED", "GT_IN_PROGRESS", "GT_COMPLETED",
       "GT_QC_IN_PROGRESS", "GT_QC_COMPLETED",
       "VECTORIZATION_IN_PROGRESS", "VECTORIZATION_COMPLETED",
       "DATA_SUBMITTED", "DATA_APPROVED",
       "FINAL_SUBMITTED", "FINAL_APPROVED",
+      "NOTIFICATION_IN_PROGRESS", "NOTIFICATION_ISSUED",
     ]);
     for (const row of rows) {
       for (const field of ["villages", "extent_ac", "extent_sqkm",
@@ -874,15 +876,27 @@ describe("billing waits for an acceptance (§078)", () => {
     expect(String(r.body.message)).toMatch(/signed off/i);
   });
 
-  it("allows it once the department has accepted them", async () => {
+  it("still refuses the third claim once deliverables are accepted but notification has not issued (§086)", async () => {
     await post(w.admin, `/api/v1/survey/villages/${awaiting}/stage`, {
       stage_code: "FINAL_DELIVERABLES", state: "COMPLETED", completed_on: "2026-05-15",
     });
+    const r = await post(w.admin, `/api/v1/survey/villages/${awaiting}/billing`,
+      { milestone: 3 });
+    expect(r.status).toBe(422);
+    expect(r.body.code).toBe("MILESTONE_NOT_EARNED");
+    expect(String(r.body.message)).toMatch(/notification/i);
+    expect(String(r.body.message)).toMatch(/not started/i);
+  });
+
+  it("allows it once notification is issued", async () => {
     for (const milestone of [1, 2]) {
       const earlier = await post(w.admin,
         `/api/v1/survey/villages/${awaiting}/billing`, { milestone });
       expect(earlier.status, JSON.stringify(earlier.body)).toBe(201);
     }
+    await post(w.admin, `/api/v1/survey/villages/${awaiting}/stage`, {
+      stage_code: "NOTIFICATION", state: "COMPLETED", completed_on: "2026-06-01",
+    });
     const r = await post(w.admin, `/api/v1/survey/villages/${awaiting}/billing`,
       { milestone: 3 });
     expect(r.status, JSON.stringify(r.body)).toBe(201);
@@ -935,6 +949,8 @@ describe("claims that would not be raised today (§079)", () => {
       ["VECTORIZATION", "COMPLETED", "2026-03-10"],
       ["DATA_SUBMISSION", "COMPLETED", "2026-04-01"],
       ["FINAL_DELIVERABLES", "COMPLETED", "2026-05-01"],
+      // Notification (§086) is what the third claim now waits on.
+      ["NOTIFICATION", "COMPLETED", "2026-05-20"],
     ] as const) {
       await post(w.admin, `/api/v1/survey/villages/${legacy}/stage`, {
         stage_code: code, state, completed_on: on,
@@ -946,14 +962,14 @@ describe("claims that would not be raised today (§079)", () => {
       await post(w.admin, `/api/v1/survey/villages/${legacy}/billing`, { milestone });
     }
     /*
-     * Then the acceptance is withdrawn — the department sends the
-     * deliverables back. The claim stands; the work no longer qualifies.
-     * Exactly the shape of the rows §078 left behind.
+     * Then the acceptance is withdrawn — the department reopens notification.
+     * The claim stands; the work no longer qualifies. Exactly the shape of
+     * the rows §078 left behind.
      */
     await w.pool.query(
       `UPDATE survey_village_stages vs SET state = 'IN_PROGRESS', completed_on = NULL
          FROM survey_stages s
-        WHERE s.id = vs.stage_id AND s.code = 'FINAL_DELIVERABLES'
+        WHERE s.id = vs.stage_id AND s.code = 'NOTIFICATION'
           AND vs.survey_village_id = $1`, [legacy]);
   });
 
@@ -969,9 +985,9 @@ describe("claims that would not be raised today (§079)", () => {
   afterAll(async () => {
     await w.pool.query(
       `UPDATE survey_village_stages vs
-          SET state = 'COMPLETED', completed_on = DATE '2026-05-01'
+          SET state = 'COMPLETED', completed_on = DATE '2026-05-20'
          FROM survey_stages s
-        WHERE s.id = vs.stage_id AND s.code = 'FINAL_DELIVERABLES'
+        WHERE s.id = vs.stage_id AND s.code = 'NOTIFICATION'
           AND vs.survey_village_id = $1`, [legacy]);
   });
 
@@ -1041,7 +1057,9 @@ describe("the data obeys the rules that govern it (§080)", () => {
             WHERE vs.survey_village_id = b.survey_village_id
               AND st.code = CASE b.milestone
                     WHEN 1 THEN 'GT_QC' WHEN 2 THEN 'DATA_SUBMISSION'
-                    ELSE 'FINAL_DELIVERABLES' END
+                    -- §086: the third claim now waits on notification, not
+                    -- on final deliverables.
+                    ELSE 'NOTIFICATION' END
               AND vs.state = 'COMPLETED')`],
     ["a later claim standing without the earlier one", `
       SELECT count(*)::int AS n FROM survey_village_billing b

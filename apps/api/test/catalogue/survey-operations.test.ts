@@ -94,7 +94,8 @@ describe("the pipeline the specification describes", () => {
     const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/progress`);
     const codes = r.data.pipeline.map((s: any) => s.code);
     expect(codes).toEqual([
-      "GROUND_TRUTHING", "GT_QC", "VECTORIZATION", "DATA_SUBMISSION", "FINAL_DELIVERABLES", "REWORK",
+      "GROUND_TRUTHING", "GT_QC", "VECTORIZATION", "DATA_SUBMISSION",
+      "FINAL_DELIVERABLES", "NOTIFICATION", "REWORK",
     ]);
   });
 

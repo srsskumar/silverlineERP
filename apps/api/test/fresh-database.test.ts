@@ -89,13 +89,14 @@ describe("building a database from nothing", () => {
   }, 180_000);
 
   it("ends with a survey module that can be used", async () => {
-    // The five stages of the pipeline and the permissions that drive them:
+    // The six stages of the pipeline and the permissions that drive them:
     // a schema that builds but cannot run the module is not a build.
+    // NOTIFICATION (§086) sits after FINAL_DELIVERABLES.
     const stages = await pool.query(
       "SELECT code FROM survey_stages WHERE active ORDER BY display_order");
     expect(stages.rows.map(r => r.code)).toEqual([
       "GROUND_TRUTHING", "GT_QC", "VECTORIZATION",
-      "DATA_SUBMISSION", "FINAL_DELIVERABLES", "REWORK",
+      "DATA_SUBMISSION", "FINAL_DELIVERABLES", "NOTIFICATION", "REWORK",
     ]);
 
     const perms = await pool.query(

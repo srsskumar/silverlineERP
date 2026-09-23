@@ -52,7 +52,10 @@ const stage = (v: string, code: string, state: string, extra: Record<string, unk
 
 /** Walks a village up to and including the named stage. */
 async function completeTo(v: string, last: string) {
-  const order = ["GROUND_TRUTHING", "GT_QC", "VECTORIZATION", "DATA_SUBMISSION", "FINAL_DELIVERABLES"];
+  const order = [
+    "GROUND_TRUTHING", "GT_QC", "VECTORIZATION", "DATA_SUBMISSION",
+    "FINAL_DELIVERABLES", "NOTIFICATION",
+  ];
   for (const code of order) {
     const extra = code === "GROUND_TRUTHING"
       ? { gt_govt_staff_allocated: 2, gt_crew_allocated: 4 } : {};
@@ -112,7 +115,7 @@ describe("what a milestone may be claimed on", () => {
     expect(r.body.message).toMatch(/data submission/i);
   });
 
-  it("holds the third until the deliverables have gone in", async () => {
+  it("holds the third until notification is issued (§086)", async () => {
     await completeTo(village, "DATA_SUBMISSION");
     expect((await post(w.admin, `/api/v1/survey/villages/${village}/billing`,
       { milestone: 2 })).status).toBe(201);
@@ -120,7 +123,15 @@ describe("what a milestone may be claimed on", () => {
       { milestone: 3 });
     expect(third.status).toBe(422);
 
+    // Final deliverables approved is no longer enough on its own — the last
+    // 20% now waits on the department issuing notification.
     await completeTo(village, "FINAL_DELIVERABLES");
+    const stillThird = await post(w.admin, `/api/v1/survey/villages/${village}/billing`,
+      { milestone: 3 });
+    expect(stillThird.status).toBe(422);
+    expect(String(stillThird.body.message)).toMatch(/notification/i);
+
+    await completeTo(village, "NOTIFICATION");
     expect((await post(w.admin, `/api/v1/survey/villages/${village}/billing`,
       { milestone: 3 })).status).toBe(201);
   });
