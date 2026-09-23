@@ -459,11 +459,18 @@ describe("concurrent stage-set calls on the same village", () => {
     const results = await Promise.all(calls);
     for (const r of results) expect(r.status, JSON.stringify(r.body)).toBe(200);
 
+    // Ordered by physical insertion order, not `changed_at`: `now()` is the
+    // *transaction's* start time, not the moment the row was actually
+    // written, so two calls queued behind the same lock can carry
+    // `changed_at` values in the opposite order to the writes they describe.
+    // Each row here is inserted exactly once, by a transaction that only
+    // reaches its INSERT after the previous holder of the lock has
+    // committed, so heap order is the true, causal order of the race.
     const history = (await w.pool.query(
       `SELECT from_state, to_state, remarks, changed_at
          FROM survey_stage_history
         WHERE survey_village_id = $1
-        ORDER BY changed_at, id`,
+        ORDER BY ctid`,
       [raceVillageId])).rows;
 
     // Eight calls alternate IN_PROGRESS/COMPLETED, but concurrent calls have
