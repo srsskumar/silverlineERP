@@ -96,6 +96,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "087_notification_stage_label", file: "087_notification_stage_label.sql" },
   { version: "088_attendance_ip_capture", file: "088_attendance_ip_capture.sql" },
   { version: "089_gcp_landmark", file: "089_gcp_landmark.sql" },
+  { version: "090_role_module_visibility", file: "090_role_module_visibility.sql" },
 ];
 
 /**
