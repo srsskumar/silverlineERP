@@ -151,7 +151,13 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
   const i=parse(invoiceSchema,req.body),u=actor(req);
   const row=await mutate(pool,req,'invoice.create','invoice',async db=>{
    await inOrg(db,'vendors',i.vendor_id,u.orgId);
-   if(i.purchase_order_id)await inOrg(db,'purchase_orders',i.purchase_order_id,u.orgId);
+   if(i.purchase_order_id){
+    // Org membership alone isn't enough: a PO from a different vendor would
+    // still belong to this org, and matching an invoice against someone
+    // else's order makes the three-way match meaningless.
+    const po=await inOrg(db,'purchase_orders',i.purchase_order_id,u.orgId);
+    if(String(po.vendor_id)!==String(i.vendor_id))fail('PO_VENDOR_MISMATCH','This purchase order belongs to a different vendor than the invoice');
+   }
    if(Number(i.gst_rate)>100)fail('VALIDATION_ERROR','Tax rate must be between zero and 100');
    const r=await db.query(`INSERT INTO invoices(org_id,serial_number,vendor_id,hsn,gst_enabled,gst_rate,subtotal,tax,total,payment_mode,reference,created_by,purchase_order_id) VALUES($1,$2,$3,$4,$5,$6,$7,round(CASE WHEN $5 THEN $7::numeric*$6::numeric/100 ELSE 0 END,2),$7::numeric+round(CASE WHEN $5 THEN $7::numeric*$6::numeric/100 ELSE 0 END,2),$8,$9,$10,$11) RETURNING *`,[u.orgId,i.serial_number,i.vendor_id,i.hsn,i.gst_enabled,i.gst_rate,i.subtotal,i.payment_mode,i.reference,u.id,i.purchase_order_id??null]);return r.rows[0];
   });return reply.code(201).send(row);

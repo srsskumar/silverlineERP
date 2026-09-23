@@ -55,6 +55,19 @@ describe('inventory integrity',()=>{
   const match=await call('POST',`invoices/${inv.json().id}/match`,{});
   expect(match.json().code).not.toBe('NO_PURCHASE_ORDER');
  });
+ it('refuses an invoice linked to another vendor\'s purchase order — B-021',async()=>{
+  // purchase_order_id was checked for org membership but never against the
+  // invoice's own vendor_id, so an invoice could link to a PO belonging to
+  // a different vendor entirely.
+  const vendorA=(await call('POST','vendors',{code:'VA',name:'Vendor A'})).json();
+  const vendorB=(await call('POST','vendors',{code:'VB',name:'Vendor B'})).json();
+  const po=(await call('POST','purchase-orders',{po_number:'PO-VMIS-1',vendor_id:vendorA.id,po_date:'2026-09-15',lines:[{description:'Cement',unit:'bag',quantity:10,unit_rate:400}]})).json().data;
+  const inv=await call('POST','invoices',{serial_number:'INV-VMIS-1',vendor_id:vendorB.id,hsn:'1234',gst_enabled:false,gst_rate:'0',subtotal:'4000',payment_mode:'BANK',reference:'PO-VMIS-1',purchase_order_id:po.id});
+  expect(inv.statusCode).toBe(422);
+  expect(inv.json().code).toBe('PO_VENDOR_MISMATCH');
+  const stored=await pool.query('SELECT count(*) FROM invoices WHERE serial_number=$1',['INV-VMIS-1']);
+  expect(Number(stored.rows[0].count)).toBe(0);
+ });
  it('rejects cross-organization references',async()=>{
   const other=(await pool.query("INSERT INTO organizations(name) VALUES('Other') RETURNING id")).rows[0].id;
   const v=(await pool.query("INSERT INTO vendors(org_id,code,name) VALUES($1,'X','Foreign') RETURNING id",[other])).rows[0].id;
