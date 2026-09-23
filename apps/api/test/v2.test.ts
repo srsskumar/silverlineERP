@@ -67,6 +67,19 @@ describe('planning and security',()=>{
   const closed=await call('POST',`cycles/${cycle.id}/close`,{},{'if-match':'1'});expect(closed.statusCode).toBe(200);expect(closed.json().metrics.remaining).toBe(1);expect(closed.json().metrics.next_cycle_id).toBeTruthy();
   expect((await pool.query('SELECT cycle_id FROM tasks WHERE id=$1',[task.id])).rows[0].cycle_id).toBe(closed.json().metrics.next_cycle_id);
  });
+ it('lists a project\'s people by their employee name, not just their login',async()=>{
+  const p=await project();
+  const emp=(await pool.query("INSERT INTO employees(org_id,emp_no,first_name,last_name,phone,date_of_joining,status) VALUES($1,'PPL1','Asha','Rao','9123456780','2026-01-01','ACTIVE') RETURNING id",[orgId])).rows[0].id;
+  const created=await call('POST','admin/users',{username:'asha.rao',password:'correct-horse-1',employee_id:emp});
+  expect(created.statusCode).toBe(201);
+  const people=await call('GET',`projects/${p.id}/people`);
+  expect(people.statusCode).toBe(200);
+  const row=people.json().data.find((r:{id:string})=>r.id===created.json().id);
+  expect(row.name).toBe('Asha Rao');
+  // The admin account itself has no employee record, so the join has to
+  // degrade to the login name rather than leaving the column empty.
+  expect(people.json().data.find((r:{id:string})=>r.id===adminId).name).toBeNull();
+ });
  it('validates required and typed custom fields',async()=>{
   const p=await project(),t=(await call('POST','tasks',{project_id:p.id,title:'Task'})).json();const task=t.task??t;
   expect((await call('POST','custom-fields',{project_id:p.id,field_key:'quality',name:'Quality',field_type:'number',required:true})).statusCode).toBe(201);
