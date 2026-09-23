@@ -447,7 +447,10 @@ describe("concurrent stage-set calls on the same village", () => {
     const calls = Array.from({ length: 8 }, (_, i) => post(
       w.admin, `/api/v1/survey/villages/${raceVillageId}/stage`,
       i % 2 === 0
-        ? { stage_code: "GROUND_TRUTHING", state: "IN_PROGRESS", remarks: `race-${i}` }
+        ? {
+          stage_code: "GROUND_TRUTHING", state: "IN_PROGRESS", remarks: `race-${i}`,
+          gt_govt_staff_allocated: 2, gt_crew_allocated: 2,
+        }
         : {
           stage_code: "GROUND_TRUTHING", state: "COMPLETED",
           completed_on: workDate(), remarks: `race-${i}`,
