@@ -1423,6 +1423,32 @@ export async function registerWorkRoutes(
         });
       }
     }
+    if (d.project_type_id) {
+      const t = await db.query(
+        "SELECT id FROM project_types WHERE id = $1::uuid AND org_id = $2",
+        [d.project_type_id, user.orgId],
+      );
+      if ((t.rowCount ?? 0) === 0) {
+        return sendError(reply, req.requestId, {
+          status: 404,
+          code: "NOT_FOUND",
+          message: "Project type not found",
+        });
+      }
+    }
+    if (d.project_manager_id) {
+      const pm = await db.query(
+        "SELECT id FROM users WHERE id = $1::uuid AND org_id = $2",
+        [d.project_manager_id, user.orgId],
+      );
+      if ((pm.rowCount ?? 0) === 0) {
+        return sendError(reply, req.requestId, {
+          status: 404,
+          code: "NOT_FOUND",
+          message: "Project manager not found",
+        });
+      }
+    }
     const upd = await db.query(
       `UPDATE projects SET
          name = COALESCE($3, name),
@@ -1438,6 +1464,8 @@ export async function registerWorkRoutes(
          contract_gst_included = COALESCE($13, contract_gst_included),
          contract_gst_rate = COALESCE($14, contract_gst_rate),
          work_order_number = COALESCE($15, work_order_number),
+         project_type_id = COALESCE($18::uuid, project_type_id),
+         project_manager_id = COALESCE($19::uuid, project_manager_id),
          updated_by = $16::uuid, updated_at = NOW(), version = version + 1
        WHERE id = $1::uuid AND org_id = $2 AND version = $17
        RETURNING ${PROJECT_COLS}`,
@@ -1459,6 +1487,8 @@ export async function registerWorkRoutes(
         d.work_order_number ?? null,
         user.id,
         expectedVersion,
+        d.project_type_id ?? null,
+        d.project_manager_id ?? null,
       ],
     );
     const row = upd.rows[0] as ProjectRow | undefined;
