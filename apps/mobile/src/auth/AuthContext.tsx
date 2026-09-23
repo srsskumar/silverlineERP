@@ -55,10 +55,40 @@ const AuthContext = createContext<AuthState | null>(null);
  */
 let pendingCreds: { username: string; password: string } | null = null;
 
+/**
+ * Restore a session left from a previous launch, so signing in once is
+ * enough until somebody chooses to sign out -- a field crew re-typing a
+ * password every time the phone locks its screen is the opposite of what
+ * this app is for.
+ *
+ * The cached copy is trusted immediately -- a field phone is offline as
+ * often as not, and refusing to open the app until the network confirms a
+ * session is exactly the offline-first promise this app breaks otherwise.
+ * `getMe()` still runs in the background to catch a session that died
+ * server-side (password changed, role changed, device revoked) while this
+ * device was away; if the server actively rejects it, the api client's own
+ * 401 handling already fires onAuthLogout and clears everything, so nothing
+ * further is needed here for that case.
+ */
 async function loadSession(): Promise<MeResponse | null> {
-  // A fresh app launch must require credentials. Tokens are still retained
-  // for refresh and API calls during the authenticated session.
-  return null;
+  const cachedRaw = await SecureStore.getItemAsync("silverline.session").catch(() => null);
+  if (!cachedRaw) return null;
+  let cached: MeResponse;
+  try {
+    cached = JSON.parse(cachedRaw) as MeResponse;
+  } catch {
+    return null;
+  }
+  void getMe()
+    .then((fresh) => {
+      void SecureStore.setItemAsync("silverline.session", JSON.stringify(fresh)).catch(() => undefined);
+    })
+    // Nothing to do here either way: a network failure says nothing about
+    // whether the session is still good, and a real rejection (expired
+    // refresh, device revoked) is already handled by the api client's own
+    // 401 path, which calls onAuthLogout and clears everything itself.
+    .catch(() => undefined);
+  return cached;
 }
 
 /**
