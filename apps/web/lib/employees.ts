@@ -172,6 +172,24 @@ export async function reactivateEmployee(id: string, input: { reason: string }):
   return data;
 }
 
+// A-010: activate (DRAFT -> ACTIVE) and suspend (ACTIVE -> SUSPENDED) always
+// existed server-side but had no caller on web — see DetailClient.tsx.
+export async function activateEmployee(id: string, input: { reason: string }): Promise<EmployeeDetail> {
+  const { data } = await apiRequest<EmployeeDetail>(
+    `/api/v1/employees/${encodeURIComponent(id)}/activate`,
+    { method: 'POST', body: input },
+  );
+  return data;
+}
+
+export async function suspendEmployee(id: string, input: { reason: string }): Promise<EmployeeDetail> {
+  const { data } = await apiRequest<EmployeeDetail>(
+    `/api/v1/employees/${encodeURIComponent(id)}/suspend`,
+    { method: 'POST', body: input },
+  );
+  return data;
+}
+
 export interface BulkImportError {
   index: number;
   emp_no?: string;

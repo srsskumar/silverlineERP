@@ -205,6 +205,18 @@ export const employeeReactivateSchema = z.object({
 });
 export type EmployeeReactivateInput = z.infer<typeof employeeReactivateSchema>;
 
+// Same shape as reactivate — mirrors the API's employeeActivateSchema /
+// employeeSuspendSchema (packages/shared/src/s1.ts), both `{ reason }` only.
+export const employeeActivateSchema = z.object({
+  reason: z.string().trim().min(1, 'Reason is required').max(500),
+});
+export type EmployeeActivateInput = z.infer<typeof employeeActivateSchema>;
+
+export const employeeSuspendSchema = z.object({
+  reason: z.string().trim().min(1, 'Reason is required').max(500),
+});
+export type EmployeeSuspendInput = z.infer<typeof employeeSuspendSchema>;
+
 /** One CSV/API import row: required identity fields, everything else optional. */
 export const importRowSchema = z
   .object(employeeBaseFields)
