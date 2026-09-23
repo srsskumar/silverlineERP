@@ -42,6 +42,26 @@ import { PlaceName } from './PunchPlace';
  * available at all; the punch takes its own reading, with maximumAge zero
  * so the browser cannot hand back a cached one.
  */
+/*
+ * The browser's own `timeout` option on getCurrentPosition is supposed to
+ * guarantee the error callback fires, but it does not on every browser: a
+ * permission prompt left unanswered, or a WebView that drops the request
+ * silently, means neither callback ever runs. `capture()` then never
+ * resolves, the mutation never settles, and the button stays disabled with
+ * its spinner forever -- which reads as the whole page having frozen, because
+ * nothing the person does gets a response.
+ *
+ * A second, harder timeout that this code controls closes that gap: whatever
+ * the browser does or does not do, the punch proceeds without a position
+ * once this fires.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    promise.then((value) => { clearTimeout(timer); resolve(value); });
+  });
+}
+
 function usePunchPosition() {
   const [position, setPosition] = React.useState<GeolocationCoordinates | null>(null);
   const [state, setState] = React.useState<'idle' | 'asking' | 'granted' | 'denied'>('idle');
@@ -68,8 +88,15 @@ function usePunchPosition() {
     [],
   );
 
-  /** A fresh fix, for the punch about to be filed. Never a cached one. */
-  const capture = React.useCallback(() => read(0), [read]);
+  /*
+   * A fresh fix, for the punch about to be filed. Never a cached one, and
+   * never open-ended: past 10 seconds the punch goes ahead without a
+   * position rather than sitting there for however long the browser takes.
+   */
+  const capture = React.useCallback(
+    () => withTimeout(read(0), 10_000, null).then((p) => { setState((s) => (s === 'asking' ? 'denied' : s)); return p; }),
+    [read],
+  );
   /** A cheap one on arrival, only so the screen can say whether this will work. */
   const ask = React.useCallback(() => { void read(30_000); }, [read]);
 

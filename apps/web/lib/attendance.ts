@@ -1,4 +1,4 @@
-import { apiRequest, apiRequestRaw } from './apiClient';
+import { apiRequest, apiRequestRaw, uuidV4 } from './apiClient';
 import type { CursorPage } from './employees';
 
 /**
@@ -156,12 +156,17 @@ export function normalizePunchResponse(body: unknown): PunchResult {
   throw new Error('Unrecognized punch response shape');
 }
 
+// Same secure-context problem as apiClient's own generator, and the same fix:
+// see the comment on uuidV4() there.
 function newIdempotencyKey(): string {
   try {
-    return crypto.randomUUID();
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
   } catch {
-    return `${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    // fall through
   }
+  return uuidV4();
 }
 
 /**

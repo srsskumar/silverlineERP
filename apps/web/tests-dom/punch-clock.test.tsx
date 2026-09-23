@@ -56,7 +56,7 @@ function wrap(node: React.ReactNode) {
 const reads: Array<{ maximumAge: number | undefined }> = [];
 let here = { latitude: 15.83, longitude: 78.04, accuracy: 12 };
 
-function geolocation(mode: 'granted' | 'denied') {
+function geolocation(mode: 'granted' | 'denied' | 'hangs') {
   reads.length = 0;
   Object.defineProperty(navigator, 'geolocation', {
     configurable: true,
@@ -65,6 +65,10 @@ function geolocation(mode: 'granted' | 'denied') {
         ok: PositionCallback, fail: PositionErrorCallback, opts?: PositionOptions,
       ) => {
         reads.push({ maximumAge: opts?.maximumAge });
+        // A permission prompt nobody answers, or a WebView that drops the
+        // request: neither callback ever runs. The browser's own `timeout`
+        // is not trusted to save us from this -- see the 'hangs' test below.
+        if (mode === 'hangs') return;
         return mode === 'granted'
           ? ok({ coords: { ...here } } as GeolocationPosition)
           : fail({ code: 1, message: 'denied' } as GeolocationPositionError);
@@ -138,6 +142,29 @@ describe('saving', () => {
     fireEvent.click(button);
     await waitFor(() => expect(punchEvent).toHaveBeenCalledTimes(1));
     expect(punchEvent.mock.calls[0][0]).not.toHaveProperty('latitude');
+  });
+
+  it('goes ahead without a position rather than waiting forever for one', async () => {
+    /*
+     * Some browsers never call either geolocation callback -- a permission
+     * prompt left unanswered, or a WebView that drops the request. Before
+     * this, that left the mutation pending and the button disabled for the
+     * rest of the visit: pressing it again did nothing, and nothing else on
+     * the page said why, which read as the page having frozen.
+     */
+    geolocation('hangs');
+    wrap(<PunchClock />);
+    const button = await ready(/punch in/i);
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(button);
+      await vi.advanceTimersByTimeAsync(10_000);
+    } finally {
+      vi.useRealTimers();
+    }
+    await waitFor(() => expect(punchEvent).toHaveBeenCalledTimes(1));
+    expect(punchEvent.mock.calls[0][0]).not.toHaveProperty('latitude');
+    await waitFor(() => expect(button.disabled).toBe(false));
   });
 
   it('never calls a recorded punch a failure', async () => {

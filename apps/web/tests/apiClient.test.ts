@@ -7,7 +7,10 @@ import {
   apiRequest,
   getAccessToken,
   setTokens,
+  uuidV4,
 } from '../lib/apiClient';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -60,6 +63,35 @@ describe('apiClient', () => {
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
     expect(init.headers['Idempotency-Key']).toBeUndefined();
+  });
+
+  it('uuidV4 always produces a well-formed UUID', () => {
+    for (let i = 0; i < 20; i += 1) expect(uuidV4()).toMatch(UUID_RE);
+  });
+
+  /*
+   * crypto.randomUUID() is secure-context-only and throws on this site's
+   * plain-HTTP origin. POST /leave/requests refuses anything that is not a
+   * real UUID (422 MISSING_IDEMPOTENCY_KEY) -- so a key that merely looks
+   * unique, like the old `${Date.now()}-${random}` fallback, is not enough.
+   */
+  it('still sends a real UUID when crypto.randomUUID is unavailable', async () => {
+    const original = crypto.randomUUID;
+    // @ts-expect-error -- simulating an insecure context, where the browser
+    // does not expose this method at all.
+    delete crypto.randomUUID;
+    try {
+      await apiRequest('/api/v1/auth/login', {
+        method: 'POST',
+        body: { username: 'u', password: 'p' },
+        skipAuthRetry: true,
+      });
+    } finally {
+      crypto.randomUUID = original;
+    }
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+    expect(init.headers['Idempotency-Key']).toMatch(UUID_RE);
   });
 
   it('on 401 refreshes once and retries the original request', async () => {

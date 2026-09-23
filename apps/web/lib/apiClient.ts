@@ -280,12 +280,43 @@ export async function logout(): Promise<void> {
   redirectToLogin();
 }
 
+/*
+ * crypto.randomUUID() is a secure-context API: on a plain-HTTP origin (this
+ * site, until it has a certificate) it throws, and the old fallback --
+ * `${Date.now()}-${random}` -- is not shaped like a UUID at all. Every
+ * mutating request still worked, because most routes accept a free-form
+ * idempotency key; POST /leave/requests is stricter and requires a real UUID,
+ * so every leave filing over HTTP failed with 422 MISSING_IDEMPOTENCY_KEY
+ * while the button, the request and the server were each doing exactly what
+ * they were told.
+ *
+ * crypto.getRandomValues() carries no such restriction -- it works in every
+ * context, secure or not -- so the fallback builds a proper RFC 4122 v4 UUID
+ * from it instead. Once the site has TLS, crypto.randomUUID() is used
+ * directly and this path never runs.
+ */
+export function uuidV4(): string {
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function newIdempotencyKey(): string {
   try {
-    return crypto.randomUUID();
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
   } catch {
-    return `${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    // fall through to the always-available generator below
   }
+  return uuidV4();
 }
 
 const MUTATING_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
