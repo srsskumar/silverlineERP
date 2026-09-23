@@ -1,11 +1,13 @@
 /**
  * Payroll (P1): the org-wide run register — status, period, totals and lock
- * state — distinct from the employee's own "My payslip" already on the More
- * tab. This is the manager's lookup: is this period's run open, calculated,
- * under review, approved or locked, and roughly what did it total. Read-only
- * — generating, approving and locking a run is a period-close action with the
- * warnings list and every employee's figures in front of it, not a phone
- * lookup, and it stays on the web.
+ * state — distinct from the employee's own "My payslip", which is web-only
+ * for now (no mobile screen exists yet; it is not in BUILT_MODULE_ROUTES and
+ * surfaces as "Coming soon" in the More-tab launcher — see A-002 in
+ * docs/qa/2026-09-24/findings-a.md). This is the manager's lookup: is this
+ * period's run open, calculated, under review, approved or locked, and
+ * roughly what did it total. Read-only — generating, approving and locking a
+ * run is a period-close action with the warnings list and every employee's
+ * figures in front of it, not a phone lookup, and it stays on the web.
  */
 import { router } from "expo-router";
 import { useState } from "react";
