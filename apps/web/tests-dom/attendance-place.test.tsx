@@ -164,6 +164,24 @@ describe('what a punch says about where it was made', () => {
     expect(screen.getByText('resolving…')).toBeInTheDocument();
   });
 
+  it('shows the client IP, muted, whether or not the punch was positioned', () => {
+    const { unmount } = render(<EventPosition event={{
+      id: 'ev', employee_id: 'e', event_type: 'CHECK_IN', client_timestamp: '2026-09-23T03:44:00.000Z',
+      latitude: 17.385, longitude: 78.4867, place_status: 'resolving',
+      ip_address: '203.0.113.7',
+    }} />);
+    const ip = screen.getByText('IP 203.0.113.7');
+    expect(ip).toBeInTheDocument();
+    expect(ip.className).toMatch(/text-text-muted/);
+    unmount();
+    render(<EventPosition event={{
+      id: 'ev', employee_id: 'e', event_type: 'CHECK_IN', client_timestamp: '2026-09-23T03:44:00.000Z',
+      ip_address: '203.0.113.7',
+    }} />);
+    expect(screen.getByText(/No position was recorded/)).toBeInTheDocument();
+    expect(screen.getByText('IP 203.0.113.7')).toBeInTheDocument();
+  });
+
   it('prints a place in a word', () => {
     const { rerender } = render(<PlaceName name="Kolluru, Nellore, Andhra Pradesh" status="named" />);
     expect(screen.getByText('Kolluru, Nellore, Andhra Pradesh')).toBeInTheDocument();

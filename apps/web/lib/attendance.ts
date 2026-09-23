@@ -57,6 +57,8 @@ export interface AttendanceEvent {
   place_name?: string | null;
   place_detail?: Record<string, unknown> | null;
   place_status?: PlaceStatus;
+  /** The client IP the punch request arrived from (migration 088, owner request). */
+  ip_address?: string | null;
   [key: string]: unknown;
 }
 
