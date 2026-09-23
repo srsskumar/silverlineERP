@@ -132,6 +132,10 @@ export function PunchClock() {
   const checkedIn = !!record?.check_in_at;
   const checkedOut = !!record?.check_out_at;
   const next: 'CHECK_IN' | 'CHECK_OUT' = checkedIn && !checkedOut ? 'CHECK_OUT' : 'CHECK_IN';
+  // The most recent punch of the day, and the place it was made from.
+  const lastPunch = !checkedIn ? null : checkedOut
+    ? { verb: 'Punched out from ', name: record?.check_out_place_name, status: record?.check_out_place_status }
+    : { verb: 'Punched in from ', name: record?.check_in_place_name, status: record?.check_in_place_status };
 
   const punch = useMutation({
     mutationFn: async () => {
@@ -232,14 +236,10 @@ export function PunchClock() {
 
       {/* Where the last punch was made, by name: the village or town the
           coordinates resolve to, once the worker has looked it up. */}
-      {record?.check_in_at ? (
+      {lastPunch ? (
         <p className="mt-2 text-xs text-text-muted" data-testid="last-punch-place">
-          {record.check_out_at ? 'Punched out from ' : 'Punched in from '}
-          <PlaceName
-            className="text-text"
-            name={record.check_out_at ? record.check_out_place_name : record.check_in_place_name}
-            status={record.check_out_at ? record.check_out_place_status : record.check_in_place_status}
-          />
+          {lastPunch.verb}
+          <PlaceName className="text-text" name={lastPunch.name} status={lastPunch.status} />
         </p>
       ) : null}
 
