@@ -55,13 +55,21 @@ export function parse<T>(schema:z.ZodType<T, z.ZodTypeDef, unknown>,body:unknown
 }
 export function fail(code:string,message:string,status=422):never {throw new ApiError({status,code,message});}
 export function actor(req:FastifyRequest) {if(!req.authUser) fail('UNAUTHENTICATED','Sign in first',401);return req.authUser;}
-export function version(req:FastifyRequest,row:{version:number}) {
+export function version(req:FastifyRequest,row:{version:number},label?:string) {
  // Shared with the other seven modules so every route reads the header the
- // same way, weak validators and all.
+ // same way, weak validators and all. `label` names whose version is wanted
+ // when that is not obvious from the URL alone -- an approval decision, for
+ // instance, wants the approval instance's version, not the document's, and
+ // a caller who already has the document's version in hand will reach for
+ // that one first unless told otherwise.
  let n:number;
  try { n=parseIfMatch(req as unknown as {headers:Record<string,unknown>}); }
- catch { fail('VERSION_REQUIRED','If-Match must contain the current version'); }
- if(n!==row.version) fail('VERSION_CONFLICT','This record changed. Reload before editing.',409);
+ catch { fail('VERSION_REQUIRED',label
+   ? `If-Match must contain the current version of the ${label}, not the document it is about.`
+   : 'If-Match must contain the current version'); }
+ if(n!==row.version) fail('VERSION_CONFLICT',label
+   ? `This ${label} changed — reload it (not the document it is about) before deciding again.`
+   : 'This record changed. Reload before editing.',409);
 }
 export function page(req:FastifyRequest) {
  const q=req.query as Record<string,string>;

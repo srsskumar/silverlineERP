@@ -192,6 +192,26 @@ describe("maker-checker and sequence", () => {
     expect(decision.status).toBe(422);
     expect(decision.body.code).toBe("NOT_THE_APPROVER");
   });
+
+  it("says whose version If-Match wants when it's missing or wrong — B-015", async () => {
+    // A caller deciding a document's approval naturally reaches for the
+    // document's own version (the one it already has in hand), but this
+    // route wants the approval instance's version instead. Task 2's seed
+    // script got this wrong on first try; the message should say so rather
+    // than a bare "If-Match must contain the current version".
+    const res = await submit(20_000);
+    const missing = await post(w.role.TEAM_LEAD,
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(missing.status).toBe(422);
+    expect(missing.body.code).toBe("VERSION_REQUIRED");
+    expect(missing.body.message).toContain("approval request");
+
+    const wrong = await post({ ...w.role.TEAM_LEAD, "if-match": "999" },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(wrong.status).toBe(409);
+    expect(wrong.body.code).toBe("VERSION_CONFLICT");
+    expect(wrong.body.message).toContain("approval request");
+  });
 });
 
 describe("re-routing when the amount moves", () => {

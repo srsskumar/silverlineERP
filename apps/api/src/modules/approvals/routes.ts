@@ -339,7 +339,7 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     return {
       data: await mutate(pool, req, `approval.${input.decision.toLowerCase()}`, 'approval_instance', async db => {
         const instance = await inOrg(db, 'approval_instances', id, u.orgId, true);
-        version(req, instance as { version: number });
+        version(req, instance as { version: number }, 'approval request');
         if (instance.status !== 'PENDING') {
           fail('NOT_PENDING', `This request is already ${String(instance.status).toLowerCase()}`);
         }
