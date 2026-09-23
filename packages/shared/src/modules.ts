@@ -87,6 +87,8 @@ export const MODULE_CATALOG: ModuleCatalogEntry[] = [
     permission: 'org.units.read' },
   { code: 'org-holidays', label: 'Holidays', group: 'Organisation', permission: 'holiday.read' },
   { code: 'admin', label: 'Administration', group: 'Organisation', permission: 'users.read' },
+  { code: 'admin-import-templates', label: 'Upload & download', group: 'Organisation',
+    permission: 'users.read' },
   { code: 'audit', label: 'Audit trail', group: 'Organisation', permission: 'audit.read' },
   // No permission: see the field comment above.
   { code: 'security', label: 'Security', group: 'Organisation' },
