@@ -133,13 +133,16 @@ export interface StageSeedOrdered extends StageSeed {
 }
 
 /*
- * The five stages a village passes through, and rework.
+ * The six stages a village passes through, and rework.
  *
  * This list was seven stages long, and the screen built on it asked somebody
  * to hold seven stages times four states in their head to answer "where is
- * this village". The contract reports eleven positions, not twenty-eight, so
- * the pipeline is now the five stages those eleven positions are made of —
- * see VILLAGE_LADDER below, which is the thing anybody actually reads.
+ * this village". The contract reported eleven positions at the time, not
+ * twenty-eight, so the pipeline became the five stages those eleven
+ * positions were made of — see VILLAGE_LADDER below, which is the thing
+ * anybody actually reads. NOTIFICATION (§086) is the sixth: a stage added
+ * afterwards, not a rename, taking the ladder from eleven positions to
+ * thirteen.
  *
  * Three stages came out. They are kept here, commented rather than deleted,
  * because the work they named still happens — records are still prepared and
@@ -181,6 +184,22 @@ export const STAGE_PIPELINE: StageSeedOrdered[] = [
     code: 'FINAL_DELIVERABLES', label: 'Final deliverables', displayOrder: 50,
     requires: 'DATA_SUBMISSION', isSignOff: true,
   },
+  /*
+   * Notification (§086).
+   *
+   * This is a genuinely new stage, not another name for one that already
+   * existed — unlike DATA_SUBMISSION and FINAL_DELIVERABLES above, nothing
+   * before this recorded it. The department's acceptance of the final
+   * deliverables was not, it turns out, the end of the contract: it issues a
+   * notification afterwards, and that is the event the third and last
+   * billing milestone actually waits on (see MILESTONE_REQUIRES below). A
+   * village sitting at "final deliverables approved" for months while
+   * nothing else happened was this gap, not a stalled village.
+   */
+  {
+    code: 'NOTIFICATION', label: 'Notification', displayOrder: 60,
+    requires: 'FINAL_DELIVERABLES', isSignOff: true,
+  },
   // Entered from wherever the work failed rather than reached in sequence, so
   // it waits on nothing. A village that comes back has a start and an end
   // like any other work, and the history has to show it happened.
@@ -190,12 +209,14 @@ export const STAGE_PIPELINE: StageSeedOrdered[] = [
 /* ------------------------------------------------------- the village ladder */
 
 /**
- * The eleven positions a village is reported at.
+ * The thirteen positions a village is reported at.
  *
  * One village, one position, and every position is a sentence somebody
  * outside this company can read. This is the whole simplification: the stage
- * table still holds five stages and four states each, and nobody has to know
- * that to answer "where is Jaggayyapeta".
+ * table holds six stages and four states each, and nobody has to know that
+ * to answer "where is Jaggayyapeta". Eleven of the thirteen are §071's;
+ * NOTIFICATION_IN_PROGRESS and NOTIFICATION_ISSUED are §086's, added after
+ * final deliverables rather than replacing anything.
  *
  * Ordered, and the order is the order of the work — so a bar chart of these
  * reads left to right as a programme moving, and "further along" is a
@@ -222,6 +243,14 @@ export const VILLAGE_LADDER: LadderRung[] = [
   { key: 'DATA_APPROVED', label: 'Data approved', stage: 'DATA_SUBMISSION', state: 'COMPLETED' },
   { key: 'FINAL_SUBMITTED', label: 'Final deliverables submitted', stage: 'FINAL_DELIVERABLES', state: 'IN_PROGRESS' },
   { key: 'FINAL_APPROVED', label: 'Final deliverables approved', stage: 'FINAL_DELIVERABLES', state: 'COMPLETED' },
+  // §086. Added after final deliverables, not in place of it: the department's
+  // acceptance of the deliverables turned out not to be the end of the
+  // contract, and the last 20% now waits on this instead.
+  { key: 'NOTIFICATION_IN_PROGRESS', label: 'Notification pending', stage: 'NOTIFICATION', state: 'IN_PROGRESS' },
+  // The "13" is part of the label itself, not merely the rung's index — the
+  // owner named this rung "status 13" and asked for the number to read that
+  // way wherever the label is shown.
+  { key: 'NOTIFICATION_ISSUED', label: '13 Notification issued', stage: 'NOTIFICATION', state: 'COMPLETED' },
 ];
 
 /**
@@ -255,7 +284,13 @@ export const LADDER_NOTES: Record<string, string> = {
   FINAL_SUBMITTED: 'The final deliverables — records, LPMs, the lot — have gone in '
     + 'and are waiting on the department.',
   FINAL_APPROVED: 'The department signed the deliverables off. The village is '
-    + 'finished and the last 20% falls due.',
+    + 'not yet finished: the last 20% now waits on the department issuing '
+    + 'notification (§086).',
+  NOTIFICATION_IN_PROGRESS: 'The final deliverables are approved and '
+    + 'notification has been asked for. Waiting on the department; the last '
+    + '20% is not yet due.',
+  NOTIFICATION_ISSUED: 'The department has issued notification. The village '
+    + 'is finished and the last 20% falls due.',
 };
 
 export const LADDER_KEYS = VILLAGE_LADDER.map(r => r.key);
@@ -279,9 +314,9 @@ export const LADDER_INDEX: Record<string, number> =
  * whole village backwards.
  *
  * ON_HOLD counts as the in-progress position and is reported separately. The
- * eleven positions are the eleven the contract names, and "on hold" is a
- * thing that is true *about* a village at a position rather than a twelfth
- * position.
+ * thirteen positions are the ones the contract and §086 between them name,
+ * and "on hold" is a thing that is true *about* a village at a position
+ * rather than a fourteenth position.
  */
 export interface LadderPosition {
   key: string;
@@ -321,7 +356,7 @@ export function villagePosition(
   };
 }
 
-/** How many villages sit at each of the eleven positions. */
+/** How many villages sit at each of the thirteen positions. */
 export function tallyByPosition(
   villages: Array<{ stages?: Record<string, StageState> }>,
   ladder: LadderRung[] = VILLAGE_LADDER,
@@ -2446,9 +2481,15 @@ export const MILESTONE_REQUIRES: Record<number, string> = {
   // (§071). Nothing about when the money falls due has moved: the department
   // approving the data is what the second claim has always waited on.
   2: 'DATA_SUBMISSION',
-  // Was SUBMISSION. The third claim falls due when the deliverables go in,
-  // not when the department signs them off — see MILESTONE_EARNED_AT.
-  3: 'FINAL_DELIVERABLES',
+  /*
+   * Was FINAL_DELIVERABLES (§086). The final deliverables being approved was
+   * never the actual end of the contract, it was just the last event this
+   * system had a stage for. The department issues a notification after
+   * that, and the third and last claim now waits on it rather than on the
+   * deliverables — a plain gate change, not a reinterpretation of what
+   * "final deliverables approved" means.
+   */
+  3: 'NOTIFICATION',
 };
 
 /**

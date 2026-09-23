@@ -2574,7 +2574,7 @@ function Villages({
             <option key={String(p.code)} value={String(p.code)}>{String(p.label)}</option>
           ))}
         </select>
-        {/* The eleven positions the dashboard reports, so a reader can land
+        {/* The thirteen positions the dashboard reports, so a reader can land
             on the same list the chart counted. */}
         <select value={position} onChange={(e) => setPosition(e.target.value)}
           title="Where the village has got to, as the dashboard reports it"

@@ -106,6 +106,13 @@ describe('villageState', () => {
     expect(villageState(village({ stages: ALL_DONE }), STAGE_CODES)).toBe('COMPLETED');
   });
 
+  it('is not complete until notification is issued, even with deliverables approved (§086)', () => {
+    const stages = { ...ALL_DONE, NOTIFICATION: 'NOT_STARTED' as const };
+    expect(villageState(village({ stages }), STAGE_CODES)).toBe('IN_PROGRESS');
+    const inProgress = { ...ALL_DONE, NOTIFICATION: 'IN_PROGRESS' as const };
+    expect(villageState(village({ stages: inProgress }), STAGE_CODES)).toBe('IN_PROGRESS');
+  });
+
   it('is not complete while one stage is outstanding', () => {
     // A village whose parcels are all surveyed but whose records are not
     // prepared is not finished, and calling it finished makes the programme
@@ -568,7 +575,8 @@ describe('the stage pipeline', () => {
 
   it('runs the stages the specification names, in order', () => {
     expect(STAGE_PIPELINE.filter(s => !s.offSequence).map(s => s.code)).toEqual([
-      'GROUND_TRUTHING', 'GT_QC', 'VECTORIZATION', 'DATA_SUBMISSION', 'FINAL_DELIVERABLES',
+      'GROUND_TRUTHING', 'GT_QC', 'VECTORIZATION', 'DATA_SUBMISSION',
+      'FINAL_DELIVERABLES', 'NOTIFICATION',
     ]);
   });
 
@@ -620,7 +628,7 @@ describe('currentStage', () => {
 
   it('reports the last stage of the sequence once everything is complete', () => {
     const all = Object.fromEntries(STAGE_PIPELINE.map(s => [s.code, 'COMPLETED' as const]));
-    expect(currentStage(all)).toEqual({ code: 'FINAL_DELIVERABLES', state: 'COMPLETED' });
+    expect(currentStage(all)).toEqual({ code: 'NOTIFICATION', state: 'COMPLETED' });
   });
 
   it('says a village in rework is in rework, whatever the sequence says', () => {
@@ -1505,7 +1513,7 @@ describe('which stage asks about attendance', () => {
     // No other stage is walked with the department, and asking on the rest
     // would collect figures that mean nothing.
     expect(stageTracksStaffing('GROUND_TRUTHING')).toBe(true);
-    for (const code of ['GT_QC', 'VECTORIZATION', 'DATA_SUBMISSION', 'FINAL_DELIVERABLES']) {
+    for (const code of ['GT_QC', 'VECTORIZATION', 'DATA_SUBMISSION', 'FINAL_DELIVERABLES', 'NOTIFICATION']) {
       expect(stageTracksStaffing(code), code).toBe(false);
     }
     expect(stageTracksStaffing(null)).toBe(false);
@@ -1531,11 +1539,18 @@ describe('what a milestone may be claimed on', () => {
     expect(milestoneEarned(2, { DATA_SUBMISSION: 'COMPLETED' })).toBe(true);
   });
 
-  it('holds the third until the deliverables have been accepted', () => {
+  it('holds the third until notification is issued (§086)', () => {
     expect(milestoneEarned(3, { DATA_SUBMISSION: 'COMPLETED' })).toBe(false);
     // Submitted is not accepted (§078). Every claim now waits on a signature.
     expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'IN_PROGRESS' })).toBe(false);
-    expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'COMPLETED' })).toBe(true);
+    // Final deliverables approved is no longer the gate: notification is.
+    expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'COMPLETED' })).toBe(false);
+    expect(milestoneEarned(3, {
+      FINAL_DELIVERABLES: 'COMPLETED', NOTIFICATION: 'IN_PROGRESS',
+    })).toBe(false);
+    expect(milestoneEarned(3, {
+      FINAL_DELIVERABLES: 'COMPLETED', NOTIFICATION: 'COMPLETED',
+    })).toBe(true);
   });
 
   it('treats a village with no stages at all as having earned nothing', () => {
@@ -1735,7 +1750,7 @@ describe('how far the surveyed extent has drifted from the record', () => {
 });
 
 describe('the village ladder (§071)', () => {
-  it('reports the eleven positions the contract names, in the order of the work', () => {
+  it('reports the thirteen positions the contract and §086 between them name, in the order of the work', () => {
     expect(VILLAGE_LADDER.map(r => r.label)).toEqual([
       'Not started',
       'GT in progress', 'GT completed',
@@ -1743,6 +1758,7 @@ describe('the village ladder (§071)', () => {
       'Vectorization in progress', 'Vectorization completed',
       'Data submitted', 'Data approved',
       'Final deliverables submitted', 'Final deliverables approved',
+      'Notification pending', '13 Notification issued',
     ]);
   });
 
@@ -1764,6 +1780,8 @@ describe('the village ladder (§071)', () => {
       [{ VECTORIZATION: 'COMPLETED', DATA_SUBMISSION: 'COMPLETED' }, 'DATA_APPROVED'],
       [{ DATA_SUBMISSION: 'COMPLETED', FINAL_DELIVERABLES: 'IN_PROGRESS' }, 'FINAL_SUBMITTED'],
       [{ DATA_SUBMISSION: 'COMPLETED', FINAL_DELIVERABLES: 'COMPLETED' }, 'FINAL_APPROVED'],
+      [{ FINAL_DELIVERABLES: 'COMPLETED', NOTIFICATION: 'IN_PROGRESS' }, 'NOTIFICATION_IN_PROGRESS'],
+      [{ FINAL_DELIVERABLES: 'COMPLETED', NOTIFICATION: 'COMPLETED' }, 'NOTIFICATION_ISSUED'],
     ];
     for (const [stages, expected] of steps) {
       expect(villagePosition(stages).key, JSON.stringify(stages)).toBe(expected);
@@ -1781,12 +1799,13 @@ describe('the village ladder (§071)', () => {
   });
 
   it('treats on hold as the in-progress rung and flags it separately', () => {
-    // Eleven positions is what the contract names. "On hold" is something
-    // true about a village at a position, not a twelfth position.
+    // Thirteen positions is what the contract and §086 between them name.
+    // "On hold" is something true about a village at a position, not a
+    // fourteenth position.
     const p = villagePosition({ GROUND_TRUTHING: 'ON_HOLD' });
     expect(p.key).toBe('GT_IN_PROGRESS');
     expect(p.onHold).toBe(true);
-    expect(LADDER_KEYS).toHaveLength(11);
+    expect(LADDER_KEYS).toHaveLength(13);
   });
 
   it('flags rework without moving the village', () => {
@@ -1825,13 +1844,16 @@ describe('the village ladder (§071)', () => {
     expect(LADDER_INDEX.NOT_STARTED).toBe(0);
     expect(LADDER_INDEX.FINAL_APPROVED).toBe(10);
     expect(LADDER_INDEX.GT_COMPLETED).toBeLessThan(LADDER_INDEX.DATA_APPROVED);
+    // §086: the 13th position — "status 13" — is notification issued.
+    expect(LADDER_INDEX.NOTIFICATION_ISSUED).toBe(12);
   });
 });
 
 describe('the pipeline after §071', () => {
-  it('is the five stages the eleven positions are made of', () => {
+  it('is the six stages the thirteen positions are made of', () => {
     expect(STAGE_PIPELINE.filter(s => !s.offSequence).map(s => s.code)).toEqual([
-      'GROUND_TRUTHING', 'GT_QC', 'VECTORIZATION', 'DATA_SUBMISSION', 'FINAL_DELIVERABLES',
+      'GROUND_TRUTHING', 'GT_QC', 'VECTORIZATION', 'DATA_SUBMISSION',
+      'FINAL_DELIVERABLES', 'NOTIFICATION',
     ]);
   });
 
@@ -1865,7 +1887,12 @@ describe('billing gates after §071', () => {
     // work nobody has signed for is a claim that comes back.
     expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'NOT_STARTED' })).toBe(false);
     expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'IN_PROGRESS' })).toBe(false);
-    expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'COMPLETED' })).toBe(true);
+    // §086: final deliverables approved is necessary but no longer
+    // sufficient. Notification is what the third claim now waits on.
+    expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'COMPLETED' })).toBe(false);
+    expect(milestoneEarned(3, {
+      FINAL_DELIVERABLES: 'COMPLETED', NOTIFICATION: 'COMPLETED',
+    })).toBe(true);
   });
 
   it('says what is in the way in words that name the right event', () => {
@@ -1874,6 +1901,20 @@ describe('billing gates after §071', () => {
       .toMatch(/signed off/);
     expect(milestoneBlockedNote(3, {}, label)).toMatch(/signed off/);
     expect(milestoneBlockedNote(1, { GT_QC: 'COMPLETED' }, label)).toBeNull();
+  });
+
+  it('blocks the third claim on notification, with a readable note, once deliverables are approved (§086)', () => {
+    const label = (c: string) => c.replace(/_/g, ' ').toLowerCase();
+    expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'COMPLETED' })).toBe(false);
+    const note = milestoneBlockedNote(3, { FINAL_DELIVERABLES: 'COMPLETED' }, label);
+    expect(note).toMatch(/notification/i);
+    expect(note).toMatch(/not started/i);
+    expect(milestoneEarned(3, {
+      FINAL_DELIVERABLES: 'COMPLETED', NOTIFICATION: 'COMPLETED',
+    })).toBe(true);
+    expect(milestoneBlockedNote(3, {
+      FINAL_DELIVERABLES: 'COMPLETED', NOTIFICATION: 'COMPLETED',
+    }, label)).toBeNull();
   });
 });
 
@@ -2171,12 +2212,14 @@ describe('signed off, not just finished (§078)', () => {
     expect(signOffFor('GT_QC')).toBe('GT_QC');
     expect(signOffFor('DATA_SUBMISSION')).toBe('DATA_SUBMISSION');
     expect(signOffFor('FINAL_DELIVERABLES')).toBe('FINAL_DELIVERABLES');
+    expect(signOffFor('NOTIFICATION')).toBe('NOTIFICATION');
     // Rework is off the sequence and accepts nothing.
     expect(signOffFor('REWORK')).toBeNull();
   });
 
   it('knows which stages are an acceptance rather than a piece of work', () => {
-    expect(SIGN_OFF_STAGES).toEqual(['GT_QC', 'DATA_SUBMISSION', 'FINAL_DELIVERABLES']);
+    expect(SIGN_OFF_STAGES).toEqual(
+      ['GT_QC', 'DATA_SUBMISSION', 'FINAL_DELIVERABLES', 'NOTIFICATION']);
     expect(isSignOffStage('GT_QC')).toBe(true);
     expect(isSignOffStage('GROUND_TRUTHING')).toBe(false);
     expect(isSignOffStage(null)).toBe(false);
@@ -2201,7 +2244,9 @@ describe('billing waits for an acceptance (§078)', () => {
      * against work nobody has signed for is a claim that comes back.
      */
     expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'IN_PROGRESS' })).toBe(false);
-    expect(milestoneEarned(3, { FINAL_DELIVERABLES: 'COMPLETED' })).toBe(true);
+    expect(milestoneEarned(3, {
+      FINAL_DELIVERABLES: 'COMPLETED', NOTIFICATION: 'COMPLETED',
+    })).toBe(true);
   });
 
   it('gates every milestone on a stage that is an acceptance', () => {
@@ -2217,8 +2262,13 @@ describe('billing waits for an acceptance (§078)', () => {
     expect(earnedMilestones({ GT_QC: 'COMPLETED' })).toEqual([1]);
     expect(earnedMilestones({ GT_QC: 'COMPLETED', DATA_SUBMISSION: 'COMPLETED' }))
       .toEqual([1, 2]);
+    // Deliverables approved but notification not yet issued earns nothing new (§086).
     expect(earnedMilestones({
       GT_QC: 'COMPLETED', DATA_SUBMISSION: 'COMPLETED', FINAL_DELIVERABLES: 'COMPLETED',
+    })).toEqual([1, 2]);
+    expect(earnedMilestones({
+      GT_QC: 'COMPLETED', DATA_SUBMISSION: 'COMPLETED',
+      FINAL_DELIVERABLES: 'COMPLETED', NOTIFICATION: 'COMPLETED',
     })).toEqual([1, 2, 3]);
     // Submitted but not approved earns nothing new.
     expect(earnedMilestones({

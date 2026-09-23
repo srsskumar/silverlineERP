@@ -72,7 +72,7 @@ const VILLAGE_STEMS = [
 /* ------------------------------------------ where each village has got to */
 
 /**
- * The eleven positions, and how many villages sit at each.
+ * The eleven positions this shape covers (of the thirteen the pipeline now has -- none reach notification), and how many villages sit at each.
  *
  * Shaped like a programme nine months in rather than spread evenly: most of
  * the work is in ground truthing, a tail has reached the department, and a
@@ -578,7 +578,13 @@ async function main(): Promise<void> {
             -- paid for, and this line used to say otherwise — which is how
             -- the corpus came to hold thirty-nine claims the routes would
             -- refuse today.
-            bool_or(s.code = 'FINAL_DELIVERABLES' AND vs.state = 'COMPLETED') AS m3
+            --
+            -- §086: the third claim now waits on notification, not on final
+            -- deliverables being accepted. No village this script generates
+            -- reaches notification (the shape below stops at "final
+            -- deliverables approved"), so this is correctly always false —
+            -- the third milestone is not earned by anything seeded here.
+            bool_or(s.code = 'NOTIFICATION' AND vs.state = 'COMPLETED')       AS m3
        FROM survey_villages sv
        JOIN survey_village_stages vs ON vs.survey_village_id = sv.id
        JOIN survey_stages s ON s.id = vs.stage_id
@@ -886,7 +892,8 @@ async function main(): Promise<void> {
              AND st.code = CASE b.milestone
                    WHEN 1 THEN 'GT_QC'
                    WHEN 2 THEN 'DATA_SUBMISSION'
-                   ELSE 'FINAL_DELIVERABLES' END
+                   -- §086: the third claim now waits on notification.
+                   ELSE 'NOTIFICATION' END
              AND vs.state = 'COMPLETED')
       ORDER BY b.milestone DESC, b.id`, [programmeId])).rows;
 

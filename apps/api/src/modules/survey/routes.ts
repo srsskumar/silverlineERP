@@ -4633,7 +4633,7 @@ export async function registerSurveyRoutes(
           // on its first day of GT and one waiting for its LPM.
           by_stage: tallyByStage(g.items, pipeline),
           // The same villages counted the way the dashboard counts them:
-          // one village, one position, eleven positions in all.
+          // one village, one position, thirteen positions in all.
           by_position: tallyByPosition(g.items),
           // Villages whose stages have been moved out of order. Reported
           // rather than prevented, because the task board drives the state
@@ -5207,7 +5207,7 @@ export async function registerSurveyRoutes(
             villages: matches.length, of_villages: villages.length,
           },
           options: { districts, mandals },
-          /* The eleven positions, in order, so a chart never has to sort. */
+          /* The thirteen positions, in order, so a chart never has to sort. */
           /* The label and what it means, so the screen never has to carry
              a second copy of the explanation. */
           ladder: VILLAGE_LADDER.map(r => ({

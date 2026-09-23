@@ -256,7 +256,7 @@ function RollUp({
                   {num(row.late)}
                 </TD>
                 <TD>
-                  {/* The same eleven positions, as one bar per group. */}
+                  {/* The same thirteen positions, as one bar per group. */}
                   <span className="flex h-3 w-40 overflow-hidden rounded bg-surface-sunken"
                     title={ladder
                       .map((r: Rung) => `${r.label}: ${row.by_position[r.key] ?? 0}`)
@@ -397,7 +397,9 @@ export function SurveyDashboard({
     totals.positions.reduce((t, p) => t + Number(p[field] ?? 0), 0);
   const surveyedPct = totals.extent_ac > 0
     ? Math.round((totals.surveyed_ac / totals.extent_ac) * 1000) / 10 : null;
-  const finished = totals.by_position.FINAL_APPROVED ?? 0;
+  // §086: a village is not finished at final deliverables approved any more —
+  // the department issuing notification is what finishes it now.
+  const finished = totals.by_position.NOTIFICATION_ISSUED ?? 0;
 
   return (
     <div className="space-y-5">
@@ -519,14 +521,14 @@ export function SurveyDashboard({
               : ''}`} />
         <Stat label="Villages finished" value={`${num(finished)} of ${num(totals.villages)}`}
           tone={finished > 0 ? 'success' : 'default'}
-          explain="Final deliverables approved by the department." />
+          explain="Notification issued by the department (§086)." />
         <Stat label="Behind plan" value={num(totals.late)}
           tone={totals.late > 0 ? 'danger' : 'success'}
           hint={totals.unplanned > 0 ? `${num(totals.unplanned)} have no dates set` : undefined}
           explain="Villages whose worst stage is past its expected finish. Work still running is measured against today, so this is a warning rather than a post-mortem." />
       </div>
 
-      {/* ------------------------------------------------ the eleven positions */}
+      {/* ----------------------------------------------- the thirteen positions */}
       <Card className="p-4">
         <div className="mb-3 flex items-baseline justify-between gap-2">
           <h3 className="text-sm font-semibold text-text">Where every village has got to</h3>
@@ -673,7 +675,7 @@ export function SurveyDashboard({
         {/*
           * Reported beside the ladder rather than as extra rungs. Each is
           * something true *about* a village at a position; making them
-          * positions would mean a village counted twice, and the eleven
+          * positions would mean a village counted twice, and the thirteen
           * would stop adding up to the total.
           */}
         <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">

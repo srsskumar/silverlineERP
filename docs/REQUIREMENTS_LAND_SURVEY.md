@@ -221,6 +221,13 @@ block it. A crew already walking the boundary is not sent home because a
 coordinate has not been typed; the gap is reported against the village until
 it is closed.
 
+**59.10.7** (§086) A sixth stage, notification, follows final deliverables:
+the department issues a notification after accepting the deliverables, and
+that is now the event the last billing milestone (the final 20%) waits on —
+not final deliverables being approved. The pipeline is therefore six stages
+and the reported positions thirteen, not five and eleven as above; final
+deliverables approved no longer means the village is finished.
+
 ## 59.11 The dashboard
 
 **59.11.1** The module carries its own dashboard, inside it rather than in the
