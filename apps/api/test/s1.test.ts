@@ -505,6 +505,29 @@ describe("employees", () => {
     expect(after["aadhaar"]).toBe("[REDACTED]");
   });
 
+  it("records the actor's IP and user agent on a mutate()-routed action", async () => {
+    // employee.create runs through the shared mutate() helper in
+    // common/domain.ts, used by nearly every module's writes -- so this one
+    // route stands in for all of them.
+    const admin = await adminHeaders();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/employees",
+      headers: { ...admin, "user-agent": "sl-test-agent/1.0" },
+      payload: empPayload(),
+      remoteAddress: "203.0.113.7",
+    });
+    expect(created.statusCode).toBe(201);
+    const id = (created.json() as { id: string }).id;
+
+    const audit = await pool.query(
+      "SELECT actor_ip, actor_user_agent FROM audit_events WHERE action = 'employee.create' AND entity_id = $1::uuid",
+      [id],
+    );
+    expect(audit.rows[0].actor_ip).toBe("203.0.113.7");
+    expect(audit.rows[0].actor_user_agent).toBe("sl-test-agent/1.0");
+  });
+
   it("rejects duplicate emp_no and phone with 409 + field_errors", async () => {
     const admin = await adminHeaders();
     const first = empPayload();
