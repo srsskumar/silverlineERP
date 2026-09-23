@@ -79,6 +79,17 @@ export interface AttendanceRecord {
   [key: string]: unknown;
 }
 
+export interface AttendanceException {
+  id: string;
+  employee_id: string;
+  attendance_record_id?: string | null;
+  exception_type: ExceptionType | string;
+  reason: string;
+  status?: string;
+  version: number;
+  [key: string]: unknown;
+}
+
 export interface PunchInput {
   employee_id: string;
   event_type: PunchEventType;
