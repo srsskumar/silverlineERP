@@ -542,6 +542,40 @@ export async function registerSurveyRoutes(
     return row;
   }
 
+  /**
+   * Whether the caller is actually posted to this village, rather than
+   * merely somewhere on the programme it belongs to.
+   *
+   * `villageOr404` answers "is this caller on the programme" — enough for
+   * reading, and for the day's own return, which already carries the
+   * village a crew member chose from their own `me/villages` list. A ground
+   * control point is different: it is planted by whoever is standing on it,
+   * and being enrolled on a six-village programme is not the same fact as
+   * being the crew for the one the point is on. Without this, any surveyor
+   * on the programme could plant or move a point on a village they have
+   * never set foot in.
+   *
+   * A supervisor is the exception: whoever can assign a crew or manage the
+   * programme did not need to be posted to a village to have business
+   * correcting a point on it.
+   */
+  async function requireOwnCrew(
+    db: Pool | PoolClient, u: { orgId: string; id: string; permissions: string[] },
+    villageId: string,
+  ) {
+    if (u.permissions.includes('survey.manage') || u.permissions.includes('survey.assign')) return;
+    const onCrew = await db.query(
+      `SELECT 1 FROM survey_crew c JOIN users usr ON usr.employee_id = c.employee_id
+        WHERE c.org_id = $1 AND usr.id = $2 AND c.survey_village_id = $3
+          AND c.released_on IS NULL`,
+      [u.orgId, u.id, villageId]);
+    if (!onCrew.rowCount) {
+      fail('NOT_YOUR_VILLAGE',
+        'You are not on this village’s crew. Ask whoever assigned the crew, or your '
+        + 'team lead, to record or correct this point.', 403);
+    }
+  }
+
   /* ------------------------------------------------------- programmes */
 
   app.get('/api/v1/survey/projects', { preHandler: guard('survey.read') }, async req => {
@@ -2216,6 +2250,26 @@ export async function registerSurveyRoutes(
         expectedEndOn: iso(gt.expected_end_on), varianceReason: gt.variance_reason,
       } : null;
 
+      /*
+       * A day dated before the crew was recorded as on the ground (§081).
+       *
+       * `pastDate` in the schema stops a return dated tomorrow; nothing
+       * flagged one dated before the village's ground truthing even started
+       * — a typo'd year landed as a silent day nobody worked, sitting in the
+       * cumulative for a stage that had not begun with nothing on the record
+       * to say so.
+       *
+       * Flagged rather than refused: `started_on` is itself something a
+       * person typed, sometimes days after the crew's first morning on the
+       * ground, and a hard refusal here would block the ordinary case of
+       * backfilling those first few days once the paperwork catches up.
+       * What must not happen is the silent version — the entry carries the
+       * warning back so whoever is looking at it can tell a typo from a
+       * backfill.
+       */
+      const backdatedBeforeGt = Boolean(
+        gtStage?.startedOn && input.entry_date < gtStage.startedOn);
+
       if (gtStage && gtReasonRequired(gtStage, today())) {
         if (!input.gt_variance_reason) {
           fail('GT_VARIANCE_REASON_REQUIRED',
@@ -2285,7 +2339,14 @@ export async function registerSurveyRoutes(
           'INSERT INTO survey_entry_values(org_id, entry_id, measure_id, quantity) VALUES($1,$2,$3,$4)',
           [u.orgId, entry.id, m.byCode.get(code)!.id, quantity]);
       }
-      return entry;
+      return {
+        ...entry,
+        warnings: backdatedBeforeGt
+          ? [`Ground truthing on this village is recorded as starting on ${gtStage!.startedOn}. `
+            + `${input.entry_date} is before that — check the date, or correct the start date `
+            + 'on the village if the paperwork is what is wrong.']
+          : [],
+      };
     });
     reply.code(201);
     return { data: row };
@@ -2995,6 +3056,7 @@ export async function registerSurveyRoutes(
       const data = await mutate(pool, req, 'survey.gcp.create', 'survey_village_gcp',
         async db => {
           await villageOr404(db, u.orgId, id, u);
+          await requireOwnCrew(db, u, id);
           const clash = await db.query(
             'SELECT 1 FROM survey_village_gcps WHERE survey_village_id = $1 AND point_code = $2',
             [id, input.point_code]);
@@ -3038,6 +3100,7 @@ export async function registerSurveyRoutes(
           const row = await inOrg(db, 'survey_village_gcps', id, u.orgId, true);
           if (!row) fail('NOT_FOUND', 'That control point no longer exists.', 404);
           await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+          await requireOwnCrew(db, u, String(row.survey_village_id));
           version(req, row as { version: number });
 
           /*
@@ -3586,6 +3649,14 @@ export async function registerSurveyRoutes(
       const u = actor(req);
       const q = parse(z.object({
         project_id: z.string().uuid().optional(),
+        // Every other survey endpoint that names a programme in its query
+        // string calls it `survey_project_id` (alert-subscriptions, the
+        // mobile village list). This one alone said `project_id`, so a
+        // caller that got the name from elsewhere in the API — or from
+        // memory — was refused with "unrecognized key" rather than filtered.
+        // Accepted here as a synonym rather than renamed, since existing
+        // callers already send `project_id`.
+        survey_project_id: z.string().uuid().optional(),
         milestone: z.coerce.number().int().min(1).max(9).optional(),
         status: z.enum(['SUBMITTED', 'APPROVED', 'REJECTED', 'PAID']).optional(),
         from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -3593,6 +3664,7 @@ export async function registerSurveyRoutes(
         /** Villages with nothing claimed at this milestone yet. */
         outstanding: z.coerce.number().int().min(1).max(9).optional(),
       }).strict(), req.query ?? {});
+      const projectId = q.project_id ?? q.survey_project_id;
       // The claim register, for the programmes this reader may see. It was
       // read organisation-wide by anybody holding survey.read, which put what
       // every village is being invoiced for in front of a client.
@@ -3615,7 +3687,7 @@ export async function registerSurveyRoutes(
                  WHERE b.survey_village_id = v.id AND b.milestone = $3
                    AND b.status <> 'REJECTED')
             ORDER BY ou.name`,
-          [u.orgId, q.project_id ?? null, q.outstanding, allowed])).rows;
+          [u.orgId, projectId ?? null, q.outstanding, allowed])).rows;
         return {
           data: rows.map(r => ({
             ...r, total_extent_ac: num(r.total_extent_ac),
@@ -3638,7 +3710,7 @@ export async function registerSurveyRoutes(
             AND ($6::date IS NULL OR b.submitted_on <= $6)
             AND ($7::uuid[] IS NULL OR v.survey_project_id = ANY($7::uuid[]))
           ORDER BY b.submitted_on DESC, ou.name`,
-        [u.orgId, q.project_id ?? null, q.milestone ?? null, q.status ?? null,
+        [u.orgId, projectId ?? null, q.milestone ?? null, q.status ?? null,
           q.from ?? null, q.to ?? null, allowed])).rows;
       return {
         data: rows.map(r => ({
@@ -4508,10 +4580,26 @@ export async function registerSurveyRoutes(
       const districtOf = (row: Record<string, any>) => row.parent_type === 'district'
         ? row.parent_name
         : row.grandparent_type === 'district' ? row.grandparent_name : null;
+      /*
+       * The dashboard's district/mandal pickers hand out org-unit ids, not
+       * names (its villages carry both, and it filters on the id). Matching
+       * here name-first, id-second means a value copied from the dashboard
+       * still narrows this screen correctly, without changing what the
+       * picker on this screen itself sends.
+       */
+      const districtIdOf = (row: Record<string, any>) => row.parent_type === 'district'
+        ? row.parent_id
+        : row.grandparent_type === 'district' ? row.grandparent_id : null;
+      const matchesDistrict = (row: Record<string, any>) => !fDistrict
+        || String(districtOf(row) ?? '') === fDistrict
+        || String(districtIdOf(row) ?? '') === fDistrict;
+      const matchesMandal = (row: Record<string, any>) => !fMandal
+        || String(row.mandal_name ?? '') === fMandal
+        || String(row.mandal_id ?? '') === fMandal;
 
       const pos = all.filter(p => {
-        if (fDistrict && String(districtOf(p.row) ?? '') !== fDistrict) return false;
-        if (fMandal && String(p.row.mandal_name ?? '') !== fMandal) return false;
+        if (!matchesDistrict(p.row)) return false;
+        if (!matchesMandal(p.row)) return false;
         if (fVillage && String(p.villageId) !== fVillage) return false;
         if (fStage) {
           const at = String(p.stages?.[fStage] ?? 'NOT_STARTED');
@@ -4660,11 +4748,10 @@ export async function registerSurveyRoutes(
       const districts = [...new Set(all
         .map(p => String(districtOf(p.row) ?? '')).filter(Boolean))].sort();
       const mandals = [...new Set(all
-        .filter(p => !fDistrict || String(districtOf(p.row) ?? '') === fDistrict)
+        .filter(p => matchesDistrict(p.row))
         .map(p => String(p.row.mandal_name ?? '')).filter(Boolean))].sort();
       const villages = all
-        .filter(p => (!fDistrict || String(districtOf(p.row) ?? '') === fDistrict)
-          && (!fMandal || String(p.row.mandal_name ?? '') === fMandal))
+        .filter(p => matchesDistrict(p.row) && matchesMandal(p.row))
         .map(p => ({ id: p.villageId, name: String(p.row.village_name) }))
         .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -5515,7 +5602,16 @@ export async function registerSurveyRoutes(
            LEFT JOIN org_units ou ON ou.id = c.org_unit_id
           WHERE ${where}
           ORDER BY c.side, ou.name NULLS FIRST, c.name`, values)).rows;
-      return { data: rows };
+      // The department and a client are shown who to ask a question of, not
+      // how to reach them directly — the same "where the work has got to,
+      // never whose desk it is on" line the dashboard draws for crew names.
+      // Dropped for an observer rather than withheld from the query, so the
+      // name, designation and what they cover still come through.
+      return {
+        data: scoped
+          ? rows.map(({ phone: _phone, email: _email, ...rest }) => rest)
+          : rows,
+      };
     });
 
   app.post('/api/v1/survey/projects/:id/contacts',
