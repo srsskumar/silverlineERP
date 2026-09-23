@@ -89,6 +89,49 @@ export function Title({ children, style }: { children: ReactNode; style?: StyleP
   );
 }
 
+/**
+ * Title row for a pushed (non-tab) screen, with a back affordance.
+ *
+ * The app never turns on the native header (every tab screen draws its own
+ * title inside `Screen`), so a screen reached by pushing onto the stack —
+ * the module launcher's destinations — needs the same hand-drawn treatment,
+ * not a sudden native bar nobody else in the app has.
+ */
+export function BackHeader({
+  title,
+  onBack,
+  right,
+}: {
+  title: string;
+  onBack: () => void;
+  right?: ReactNode;
+}) {
+  const t = useTheme();
+  return (
+    <Row gap={space.sm} style={{ marginBottom: space.lg, justifyContent: "space-between" }}>
+      <Row gap={space.xs} style={{ flex: 1, minWidth: 0 }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          hitSlop={10}
+          onPress={onBack}
+          style={{
+            width: TOUCH_TARGET - 12,
+            height: TOUCH_TARGET - 12,
+            alignItems: "center",
+            justifyContent: "center",
+            marginLeft: -space.sm,
+          }}
+        >
+          <Ionicons name="chevron-back" size={24} color={t.text} />
+        </Pressable>
+        <Title style={{ flexShrink: 1 }}>{title}</Title>
+      </Row>
+      {right}
+    </Row>
+  );
+}
+
 export function Heading({ children, style }: { children: ReactNode; style?: StyleProp<TextStyle> }) {
   const t = useTheme();
   return (

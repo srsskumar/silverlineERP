@@ -172,3 +172,87 @@ export function validateAttendanceException(input: {
   }
   return result(errors);
 }
+
+/**
+ * The categories from shared expenseLineSchema's `z.enum(EXPENSE_CATEGORIES)`
+ * (packages/shared/src/expenses.ts). Duplicated rather than imported for the
+ * same dependency-free reason as the rest of this file — see the file header.
+ */
+export const EXPENSE_CATEGORIES = [
+  "TRAVEL", "LODGING", "FUEL", "PER_DIEM",
+  "SITE_MATERIALS_PETTY", "CLIENT_ENTERTAINMENT", "COMMUNICATION", "OTHER",
+] as const;
+
+/**
+ * POST /api/v1/expense-claims — shared expenseClaimSchema, narrowed to what
+ * this screen collects (a single line): claim_no, claim_date, purpose and
+ * one line's category/date/description/amount. The server enforces policy
+ * limits, duplicate-receipt fingerprinting and GST credit rules on top of
+ * this; this is only the cheap "is the form fillable" pre-check.
+ */
+export function validateExpenseClaim(input: {
+  claim_no: string;
+  claim_date: string;
+  purpose: string;
+  category: string;
+  expense_date: string;
+  description: string;
+  amount: number | string;
+}): ValidationResult {
+  const errors: FieldError[] = [];
+  if (!req(errors, "claim_no", input.claim_no, "A claim number is required")) {
+    // pushed above
+  } else if ((input.claim_no as string).trim().length > 50) {
+    errors.push({ field: "claim_no", message: "Claim number must be ≤ 50 characters" });
+  }
+  if (!isDateString(input.claim_date)) {
+    errors.push({ field: "claim_date", message: "Must be a date in YYYY-MM-DD format" });
+  }
+  if (!req(errors, "purpose", input.purpose, "Purpose is required")) {
+    // pushed above
+  } else if ((input.purpose as string).trim().length > 1000) {
+    errors.push({ field: "purpose", message: "Purpose must be ≤ 1000 characters" });
+  }
+  if (!(EXPENSE_CATEGORIES as readonly string[]).includes(input.category)) {
+    errors.push({ field: "category", message: "Choose a category" });
+  }
+  if (!isDateString(input.expense_date)) {
+    errors.push({ field: "expense_date", message: "Must be a date in YYYY-MM-DD format" });
+  }
+  if (!req(errors, "description", input.description, "Description is required")) {
+    // pushed above
+  } else if ((input.description as string).trim().length > 500) {
+    errors.push({ field: "description", message: "Description must be ≤ 500 characters" });
+  }
+  const amount = Number(input.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    errors.push({ field: "amount", message: "Amount must be greater than zero" });
+  }
+  return result(errors);
+}
+
+/**
+ * POST /api/v1/inventory/transactions — shared stockSchema.
+ * item_id + direction + a positive quantity + a reference are required;
+ * the server itself refuses an OUT that would take stock negative.
+ */
+export function validateStockTransaction(input: {
+  item_id: string;
+  direction: "IN" | "OUT";
+  quantity: number | string;
+  reference: string;
+}): ValidationResult {
+  const errors: FieldError[] = [];
+  if (!isUuid(input.item_id)) {
+    errors.push({ field: "item_id", message: "Choose an item" });
+  }
+  if (input.direction !== "IN" && input.direction !== "OUT") {
+    errors.push({ field: "direction", message: "Direction must be IN or OUT" });
+  }
+  const quantity = Number(input.quantity);
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    errors.push({ field: "quantity", message: "Quantity must be greater than zero" });
+  }
+  req(errors, "reference", input.reference, "A reference is required");
+  return result(errors);
+}
