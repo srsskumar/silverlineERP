@@ -302,6 +302,24 @@ describe("§46.6 retention and legal hold", () => {
     expect(gone.status).toBe(404);
   });
 
+  it("still deletes when the caller sends Content-Type on a bodyless DELETE — B-016", async () => {
+    // The mobile client (apps/mobile/src/api/client.ts) sets Content-Type:
+    // application/json on every request, DELETE included, whether or not it
+    // sends a body. Fastify's default JSON body parser throws on an empty
+    // body with that header, which the global error handler then flattens
+    // into a generic 400 "Bad request" -- before the route's own preHandler
+    // (permission check) or handler (retention/legal-hold checks) ever run.
+    // The web client avoids this by omitting Content-Type when there is no
+    // body, but the contract should not depend on every caller doing that.
+    const doc = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const r = await del(
+      { ...w.admin, ...(await ver(doc.id)), "content-type": "application/json" },
+      `/api/v1/documents/${doc.id}`);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const gone = await get(w.admin, `/api/v1/documents/${doc.id}`);
+    expect(gone.status).toBe(404);
+  });
+
   it("refuses deletion under legal hold whatever the document's age", async () => {
     const doc = await orgDoc({ expires_on: dayOffset(-365 * 20) });
     const held = await post(

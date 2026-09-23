@@ -78,6 +78,18 @@ export async function buildApp(
     // per-address limit and every audit row's actor_ip depends on it.
     trustProxy: config.trustProxy,
   });
+  // Fastify's default JSON parser throws on an empty body sent with
+  // Content-Type: application/json, and the mobile client (unlike web) sets
+  // that header on every request whether or not it carries a body -- a
+  // bodyless DELETE from it hit that throw and came back as a generic 400
+  // "Bad request", before the route's own permission or business checks
+  // ever ran (B-016). Treat an empty JSON body as no body at all; a real
+  // JSON payload still parses (and still fails loudly if it is malformed).
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+    if (body === '' || body === undefined) { done(null, undefined); return; }
+    try { done(null, JSON.parse(body as string)); }
+    catch (err) { done(err as Error, undefined); }
+  });
   await registerRequestId(app);
   await registerErrorHandler(app);
   const counters=new Map<string,{requests:number;errors:number;total_ms:number}>();
