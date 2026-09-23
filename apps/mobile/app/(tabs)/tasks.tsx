@@ -57,7 +57,7 @@ function TasksScreen() {
     typeof params.taskId === "string" ? params.taskId : null,
   );
   const { canDo } = useAuth();
-  const projects = useQuery({ queryKey: ["projects"], queryFn: getProjects });
+  const projects = useQuery({ queryKey: ["projects"], queryFn: () => getProjects() });
   const [quickProject, setQuickProject] = useState("");
   const [quickTitle, setQuickTitle] = useState("");
   const [quickMsg, setQuickMsg] = useState<string | null>(null);
