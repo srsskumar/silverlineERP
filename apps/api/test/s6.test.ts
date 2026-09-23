@@ -591,6 +591,36 @@ describe("dashboards widgets", () => {
     );
   });
 
+  it("never links a widget straight at a bare JSON API route (B-022) — every link must be a browsable web page", async () => {
+    await seedOrgFixtures();
+    const h = await adminHeaders();
+    const team = await mkUser(["TEAM_LEAD"], "tlB022");
+    const emp = await mkUser(["EMPLOYEE"], "empB022");
+    const inv = await mkUser(["INVENTORY_MANAGER"], "invB022");
+    const payrollUser = await mkUser(["PAYROLL_OFFICER"], "payB022");
+    const cases: [Record<string, string>, string][] = [
+      [h, "super_admin"],
+      [h, "admin"],
+      [(await mkUser(["HR_MANAGER"], "hrB022")).headers, "hr_manager"],
+      [(await mkUser(["PROJECT_MANAGER"], "pmB022")).headers, "project_manager"],
+      [team.headers, "team_lead"],
+      [emp.headers, "employee"],
+      [(await mkUser(["AUDITOR"], "audB022")).headers, "auditor"],
+      [payrollUser.headers, "payroll_officer"],
+      [inv.headers, "inventory_manager"],
+    ];
+    for (const [headers, template] of cases) {
+      const res = await getDashboard(headers, template);
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as DashboardBody;
+      for (const w of body.widgets) {
+        if (w.link) {
+          expect(w.link.startsWith("/api/")).toBe(false);
+        }
+      }
+    }
+  });
+
   it("never leaks cross-org rows into caller-scoped widgets", async () => {
     const h = await adminHeaders();
     await mkActiveEmployee({});
