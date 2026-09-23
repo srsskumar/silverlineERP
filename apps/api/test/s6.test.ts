@@ -600,7 +600,7 @@ describe("dashboards widgets", () => {
     const payrollUser = await mkUser(["PAYROLL_OFFICER"], "payB022");
     const cases: [Record<string, string>, string][] = [
       [h, "super_admin"],
-      [h, "admin"],
+      [(await mkUser(["ADMIN"], "admB022")).headers, "admin"],
       [(await mkUser(["HR_MANAGER"], "hrB022")).headers, "hr_manager"],
       [(await mkUser(["PROJECT_MANAGER"], "pmB022")).headers, "project_manager"],
       [team.headers, "team_lead"],

@@ -260,12 +260,12 @@ async function buildAdminWidgets(
   );
   return {
     widgets: [
-      widget("headcount_active", "Active headcount", headcount, "/api/v1/employees"),
-      widget("attendance_today_pct", "Attendance today (%)", pct(present, headcount), "/api/v1/attendance/records"),
+      widget("headcount_active", "Active headcount", headcount, "/employees"),
+      widget("attendance_today_pct", "Attendance today (%)", pct(present, headcount), "/attendance"),
       widget("pending_exceptions", "Pending attendance exceptions", pendingExceptions),
-      widget("open_tasks", "Open tasks", openTasks, "/api/v1/tasks"),
-      widget("overdue_tasks", "Overdue tasks", overdueTasks, "/api/v1/tasks?sla=overdue"),
-      widget("pending_leave", "Pending leave requests", pendingLeave, "/api/v1/leave/requests"),
+      widget("open_tasks", "Open tasks", openTasks, "/my-work"),
+      widget("overdue_tasks", "Overdue tasks", overdueTasks, "/my-work"),
+      widget("pending_leave", "Pending leave requests", pendingLeave, "/leave"),
     ],
   };
 }
@@ -297,9 +297,9 @@ async function buildHrWidgets(db: Db, orgId: string): Promise<DashboardBuild> {
   );
   return {
     widgets: [
-      widget("headcount_active", "Active headcount", headcount, "/api/v1/employees"),
+      widget("headcount_active", "Active headcount", headcount, "/employees"),
       widget("on_leave_today", "Employees on leave today", onLeaveToday),
-      widget("pending_leave", "Pending leave requests", pendingLeave, "/api/v1/leave/requests"),
+      widget("pending_leave", "Pending leave requests", pendingLeave, "/leave"),
       widget("pending_exceptions", "Pending attendance exceptions", pendingExceptions),
     ],
   };
@@ -319,8 +319,8 @@ async function buildPmWidgets(
     return {
       widgets: [
         widget("my_projects", "My projects", 0),
-        widget("open_tasks", "Open tasks", 0, "/api/v1/tasks"),
-        widget("overdue_tasks", "Overdue tasks", 0, "/api/v1/tasks?sla=overdue"),
+        widget("open_tasks", "Open tasks", 0, "/my-work"),
+        widget("overdue_tasks", "Overdue tasks", 0, "/my-work"),
         widget("blocked_tasks", "Blocked tasks", 0),
       ],
       scopeNote: "no managed projects",
@@ -349,8 +349,8 @@ async function buildPmWidgets(
   return {
     widgets: [
       widget("my_projects", "My projects", projectIds.length),
-      widget("open_tasks", "Open tasks", openTasks, "/api/v1/tasks"),
-      widget("overdue_tasks", "Overdue tasks", overdueTasks, "/api/v1/tasks?sla=overdue"),
+      widget("open_tasks", "Open tasks", openTasks, "/my-work"),
+      widget("overdue_tasks", "Overdue tasks", overdueTasks, "/my-work"),
       widget("blocked_tasks", "Blocked tasks", blockedTasks),
     ],
   };
@@ -366,8 +366,8 @@ async function buildTeamLeadWidgets(
     return {
       widgets: [
         widget("team_size", "Team size", 0),
-        widget("attendance_today_pct", "Attendance today (%)", 0, "/api/v1/attendance/records"),
-        widget("pending_leave", "Pending leave requests (approver: me)", 0, "/api/v1/leave/requests"),
+        widget("attendance_today_pct", "Attendance today (%)", 0, "/attendance"),
+        widget("pending_leave", "Pending leave requests (approver: me)", 0, "/leave"),
         widget("pending_exceptions", "Pending attendance exceptions", 0),
       ],
       scopeNote: "caller has no linked employee; team scope is empty",
@@ -407,8 +407,8 @@ async function buildTeamLeadWidgets(
   return {
     widgets: [
       widget("team_size", "Team size", teamIds.length),
-      widget("attendance_today_pct", "Attendance today (%)", pct(present, teamIds.length), "/api/v1/attendance/records"),
-      widget("pending_leave", "Pending leave requests (approver: me)", pendingLeave, "/api/v1/leave/requests"),
+      widget("attendance_today_pct", "Attendance today (%)", pct(present, teamIds.length), "/attendance"),
+      widget("pending_leave", "Pending leave requests (approver: me)", pendingLeave, "/leave"),
       widget("pending_exceptions", "Pending attendance exceptions", pendingExceptions),
     ],
     ...(note ? { scopeNote: note } : {}),
@@ -455,10 +455,10 @@ async function buildEmployeeWidgets(
   );
   return {
     widgets: [
-      widget("my_open_tasks", "My open tasks", myOpen, "/api/v1/tasks?assignee_me=true"),
-      widget("my_overdue", "My overdue tasks", myOverdue, "/api/v1/tasks?assignee_me=true&sla=overdue"),
+      widget("my_open_tasks", "My open tasks", myOpen, "/my-work"),
+      widget("my_overdue", "My overdue tasks", myOverdue, "/my-work"),
       widget("my_pending_requests", "My pending requests", pendingLeave + pendingExceptions),
-      widget("unread_notifications", "Unread notifications", unread, "/api/v1/notifications?unread=true"),
+      widget("unread_notifications", "Unread notifications", unread, "/inbox"),
     ],
   };
 }
@@ -491,8 +491,8 @@ async function buildViewerWidgets(
   );
   return {
     widgets: [
-      widget("projects_active", "Active projects", projectsActive, "/api/v1/projects?status=ACTIVE"),
-      widget("tasks_open", "Open tasks", tasksOpen, "/api/v1/tasks"),
+      widget("projects_active", "Active projects", projectsActive, "/projects"),
+      widget("tasks_open", "Open tasks", tasksOpen, "/my-work"),
       widget("tasks_done_7d", "Tasks completed (7d)", tasksDone7d),
       widget("audit_events_7d", "Audit events (7d)", auditEvents7d),
     ],
