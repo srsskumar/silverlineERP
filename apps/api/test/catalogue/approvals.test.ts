@@ -436,3 +436,17 @@ describe("role boundaries", () => {
     expect((await get(w.role.CLIENT_VIEWER, "/api/v1/approval-policies")).status).toBe(403);
   });
 });
+
+describe("empty body never 500s — B-020", () => {
+  it("answers an empty JSON body on POST /approvals with 4xx, never a 500", async () => {
+    // createApp.ts's content-type parser (B-016) maps an empty body sent
+    // with Content-Type: application/json to a value the route can read
+    // without throwing. Line 200-201 reads body.document_type/document_id/
+    // amount straight off req.body, which used to be `undefined` here and
+    // 500 instead of the intended "required" validation error.
+    const res = await post(
+      { ...w.role.EMPLOYEE, "content-type": "application/json" }, "/api/v1/approvals");
+    expect(res.status, JSON.stringify(res.body)).toBeLessThan(500);
+    expect(res.status).toBeGreaterThanOrEqual(400);
+  });
+});

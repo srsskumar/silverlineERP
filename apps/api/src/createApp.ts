@@ -83,10 +83,19 @@ export async function buildApp(
   // that header on every request whether or not it carries a body -- a
   // bodyless DELETE from it hit that throw and came back as a generic 400
   // "Bad request", before the route's own permission or business checks
-  // ever ran (B-016). Treat an empty JSON body as no body at all; a real
-  // JSON payload still parses (and still fails loudly if it is malformed).
+  // ever ran (B-016). Treat an empty JSON body as an empty object, not
+  // `undefined`: about fifteen handlers do `const body = req.body as
+  // {...}` and read a property straight off it with no null check (e.g.
+  // procurement's `/purchase-orders/:id/status`, approvals' `POST
+  // /approvals`) -- `undefined` made that a TypeError, which surfaced as a
+  // 500, worse than the 400 this was meant to fix (B-020). `{}` reads back
+  // as every optional field being absent, which every one of those
+  // handlers already handles as a validation failure, and zod's own
+  // `parse()` rejects a required field missing from `{}` exactly as it
+  // would from `undefined`. A real JSON payload still parses (and still
+  // fails loudly if it is malformed).
   app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
-    if (body === '' || body === undefined) { done(null, undefined); return; }
+    if (body === '' || body === undefined) { done(null, {}); return; }
     try { done(null, JSON.parse(body as string)); }
     catch (err) { done(err as Error, undefined); }
   });

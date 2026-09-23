@@ -288,6 +288,23 @@ describe("purchase order", () => {
     const after = await w.pool.query("SELECT status FROM purchase_orders WHERE id=$1", [po.id]);
     expect(after.rows[0].status).toBe("DRAFT");
   });
+
+  it("answers an empty JSON body with 4xx, never a 500 — B-020", async () => {
+    // createApp.ts's content-type parser (B-016) maps an empty body sent
+    // with Content-Type: application/json to a value the route can read
+    // without throwing. `body.status` here used to read past an `undefined`
+    // req.body and 500 instead of giving a real validation error.
+    const vendor = await makeVendor();
+    const po = (await post(w.admin, "/api/v1/purchase-orders", {
+      po_number: uniq("PO"), vendor_id: vendor.id, po_date: "2026-09-15",
+      lines: [{ description: "Cement", unit: "bag", quantity: 10, unit_rate: 400 }],
+    })).data;
+    const res = await post(
+      { ...w.admin, ...(await ver("purchase_orders", po.id)), "content-type": "application/json" },
+      `/api/v1/purchase-orders/${po.id}/status`);
+    expect(res.status, JSON.stringify(res.body)).toBeLessThan(500);
+    expect(res.status).toBeGreaterThanOrEqual(400);
+  });
 });
 
 describe("goods receipt", () => {
