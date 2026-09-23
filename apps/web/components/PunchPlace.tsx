@@ -3,7 +3,8 @@
 import * as React from 'react';
 import { MapPin } from 'lucide-react';
 import { formatUtm } from '@silverline/shared';
-import { placeLabel, type AttendanceEvent, type PlaceStatus } from '@/lib/attendance';
+import type { AttendanceEvent } from '@/lib/attendance';
+import { placeLabel, type PlaceStatus } from '@/lib/place';
 import { cn } from '@/lib/cn';
 
 /**

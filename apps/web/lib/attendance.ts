@@ -34,12 +34,8 @@ export type ExceptionType =
   | 'SYSTEM_FLAG';
 export type ExceptionDecision = 'APPROVE' | 'REJECT';
 
-/**
- * Where a punch stands on its place name (see the API's placeStatus):
- * no position at all, positioned but not yet named by the worker, named,
- * or asked and nothing came back.
- */
-export type PlaceStatus = 'none' | 'resolving' | 'named' | 'unnamed';
+export { placeLabel, type PlaceStatus } from './place';
+import type { PlaceStatus } from './place';
 
 export interface AttendanceEvent {
   id: string;
@@ -79,35 +75,6 @@ export interface AttendanceRecord {
   check_in_place_status?: PlaceStatus;
   check_out_place_name?: string | null;
   check_out_place_status?: PlaceStatus;
-  version: number;
-  [key: string]: unknown;
-}
-
-/**
- * What to print for a punch's place.
- *
- * The name once the worker has been; "resolving…" while it has not, so the
- * reader knows a name is coming rather than that there is none; a dash for
- * a punch made without a position; and "unnamed" when the geocoder was
- * asked and had nothing, which is true of open country and of a bad fix.
- */
-export function placeLabel(name: string | null | undefined, status: PlaceStatus | undefined): string {
-  if (name) return name;
-  switch (status) {
-    case 'resolving': return 'resolving…';
-    case 'unnamed': return 'unnamed place';
-    case 'none': return '—';
-    default: return '—';
-  }
-}
-
-export interface AttendanceException {
-  id: string;
-  employee_id: string;
-  attendance_record_id?: string | null;
-  exception_type: ExceptionType | string;
-  reason: string;
-  status?: string;
   version: number;
   [key: string]: unknown;
 }
