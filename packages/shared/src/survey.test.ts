@@ -1758,7 +1758,7 @@ describe('the village ladder (§071)', () => {
       'Vectorization in progress', 'Vectorization completed',
       'Data submitted', 'Data approved',
       'Final deliverables submitted', 'Final deliverables approved',
-      'Notification pending', '13 Notification issued',
+      '13 Notification pending', '13 Notification issued',
     ]);
   });
 

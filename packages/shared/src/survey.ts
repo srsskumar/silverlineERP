@@ -197,7 +197,7 @@ export const STAGE_PIPELINE: StageSeedOrdered[] = [
    * nothing else happened was this gap, not a stalled village.
    */
   {
-    code: 'NOTIFICATION', label: 'Notification', displayOrder: 60,
+    code: 'NOTIFICATION', label: '13 Notification', displayOrder: 60,
     requires: 'FINAL_DELIVERABLES', isSignOff: true,
   },
   // Entered from wherever the work failed rather than reached in sequence, so
@@ -246,7 +246,7 @@ export const VILLAGE_LADDER: LadderRung[] = [
   // §086. Added after final deliverables, not in place of it: the department's
   // acceptance of the deliverables turned out not to be the end of the
   // contract, and the last 20% now waits on this instead.
-  { key: 'NOTIFICATION_IN_PROGRESS', label: 'Notification pending', stage: 'NOTIFICATION', state: 'IN_PROGRESS' },
+  { key: 'NOTIFICATION_IN_PROGRESS', label: '13 Notification pending', stage: 'NOTIFICATION', state: 'IN_PROGRESS' },
   // The "13" is part of the label itself, not merely the rung's index — the
   // owner named this rung "status 13" and asked for the number to read that
   // way wherever the label is shown.

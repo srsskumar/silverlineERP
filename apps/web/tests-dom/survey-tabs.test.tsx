@@ -89,7 +89,7 @@ const LADDER = [
   { key: 'FINAL_APPROVED', label: 'Final deliverables approved',
     note: 'The department signed the deliverables off. The village is not yet '
       + 'finished: the last 20% now waits on the department issuing notification (§086).' },
-  { key: 'NOTIFICATION_IN_PROGRESS', label: 'Notification pending' },
+  { key: 'NOTIFICATION_IN_PROGRESS', label: '13 Notification pending' },
   { key: 'NOTIFICATION_ISSUED', label: '13 Notification issued' },
 ];
 
@@ -161,7 +161,7 @@ const DASHBOARD = {
     { code: 'FINAL_DELIVERABLES', label: 'Final deliverables', villages_measured: 0,
       villages_here: 0, avg_days: null, median_days: null, max_days: null,
       holders: [], unassigned: 0 },
-    { code: 'NOTIFICATION', label: 'Notification', villages_measured: 0,
+    { code: 'NOTIFICATION', label: '13 Notification', villages_measured: 0,
       villages_here: 0, avg_days: null, median_days: null, max_days: null,
       holders: [], unassigned: 0 },
   ],

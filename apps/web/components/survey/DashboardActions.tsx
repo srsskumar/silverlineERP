@@ -81,7 +81,7 @@ export function SurveyContacts({
   return (
     <Card className="p-4">
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-sm font-semibold text-text">Who to contact</h3>
+        <h3 className="text-sm font-semibold text-text">Whom to contact</h3>
         {canManage ? (
           <Button variant="secondary" onClick={() => setAdding((v) => !v)}>
             {adding ? 'Cancel' : 'Add a contact'}
