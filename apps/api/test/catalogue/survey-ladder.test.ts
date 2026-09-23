@@ -9,7 +9,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  buildWorld, idem, uniq, workDate, type CatalogueWorld, type Headers,
+  buildWorld, idem, joinProgramme, uniq, workDate, type CatalogueWorld, type Headers,
 } from "./fixture.js";
 
 let w: CatalogueWorld;
@@ -1202,6 +1202,12 @@ describe("asking, reaching, and being told (§073)", () => {
   });
 
   it("lets a team lead answer, and tells whoever asked", async () => {
+    // survey.answer is organisation-wide as a permission, but the caller is
+    // still scoped to the programmes they are actually on -- the same rule
+    // as every other survey.answer/enter route. Enrolled here, deliberately,
+    // rather than leaning on the (fixed) gap that let an unenrolled team lead
+    // answer questions raised anywhere in the organisation.
+    await joinProgramme(w.pool, w.orgId, w.roleUserId.TEAM_LEAD, programmeId);
     const r = await post(w.role.TEAM_LEAD, `/api/v1/survey/queries/${raised}/answer`,
       { answer: "The mandal reassigned its staff; we restart on Monday." });
     expect(r.status, JSON.stringify(r.body)).toBe(200);

@@ -180,6 +180,26 @@ describe('csv fallback', () => {
     expect(csv).toContain('"He said ""go"""');
   });
 
+  it('defuses a cell that would open as a formula rather than the text it is', () => {
+    // A CSV has no cell-type information the way the workbook does (every
+    // one of its cells is written inlineStr), so a spreadsheet reading the
+    // fallback decides for itself, and Excel, LibreOffice and Google Sheets
+    // all read a leading =, +, - or @ as a formula. Somebody's query subject
+    // or a landmark description is typed, not authored as a formula.
+    for (const dangerous of ['=1+1', '+1+1', '-1+1', '@SUM(1)', "=cmd|'/C calc'!A1"]) {
+      const csv = sheetCsv({ ...spec, rows: [[dangerous, 'DONE']] });
+      // Quoted or not (a quote mark in the value forces quoting, which is a
+      // separate, already-covered concern), the defused value is right there
+      // in the file, one character further in than it was typed.
+      expect(csv, dangerous).toContain(`'${dangerous}`);
+    }
+  });
+
+  it('leaves a genuine negative or signed number alone', () => {
+    const csv = sheetCsv({ ...spec, rows: [['-12.5', 'DONE']] });
+    expect(csv).toContain('-12.5,DONE');
+  });
+
   it('carries exactly the columns the workbook does', async () => {
     // The two downloads must not drift apart; a CSV with a column the
     // importer does not know is the hardest failure for a user to diagnose.

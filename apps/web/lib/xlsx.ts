@@ -422,9 +422,27 @@ export async function downloadWorkbook(sheets: SheetSpec[], fileName: string): P
 
 /* ------------------------------------------------------------------ csv */
 
-/** A CSV cell, quoted only where it has to be. */
-const csvCell = (value: string) =>
-  /[",\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
+/*
+ * A cell that would open as a formula rather than the text it is.
+ *
+ * A CSV carries no type information the way the workbook's own cells do
+ * (each of those is written `t="inlineStr"`, so Excel never mistakes one for
+ * a formula whatever it starts with) — a spreadsheet reading a CSV decides
+ * for itself, and a cell starting with =, +, - or @ is read as a formula in
+ * Excel, LibreOffice and Google Sheets alike. Query subjects, remarks and
+ * landmark descriptions are typed by whoever raised the question or stood at
+ * the point, and "why is this =HYPERLINK(...)" is exactly the sentence nobody
+ * writing it meant as a formula. A plain negative or signed number is left
+ * alone, so a variance column still sums.
+ */
+const FORMULA_TRIGGER = /^[=+\-@\t\r]/;
+const isPlainNumber = (value: string) => /^[+-]?\d+(\.\d+)?$/.test(value);
+
+/** A CSV cell, quoted only where it has to be, and never mistaken for a formula. */
+const csvCell = (value: string) => {
+  const safe = FORMULA_TRIGGER.test(value) && !isPlainNumber(value) ? `'${value}` : value;
+  return /[",\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
+};
 
 /**
  * The same sheet as CSV, for anyone who would rather not open a workbook.

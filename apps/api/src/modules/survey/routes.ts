@@ -2372,6 +2372,12 @@ export async function registerSurveyRoutes(
     return {
       data: await mutate(pool, req, 'survey.entry.update', 'survey_entry', async db => {
         const row = await inOrg(db, 'survey_entries', id, u.orgId, true);
+        // inOrg only asks "is this in your organisation" -- the same gap that
+        // let a crew member on one programme plant a control point on
+        // another's village before villageOr404 existed. An entry carries a
+        // village too, and amending it is exactly the write GCP PATCH was
+        // fixed against, so it gets the same check.
+        await villageOr404(db, u.orgId, String(row.survey_village_id), u);
         version(req, row as { version: number });
 
         const entryDay = String(row.entry_date).slice(0, 10);
@@ -5814,6 +5820,11 @@ export async function registerSurveyRoutes(
           // already answered this" is a better thing to tell the loser than
           // "the record changed" — it says what happened and what to do.
           const row = await inOrg(db, 'survey_queries', id, u.orgId, true);
+          // survey.answer is held by team leads as well as by organisation-wide
+          // roles, and a team lead is scoped to the programmes they are
+          // actually on -- inOrg alone let one answer, and so close, a
+          // question raised on a programme they have never worked on.
+          await projectOr404(db, u.orgId, String(row.survey_project_id), u);
           if (row.status !== 'OPEN') {
             fail('QUERY_NOT_OPEN',
               'That question has already been dealt with. Raise a new one rather than '
