@@ -466,20 +466,36 @@ describe("concurrent stage-set calls on the same village", () => {
         ORDER BY changed_at, id`,
       [raceVillageId])).rows;
 
-    // Every one of the eight calls asked for a state different from the one
-    // before it (the sequence strictly alternates), so a village that has
-    // never seen this stage before must end up with exactly eight
-    // transitions on record — one per call, not fewer.
-    expect(history.length, JSON.stringify(history)).toBe(8);
+    // Eight calls alternate IN_PROGRESS/COMPLETED, but concurrent calls have
+    // no guaranteed order of execution -- the lock says who goes next only
+    // once the others are queued, not which of the eight goes first. Two
+    // calls asking for the same state can legitimately land back to back
+    // (one is then a real no-op, and rightly writes nothing), so the count
+    // of history rows is not fixed at eight. What is fixed, win or lose the
+    // race for a turn, is that every row that IS written tells the truth.
+    expect(history.length, JSON.stringify(history)).toBeGreaterThan(0);
 
-    // And the chain has to be honest: each row's "from" is the row before
-    // it's "to" (null for the very first), never a state some other,
-    // interleaved call had already overtaken by the time this one wrote.
+    // The chain has to be honest: each row's "from" is the row before it's
+    // "to" (null for the very first), never a state some other, interleaved
+    // call had already overtaken by the time this one wrote. This is
+    // exactly what broke before the village row was locked: a stale read let
+    // two calls each believe they were moving from the same "previous"
+    // state, so the row written after the first transition already carried
+    // a from_state the table had moved past.
     let expectedFrom: string | null = null;
     for (const row of history) {
       expect(row.from_state, JSON.stringify(history)).toBe(expectedFrom);
       expectedFrom = row.to_state;
     }
+
+    // And the row itself agrees with its own history: whatever state the
+    // stage actually holds now is the "to" of the last transition on record.
+    const stored = (await w.pool.query(
+      `SELECT vs.state FROM survey_village_stages vs
+         JOIN survey_stages s ON s.id = vs.stage_id
+        WHERE vs.survey_village_id = $1 AND s.code = 'GROUND_TRUTHING'`,
+      [raceVillageId])).rows[0];
+    expect(stored.state).toBe(expectedFrom);
   });
 });
 
