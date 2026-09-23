@@ -211,6 +211,9 @@ export interface PayrollWarning {
   code: string;
   message: string;
   employee_id?: string | null;
+  /** Set by runs calculated since the warning learned to name the person. */
+  emp_no?: string | null;
+  employee_name?: string | null;
   [key: string]: unknown;
 }
 

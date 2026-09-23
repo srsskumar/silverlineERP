@@ -689,6 +689,7 @@ describe("my-work", () => {
     expect(body.pending_approvals.leave[0]).toMatchObject({
       id: leaveId,
       employee_id: empRow,
+      employee_name: "S6 Fixture",
       from_date: istToday(),
       to_date: istToday(),
     });

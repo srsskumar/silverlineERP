@@ -7,6 +7,8 @@ export interface Holiday {
   type: string;
   scope_type?: string | null;
   scope_id?: string | null;
+  /** The unit the scope points at; the list looks it up. */
+  scope_name?: string | null;
   [key: string]: unknown;
 }
 

@@ -8,6 +8,8 @@ import { useAuth } from '@/components/AuthProvider';
 import { Button } from '@/components/ui/Button';
 import { Combobox } from '@/components/ui/Combobox';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { EmployeePicker } from '@/components/EmployeePicker';
+import { UserPicker } from '@/components/UserPicker';
 export type Row=Record<string,any>;
 export function useRows(path:string,enabled=true){const {status}=useAuth();return useQuery({queryKey:['v2',path],queryFn:async()=>{const r=await apiRequestRaw('/api/v1/'+path);const b=r.body as {data?:Row[];has_more?:boolean;next_offset?:number};return {rows:Array.isArray(b)?b:b.data??[],hasMore:b.has_more??false};},enabled:enabled&&status==='authenticated'});}
 export function Workbench({title,description,children}:{title:string;description:string;children:ReactNode}){return <AppShell><div className="mx-auto max-w-7xl space-y-6"><div><p className="text-xs font-semibold uppercase tracking-wider text-primary">Silverline operations</p><h1 className="mt-2 text-3xl font-semibold text-text">{title}</h1><p className="mt-2 max-w-3xl text-text-muted">{description}</p></div>{children}</div></AppShell>;}
@@ -15,7 +17,7 @@ export function Panel({title,children}:{title:string;children:ReactNode}){return
 export function Can({permission,children}:{permission:string;children:ReactNode}){const {session}=useAuth();return session?.permissions.includes(permission)?<>{children}</>:null;}
 export interface Field {
  key:string;label:string;
- type?:'text'|'date'|'number'|'password'|'email'|'checkbox'|'textarea'|'select'|'multi_select';
+ type?:'text'|'date'|'number'|'password'|'email'|'checkbox'|'textarea'|'select'|'multi_select'|'employee'|'user';
  required?:boolean;options?:{value:string;label:string}[];source?:string;labelKey?:string;default?:unknown;
  /**
   * Endpoint that creates a missing option, e.g. 'project-categories'.
@@ -37,7 +39,7 @@ function SelectField({field,value,onChange}:{field:Field;value:unknown;onChange:
   ??query.data?.rows.map(r=>({
     id:String(r.id),
     label:String(r[field.labelKey??'name']??r.title??r.username??`${r.first_name??''} ${r.last_name??''}`.trim()??r.id),
-    hint:r.code?String(r.code):undefined,
+    hint:r.code?String(r.code):r.emp_no?String(r.emp_no):undefined,
   }))??[]);
 
  // A multi-select still needs every option visible at once, so it keeps the
@@ -78,7 +80,7 @@ function SelectField({field,value,onChange}:{field:Field;value:unknown;onChange:
  */
 export function MutationForm({path,fields,method='POST',version,initial={},submit='Save',transform,onSaved,signOutMessage}:{path:string;fields:Field[];method?:string;version?:number;initial?:Row;submit?:string;transform?:(row:Row)=>Row;onSaved?:(row:Row)=>void;signOutMessage?:string}){
  const [values,setValues]=useState<Row>(()=>Object.fromEntries(fields.map(f=>[f.key,initial[f.key]??f.default??(f.type==='checkbox'?false:'')]))),[busy,setBusy]=useState(false),[error,setError]=useState<unknown>(),[saved,setSaved]=useState(false),client=useQueryClient();
- return <form className="space-y-4" onSubmit={async e=>{e.preventDefault();setBusy(true);setError(undefined);setSaved(false);try{const body=Object.fromEntries(Object.entries(values).filter(([,v])=>v!==''));const {data}=await apiRequest<Row>('/api/v1/'+path,{method,body:transform?transform(body):body,headers:{...(version!==undefined?{'If-Match':String(version)}:{})}});setSaved(true);if(signOutMessage){signOutWithNotice(signOutMessage);return;}await client.invalidateQueries();onSaved?.(data);}catch(e){setError(e);}finally{setBusy(false);}}}><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{fields.map(f=><label key={f.key} className="block text-sm font-medium text-text-muted"><span className="mb-1 block">{f.label}{f.required?' *':''}</span>{f.source||f.type==='select'||f.type==='multi_select'?<SelectField field={f} value={values[f.key]} onChange={v=>setValues({...values,[f.key]:v})}/>:f.type==='checkbox'?<input type="checkbox" checked={!!values[f.key]} onChange={e=>setValues({...values,[f.key]:e.target.checked})}/>:f.type==='textarea'?<textarea className="w-full rounded-md border border-border p-2" required={f.required} value={String(values[f.key])} onChange={e=>setValues({...values,[f.key]:e.target.value})}/>:<input className="w-full rounded-md border border-border p-2" type={f.type??'text'} required={f.required} step={f.type==='number'?'any':undefined} value={String(values[f.key])} onChange={e=>setValues({...values,[f.key]:e.target.value})}/>}</label>)}</div>{error?<ErrorCard error={error}/>:null}<div className="flex items-center gap-3"><Button type="submit" loading={busy}>{submit}</Button>{saved?<p role="status" className="text-sm text-success">Saved successfully.</p>:null}</div></form>;
+ return <form className="space-y-4" onSubmit={async e=>{e.preventDefault();setBusy(true);setError(undefined);setSaved(false);try{const body=Object.fromEntries(Object.entries(values).filter(([,v])=>v!==''));const {data}=await apiRequest<Row>('/api/v1/'+path,{method,body:transform?transform(body):body,headers:{...(version!==undefined?{'If-Match':String(version)}:{})}});setSaved(true);if(signOutMessage){signOutWithNotice(signOutMessage);return;}await client.invalidateQueries();onSaved?.(data);}catch(e){setError(e);}finally{setBusy(false);}}}><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{fields.map(f=><label key={f.key} className="block text-sm font-medium text-text-muted"><span className="mb-1 block">{f.label}{f.required?' *':''}</span>{f.type==='employee'?<EmployeePicker value={String(values[f.key]??'')} onChange={v=>setValues({...values,[f.key]:v})} hint={f.hint}/>:f.type==='user'?<UserPicker value={String(values[f.key]??'')} onChange={v=>setValues({...values,[f.key]:v})} hint={f.hint}/>:f.source||f.type==='select'||f.type==='multi_select'?<SelectField field={f} value={values[f.key]} onChange={v=>setValues({...values,[f.key]:v})}/>:f.type==='checkbox'?<input type="checkbox" checked={!!values[f.key]} onChange={e=>setValues({...values,[f.key]:e.target.checked})}/>:f.type==='textarea'?<textarea className="w-full rounded-md border border-border p-2" required={f.required} value={String(values[f.key])} onChange={e=>setValues({...values,[f.key]:e.target.value})}/>:<input className="w-full rounded-md border border-border p-2" type={f.type??'text'} required={f.required} step={f.type==='number'?'any':undefined} value={String(values[f.key])} onChange={e=>setValues({...values,[f.key]:e.target.value})}/>}</label>)}</div>{error?<ErrorCard error={error}/>:null}<div className="flex items-center gap-3"><Button type="submit" loading={busy}>{submit}</Button>{saved?<p role="status" className="text-sm text-success">Saved successfully.</p>:null}</div></form>;
 }
 export function Collection({path,columns,onSelect}:{path:string;columns:{key:string;label:string}[];onSelect?:(row:Row)=>void}){
  const [offset,setOffset]=useState(0),query=useRows(`${path}${path.includes('?')?'&':'?'}limit=30&offset=${offset}`);

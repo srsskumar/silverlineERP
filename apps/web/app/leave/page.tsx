@@ -14,7 +14,8 @@ import { LeaveStatusBadge } from '@/components/LeaveStatusBadge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
-import { Input } from '@/components/ui/Input';
+import { EmployeePicker } from '@/components/EmployeePicker';
+import { PersonName } from '@/components/PersonName';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Spinner } from '@/components/ui/Spinner';
 import { day } from '@/lib/finance';
@@ -59,8 +60,8 @@ function RequestsTable({ view }: { view: LeaveListView }) {
         </div>
         {view === 'all' && (
           <div className="flex-1">
-            <label htmlFor={`leave-employee-${view}`} className="text-sm font-medium text-text-muted">Employee ID</label>
-            <Input id={`leave-employee-${view}`} placeholder="Filter by employee…" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} />
+            <label htmlFor={`leave-employee-${view}`} className="text-sm font-medium text-text-muted">Employee</label>
+            <EmployeePicker id={`leave-employee-${view}`} status={null} value={employeeId} onChange={setEmployeeId} placeholder="Anybody — type a name to filter" />
           </div>
         )}
         <Link href="/leave/new" className="text-sm text-primary hover:underline">
@@ -97,7 +98,7 @@ function RequestsTable({ view }: { view: LeaveListView }) {
                     <td className="px-3 py-2">
                       <LeaveStatusBadge status={String(r.status)} />
                     </td>
-                    <td className="px-3 py-2 font-mono text-xs text-text-muted">{r.employee_id}</td>
+                    <td className="px-3 py-2 text-text-muted"><PersonName id={r.employee_id} name={r.employee_name} empNo={r.employee_emp_no} /></td>
                     <td className="px-3 py-2">
                       <Link href={`/leave/${r.id}`} className="text-primary hover:underline">
                         View

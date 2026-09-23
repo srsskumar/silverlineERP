@@ -200,11 +200,42 @@ interface RequestRow {
   version: number;
   created_at: Date | string;
   updated_at: Date | string;
+  /** From the employee record, when the query joined it. */
+  employee_name?: string | null;
+  employee_emp_no?: string | null;
 }
 
 const REQUEST_COLS = `id, org_id, employee_id, leave_type_id, from_date,
   to_date, total_days, reason, status, approval_chain, current_approver_id,
   version, created_at, updated_at`;
+
+/*
+ * The request with the employee's name beside it.
+ *
+ * A leave request carries only the employee id, and every screen that
+ * listed requests printed that id where the person reviewing them wanted a
+ * name. One join here is cheaper than a directory fetch per page on every
+ * client, and it survives the employee later leaving: the name is read from
+ * the record, not from the directory of who can still sign in.
+ */
+const REQUEST_COLS_R = REQUEST_COLS.split(",").map((c) => `r.${c.trim()}`).join(", ");
+const EMPLOYEE_NAME_COLS = `trim(concat_ws(' ', e.first_name, e.last_name)) AS employee_name,
+  e.emp_no AS employee_emp_no`;
+const EMPLOYEE_JOIN = `LEFT JOIN employees e ON e.id = r.employee_id AND e.org_id = r.org_id`;
+
+/** Add the employee's name to a row that came back from an INSERT or UPDATE. */
+async function nameEmployee<T extends RequestRow>(
+  db: Pick<Pool, "query">,
+  row: T,
+): Promise<T> {
+  const res = await db.query(
+    `SELECT trim(concat_ws(' ', first_name, last_name)) AS employee_name, emp_no AS employee_emp_no
+     FROM employees WHERE id = $1::uuid AND org_id = $2`,
+    [row.employee_id, row.org_id],
+  );
+  const named = res.rows[0] as { employee_name: string; employee_emp_no: string } | undefined;
+  return { ...row, employee_name: named?.employee_name ?? null, employee_emp_no: named?.employee_emp_no ?? null };
+}
 
 function chainOf(row: RequestRow): ApprovalChainStep[] {
   return Array.isArray(row.approval_chain)
@@ -224,6 +255,8 @@ function toRequestShape(row: RequestRow) {
     status: row.status,
     current_approver_id: row.current_approver_id,
     version: row.version,
+    employee_name: row.employee_name ?? null,
+    employee_emp_no: row.employee_emp_no ?? null,
   };
 }
 
@@ -295,7 +328,7 @@ export async function registerLeaveRoutes(
     id: string,
   ): Promise<RequestRow | undefined> {
     const res = await opts.pool.query(
-      `SELECT ${REQUEST_COLS} FROM leave_requests WHERE id = $1::uuid AND org_id = $2`,
+      `SELECT ${REQUEST_COLS_R}, ${EMPLOYEE_NAME_COLS} FROM leave_requests r ${EMPLOYEE_JOIN} WHERE r.id = $1::uuid AND r.org_id = $2`,
       [id, orgId],
     );
     return res.rows[0] as RequestRow | undefined;
@@ -770,7 +803,7 @@ export async function registerLeaveRoutes(
       ],
     );
     const row = ins.rows[0] as RequestRow;
-    const body = toRequestShape(row);
+    const body = toRequestShape(await nameEmployee(db, row));
     try {
       await db.query(
         `INSERT INTO idempotency_keys (key, user_id, method, path, status_code, response_body)
@@ -893,8 +926,8 @@ export async function registerLeaveRoutes(
     }
     values.push(q.limit + 1);
     const res = await opts.pool.query(
-      `SELECT ${REQUEST_COLS.split(",").map((c) => `r.${c.trim()}`).join(", ")}
-       FROM leave_requests r
+      `SELECT ${REQUEST_COLS_R}, ${EMPLOYEE_NAME_COLS}
+       FROM leave_requests r ${EMPLOYEE_JOIN}
        WHERE ${clauses.join(" AND ")}
        ORDER BY r.created_at DESC, r.id DESC LIMIT $${values.length}`,
       values as string[],
@@ -1203,7 +1236,7 @@ export async function registerLeaveRoutes(
           message: f.message,
         });
       }
-      const body = toRequestDetail(finalRow);
+      const body = toRequestDetail(await nameEmployee(opts.pool, finalRow));
       // S5 inbox (best-effort, after commit): LEAVE_DECIDED to the
       // requester's linked user, on final decisions only. Dates + outcome
       // only — never PII.
@@ -1314,7 +1347,7 @@ export async function registerLeaveRoutes(
           message: "Leave request is no longer cancellable",
         });
       }
-      const body = toRequestDetail(row);
+      const body = toRequestDetail(await nameEmployee(db, row));
       const cancelReason = parsed.data.reason?.trim()
         ? parsed.data.reason.trim()
         : null;

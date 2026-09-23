@@ -471,7 +471,7 @@ describe("payroll calculate", () => {
       total_gross: number;
       total_deductions: number;
       total_net: number;
-      warnings: Array<{ type: string; employee_id: string }>;
+      warnings: Array<{ type: string; employee_id: string; emp_no?: string; employee_name?: string }>;
     };
     expect(body.status).toBe("CALCULATED");
     expect(body.employee_count).toBe(3);
@@ -484,6 +484,11 @@ describe("payroll calculate", () => {
     expect(
       body.warnings.filter((w) => w.employee_id === empC).map((w) => w.type).sort(),
     ).toEqual(["NO_RECORDS", "NO_SALARY"]);
+    // A warning names the person, so the screen can print who and not which uuid.
+    for (const w of body.warnings.filter((w) => w.employee_id === empC)) {
+      expect(w).toMatchObject({ emp_no: "P1C01" });
+      expect((w as { employee_name?: string }).employee_name).toMatch(/^P1/);
+    }
 
     const slips = await app.inject({
       method: "GET",

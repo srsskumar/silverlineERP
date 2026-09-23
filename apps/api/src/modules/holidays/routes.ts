@@ -48,8 +48,20 @@ interface HolidayRow {
   type: string;
   scope_type: string | null;
   scope_id: string | null;
+  /** The unit the scope points at, when the query looked it up. */
+  scope_name?: string | null;
   created_at: Date | string;
 }
+
+/*
+ * The name of the unit a local holiday belongs to, looked up in place.
+ *
+ * The screen printed "district:64634e67…" next to every scoped holiday. A
+ * correlated subselect rather than a join, because the list's WHERE clauses
+ * name unqualified columns that org_units also has.
+ */
+const SCOPE_NAME_COL = `(SELECT u.name FROM org_units u
+    WHERE u.id = holidays.scope_id AND u.org_id = holidays.org_id) AS scope_name`;
 
 function toShape(row: HolidayRow) {
   const date = row.date instanceof Date ? row.date.toISOString().slice(0, 10) : String(row.date).slice(0, 10);
@@ -60,6 +72,7 @@ function toShape(row: HolidayRow) {
     type: row.type,
     scope_type: row.scope_type,
     scope_id: row.scope_id,
+    scope_name: row.scope_name ?? null,
   };
 }
 
@@ -152,7 +165,7 @@ export async function registerHolidayRoutes(
       // Resolution needs every candidate for the period, so this branch does
       // not paginate; a year of holidays is a short list by construction.
       const all = await opts.pool.query(
-        `SELECT id, date, name, type, scope_type, scope_id, created_at
+        `SELECT id, date, name, type, scope_type, scope_id, created_at, ${SCOPE_NAME_COL}
            FROM holidays WHERE ${clauses.join(" AND ")}
           ORDER BY date ASC, id ASC LIMIT 1000`,
         values as string[],
@@ -176,7 +189,7 @@ export async function registerHolidayRoutes(
 
     values.push(limit + 1);
     const res = await opts.pool.query(
-      `SELECT id, date, name, type, scope_type, scope_id, created_at
+      `SELECT id, date, name, type, scope_type, scope_id, created_at, ${SCOPE_NAME_COL}
        FROM holidays WHERE ${clauses.join(" AND ")}
        ORDER BY date ASC, id ASC LIMIT $${values.length}`,
       values as string[],

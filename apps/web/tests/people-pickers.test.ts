@@ -49,14 +49,18 @@ describe('every picker actually applies it', () => {
     // Pinned by file, because the filter is one call that is easy to drop
     // and produces no visible failure until somebody assigns work to a
     // leaver.
-    for (const file of ['components/AssignDialog.tsx', 'app/approvals/delegations/page.tsx']) {
+    for (const file of ['components/AssignDialog.tsx', 'components/UserPicker.tsx']) {
       expect(read(file), file).toContain('assignablePeople(');
     }
   });
 
   it('asks the server for active employees where the list comes from the directory', () => {
     expect(read('components/survey/VillageDetail.tsx')).toContain('status=ACTIVE');
-    expect(read('app/admin/page.tsx')).toContain('status=ACTIVE');
+    // The admin link and the delegation go through the pickers, which
+    // default to people still employed.
+    expect(read('app/admin/page.tsx')).toContain("type:'employee'");
+    expect(read('app/approvals/delegations/page.tsx')).toContain('<UserPicker');
+    expect(read('components/EmployeePicker.tsx')).toContain("status = 'ACTIVE'");
     expect(read('app/geo-fences/page.tsx')).toContain("status: 'ACTIVE'");
     expect(read('components/EmployeeForm.tsx')).toContain("status: 'ACTIVE'");
   });

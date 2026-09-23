@@ -77,3 +77,70 @@ export function assignablePeople(people: Person[] | undefined): Person[] {
     (p) => p.employee_id === null || p.employee_status === 'ACTIVE',
   );
 }
+
+/* ------------------------------------------------------------------
+ * One way to print a person, everywhere.
+ *
+ * Every screen had its own idea: a truncated UUID here, a username there,
+ * a name with no employee number somewhere else. The rule is now the same
+ * throughout: the name from the employee record, then the employee number
+ * after a dot; failing a name, the sign-in name; failing everything, the
+ * first eight characters of the id with the whole of it on hover, so support
+ * can still copy it.
+ */
+
+/** The first eight characters, for an id that has to appear at all. */
+export function shortId(id: string | null | undefined): string {
+  const s = String(id ?? '');
+  return s.length > 12 ? `${s.slice(0, 8)}…` : s;
+}
+
+export interface PersonLike {
+  id?: string | null;
+  name?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  username?: string | null;
+  emp_no?: string | null;
+  designation?: string | null;
+}
+
+/** "First Last" from an employee row; blank when the row has no name. */
+export function fullName(p: PersonLike | null | undefined): string {
+  if (!p) return '';
+  const explicit = String(p.name ?? '').trim();
+  if (explicit) return explicit;
+  return [p.first_name, p.last_name].map((s) => String(s ?? '').trim()).filter(Boolean).join(' ');
+}
+
+export interface PersonDisplay {
+  /** What to print in the main position. */
+  text: string;
+  /** The employee number, printed after the name where there is one. */
+  empNo: string | null;
+  /** True when the text is nothing better than a shortened id. */
+  isId: boolean;
+}
+
+/**
+ * Name, else username, else the shortened id.
+ *
+ * The employee number is returned separately rather than folded in, so a
+ * table can print it muted after the name and a picker can print it as a
+ * hint, without either re-splitting a string.
+ */
+export function personDisplay(p: PersonLike | null | undefined, id?: string | null): PersonDisplay {
+  const name = fullName(p);
+  const empNo = p?.emp_no ? String(p.emp_no) : null;
+  if (name) return { text: name, empNo, isId: false };
+  const username = String(p?.username ?? '').trim();
+  if (username) return { text: username, empNo, isId: false };
+  const raw = id ?? p?.id;
+  return { text: raw ? shortId(raw) : '—', empNo, isId: true };
+}
+
+/** "First Last · EMP-NO · Designation": what a picker option says. */
+export function employeeOptionLabel(e: PersonLike): string {
+  return [fullName(e) || e.username || shortId(e.id), e.emp_no, e.designation]
+    .map((s) => String(s ?? '').trim()).filter(Boolean).join(' · ');
+}

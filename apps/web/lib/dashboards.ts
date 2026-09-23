@@ -94,6 +94,8 @@ export interface MyWorkOverdueTask {
 export interface MyWorkLeaveApproval {
   id: string;
   employee_id: string;
+  employee_name?: string | null;
+  employee_emp_no?: string | null;
   from_date: string;
   to_date: string;
   [key: string]: unknown;

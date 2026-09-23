@@ -25,7 +25,7 @@ export interface ComboOption {
  */
 export function Combobox({
   value, onChange, options, placeholder, disabled, isLoading,
-  onCreate, createLabel, id, emptyHint,
+  onCreate, createLabel, id, emptyHint, onQueryChange, filter = 'client',
 }: {
   value: string;
   onChange: (id: string) => void;
@@ -38,6 +38,14 @@ export function Combobox({
   createLabel?: string;
   id?: string;
   emptyHint?: React.ReactNode;
+  /**
+   * Told what is typed, so a caller can ask the server for matches instead
+   * of loading a whole register up front. Pair it with `filter: 'server'`,
+   * or the options the server already narrowed are narrowed again here, and
+   * a match on something the label does not show (a phone number) vanishes.
+   */
+  onQueryChange?: (query: string) => void;
+  filter?: 'client' | 'server';
 }) {
   const [query, setQuery] = React.useState('');
   const [open, setOpen] = React.useState(false);
@@ -61,7 +69,7 @@ export function Combobox({
   // Matches anywhere, not just the start: an alphabetical list is not how
   // people remember a client, and the first word is rarely the memorable one.
   const needle = query.trim().toLowerCase();
-  const matches = needle
+  const matches = filter === 'server' ? options : needle
     ? options.filter((o) =>
         o.label.toLowerCase().includes(needle) || (o.hint ?? '').toLowerCase().includes(needle))
     : options;
@@ -124,7 +132,7 @@ export function Combobox({
           value={open ? query : (selected?.label ?? '')}
           placeholder={isLoading ? 'Loading…' : (placeholder ?? 'Type to search…')}
           onFocus={() => setOpen(true)}
-          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+          onChange={(e) => { setQuery(e.target.value); onQueryChange?.(e.target.value); setOpen(true); }}
           onKeyDown={(e) => {
             if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setActive((i) => Math.min(i + 1, visible.length - 1)); }
             if (e.key === 'ArrowUp') { e.preventDefault(); setActive((i) => Math.max(i - 1, 0)); }
