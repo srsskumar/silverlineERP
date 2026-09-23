@@ -9,7 +9,10 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildWorld, idem, NOW, uniq, workDate, type CatalogueWorld, type Headers } from "./fixture.js";
+import {
+  buildWorld, idem, joinProgramme, NOW, uniq, workDate,
+  type CatalogueWorld, type Headers,
+} from "./fixture.js";
 
 let w: CatalogueWorld;
 let programmeId: string;
@@ -30,6 +33,7 @@ async function send(
 }
 const post = (h: Headers, u: string, p?: unknown) => send("POST", h, u, p);
 const get = (h: Headers, u: string) => send("GET", h, u);
+const patch = (h: Headers, u: string, p?: unknown) => send("PATCH", h, u, p);
 
 beforeAll(async () => {
   w = await buildWorld();
@@ -286,6 +290,56 @@ describe("a crew member reaching past their own programme", () => {
       village_name: "Not theirs to add", village_code: uniq("NT"), mandal_id: mandalId,
     });
     expect([401, 403, 404]).toContain(r.status);
+  });
+});
+
+describe("reaching another programme through a child row's own id", () => {
+  // GCP PATCH/DELETE were fixed to check the village's programme rather than
+  // stopping at "is this row in my organisation" (inOrg). Two more routes had
+  // the identical gap: they fetch the row by its own id, check inOrg, and
+  // never ask whether the caller may touch the programme it actually belongs
+  // to. Both are reached through permissions (survey.enter, survey.answer)
+  // that ordinary staff -- not just survey.manage -- hold, and staff are
+  // scoped to the programmes they are actually enrolled on.
+  let theirProgramme: string;
+  let theirEntryId: string;
+  let theirQueryId: string;
+
+  beforeAll(async () => {
+    const other = await post(w.admin, "/api/v1/survey/projects",
+      { code: uniq("XPR"), name: "Somebody else's programme entirely", create_project: false });
+    theirProgramme = String(other.data.id);
+    const v = await post(w.admin, `/api/v1/survey/projects/${theirProgramme}/villages`,
+      { village_name: "Not directUser's programme", village_code: uniq("XV"), mandal_id: mandalId });
+
+    const entry = await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: v.data.id, entry_date: workDate(),
+      teams_deployed: 1, values: { GOVT_LAND_EXTENT_AC: 3 },
+    });
+    theirEntryId = String(entry.data.id);
+
+    const query = await post(w.admin, `/api/v1/survey/projects/${theirProgramme}/queries`,
+      { kind: "QUESTION", subject: "Why is this behind schedule",
+        body: "Asking on behalf of the department, for the record." });
+    theirQueryId = String(query.data.id);
+  });
+
+  it("cannot amend a daily return filed on a programme it is not on", async () => {
+    // Before the fix this was a plain 200: directUser holds survey.enter
+    // organisation-wide and inOrg alone does not ask which programme.
+    const r = await patch(w.directUser, `/api/v1/survey/entries/${theirEntryId}`,
+      { notes: "tampered from outside the programme" });
+    expect([403, 404]).toContain(r.status);
+  });
+
+  it("cannot answer a question raised on a programme it is not on", async () => {
+    // A team lead -- not just survey.manage -- holds survey.answer, and is
+    // scoped like any other crew member. Enrolled here on the file's own
+    // programme, deliberately not on theirProgramme.
+    await joinProgramme(w.pool, w.orgId, w.roleUserId.TEAM_LEAD, programmeId);
+    const r = await post(w.role.TEAM_LEAD, `/api/v1/survey/queries/${theirQueryId}/answer`,
+      { answer: "tampered from outside the programme" });
+    expect([403, 404]).toContain(r.status);
   });
 });
 
