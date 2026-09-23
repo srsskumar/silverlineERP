@@ -26,9 +26,13 @@ async function main(): Promise<void> {
   const dryRun = process.argv.includes("--dry-run");
   const pool = new Pool({ connectionString: process.env["DATABASE_URL"] ?? "postgresql://localhost:5432/silverline_dev" });
   try {
+    // UTM covers 80°S to 84°N; a punch from outside that band (there has
+    // never been one) is left alone rather than given a made-up grid.
+    const inBand = "lat BETWEEN -80 AND 84 AND lng BETWEEN -180 AND 180";
     const pending = Number(
       (await pool.query(
-        "SELECT COUNT(*)::int AS n FROM attendance_events WHERE lat IS NOT NULL AND lng IS NOT NULL AND utm_zone IS NULL",
+        `SELECT COUNT(*)::int AS n FROM attendance_events
+          WHERE lat IS NOT NULL AND lng IS NOT NULL AND utm_zone IS NULL AND ${inBand}`,
       )).rows[0].n,
     );
     console.log(`${pending} positioned punch(es) without UTM`);
@@ -37,7 +41,7 @@ async function main(): Promise<void> {
     for (;;) {
       const rows = (await pool.query(
         `SELECT id, lat, lng, altitude FROM attendance_events
-          WHERE lat IS NOT NULL AND lng IS NOT NULL AND utm_zone IS NULL
+          WHERE lat IS NOT NULL AND lng IS NOT NULL AND utm_zone IS NULL AND ${inBand}
           ORDER BY server_timestamp ASC LIMIT $1`,
         [BATCH],
       )).rows as Array<{ id: string; lat: number; lng: number; altitude: number | null }>;
@@ -46,10 +50,8 @@ async function main(): Promise<void> {
         const lat = Number(row.lat), lng = Number(row.lng);
         const utm = toUtm(lat, lng);
         if (!utm) {
-          // Outside the UTM bands (polar) or not a number: leave it, and
-          // stop it being selected again by marking the zone as unusable.
-          await pool.query("UPDATE attendance_events SET utm_zone = 0 WHERE id = $1::uuid", [row.id]);
-          continue;
+          // Cannot happen inside the band; said out loud rather than looped on.
+          throw new Error(`event ${row.id} at ${lat},${lng} has no UTM projection`);
         }
         await pool.query(
           `UPDATE attendance_events
