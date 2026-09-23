@@ -318,8 +318,8 @@ describe("generating a board for a real programme", () => {
       { dry_run: true, include_stages: true });
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect(r.data.village_tasks).toBeGreaterThan(0);
-    // Five stages plus rework, since §071 (was seven plus rework).
-    expect(r.data.stage_tasks).toBe(r.data.village_tasks * 6);
+    // Six stages plus rework, since §086 (was five plus rework).
+    expect(r.data.stage_tasks).toBe(r.data.village_tasks * 7);
 
     const after = await w.pool.query("SELECT count(*)::int AS n FROM tasks");
     expect(after.rows[0].n, "a preview writes nothing").toBe(before.rows[0].n);
@@ -329,8 +329,8 @@ describe("generating a board for a real programme", () => {
     const r = await post(w.admin, `/api/v1/survey/projects/${programmeId}/generate-tasks`,
       { dry_run: false, include_stages: true });
     expect(r.status, JSON.stringify(r.body)).toBe(200);
-    // Five stages plus rework, since §071 (was seven plus rework).
-    expect(r.data.stage_tasks).toBe(r.data.village_tasks * 6);
+    // Six stages plus rework, since §086 (was five plus rework).
+    expect(r.data.stage_tasks).toBe(r.data.village_tasks * 7);
 
     // Every village carries its task, and every subtask hangs off the right
     // parent — the set-based insert relies on ordering, so this is the
