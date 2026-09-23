@@ -1847,4 +1847,234 @@ export async function getReportPdf(downloadUrl: string): Promise<Uint8Array> {
   return data;
 }
 
+// --- Asset movements (round 4) ------------------------------------------------
+
+/**
+ * Where a piece of equipment has been — built from asset_assignments itself
+ * (apps/api/src/modules/inventory/routes.ts's GET /assets/movements), not a
+ * separate log, so this cannot disagree with the register. A movement is one
+ * leg of a handover: ISSUED (went out) or RETURNED (came back). Distinct
+ * from the Assets tab, which is the register — what's on hand now, not
+ * where it has been.
+ */
+export interface AssetMovement {
+  allocation_id: string;
+  asset_id: string;
+  movement: "ISSUED" | "RETURNED";
+  at: string;
+  asset_code?: string | null;
+  asset_name?: string | null;
+  serial_number?: string | null;
+  type_label?: string | null;
+  condition?: string | null;
+  condition_note_src?: string | null;
+  to_name?: string | null;
+  to_emp_no?: string | null;
+  to_phone?: string | null;
+  from_name?: string | null;
+  from_emp_no?: string | null;
+  project_name?: string | null;
+  project_code?: string | null;
+  due_date?: string | null;
+  reason?: string | null;
+  recorded_by_username?: string | null;
+  [k: string]: unknown;
+}
+
+export async function getAssetMovements(params?: {
+  asset_id?: string;
+  employee_id?: string;
+  from?: string;
+  to?: string;
+  offset?: number;
+}): Promise<{ items: AssetMovement[]; hasMore: boolean }> {
+  const q = new URLSearchParams({ limit: "50", offset: String(params?.offset ?? 0) });
+  if (params?.asset_id) q.set("asset_id", params.asset_id);
+  if (params?.employee_id) q.set("employee_id", params.employee_id);
+  if (params?.from) q.set("from", params.from);
+  if (params?.to) q.set("to", params.to);
+  const { data } = await cachedRead(`getAssetMovements:${q.toString()}`, () =>
+    apiFetch<{ data?: AssetMovement[]; has_more?: boolean }>(`/api/v1/assets/movements?${q.toString()}`));
+  const body = data as { data?: AssetMovement[]; has_more?: boolean } | null;
+  return { items: body?.data ?? [], hasMore: body?.has_more ?? false };
+}
+
+// --- Analytics (round 4) ------------------------------------------------------
+
+/**
+ * A project's operational metrics — apps/api/src/modules/analytics/routes.ts's
+ * GET /analytics/projects/:id. The web page also draws a 30-day burndown
+ * chart (`burndown`, cumulative created/completed points); that's a canvas
+ * feature, deliberately left off the phone, so this type omits it.
+ */
+export interface ProjectAnalyticsSummary {
+  total: number;
+  completed: number;
+  blocked: number;
+  overdue: number;
+  cycle_time_days: number | string | null;
+  lead_time_days: number | string | null;
+  [k: string]: unknown;
+}
+export interface ProjectAnalyticsFlow {
+  status: string;
+  count: number;
+  average_age_days: number | string | null;
+}
+export interface ProjectAnalyticsWorkload {
+  assignee_id: string | null;
+  username?: string | null;
+  name?: string | null;
+  emp_no?: string | null;
+  open: number;
+  overdue: number;
+}
+export interface ProjectAnalyticsCycle {
+  id: string;
+  name: string;
+  start_date?: string | null;
+  end_date?: string | null;
+  status: string;
+  metrics: { completed?: number; planned?: number; [k: string]: unknown } | null;
+}
+export interface ProjectAnalytics {
+  generated_at: string;
+  summary: ProjectAnalyticsSummary;
+  flow: ProjectAnalyticsFlow[];
+  cycles: ProjectAnalyticsCycle[];
+  workload: ProjectAnalyticsWorkload[];
+  [k: string]: unknown;
+}
+
+export async function getProjectAnalytics(projectId: string): Promise<ProjectAnalytics> {
+  const { data } = await cachedRead(`project-analytics:${projectId}`, () =>
+    apiFetch(`/api/v1/analytics/projects/${projectId}`));
+  return asItem<ProjectAnalytics>(data);
+}
+
+/** The statistical delivery-risk advisory alongside the metrics — advisory only. */
+export interface ProjectInsight {
+  model_version: string;
+  prediction_timestamp: string;
+  status: "AVAILABLE" | "INSUFFICIENT_DATA" | string;
+  sample_size: number;
+  confidence: number | null;
+  prediction: { delay_risk: "HIGH" | "LOW" | string; typical_task_days: number } | null;
+  factors: Array<{ name: string; value: unknown }>;
+  recommended_action: string;
+  [k: string]: unknown;
+}
+
+export async function getProjectInsights(projectId: string): Promise<ProjectInsight> {
+  const { data } = await cachedRead(`project-insights:${projectId}`, () =>
+    apiFetch(`/api/v1/insights/projects/${projectId}`));
+  return asItem<ProjectInsight>(data);
+}
+
+// --- Automation (round 4, read-only) ------------------------------------------
+
+/**
+ * Work rules (trigger → conditions → actions) — apps/api's
+ * automation-rules routes. Authoring/editing a rule needs automation.manage
+ * AND stays behind the same guard for GET /automation-rules/:id (the single
+ * -rule fetch, unlike the list, is NOT reachable on automation.read alone —
+ * see apps/api/src/modules/automation/routes.ts), so this client never calls
+ * it: the list endpoint already returns full rows (SELECT *), and detail
+ * here is built from the row the list handed back.
+ */
+export interface AutomationAction {
+  type: "status" | "assign" | "label" | "comment" | "notify" | "webhook";
+  value: string;
+}
+export interface AutomationCondition {
+  field: string;
+  value: string;
+}
+export interface AutomationRule {
+  id: string;
+  project_id: string | null;
+  name: string;
+  trigger: string;
+  conditions: AutomationCondition[];
+  actions: AutomationAction[];
+  active: boolean;
+  last_run_at: string | null;
+  version: number;
+  created_at: string;
+  [k: string]: unknown;
+}
+
+export async function getAutomationRules(projectId: string): Promise<AutomationRule[]> {
+  const { data } = await cachedRead(`getAutomationRules:${projectId}`, () =>
+    apiFetch(`/api/v1/automation-rules?project_id=${encodeURIComponent(projectId)}`));
+  return asList<AutomationRule>(data);
+}
+
+export interface AutomationExecution {
+  id: string;
+  rule_id: string;
+  event_id: string;
+  status: "SUCCEEDED" | "FAILED" | string;
+  results: unknown[];
+  created_at: string;
+}
+
+export async function getAutomationExecutions(ruleId: string): Promise<AutomationExecution[]> {
+  const { data } = await cachedRead(`automation-executions:${ruleId}`, () =>
+    apiFetch(`/api/v1/automation-rules/${ruleId}/executions`));
+  return asList<AutomationExecution>(data);
+}
+
+// --- Org units / locations (round 4) ------------------------------------------
+
+export type OrgUnitType = "district" | "division" | "mandal" | "village" | "site";
+
+export interface OrgUnit {
+  id: string;
+  type: OrgUnitType;
+  code: string;
+  name: string;
+  parent_id: string | null;
+  status: string;
+  version: number;
+  [k: string]: unknown;
+}
+
+export async function getOrgUnits(params?: {
+  type?: OrgUnitType;
+  q?: string;
+  cursor?: string;
+  limit?: number;
+}): Promise<Page<OrgUnit>> {
+  const q = new URLSearchParams({ limit: String(params?.limit ?? 50) });
+  if (params?.type) q.set("type", params.type);
+  if (params?.q) q.set("q", params.q);
+  if (params?.cursor) q.set("cursor", params.cursor);
+  const { data } = await cachedRead(`getOrgUnits:${q.toString()}`, () =>
+    apiFetch(`/api/v1/org/units?${q.toString()}`));
+  return asPage<OrgUnit>(data);
+}
+
+// --- Holidays (round 4) --------------------------------------------------------
+
+export interface Holiday {
+  id: string;
+  date: string;
+  name: string;
+  type: string;
+  scope_type: string | null;
+  scope_id: string | null;
+  scope_name: string | null;
+  [k: string]: unknown;
+}
+
+/** A year's calendar in one page — cursorPageQuerySchema's own max (100). */
+export async function getHolidays(year?: number): Promise<Page<Holiday>> {
+  const q = new URLSearchParams({ limit: "100" });
+  if (year) q.set("year", String(year));
+  const { data } = await cachedRead(`getHolidays:${year ?? ""}`, () =>
+    apiFetch(`/api/v1/holidays?${q.toString()}`));
+  return asPage<Holiday>(data);
+}
+
 // --- Geo-fences: removed 2026-09-22 (Silverline has no geo-fencing) ---------
