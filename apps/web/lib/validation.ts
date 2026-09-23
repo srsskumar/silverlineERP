@@ -161,7 +161,7 @@ const employeeBaseFields = {
   education: optionalText(500),
   skills: z.union([z.array(z.string().trim().min(1)).max(50), z.string().trim().max(2000)]).optional(),
   experience_years: z.coerce.number().min(0).max(60).optional(),
-  status: z.enum(EMPLOYEE_STATUSES).optional(),
+  status: optionalEnum(EMPLOYEE_STATUSES),
 };
 
 function checkDobVsDoj<T extends { date_of_birth?: string; date_of_joining?: string }>(
@@ -232,6 +232,16 @@ export type OrgUnitUpdateInput = z.infer<typeof orgUnitUpdateSchema>;
 // "PUBLIC"/"FESTIVAL" placeholder) turns every such submission into a
 // guaranteed 422 (A-007).
 export const HOLIDAY_TYPES = ['national', 'regional', 'local', 'weekly_off', 'manual'] as const;
+
+// Humanised labels for the Type picker. The submitted value is still the raw
+// server enum member above — only the text shown in the <option> changes.
+export const HOLIDAY_TYPE_LABELS: Record<(typeof HOLIDAY_TYPES)[number], string> = {
+  national: 'National',
+  regional: 'Regional',
+  local: 'Local',
+  weekly_off: 'Weekly off',
+  manual: 'Manual',
+};
 
 export const holidaySchema = z
   .object({

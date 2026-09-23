@@ -66,6 +66,17 @@ describe('employeeCreateSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('accepts a blank status column (a CSV cell left empty, not the string "undefined")', () => {
+    // A blank CSV "status" column comes through parseEmployeeCsv as the empty
+    // string, not an absent key. Before this field used optionalEnum(), a
+    // bare z.enum(...).optional() rejected '' (only an absent key counts as
+    // "not set" to zod), so every bulk-import row with no status column
+    // value got a spurious "Invalid status" warning even though status is
+    // optional.
+    const result = employeeCreateSchema.safeParse({ ...VALID_EMPLOYEE, status: '' });
+    expect(result.success).toBe(true);
+  });
+
   it('employeeUpdateSchema accepts a partial patch', () => {
     expect(employeeUpdateSchema.safeParse({ designation: 'Supervisor' }).success).toBe(true);
     expect(employeeUpdateSchema.safeParse({ phone: 'bad' }).success).toBe(false);

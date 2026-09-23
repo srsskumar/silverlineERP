@@ -10,7 +10,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 import { createHoliday, listHolidays } from '@/lib/holidays';
 import { queryKeys } from '@/lib/query-keys';
-import { holidaySchema, HOLIDAY_TYPES, ORG_UNIT_TYPES, type HolidayInput } from '@/lib/validation';
+import { holidaySchema, HOLIDAY_TYPES, HOLIDAY_TYPE_LABELS, ORG_UNIT_TYPES, type HolidayInput } from '@/lib/validation';
 import { applyFieldErrors } from '@/lib/form-errors';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -72,7 +72,7 @@ function CreateHolidayDialog({ open, year, onClose }: { open: boolean; year: num
             <select id="hol-type" className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm" {...register('type')}>
               {HOLIDAY_TYPES.map((t) => (
                 <option key={t} value={t}>
-                  {t}
+                  {HOLIDAY_TYPE_LABELS[t]}
                 </option>
               ))}
             </select>
