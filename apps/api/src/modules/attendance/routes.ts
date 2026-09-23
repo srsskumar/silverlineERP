@@ -85,6 +85,8 @@ interface EventRow {
   place_name: string | null;
   place_detail: Record<string, unknown> | null;
   place_resolved_at: Date | string | null;
+  ip_address: string | null;
+  user_agent: string | null;
 }
 
 interface RecordRow {
@@ -166,6 +168,10 @@ function toEventShape(row: EventRow) {
     place_detail: row.place_detail ?? null,
     place_resolved_at: iso(row.place_resolved_at ?? null),
     place_status: placeStatus(row.lat !== null && row.lat !== undefined, row.place_name ?? null, row.place_resolved_at ?? null),
+    // The client IP and user agent the punch request arrived with (migration
+    // 088, owner request). Null for punches made before that migration.
+    ip_address: row.ip_address ?? null,
+    user_agent: row.user_agent ?? null,
   };
 }
 
@@ -270,7 +276,8 @@ const EVENT_COLS = `id, employee_id, event_type, client_timestamp,
   server_timestamp, lat, lng, gps_accuracy, mock_location, device_id,
   app_version, idempotency_key, device_signals,
   altitude, altitude_accuracy, utm_zone, utm_hemisphere, utm_easting,
-  utm_northing, height_egm96, place_name, place_detail, place_resolved_at`;
+  utm_northing, height_egm96, place_name, place_detail, place_resolved_at,
+  ip_address, user_agent`;
 
 const RECORD_COLS = `id, employee_id, work_date, check_in_event_id,
   check_out_event_id, check_in_at, check_out_at, total_hours, status`;
@@ -345,6 +352,9 @@ async function insertPunch(
     serverNow: Date;
     idemKey: string;
     storedSignals: unknown | null;
+    /** The punch request's client IP and User-Agent (migration 088, owner request). */
+    ip: string | null;
+    userAgent: string | null;
   },
 ): Promise<EventRow> {
   const { d } = a;
@@ -356,9 +366,9 @@ async function insertPunch(
         mock_location, device_id, app_version, idempotency_key, device_signals,
         survey_village_id, progress_deferred_reason, progress_deferred_remarks,
         altitude, altitude_accuracy, utm_zone, utm_hemisphere, utm_easting,
-        utm_northing, height_egm96)
+        utm_northing, height_egm96, ip_address, user_agent)
      VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,
-        $13::uuid,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+        $13::uuid,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
      RETURNING ${EVENT_COLS}`,
     [
       a.employeeId,
@@ -383,6 +393,8 @@ async function insertPunch(
       pos.utm_easting,
       pos.utm_northing,
       pos.height_egm96,
+      a.ip,
+      a.userAgent,
     ],
   );
   return ins.rows[0] as EventRow;
@@ -925,6 +937,11 @@ export async function registerAttendanceRoutes(
     const workDateFor = (date: Date) => businessDay(date, timeZone);
     const clientTime = new Date(d.client_timestamp);
     const serverNow = new Date();
+    // Where this punch came from (migration 088, owner request): the same
+    // req.ip / User-Agent that audit_events already records for every write.
+    const punchIp = req.ip ?? null;
+    const punchUserAgentHeader = req.headers["user-agent"];
+    const punchUserAgent = typeof punchUserAgentHeader === "string" ? punchUserAgentHeader : null;
 
     // 4 (moved before skew/future by design): duplicate Idempotency-Key replays
     // the original outcome without side effects.
@@ -1001,6 +1018,7 @@ export async function registerAttendanceRoutes(
       const rec = await todayRecord(db, emp.id, workDate);
       const held = await insertPunch(db, {
         employeeId: emp.id, d, clientTime, serverNow, idemKey, storedSignals,
+        ip: punchIp, userAgent: punchUserAgent,
       });
       const message = `client_timestamp differs from server time by more than ${SKEW_WINDOW_MIN} minutes; queued for review`;
       const exceptionId = await createSystemException(db, {
@@ -1142,6 +1160,7 @@ export async function registerAttendanceRoutes(
     async function storeEvent(): Promise<EventRow> {
       return insertPunch(db, {
         employeeId: emp!.id, d, clientTime, serverNow, idemKey: punchKey, storedSignals,
+        ip: punchIp, userAgent: punchUserAgent,
       });
     }
 

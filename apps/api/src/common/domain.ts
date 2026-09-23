@@ -162,7 +162,13 @@ export async function mutate<T>(pool:Pool,req:FastifyRequest,action:string,entit
    * (§075) names who was actually at the keyboard, and is null for the
    * overwhelming majority of rows where those are the same person.
    */
-  await db.query('INSERT INTO audit_events(org_id,actor_id,action,entity_type,entity_id,after_state,request_id,idempotency_key,impersonator_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',[u.orgId,u.id,action,entity,id,JSON.stringify(safe),req.requestId,key||null,u.impersonator?.id??null]);
+  // req.ip is always present on a real request (Fastify sets it from the
+  // socket, or from X-Forwarded-For under trustProxy); the ?? null guards
+  // only a test double built without one, so a stub caller never crashes.
+  const actorIp=req.ip??null;
+  const ua=req.headers?.['user-agent'];
+  const actorUserAgent=typeof ua==='string'?ua:null;
+  await db.query('INSERT INTO audit_events(org_id,actor_id,actor_ip,actor_user_agent,action,entity_type,entity_id,after_state,request_id,idempotency_key,impersonator_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',[u.orgId,u.id,actorIp,actorUserAgent,action,entity,id,JSON.stringify(safe),req.requestId,key||null,u.impersonator?.id??null]);
   if(key)await db.query('INSERT INTO v2_operations(key,user_id,path,request_hash,response) VALUES($1,$2,$3,$4,$5)',[key,u.id,req.url,hash,JSON.stringify(value)]);
   await db.query('COMMIT');return value;
  }catch(e){await db.query('ROLLBACK');throw e;}finally{db.release();}

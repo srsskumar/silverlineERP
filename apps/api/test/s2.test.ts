@@ -268,6 +268,29 @@ describe("attendance punches", () => {
     expect(body.record.status).toBe("PARTIAL");
   });
 
+  it("records the punch request's IP and user agent (migration 088)", async () => {
+    const h = await adminHeaders();
+    const ids = await unitChain(h, "F2");
+    const empId = await activeEmployee(h, { village_id: ids.village });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/attendance/events",
+      headers: { ...h, "Idempotency-Key": nextKey(), "user-agent": "sl-test-agent/1.0" },
+      payload: checkinBody(empId),
+      remoteAddress: "198.51.100.23",
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json() as { event: { id: string; ip_address: string | null } };
+    // Surfaced on the response the same way place_name and the UTM fields are.
+    expect(body.event.ip_address).toBe("198.51.100.23");
+    const stored = await pool.query(
+      "SELECT ip_address, user_agent FROM attendance_events WHERE id = $1::uuid",
+      [body.event.id],
+    );
+    expect(stored.rows[0].ip_address).toBe("198.51.100.23");
+    expect(stored.rows[0].user_agent).toBe("sl-test-agent/1.0");
+  });
+
   it("accepts a check-in with no position the same way", async () => {
     const h = await adminHeaders();
     const ids = await unitChain(h, "G");
