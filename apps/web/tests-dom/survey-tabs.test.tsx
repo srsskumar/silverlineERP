@@ -670,12 +670,20 @@ describe('the land survey screen', () => {
     expect(screen.getAllByRole('button', { name: 'Ask about Adakula' }).length)
       .toBeGreaterThan(0);
 
-    // Pressing one opens the form already scoped to it.
+    /*
+     * Pressing one opens the form already scoped to it -- and brings it into
+     * view. The card sits below the roll-ups and the alerts, often a full
+     * screen down; opening it there with nothing else visibly changing is
+     * indistinguishable from the button having done nothing at all.
+     */
+    const scrolled = vi.fn();
+    Element.prototype.scrollIntoView = scrolled;
     screen.getByRole('button', { name: 'Ask about Koyyuru' }).click();
     await waitFor(() =>
       expect(screen.getByText(/About Koyyuru mandal/)).toBeInTheDocument());
     expect(screen.getByRole('button', { name: /Ask about the programme instead/ }))
       .toBeInTheDocument();
+    expect(scrolled).toHaveBeenCalled();
   });
 
   it('opens on the dashboard', async () => {

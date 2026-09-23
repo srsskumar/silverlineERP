@@ -205,9 +205,25 @@ export function SurveyQueries({
   const qc = useQueryClient();
   const toast = useToast();
   const [open, setOpen] = React.useState(false);
-  /* A scope arriving from a row press opens the form with it. */
+  const [justOpened, setJustOpened] = React.useState(false);
+  const cardRef = React.useRef<HTMLDivElement>(null);
+  /*
+   * A scope arriving from a row's "Ask" press opens the form with it -- but
+   * this card sits below the roll-ups and the alerts, often a full screen
+   * down, and opening it there with nothing else changing on screen reads as
+   * the button having done nothing. It did; nobody could see it. The card
+   * now brings itself into view and marks itself for a moment, the same way
+   * a jump to any other off-screen result would.
+   */
   React.useEffect(() => {
-    if (scope.villageId || scope.orgUnitId) setOpen(true);
+    if (scope.villageId || scope.orgUnitId) {
+      setOpen(true);
+      cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setJustOpened(true);
+      const t = setTimeout(() => setJustOpened(false), 2000);
+      return () => clearTimeout(t);
+    }
+    return undefined;
   }, [scope.villageId, scope.orgUnitId]);
   const [kind, setKind] = React.useState<string>('QUESTION');
   const [subject, setSubject] = React.useState('');
@@ -259,7 +275,8 @@ export function SurveyQueries({
   const openOnes = rows.filter((q) => q.status === 'OPEN');
 
   return (
-    <Card className="p-4">
+    <div ref={cardRef} className="scroll-mt-4">
+      <Card className={`p-4 transition-shadow ${justOpened ? 'ring-2 ring-primary' : ''}`}>
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="text-sm font-semibold text-text">Questions and concerns</h3>
         <Button variant="secondary" onClick={() => setOpen((v) => !v)}>
@@ -364,7 +381,8 @@ export function SurveyQueries({
           {openOnes.length} open in total; the most recent are shown.
         </p>
       ) : null}
-    </Card>
+      </Card>
+    </div>
   );
 }
 
