@@ -1,12 +1,12 @@
 /**
  * Catalogue: the Web half of the end-to-end suite.
  *
- * Covers E2E-02, E2E-04, E2E-20, E2E-26, E2E-30 and E2E-31 from the client's
- * side; the server half of each row is in apps/api/test/catalogue/e2e.test.ts.
+ * Covers E2E-02, E2E-20, E2E-26, E2E-30 and E2E-31 from the client's side;
+ * the server half of each row is in apps/api/test/catalogue/e2e.test.ts.
+ * E2E-04 (the fence editor) is retired: Silverline has no geo-fencing.
  *
  * What is asserted here is the client's own decision-making — which navigation
- * a session may see, what payload the fence form submits, which endpoint a
- * board drag calls, which fields reach a client viewer, and that every required
+ * a session may see, which endpoint a board drag calls, which fields reach a client viewer, and that every required
  * UI state has a component behind it. Pixel rendering and real browser timing
  * need a browser and are reported as such rather than faked.
  */
@@ -25,7 +25,6 @@ import {
 import { navItemVisible } from '../lib/landing';
 import { NAV_GROUPS, QUICK_CREATE } from '../lib/nav';
 import { hasPermission, PERMISSIONS } from '../lib/permissions';
-import { buildFencesQuery, normalizeFences } from '../lib/geo';
 import { normalizeTask, normalizeTasksPage } from '../lib/tasks';
 
 const WEB_ROOT = join(__dirname, '..');
@@ -97,7 +96,6 @@ describe('E2E-02 employee signs in without admin permissions', () => {
       '/employees',
       '/attendance/exceptions',
       '/payroll',
-      '/geo-fences',
       '/org/locations',
       '/org/holidays',
       '/admin',
@@ -142,11 +140,11 @@ describe('E2E-02 employee signs in without admin permissions', () => {
     expect(actions).toContain('/leave/new');
   });
 
-  it('gates the geo-fence destination on geo.read, not merely on a session', () => {
-    const item = NAV_GROUPS.flatMap((g) => g.items).find((i) => i.href === '/geo-fences');
-    expect(item?.permission).toBe(PERMISSIONS.GEO_READ);
-    expect(visibleNav(['auth.login'])).not.toContain('/geo-fences');
-    expect(visibleNav([PERMISSIONS.GEO_READ])).toContain('/geo-fences');
+  it('offers no geo-fence destination to anybody', () => {
+    // Removed with the feature, not merely hidden: a stale grant such as the
+    // old geo.read must not resurrect the screen.
+    expect(NAV_GROUPS.flatMap((g) => g.items).find((i) => i.href === '/geo-fences')).toBeUndefined();
+    expect(visibleNav(['auth.login', 'geo.read', 'geo.manage'])).not.toContain('/geo-fences');
   });
 
   it('fails closed for a permission code that does not exist on the server', () => {
@@ -154,87 +152,6 @@ describe('E2E-02 employee signs in without admin permissions', () => {
     const holder = { permissions: ['auth.login'] };
     expect(hasPermission(holder, 'geo:read')).toBe(false);
     expect(hasPermission(holder, '')).toBe(false);
-  });
-});
-
-// ===========================================================================
-// E2E-04
-// ===========================================================================
-
-describe('E2E-04 admin opens New fence, searches a place, selects result and clicks map', () => {
-  it('builds the fence list query the page actually issues', () => {
-    expect(buildFencesQuery({})).toBe('/api/v1/geo-fences');
-    const scoped = buildFencesQuery({ scope_type: 'site', scope_id: 'abc' });
-    expect(scoped).toContain('scope_type=site');
-    expect(scoped).toContain('scope_id=abc');
-  });
-
-  it('normalizes a circle fence into the shape the map previews', () => {
-    const [fence] = normalizeFences({
-      data: [
-        {
-          id: 'f1',
-          name: 'Depot',
-          scope_type: 'site',
-          scope_id: 's1',
-          geometry_type: 'circle',
-          geometry: { lat: 17.385, lng: 78.4867, radius_m: 200 },
-          tolerance_meters: 25,
-          status: 'ACTIVE',
-          version: 3,
-        },
-      ],
-    });
-    expect(fence!.geometry_type).toBe('circle');
-    const geometry = fence!.geometry as { lat: number; lng: number; radius_m: number };
-    // The preview circle is drawn from exactly these three numbers.
-    expect(geometry.lat).toBeCloseTo(17.385, 6);
-    expect(geometry.lng).toBeCloseTo(78.4867, 6);
-    expect(geometry.radius_m).toBe(200);
-    expect(fence!.tolerance_meters).toBe(25);
-  });
-
-  it('normalizes a polygon fence without losing or reordering its points', () => {
-    const points: Array<[number, number]> = [
-      [17.4, 78.5],
-      [17.41, 78.5],
-      [17.41, 78.51],
-    ];
-    const [fence] = normalizeFences({
-      data: [
-        {
-          id: 'f2',
-          name: 'Yard',
-          scope_type: 'site',
-          scope_id: 's2',
-          geometry_type: 'polygon',
-          geometry: { points },
-          tolerance_meters: 0,
-          status: 'ACTIVE',
-          version: 1,
-        },
-      ],
-    });
-    expect((fence!.geometry as { points: Array<[number, number]> }).points).toEqual(points);
-  });
-
-  it('wires the place search to the map through the fence form', () => {
-    const form = source('components/FenceForm.tsx');
-    // The form searches places and writes the chosen coordinate into the
-    // geometry it submits; a map click does the same thing.
-    expect(form).toMatch(/searchPlaces/);
-    expect(form).toMatch(/lat/);
-    expect(form).toMatch(/lng/);
-    // Radius and tolerance are part of the submitted geometry, not decoration.
-    expect(form).toMatch(/radius_m/);
-    expect(form).toMatch(/tolerance_meters/);
-  });
-
-  it('recenters the map on the selected result', () => {
-    const map = source('components/map/FenceMap.tsx');
-    // A selection has to move the viewport, or the "map recenters" step of the
-    // workflow does not happen.
-    expect(map).toMatch(/flyTo|easeTo|jumpTo|setCenter|fitBounds/);
   });
 });
 
@@ -434,7 +351,6 @@ describe('E2E-31 load normal authenticated Web screens under agreed data volume'
     const tasks = source('lib/tasks.ts');
     const match = tasks.match(/limit[^\n]{0,40}?(\d{1,5})/);
     if (match) expect(Number(match[1])).toBeLessThanOrEqual(100);
-    expect(buildFencesQuery({ scope_type: 'site' })).toContain('scope_type=site');
   });
 
   it('caches reads instead of refetching on every render', () => {

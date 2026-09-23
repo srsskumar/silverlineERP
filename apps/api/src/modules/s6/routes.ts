@@ -1025,7 +1025,7 @@ async function buildAttendanceReport(
   }
   const res = await pool.query(
     `SELECT r.id, r.employee_id, r.work_date, r.status, r.check_in_at,
-       r.check_out_at, r.total_hours, r.geofence_violation
+       r.check_out_at, r.total_hours
      FROM attendance_records r
      JOIN employees e ON e.id = r.employee_id
      WHERE ${where} ORDER BY r.work_date ASC, r.id ASC`,
@@ -1040,7 +1040,6 @@ async function buildAttendanceReport(
       check_in_at: Date | string | null;
       check_out_at: Date | string | null;
       total_hours: string | number | null;
-      geofence_violation: boolean;
     }>
   ).map((r) => [
     r.id,
@@ -1052,7 +1051,6 @@ async function buildAttendanceReport(
     r.total_hours === null || r.total_hours === undefined
       ? ""
       : String(Number(r.total_hours)),
-    r.geofence_violation ? "true" : "false",
   ]);
   return { total, rows };
 }

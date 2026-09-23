@@ -78,7 +78,7 @@ export function RecordDetailView({ id }: { id: string }) {
                   {day(record.work_date)} <span className="font-mono text-sm font-normal text-text-muted">{record.employee_id}</span>
                 </h1>
                 <div className="mt-2 flex items-center gap-2">
-                  <AttendanceStatusBadge status={String(record.status)} violation={!!record.geofence_violation} />
+                  <AttendanceStatusBadge status={String(record.status)} />
                   <span className="text-xs text-text-muted">v{record.version}</span>
                 </div>
               </div>
@@ -92,7 +92,6 @@ export function RecordDetailView({ id }: { id: string }) {
               <DetailRow label="Check in" value={dayTime(record.check_in_at)} />
               <DetailRow label="Check out" value={dayTime(record.check_out_at)} />
               <DetailRow label="Total hours" value={formatHours(record.total_hours)} />
-              <DetailRow label="Geofence violation" value={record.geofence_violation ? 'Yes ⚠' : 'No'} />
             </dl>
           </div>
 

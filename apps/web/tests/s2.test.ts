@@ -6,47 +6,17 @@ import {
   normalizeRecordDetail,
   normalizeRecordsPage,
 } from '../lib/attendance';
-import { normalizeFences } from '../lib/geo';
 import { isConflictError } from '../lib/form-errors';
 import { PERMISSIONS } from '../lib/permissions';
 import {
   decisionSchema,
   exceptionSchema,
-  fenceSchema,
-  parsePolygonTextarea,
+  EXCEPTION_TYPE_LABELS,
   regularizeSchema,
 } from '../lib/validation';
 
 const EVENT = { id: 'evt_1', employee_id: 'emp_1', event_type: 'CHECK_IN', client_timestamp: '2026-09-01T09:00:00Z' };
 const RECORD = { id: 'rec_1', employee_id: 'emp_1', work_date: '2026-09-01', status: 'PRESENT', version: 3 };
-
-describe('parsePolygonTextarea', () => {
-  it('parses a valid 3-point polygon', () => {
-    const res = parsePolygonTextarea('17.44,78.34\n17.45,78.35\n17.43,78.36');
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.points).toHaveLength(3);
-      expect(res.points[0]).toEqual({ lat: 17.44, lng: 78.34 });
-    }
-  });
-
-  it('rejects a malformed line with a line number', () => {
-    const res = parsePolygonTextarea('17.44,78.34\nnope\n17.43,78.36');
-    expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.error).toMatch(/Line 2/);
-  });
-
-  it('rejects fewer than 3 points', () => {
-    const res = parsePolygonTextarea('17.44,78.34\n17.45,78.35');
-    expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.error).toMatch(/at least 3 points/);
-  });
-
-  it('rejects out-of-range coordinates', () => {
-    expect(parsePolygonTextarea('91,0\n17.45,78.35\n17.43,78.36').ok).toBe(false);
-    expect(parsePolygonTextarea('17.44,200\n17.45,78.35\n17.43,78.36').ok).toBe(false);
-  });
-});
 
 describe('normalizePunchResponse', () => {
   it('maps the 201 shape (event+record+decision) to accepted', () => {
@@ -63,13 +33,13 @@ describe('normalizePunchResponse', () => {
   it('maps the 202 shape (review+code+exception_id) to review', () => {
     const res = normalizePunchResponse({
       review: 'REQUIRES_REVIEW',
-      code: 'OUTSIDE_GEOFENCE',
+      code: 'MOCK_LOCATION',
       exception_id: 'exc_9',
-      message: 'Outside fence',
+      message: 'Mock location detected',
     });
     expect(res.kind).toBe('review');
     if (res.kind === 'review') {
-      expect(res.code).toBe('OUTSIDE_GEOFENCE');
+      expect(res.code).toBe('MOCK_LOCATION');
       expect(res.exception_id).toBe('exc_9');
     }
   });
@@ -94,6 +64,15 @@ describe('exception + decision + regularize schemas', () => {
     ).toBe(true);
   });
 
+  it('no longer lets an outside-geofence exception be filed, but still labels an old one', () => {
+    // The geo-fence is gone (2026-09-22). Rows raised while it existed keep
+    // the type and need a name; nothing new may be filed under it.
+    expect(
+      exceptionSchema.safeParse({ employee_id: 'emp_1', exception_type: 'OUTSIDE_GEOFENCE', reason: 'x' }).success,
+    ).toBe(false);
+    expect(EXCEPTION_TYPE_LABELS.OUTSIDE_GEOFENCE).toMatch(/legacy/i);
+  });
+
   it('rejects an exception with an empty reason', () => {
     expect(
       exceptionSchema.safeParse({ employee_id: 'emp_1', exception_type: 'MISSED_PUNCH', reason: '' }).success,
@@ -112,31 +91,6 @@ describe('exception + decision + regularize schemas', () => {
     expect(regularizeSchema.safeParse({ ...base, claimed_check_out: '2026-09-01T18:00:00Z' }).success).toBe(true);
     expect(regularizeSchema.safeParse(base).success).toBe(false);
     expect(regularizeSchema.safeParse({ ...base, work_date: '01-09-2026', claimed_check_in: 'x' }).success).toBe(false);
-  });
-});
-
-describe('fenceSchema', () => {
-  const base = { name: 'Gate', scope_type: 'site', scope_id: 's1', tolerance_meters: 50, accuracy_threshold_meters: 100 };
-
-  it('accepts a valid circle fence', () => {
-    expect(
-      fenceSchema.safeParse({ ...base, geometry_type: 'circle', circle_lat: 17.44, circle_lng: 78.34, radius_m: 100 }).success,
-    ).toBe(true);
-  });
-
-  it('rejects a circle with radius_m <= 0', () => {
-    expect(
-      fenceSchema.safeParse({ ...base, geometry_type: 'circle', circle_lat: 17.44, circle_lng: 78.34, radius_m: 0 }).success,
-    ).toBe(false);
-  });
-
-  it('accepts a valid polygon textarea, rejects <3 points', () => {
-    expect(
-      fenceSchema.safeParse({ ...base, geometry_type: 'polygon', polygon_text: '17.44,78.34\n17.45,78.35\n17.43,78.36' }).success,
-    ).toBe(true);
-    expect(
-      fenceSchema.safeParse({ ...base, geometry_type: 'polygon', polygon_text: '17.44,78.34\n17.45,78.35' }).success,
-    ).toBe(false);
   });
 });
 
@@ -170,12 +124,15 @@ describe('S2 permission gating codes (exact values)', () => {
     expect(PERMISSIONS.ATTENDANCE_PUNCH).toBe('attendance.punch');
     expect(PERMISSIONS.ATTENDANCE_READ).toBe('attendance.read');
     expect(PERMISSIONS.ATTENDANCE_DECIDE).toBe('attendance.decide');
-    expect(PERMISSIONS.GEO_READ).toBe('geo.read');
-    expect(PERMISSIONS.GEO_MANAGE).toBe('geo.manage');
+  });
+
+  it('no longer knows the retired geo-fence codes', () => {
+    expect(PERMISSIONS).not.toHaveProperty('GEO_READ');
+    expect(PERMISSIONS).not.toHaveProperty('GEO_MANAGE');
   });
 });
 
-describe('records / fences / record-detail normalizers', () => {
+describe('records / record-detail normalizers', () => {
   it('normalizes both envelope and bare-array records pages', () => {
     const fromEnvelope = normalizeRecordsPage({ data: [RECORD], next_cursor: 'c1', has_more: true });
     expect(fromEnvelope.data).toHaveLength(1);
@@ -184,13 +141,6 @@ describe('records / fences / record-detail normalizers', () => {
     const fromBare = normalizeRecordsPage([RECORD]);
     expect(fromBare.data).toHaveLength(1);
     expect(fromBare.has_more).toBe(false);
-  });
-
-  it('normalizes both envelope and bare-array fence lists', () => {
-    const fence = { id: 'f1', name: 'Gate', scope_type: 'site', scope_id: 's1', geometry_type: 'circle', version: 1 };
-    expect(normalizeFences({ data: [fence] })).toHaveLength(1);
-    expect(normalizeFences([fence])).toHaveLength(1);
-    expect(normalizeFences(null)).toEqual([]);
   });
 
   it('normalizes {record,events} and flat record-detail shapes', () => {

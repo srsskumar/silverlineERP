@@ -314,7 +314,7 @@ function checkDevice(adbUsable, sdkRoot) {
 
 /**
  * `packages/shared/dist` is gitignored, so a fresh clone has no build output and
- * Metro cannot resolve the geofencing helpers. That surfaces as a bundling error
+ * Metro cannot resolve the shared anti-fraud helpers. That surfaces as a bundling error
  * minutes into a Gradle build, long after the point where it is cheap to fix.
  */
 function checkSharedPackage() {
@@ -325,7 +325,7 @@ function checkSharedPackage() {
   }
   fail(
     '@silverline/shared',
-    'packages/shared/dist is missing. src/device/geofencing.ts imports it at runtime, so Metro will fail to bundle.',
+    'packages/shared/dist is missing. src/device/signals.ts imports it at runtime, so Metro will fail to bundle.',
     'npm run build --workspace=@silverline/shared   # from the repository root',
   );
 }

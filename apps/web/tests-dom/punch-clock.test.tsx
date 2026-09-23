@@ -126,9 +126,9 @@ describe('saving', () => {
 
   it('saves without a location rather than refusing to', async () => {
     /*
-     * The server decides whether a punch with no position is acceptable --
-     * it may hold it for review, which is the right place for that call.
-     * Refusing here would just mean the day goes unmarked.
+     * A punch with no position is accepted exactly like one with a position
+     * (there is no geo-fence). Refusing here would just mean the day goes
+     * unmarked.
      */
     geolocation('denied');
     wrap(<PunchClock />);
@@ -146,8 +146,8 @@ describe('saving', () => {
      * and again, and the exception queue fills with their attempts.
      */
     punchEvent.mockResolvedValue({
-      kind: 'review', code: 'OUTSIDE_FENCE', exception_id: 'x1',
-      message: 'You are not inside a work site.',
+      kind: 'review', code: 'MOCK_LOCATION', exception_id: 'x1',
+      message: 'Mock location detected; manual review required.',
     } as never);
     wrap(<PunchClock />);
     fireEvent.click(await ready(/punch in/i));
@@ -171,7 +171,7 @@ describe('where the punch was made', () => {
      * opened, sent with whatever was pressed afterwards. Punch in at nine
      * and out at six from the same tab and both would have been filed from
      * the morning's position -- worse than no location, because a wrong one
-     * looks authoritative and passes a geofence it should fail.
+     * looks authoritative to anybody later asking where the day was worked.
      */
     wrap(<PunchClock />);
     const button = await ready(/punch in/i);

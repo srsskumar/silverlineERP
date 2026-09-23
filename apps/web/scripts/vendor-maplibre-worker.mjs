@@ -1,13 +1,13 @@
 // Put MapLibre's worker where the browser can fetch it.
 //
-// MapLibre GL draws GeoJSON sources -- every fence on the geo-fence screen,
-// every punch cluster on the attendance map -- in a web worker. Since v6 it
+// MapLibre GL draws GeoJSON sources -- every punch cluster on the attendance
+// map -- in a web worker. Since v6 it
 // finds that worker's script next to its own module through import.meta.url,
 // which a webpack bundle does not carry as an http(s) address, so the lookup
 // came back empty and the map started `new Worker('')`: the page's own HTML,
 // loaded as a script. The request never completed, nothing that needed the
 // worker was ever drawn, and the tiles underneath made it look like a map
-// with no fences on it.
+// with nothing on it.
 //
 // This copies the worker and the shared chunk it imports into public/, where
 // the static export serves them, and the map is told that address (see

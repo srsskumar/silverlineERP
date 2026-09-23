@@ -50,10 +50,9 @@ npx next build     # must succeed; emits static site to out/
 | `/org/locations`    | district\|mandal\|village\|site tabs, table + create + deactivate | `org.units.read` (+ `org.units.manage` for writes) |
 | `/org/holidays`     | Year filter + table + create dialog                  | `holiday.read` (+ `holiday.manage` for writes) |
 | `/403`              | Forbidden panel (also used by `RequirePermission`)   | — |
-| `/attendance`         | Date-range + status + violation filters, records table (hours + badges), Load more, collapsible manual PunchPanel | `attendance.read` (punch needs `attendance.punch`) |
+| `/attendance`         | Date-range + status filters, records table (hours + badges), punch map, Load more, collapsible manual PunchPanel | `attendance.read` (punch needs `attendance.punch`) |
 | `/attendance/exceptions` | Lookup record by employee+date → file exception / regularize / decide on known exception ids | `attendance.read` (decide needs `attendance.decide`) |
 | `/attendance/records/[id]` | Detail: times, hours, events timeline, file-exception + decide entry points | `attendance.read` (+ `attendance.decide`) |
-| `/geo-fences`         | Scope filter + table + create (circle/polygon) + deactivate via PATCH + 409 ConflictDialog | `geo.read` (+ `geo.manage` for writes) |
 | `/leave`              | Tabs Mine \| Approvals (gated `leave.decide`) \| All (gated `leave.read`), status filter, table + Load more | `leave.request` |
 | `/leave/new`          | File form (type + range + reason) → detail on success; idempotent replay → detail with "already filed" notice | `leave.request` |
 | `/leave/[id]`         | Header facts + approval chain + DecisionButtons (current approver only) + CancelButton (own PENDING only) | `leave.request` |
@@ -100,14 +99,13 @@ server (`GET /api/v1/roles` or equivalent). Local S1 permission codes live in
 
 ## S2 contract assumed (frozen — backend implements the same; verify when it lands)
 
-- `POST /api/v1/geo-fences` `{name,scope_type,scope_id,geometry_type:circle|polygon,geometry,tolerance_meters?,accuracy_threshold_meters?}` → 201 bare; `GET /geo-fences?scope_type=&scope_id=` → `{data,...}` (bare arrays tolerated); `PATCH /:id` + `If-Match` → 200 version++ (409 opens `ConflictDialog`).
+- No geo-fencing (decision 2026-09-22): there is no `/geo-fences` screen or endpoint. A punch is accepted with or without a position; the position, when the browser grants it, is stored and shown on the record and the punch map. `GET /api/v1/geo/search?q=` (place lookup, `attendance.read`) is kept in `lib/geo.ts`.
 - `POST /api/v1/attendance/events` + REQUIRED `Idempotency-Key` → **201** `{event,record,decision:"ACCEPTED"}` (fresh punch) | **200** `{applied:true,event,record}` (same-key replay — no double count) | **202** `{review:"REQUIRES_REVIEW",code,exception_id,message}` (routed to review; UI shows the code + exception id and the id can be tracked on the exceptions page) | **422** envelope (`EMPLOYEE_INACTIVE`/`FUTURE_PUNCH`/`CHECKOUT_WITHOUT_CHECKIN`/`DUPLICATE_CHECKIN`/`RECORD_CLOSED`/`MISSING_IDEMPOTENCY_KEY`, surfaced inline with the code). The client normalizes by presence of the `decision`/`applied`/`review` keys (`normalizePunchResponse` in `lib/attendance.ts`); `punchEvent` always sends an explicit key (generated per attempt) so retries are safe.
-- `GET /api/v1/attendance/records?employee_id=&from=&to=&status=&violation=&limit=&cursor=` → cursor page (`{data,next_cursor,has_more}`; bare arrays tolerated); `GET /:id` → record + `events[]` (`normalizeRecordDetail` tolerates `{record,events}`, `{data:{record,events}}` and flat shapes). Status vocabulary `PRESENT|PARTIAL|ABSENT|VIOLATION` with a neutral fallback badge for unknowns.
+- `GET /api/v1/attendance/records?employee_id=&from=&to=&status=&limit=&cursor=` → cursor page (`{data,next_cursor,has_more}`; bare arrays tolerated); `GET /:id` → record + `events[]` (`normalizeRecordDetail` tolerates `{record,events}`, `{data:{record,events}}` and flat shapes). Status vocabulary `PRESENT|PARTIAL|ABSENT` with a neutral fallback badge for unknowns.
 - `POST /api/v1/attendance/exceptions` → 201; `PATCH /:id/decision {decision:APPROVE|REJECT,note?}` + `If-Match` → 200 single transition (409 → `ConflictDialog` + reload).
 - `POST /api/v1/attendance/regularize` → 201 (filed exception id feeds the decide queue).
-- Permission codes: `attendance.punch/read/decide`, `geo.read/manage` (`lib/permissions.ts`).
-- Geometry payload assumption (contract fixes field names, not the geometry object layout): circle → `{lat,lng,radius_m}`, polygon → `{points:[{lat,lng},…]}`. Polygon entry is a `"lat,lng" per line` textarea parsed by `parsePolygonTextarea` (≥3 points). Tolerance/accuracy defaults 50/100m.
-- **Known S2 gap — no exceptions list endpoint.** The contract has no `GET /attendance/exceptions`, so `/attendance/exceptions` cannot render a server-side queue. It instead works from *known* ids: ids returned by file/regularize actions, `exception_id` from 202 punch responses, or manually pasted ids (+ version for `If-Match`). Violation triage starts from `/attendance` filtered to `violation=true` / status `VIOLATION`, linking through to the record detail. A list endpoint is an S3 backend gap — do NOT invent client-side polling of guessed URLs.
+- Permission codes: `attendance.punch/read/decide` (`lib/permissions.ts`).
+- **Known S2 gap — no exceptions list endpoint.** The contract has no `GET /attendance/exceptions`, so `/attendance/exceptions` cannot render a server-side queue. It instead works from *known* ids: ids returned by file/regularize actions, `exception_id` from 202 punch responses, or manually pasted ids (+ version for `If-Match`). Triage starts from `/attendance`, linking through to the record detail. A list endpoint is an S3 backend gap — do NOT invent client-side polling of guessed URLs.
 
 ## S3 contract assumed (frozen — backend implements the same; verify when it lands)
 

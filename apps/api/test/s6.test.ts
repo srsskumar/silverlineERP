@@ -911,7 +911,7 @@ describe("reports", () => {
     const attCsv = parseCsv(attDl.body);
     expect(attCsv.header).toEqual([
       "id", "employee_id", "work_date", "status",
-      "check_in_at", "check_out_at", "total_hours", "geofence_violation",
+      "check_in_at", "check_out_at", "total_hours",
     ]);
     expect(attCsv.rows[0]?.[1]).toBe(empRow);
 

@@ -63,29 +63,20 @@ describe("catalogue test data baseline", () => {
     expect(status.get(w.exitedEmployee)).toBe("EXITED");
   });
 
-  it("gives one employee a direct fence and the other only a site assignment", async () => {
-    const direct = await w.pool.query(
-      "SELECT employee_id FROM geo_fence_employee_assignments WHERE org_id = $1 AND status = 'ACTIVE'",
-      [w.orgId],
-    );
-    const assigned = direct.rows.map((r) => r.employee_id);
-    expect(assigned).toContain(w.directEmployee);
-    expect(assigned).not.toContain(w.siteEmployee);
-
-    const site = await w.pool.query("SELECT site_id FROM employees WHERE id = $1", [
-      w.siteEmployee,
+  it("puts each active employee on their own chain's site", async () => {
+    const sites = await w.pool.query("SELECT id, site_id FROM employees WHERE id = ANY($1::uuid[])", [
+      [w.directEmployee, w.siteEmployee],
     ]);
-    expect(site.rows[0].site_id).toBe(w.chainB.site);
+    const siteOf = new Map(sites.rows.map((r) => [r.id, r.site_id]));
+    expect(siteOf.get(w.directEmployee)).toBe(w.chainA.site);
+    expect(siteOf.get(w.siteEmployee)).toBe(w.chainB.site);
   });
 
-  it("creates circular and polygon fences", async () => {
-    const rows = await w.pool.query(
-      "SELECT id, geometry_type FROM geo_fences WHERE id = ANY($1::uuid[])",
-      [[w.circleFence, w.polygonFence]],
-    );
-    const kinds = new Map(rows.rows.map((r) => [r.id, r.geometry_type]));
-    expect(kinds.get(w.circleFence)).toBe("circle");
-    expect(kinds.get(w.polygonFence)).toBe("polygon");
+  it("holds no geo-fences, because the product has none", async () => {
+    const fences = await w.pool.query("SELECT COUNT(*)::int AS n FROM geo_fences WHERE org_id = $1", [
+      w.orgId,
+    ]);
+    expect(fences.rows[0].n).toBe(0);
   });
 
   it("creates an active project with a configurable workflow and an inactive project", async () => {

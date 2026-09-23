@@ -210,7 +210,7 @@ export type EmployeeExitInput = z.infer<typeof employeeExitSchema>;
  * POST /api/v1/employees/:id/activate — DRAFT → ACTIVE.
  *
  * Creation deliberately lands an employee in DRAFT so a half-entered record
- * cannot punch, hold a fence or be paid. Activation is the explicit, audited
+ * cannot punch or be paid. Activation is the explicit, audited
  * step that puts them on the roster once the record is complete.
  */
 export const employeeActivateSchema = z.object({

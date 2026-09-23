@@ -41,6 +41,7 @@ API tests run migrations automatically. `npm run build` builds shared contracts,
 ## Operating the application
 
 - Administration manages users, roles, project/geography scopes, organization settings and devices. Production administrative roles must enroll an authenticator before accessing business screens.
+- There is no geo-fencing (decision 2026-09-22, see `docs/DEV_PLAN.md`): a punch is accepted with or without a position, the position is kept as evidence, and the anti-fraud review rules still apply. The §9 fencing text in `docs/REQUIREMENTS_*` is superseded.
 - Employees, attendance, leave and payroll share employee identities and business rules. Payroll runs follow calculate → review → approve → lock; reopening requires an authorized user and a reason. Recalculation retains prior payslip revisions.
 - Projects support tasks, lists/boards, dependencies, workflows, planning dates, cycles, custom fields and checklists. Dragging a card uses the same server workflow validation as the mobile app and automation.
 - Inventory records immutable stock movements; withdrawals serialize against the item balance. Assets support assignment, return/condition changes, QR/barcode lookup and physical audits.

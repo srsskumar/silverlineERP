@@ -10,7 +10,6 @@ import { useAuth } from '@/components/AuthProvider';
 import { AttendanceStatusBadge } from '@/components/AttendanceStatusBadge';
 import { PunchPanel } from '@/components/PunchPanel';
 import type { PunchClusterMapProps } from '@/components/map/PunchClusterMap';
-import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
@@ -42,7 +41,6 @@ function RecordsTable() {
   const [from, setFrom] = React.useState('');
   const [to, setTo] = React.useState('');
   const [status, setStatus] = React.useState('');
-  const [violation, setViolation] = React.useState('');
   const [punchOpen, setPunchOpen] = React.useState(false);
 
   const filters = React.useMemo(
@@ -51,9 +49,8 @@ function RecordsTable() {
       from: from || undefined,
       to: to || undefined,
       status: status || undefined,
-      violation: violation || undefined,
     }),
-    [employeeId, from, to, status, violation],
+    [employeeId, from, to, status],
   );
 
   const listQuery = useInfiniteQuery({
@@ -99,17 +96,9 @@ function RecordsTable() {
           <label htmlFor="rec-status" className="text-sm font-medium text-text-muted">Status</label>
           <select id="rec-status" className={inputClass} value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All</option>
-            {['PRESENT', 'PARTIAL', 'ABSENT', 'VIOLATION'].map((s) => (
+            {['PRESENT', 'PARTIAL', 'ABSENT'].map((s) => (
               <option key={s} value={s}>{s}</option>
             ))}
-          </select>
-        </div>
-        <div>
-          <label htmlFor="rec-violation" className="text-sm font-medium text-text-muted">Geofence</label>
-          <select id="rec-violation" className={inputClass} value={violation} onChange={(e) => setViolation(e.target.value)}>
-            <option value="">All</option>
-            <option value="true">Violation only</option>
-            <option value="false">No violation</option>
           </select>
         </div>
         <div className="flex items-end">
@@ -144,9 +133,8 @@ function RecordsTable() {
         </div>
       )}
 
-      {/* Map view: the table answers "who punched", the map answers "where from",
-          which is the question a geofence violation actually raises. Hidden
-          until there is something positioned to plot. */}
+      {/* Map view: the table answers "who punched", the map answers "where from".
+          Hidden until there is something positioned to plot. */}
       {showMap ? (
         mapQuery.isLoading ? (
           <Skeleton className="mb-4 h-[420px] w-full" />
@@ -157,8 +145,7 @@ function RecordsTable() {
               {mapQuery.data.data.length} positioned {mapQuery.data.data.length === 1 ? 'punch' : 'punches'}
               {mapQuery.data.truncated ? ' (showing the most recent — narrow the date range for the full set)' : ''}
               {' · '}
-              <span className="text-success">green</span> inside a fence,{' '}
-              <span className="text-danger">red</span> outside,{' '}
+              <span className="text-success">green</span> accepted,{' '}
               <span className="text-warning">amber</span> flagged for review
             </p>
           </div>
@@ -199,7 +186,7 @@ function RecordsTable() {
                     <td className="px-3 py-2 font-mono text-xs text-text">{day(r.work_date)}</td>
                     <td className="px-3 py-2 font-mono text-xs text-text-muted">{r.employee_id}</td>
                     <td className="px-3 py-2">
-                      <AttendanceStatusBadge status={String(r.status)} violation={!!r.geofence_violation} />
+                      <AttendanceStatusBadge status={String(r.status)} />
                     </td>
                     <td className="px-3 py-2 text-xs text-text-muted">{clock(r.check_in_at)}</td>
                     <td className="px-3 py-2 text-xs text-text-muted">{clock(r.check_out_at)}</td>
@@ -208,11 +195,6 @@ function RecordsTable() {
                       <Link href={`/attendance/records/${r.id}`} className="text-primary hover:underline">
                         View
                       </Link>
-                      {r.geofence_violation ? (
-                        <span className="ml-2">
-                          <Badge tone="warning">⚠</Badge>
-                        </span>
-                      ) : null}
                     </td>
                   </tr>
                 ))}
@@ -260,7 +242,7 @@ export default function AttendancePage() {
       ) : (
         <>
           <h1 className="text-xl font-bold text-text">Attendance records</h1>
-          <p className="mt-1 text-sm text-text-muted">Daily records with punch status, hours and geofence flags.</p>
+          <p className="mt-1 text-sm text-text-muted">Daily records with punch status, hours and where each punch was made.</p>
           <div className="mt-6">
             <RecordsTable />
           </div>

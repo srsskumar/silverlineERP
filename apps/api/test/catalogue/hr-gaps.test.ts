@@ -14,7 +14,6 @@ import {
   buildWorld,
   createActiveEmployee,
   createChain,
-  createFence,
   createUser,
   grantLeaveBalance,
   headersForUserId,
@@ -43,7 +42,7 @@ afterAll(async () => {
 });
 
 interface PunchBody {
-  event?: { id: string; geofence_result: string };
+  event?: { id: string };
   record?: { id: string; status: string; work_date: string };
   review?: string;
   code?: string;
@@ -79,10 +78,8 @@ async function decide(
   });
 }
 
-/** An employee on their own chain with a site fence, so the history is theirs. */
-async function fencedWorker(
-  fence: Record<string, unknown> = {},
-): Promise<{ employeeId: string }> {
+/** An employee on their own chain, so the attendance history is theirs. */
+async function siteWorker(): Promise<{ employeeId: string }> {
   const chain = await createChain(w.app, w.admin, `H${uniq().slice(-4)}`);
   const employeeId = await createActiveEmployee(w.app, w.admin, {
     district_id: chain.district,
@@ -90,16 +87,24 @@ async function fencedWorker(
     village_id: chain.village,
     site_id: chain.site,
   });
-  await createFence(w.app, w.admin, {
-    name: "HR gaps fence",
-    scope_type: "site",
-    scope_id: chain.site,
-    geometry_type: "circle",
-    geometry: { ...GEO.circleCentre, radius_m: GEO.circleRadiusM },
-    tolerance_meters: 0,
-    ...fence,
-  });
   return { employeeId };
+}
+
+/**
+ * A punch the server holds back for review.
+ *
+ * Mock location is the hold that survives the removal of the geo-fence: it
+ * is an anti-fraud signal, not a boundary, and it never auto-accepts.
+ */
+function heldPunch(employeeId: string, over: Record<string, unknown> = {}) {
+  return {
+    employee_id: employeeId,
+    latitude: GEO.atSite.lat,
+    longitude: GEO.atSite.lng,
+    gps_accuracy: 8,
+    mock_location: true,
+    ...over,
+  };
 }
 
 /** An employee with no fence, a CL balance and a login of their own. */
@@ -159,7 +164,7 @@ async function recordsOf(employeeId: string) {
   return (
     await w.pool.query(
       `SELECT id, work_date, status, check_in_event_id, check_out_event_id,
-              check_in_at, geofence_violation
+              check_in_at
          FROM attendance_records WHERE employee_id = $1 ORDER BY work_date`,
       [employeeId],
     )
@@ -171,17 +176,12 @@ async function recordsOf(employeeId: string) {
 // ===========================================================================
 
 describe("HR-1 approving a held-back punch records the attendance", () => {
-  it("turns an approved outside-fence check-in into a record, and the check-out then succeeds", async () => {
-    const { employeeId } = await fencedWorker();
-    const held = await punch({
-      employee_id: employeeId,
-      latitude: GEO.outsideCircle.lat,
-      longitude: GEO.outsideCircle.lng,
-      gps_accuracy: 8,
-    });
+  it("turns an approved held-back check-in into a record, and the check-out then succeeds", async () => {
+    const { employeeId } = await siteWorker();
+    const held = await punch(heldPunch(employeeId));
     expect(held.statusCode).toBe(202);
     const heldBody = held.json() as PunchBody;
-    expect(heldBody.code).toBe("OUTSIDE_GEOFENCE");
+    expect(heldBody.code).toBe("MOCK_LOCATION");
     expect(await recordsOf(employeeId)).toHaveLength(0);
 
     const approved = await decide(heldBody.exception_id!, "APPROVE");
@@ -191,20 +191,17 @@ describe("HR-1 approving a held-back punch records the attendance", () => {
     expect(records).toHaveLength(1);
     expect(records[0].work_date).toBe(workDate());
     expect(records[0].status).toBe("PARTIAL");
-    // The very punch that was held back is the day's check-in, and the
-    // violation is still on file for the reports that look for it.
+    // The very punch that was held back is the day's check-in.
     const event = await w.pool.query(
       "SELECT attendance_event_id FROM attendance_exceptions WHERE id = $1",
       [heldBody.exception_id],
     );
     expect(records[0].check_in_event_id).toBe(event.rows[0].attendance_event_id);
-    expect(records[0].geofence_violation).toBe(true);
     expect((approved.json() as { attendance_record_id: string }).attendance_record_id).toBe(
       records[0].id,
     );
 
-    // The day's end, hours later; without moving the morning punch back the
-    // two kilometres between them in seconds would read as impossible travel.
+    // The day's end, hours later.
     await w.pool.query(
       "UPDATE attendance_events SET client_timestamp = client_timestamp - interval '6 hours' WHERE employee_id = $1",
       [employeeId],
@@ -213,8 +210,8 @@ describe("HR-1 approving a held-back punch records the attendance", () => {
     const out = await punch({
       employee_id: employeeId,
       event_type: "CHECK_OUT",
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
       gps_accuracy: 8,
     });
     expect(out.statusCode, out.body).toBe(201);
@@ -222,13 +219,8 @@ describe("HR-1 approving a held-back punch records the attendance", () => {
   });
 
   it("leaves the day empty when the exception is rejected", async () => {
-    const { employeeId } = await fencedWorker();
-    const held = await punch({
-      employee_id: employeeId,
-      latitude: GEO.outsideCircle.lat,
-      longitude: GEO.outsideCircle.lng,
-      gps_accuracy: 8,
-    });
+    const { employeeId } = await siteWorker();
+    const held = await punch(heldPunch(employeeId));
     const rejected = await decide((held.json() as PunchBody).exception_id!, "REJECT");
     expect(rejected.statusCode).toBe(200);
     expect(await recordsOf(employeeId)).toHaveLength(0);
@@ -287,20 +279,12 @@ describe("HR-1 approving a held-back punch records the attendance", () => {
 
 describe("HR-7 self-decision covers system-raised exceptions", () => {
   it("refuses a manager approving their own flagged punch, and lets another approver", async () => {
-    const { employeeId } = await fencedWorker();
+    const { employeeId } = await siteWorker();
     const username = `cat_hr_mgr_${uniq()}`;
     await createUser(w.pool, w.orgId, { username, roles: ["HR_MANAGER"], employeeId });
     const manager = await loginAs(w.app, username);
 
-    const held = await punch(
-      {
-        employee_id: employeeId,
-        latitude: GEO.outsideCircle.lat,
-        longitude: GEO.outsideCircle.lng,
-        gps_accuracy: 8,
-      },
-      manager,
-    );
+    const held = await punch(heldPunch(employeeId), manager);
     expect(held.statusCode).toBe(202);
     const exceptionId = (held.json() as PunchBody).exception_id!;
     const row = await w.pool.query("SELECT submitted_by FROM attendance_exceptions WHERE id = $1", [
@@ -403,44 +387,36 @@ describe("HR-8 balance is re-checked at approval", () => {
 });
 
 // ===========================================================================
-// HR-5: a fenced employee punching with no position
+// HR-5: a punch without a position
 // ===========================================================================
 
-describe("HR-5 a fence cannot be bypassed by switching location off", () => {
-  it("sends a coordinate-less punch to review when a fence applies", async () => {
-    const { employeeId } = await fencedWorker();
+describe("HR-5 a punch is accepted with or without a position", () => {
+  // HR-5 used to pin the opposite: a fenced employee could not get past the
+  // fence by switching location off. There is no fence any more (decision
+  // 2026-09-22), so the rule it pins now is that the two kinds of punch are
+  // treated alike, and a position, when sent, is kept.
+  it("accepts a coordinate-less punch and opens the day", async () => {
+    const { employeeId } = await siteWorker();
     const res = await punch({ employee_id: employeeId });
-    expect(res.statusCode).toBe(202);
-    expect((res.json() as PunchBody).code).toBe("NO_LOCATION");
-    expect(await recordsOf(employeeId)).toHaveLength(0);
-
-    // With a position inside the fence the same fence accepts a punch. A
-    // second worker, because a repeat within five minutes is a duplicate.
-    const other = await fencedWorker();
-    const inside = await punch({
-      employee_id: other.employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
-    });
-    expect(inside.statusCode, inside.body).toBe(201);
+    expect(res.statusCode, res.body).toBe(201);
+    expect(await recordsOf(employeeId)).toHaveLength(1);
   });
 
-  it("sends a punch without accuracy to review when the fence sets a threshold", async () => {
-    const { employeeId } = await fencedWorker({ accuracy_threshold_meters: 50 });
+  it("accepts a positioned punch the same way, and stores the position", async () => {
+    const { employeeId } = await siteWorker();
     const res = await punch({
       employee_id: employeeId,
-      latitude: GEO.insideCircle.lat,
-      longitude: GEO.insideCircle.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
+      gps_accuracy: 8,
     });
-    expect(res.statusCode).toBe(202);
-    expect((res.json() as PunchBody).code).toBe("NO_LOCATION");
-  });
-
-  it("still accepts a coordinate-less punch when no fence applies", async () => {
-    const employeeId = await createActiveEmployee(w.app, w.admin);
-    const res = await punch({ employee_id: employeeId });
-    expect(res.statusCode).toBe(201);
-    expect((res.json() as PunchBody).event!.geofence_result).toBe("NO_FENCE");
+    expect(res.statusCode, res.body).toBe(201);
+    const event = await w.pool.query(
+      "SELECT lat, lng, gps_accuracy FROM attendance_events WHERE id = $1",
+      [(res.json() as PunchBody).event!.id],
+    );
+    expect(Number(event.rows[0].lat)).toBeCloseTo(GEO.atSite.lat, 5);
+    expect(Number(event.rows[0].gps_accuracy)).toBe(8);
   });
 });
 

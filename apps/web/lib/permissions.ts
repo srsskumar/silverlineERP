@@ -53,8 +53,6 @@ export const PERMISSIONS = {
   ATTENDANCE_PUNCH: 'attendance.punch',
   ATTENDANCE_READ: 'attendance.read',
   ATTENDANCE_DECIDE: 'attendance.decide',
-  GEO_READ: 'geo.read',
-  GEO_MANAGE: 'geo.manage',
   // S3 frozen contract codes (dot-style; backend enforces these).
   LEAVE_REQUEST: 'leave.request',
   LEAVE_DECIDE: 'leave.decide',

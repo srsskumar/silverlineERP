@@ -1,14 +1,14 @@
 /**
- * Attendance: punch in/out with live geo-fence context.
+ * Attendance: punch in/out, with the punch position shown on a map.
  *
- * The screen now answers the field user's actual question before they act —
- * "am I at the site?" — by drawing the fences around them and naming the one
- * they are standing in. Previously the only feedback was the server's verdict
- * after the punch had already been queued.
+ * Silverline has no geo-fencing (decision 2026-09-22). The position is
+ * captured and sent with the punch as evidence of where the day was worked;
+ * it is never judged against a boundary, and the screen no longer says
+ * "inside" or "outside" anything. The anti-fraud signals (mock location,
+ * emulator, impossible travel) are unchanged and still advisory.
  *
  * Offline behaviour is unchanged: punches enqueue into pending_ops with a
- * client UUID and Idempotency-Key and flush on reconnect. Fences are cached, so
- * the map and the containment check still work without signal.
+ * client UUID and Idempotency-Key and flush on reconnect.
  */
 import { withScreenBoundary } from "../../src/ui/ErrorBoundary";
 import { useCallback, useEffect, useState } from "react";
@@ -30,8 +30,6 @@ import {
 } from "../../src/device/location";
 import { loadLastFix, saveLastFix } from "../../src/device/lastFix";
 import { buildPunchSignals } from "../../src/device/signals";
-import { useFences } from "../../src/device/useFences";
-import { requestBackgroundPermission } from "../../src/device/geofencing";
 import { submitQueued } from "../../src/sync/engine";
 import { validateAttendanceException } from "../../src/validators";
 import {
@@ -86,16 +84,6 @@ function AttendanceScreen() {
   const [excMsg, setExcMsg] = useState<string | null>(null);
   const [signalNote, setSignalNote] = useState<string | null>(null);
 
-  const {
-    fences,
-    currentFence,
-    monitored,
-    backgroundGranted,
-    refreshBackgroundPermission,
-    refreshFences,
-    isLoading: fencesLoading,
-  } = useFences(fix);
-
   const history = useQuery({
     queryKey: ["attendance", "history"],
     queryFn: () => getAttendanceRecords({ limit: 20 }),
@@ -120,19 +108,18 @@ function AttendanceScreen() {
   });
   const villages = myVillages.data?.villages ?? [];
 
-  /** Takes a fix up front so the map and fence badge are live before punching. */
+  /** Takes a fix up front so the map is live before punching. */
   const locate = useCallback(async () => {
     setBusy("locating");
     try {
-      const [nextFix] = await Promise.all([getPunchFix(), refreshFences()]);
-      setFix(nextFix);
+      setFix(await getPunchFix());
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Could not get a location");
       setMsgTone("danger");
     } finally {
       setBusy(null);
     }
-  }, [refreshFences]);
+  }, []);
 
   useEffect(() => {
     void locate();
@@ -269,19 +256,9 @@ function AttendanceScreen() {
 
       <Card
         title="Where you are"
-        right={
-          currentFence ? (
-            <StatusDot text="Inside fence" tone="success" />
-          ) : fix && fences.length === 0 ? (
-            <StatusDot text="No fence assigned" tone="neutral" />
-          ) : fix ? (
-            <StatusDot text="Outside fence" tone="warning" />
-          ) : null
-        }
+        right={fix ? <StatusDot text="Located" tone="success" /> : null}
       >
         <MapCanvas
-          fences={fences}
-          activeFenceId={currentFence?.id ?? null}
           center={fix ? { latitude: fix.latitude, longitude: fix.longitude } : null}
           points={
             fix
@@ -294,7 +271,6 @@ function AttendanceScreen() {
         <Row style={{ marginTop: space.md, flexWrap: "wrap" }} gap={space.sm}>
           <Ionicons name="locate-outline" size={15} color={t.textSubtle} />
           <Muted>{accuracyLabel(fix)}</Muted>
-          {currentFence ? <Badge text={currentFence.name} tone="success" /> : null}
           {fix?.mocked ? <Badge text="Mock location" tone="danger" /> : null}
         </Row>
 
@@ -303,16 +279,7 @@ function AttendanceScreen() {
             tone="warning"
             icon="warning-outline"
             title="Weak GPS signal"
-            message="Move into the open before punching, or this will be queued for review."
-          />
-        ) : null}
-
-        {!currentFence && fix && fences.length > 0 ? (
-          <Banner
-            tone="warning"
-            icon="navigate-circle-outline"
-            title="You are not inside a work site"
-            message="You can still punch — it will be recorded as an outside-fence exception."
+            message="The punch is still accepted; its position will be recorded as approximate."
           />
         ) : null}
 
@@ -437,34 +404,6 @@ function AttendanceScreen() {
         ) : null}
       </Card>
 
-      {backgroundGranted === false ? (
-        <Card title="Site alerts">
-          <Muted>
-            Allow location “Always” and Silverline will confirm arrivals and departures
-            without you opening the app.
-          </Muted>
-          <Button
-            title="Allow background location"
-            variant="secondary"
-            icon="notifications-outline"
-            style={{ marginTop: space.md }}
-            onPress={() => {
-              void requestBackgroundPermission().then(() => refreshBackgroundPermission());
-            }}
-          />
-        </Card>
-      ) : monitored.length > 0 ? (
-        <Card>
-          <Row gap={space.sm}>
-            <Ionicons name="shield-checkmark-outline" size={16} color={t.success} />
-            <Muted>
-              Watching {monitored.length} nearby {monitored.length === 1 ? "site" : "sites"} in the
-              background
-            </Muted>
-          </Row>
-        </Card>
-      ) : null}
-
       <SectionLabel>Recent punches</SectionLabel>
       <Card>
         {history.isLoading ? (
@@ -491,8 +430,7 @@ function AttendanceScreen() {
       <SectionLabel>Regularisation</SectionLabel>
       <Card>
         <Muted style={{ marginBottom: space.md }}>
-          Missed a punch or were outside the fence? Explain what happened and your manager
-          will review it.
+          Missed a punch? Explain what happened and your manager will review it.
         </Muted>
         <Input
           placeholder="Reason (required)"
@@ -509,8 +447,6 @@ function AttendanceScreen() {
         />
         {excMsg ? <Subtle style={{ marginTop: space.sm }}>{excMsg}</Subtle> : null}
       </Card>
-
-      {fencesLoading ? <Subtle>Loading sites…</Subtle> : null}
     </Screen>
   );
 }

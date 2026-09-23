@@ -48,6 +48,10 @@ Build order: **Auth → Org → Employee → (Attendance+Geo ‖ Leave+Holidays 
 | S6 | Rollups + limits + backup drill | Dashboards + perf pass | Home dashboard + ≤200KB photos | Dash <3s, 200-burst load, restore passes |
 | S7 | Pilot support | Low-bandwidth mode + manuals | Frozen build + TestFlight/internal track | 50–100 users, sync >99%, UAT sign-off |
 
+## Decision 2026-09-22: no geo-fencing
+
+Silverline ERP has no geo-fencing. Removed end to end: the geo-fence CRUD, employee fence assignments and the phone's effective-fence read (`/api/v1/geo-fences*`), the fence maths in `@silverline/shared`, the `geo.read` / `geo.manage` permissions (migration 084 deletes the rows), the fence-based punch review (`OUTSIDE_GEOFENCE`, `NO_LOCATION`, `POOR_ACCURACY`), the web `/geo-fences` screen and fence badges, and the mobile background geofence monitoring with its `ACCESS_BACKGROUND_LOCATION` / location foreground-service permissions. What stays: a punch still carries latitude, longitude and accuracy when the device has them and is accepted the same way with or without them; the anti-fraud holds (mock location, emulator, impossible travel), clock skew, approved-leave and payroll-lock reviews are unchanged; the place search (`/api/v1/geo/search`, `GEOCODING_*`) is kept for the place names attendance will attach to punches. The `geo_fences` and `geo_fence_employee_assignments` tables and the fence columns on `attendance_events` / `attendance_records` are kept, unwritten, so history stays readable; pending `OUTSIDE_GEOFENCE` exceptions remain decidable and are labelled as legacy in the clients. `docs/REQUIREMENTS_*` §9 still describes fencing; that text is superseded by this decision.
+
 ## 6. Risk Register (top, merged)
 
 1. Morning check-in herd (15–25 rps, one box) → batch sync endpoint, PgBouncer, upsert path, jittered retries, 2× load test S6.

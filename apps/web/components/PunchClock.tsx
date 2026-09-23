@@ -34,7 +34,7 @@ import { clock, day, businessToday } from '@/lib/finance';
  * whatever was pressed afterwards. Punching in at nine and out at six from
  * the same open tab would have filed both from the morning's position --
  * which is worse than no location at all, because a wrong one looks
- * authoritative and would pass a geofence check it should have failed.
+ * authoritative to anybody later asking where the day was worked.
  *
  * So the mount-time read exists only to tell the user whether location is
  * available at all; the punch takes its own reading, with maximumAge zero
@@ -55,9 +55,9 @@ function usePunchPosition() {
       navigator.geolocation.getCurrentPosition(
         (p) => { setPosition(p.coords); setState('granted'); resolve(p.coords); },
         /*
-         * Refusing to share a location is not an error worth a red box. The
-         * server decides whether a punch without one is acceptable -- it may
-         * hold it for review, and that is the right place for the decision.
+         * Refusing to share a location is not an error worth a red box. A
+         * punch without one is accepted exactly like a punch with one; the
+         * position is evidence of where the day was worked, not a gate.
          */
         () => { setState('denied'); resolve(null); },
         { enableHighAccuracy: true, timeout: 8000, maximumAge },
@@ -137,8 +137,7 @@ export function PunchClock() {
       /*
        * Read the position now, for this punch. Both directions carry one:
        * where somebody finished the day answers as many questions as where
-       * they started it, and a check-out with no location is exactly the
-       * gap a geofence is meant to close.
+       * they started it.
        */
       const here = await capture();
       return punchEvent({
@@ -230,7 +229,7 @@ export function PunchClock() {
           {geoState === 'granted'
             ? `Location on, to about ${Math.round(position?.accuracy ?? 0)} m — taken again when you punch`
             : geoState === 'asking' ? 'Finding your location…'
-            : 'No location — the punch still saves, and may be held for review'}
+            : 'No location — the punch still saves'}
           {geoState === 'denied' ? (
             <button type="button" onClick={ask} className="ml-1 underline">try again</button>
           ) : null}

@@ -38,7 +38,7 @@ import { registerCatalogueRoutes } from "./modules/catalogue/routes.js";
 import { registerOrgUnitRoutes } from "./modules/org/routes.js";
 import { registerEmployeeRoutes } from "./modules/employees/routes.js";
 import { registerHolidayRoutes } from "./modules/holidays/routes.js";
-import { registerGeoFenceRoutes } from "./modules/geo/routes.js";
+import { registerGeoRoutes } from "./modules/geo/routes.js";
 import { registerAttendanceRoutes } from "./modules/attendance/routes.js";
 import { registerLeaveRoutes } from "./modules/leave/routes.js";
 import { registerWorkRoutes } from "./modules/work/routes.js";
@@ -189,7 +189,7 @@ export async function buildApp(
   await registerOrgUnitRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerEmployeeRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerHolidayRoutes(app, { pool, jwtSecret: config.jwtSecret });
-  await registerGeoFenceRoutes(app, { pool, jwtSecret: config.jwtSecret });
+  await registerGeoRoutes(app, { pool, jwtSecret: config.jwtSecret });
   await registerAttendanceRoutes(app, {
     pool,
     jwtSecret: config.jwtSecret,

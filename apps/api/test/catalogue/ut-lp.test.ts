@@ -9,7 +9,6 @@ import {
   buildWorld,
   createActiveEmployee,
   createChain,
-  createFence,
   grantLeaveBalance,
   headersForUserId,
   idem,
@@ -265,13 +264,6 @@ describe("UT-LP-02 submit overlapping approved leave or attendance", () => {
       site_id: chain.site,
     });
     await grantLeaveBalance(w.app, w.admin, employeeId, types.CL!);
-    await createFence(w.app, w.admin, {
-      name: "LP fence",
-      scope_type: "site",
-      scope_id: chain.site,
-      geometry_type: "circle",
-      geometry: { ...GEO.circleCentre, radius_m: GEO.circleRadiusM },
-    });
     const username = `cat_lp_att_${uniq()}`;
     await createUser(w.pool, w.orgId, {
       username,
@@ -288,8 +280,8 @@ describe("UT-LP-02 submit overlapping approved leave or attendance", () => {
         employee_id: employeeId,
         event_type: "CHECK_IN",
         client_timestamp: new Date().toISOString(),
-        latitude: GEO.insideCircle.lat,
-        longitude: GEO.insideCircle.lng,
+        latitude: GEO.atSite.lat,
+        longitude: GEO.atSite.lng,
       },
     });
     expect(punch.statusCode).toBe(201);
@@ -1614,13 +1606,6 @@ describe("UT-LP-10 convert client time around midnight and DST-independent IST b
       village_id: chain.village,
       site_id: chain.site,
     });
-    await createFence(w.app, w.admin, {
-      name: "TZ fence",
-      scope_type: "site",
-      scope_id: chain.site,
-      geometry_type: "circle",
-      geometry: { ...GEO.circleCentre, radius_m: GEO.circleRadiusM },
-    });
 
     const res = await w.app.inject({
       method: "POST",
@@ -1630,8 +1615,8 @@ describe("UT-LP-10 convert client time around midnight and DST-independent IST b
         employee_id: employeeId,
         event_type: "CHECK_IN",
         client_timestamp: new Date().toISOString(),
-        latitude: GEO.insideCircle.lat,
-        longitude: GEO.insideCircle.lng,
+        latitude: GEO.atSite.lat,
+        longitude: GEO.atSite.lng,
       },
     });
     expect(res.statusCode).toBe(201);

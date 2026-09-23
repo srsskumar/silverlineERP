@@ -17,8 +17,6 @@ import { cachedRead } from "../sync/db";
  */
 
 import { apiFetch, asItem, asList, asPage, type Page } from "./client";
-import type { CircleGeometry, PolygonGeometry, FenceShape } from "@silverline/shared";
-import type { MonitoredFence } from "../device/geofencing";
 
 // --- Auth -------------------------------------------------------------------
 
@@ -666,68 +664,4 @@ export async function getProjects(): Promise<Project[]> {
   return asList<Project>(data);
 }
 
-// --- Geo-fences -------------------------------------------------------------
-
-export interface GeoFence {
-  id: string;
-  name: string;
-  scope_type: string | null;
-  scope_id: string | null;
-  geometry_type: "circle" | "polygon";
-  geometry: CircleGeometry | PolygonGeometry;
-  tolerance_meters: number;
-  accuracy_threshold_meters: number | null;
-  status: string;
-  version: number;
-}
-
-/**
- * Active fences for the signed-in employee's assigned site/location chain,
- * cached so a field user out of signal can still see the applicable boundary.
- */
-export async function getGeoFences(limit = 100): Promise<GeoFence[]> {
-  return cachedRead("geo-fences", async () => {
-    const { data } = await apiFetch<unknown>(`/api/v1/geo-fences/effective?limit=${limit}`, {
-      method: "GET",
-    });
-    return asPage<GeoFence>(data).items;
-  });
-}
-
-/** Circle fences reshaped for OS region monitoring; polygons are excluded. */
-export function toMonitoredFences(fences: readonly GeoFence[]): MonitoredFence[] {
-  const out: MonitoredFence[] = [];
-  for (const f of fences) {
-    if (f.geometry_type !== "circle") continue;
-    if (f.status && f.status !== "ACTIVE") continue;
-    const g = f.geometry as CircleGeometry;
-    out.push({
-      id: f.id,
-      name: f.name,
-      latitude: g.lat,
-      longitude: g.lng,
-      // Tolerance widens the fence server-side, so monitor the same radius the
-      // server will accept — otherwise the OS fires exit while the punch is
-      // still inside tolerance.
-      radius_m: g.radius_m + (f.tolerance_meters ?? 0),
-    });
-  }
-  return out;
-}
-
-/** Fence shapes for on-device containment checks (circles and polygons). */
-export function toFenceShapes(
-  fences: readonly GeoFence[],
-): { id: string; name: string; shape: FenceShape }[] {
-  return fences
-    .filter((f) => !f.status || f.status === "ACTIVE")
-    .map((f) => ({
-      id: f.id,
-      name: f.name,
-      shape: {
-        geometry_type: f.geometry_type,
-        geometry: f.geometry,
-        tolerance_meters: f.tolerance_meters ?? null,
-      },
-    }));
-}
+// --- Geo-fences: removed 2026-09-22 (Silverline has no geo-fencing) ---------

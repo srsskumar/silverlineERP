@@ -9,7 +9,7 @@
 
 import {
   Activity, BarChart3, Boxes, Building2, CalendarDays, ClipboardList, Clock,
-  FileSpreadsheet, FolderKanban, Inbox, LayoutDashboard, MapPin,
+  FileSpreadsheet, FolderKanban, Inbox, LayoutDashboard,
   Package, PlaneTakeoff, Settings, Shield, Users, Wallet, Workflow,
   Briefcase, Contact, Gavel, Receipt, ShoppingCart, CheckSquare, IndianRupee, Download,
   ArrowDownToLine,
@@ -53,7 +53,7 @@ export interface NavGroup {
   items: NavItem[];
 }
 
-// S6 shell: dashboard + employees/org masters + attendance/geo + leave + projects/tasks + work/reports. Each item is permission-gated;
+// S6 shell: dashboard + employees/org masters + attendance + leave + projects/tasks + work/reports. Each item is permission-gated;
 // groups render only when at least one child is visible.
 export const NAV_GROUPS: NavGroup[] = [
   {
@@ -134,7 +134,6 @@ export const NAV_GROUPS: NavGroup[] = [
       // changed", this answers "where has the equipment been", and they are
       // different questions asked by different people.
       { href: '/assets/movements', label: 'Asset movements', permission: 'asset.read', icon: ArrowLeftRight },
-      { href: '/geo-fences', label: 'Geo-fences', permission: PERMISSIONS.GEO_READ, icon: MapPin },
       // Measured per project, so the first thing it loads is the project list.
       { href: '/analytics', label: 'Analytics', permission: 'analytics.read', requires: [PERMISSIONS.PROJECT_READ], icon: BarChart3 },
       { href: '/automation', label: 'Automation', permission: 'automation.read', icon: Workflow },

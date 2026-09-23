@@ -9,8 +9,8 @@
 # time via NEXT_PUBLIC_API_URL. Replace `https:` with that exact origin in a
 # fixed environment for a materially stronger policy.
 #
-# img-src additionally allows tile.openstreetmap.org: the geo-fence and punch
-# maps are raster tiles fetched as images. Point this at your own tile host if
+# img-src additionally allows tile.openstreetmap.org: the punch map's raster
+# tiles are fetched as images. Point this at your own tile host if
 # you self-host; MapLibre also needs blob: for its web workers.
 #
 # Permissions-Policy allows geolocation for this origin only: the punch clock

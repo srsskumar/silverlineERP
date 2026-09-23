@@ -136,12 +136,6 @@ export const queryKeys = {
     all: ['documents'] as const,
     list: (employeeId: string) => [...queryKeys.documents.all, 'list', employeeId] as const,
   },
-  geoFences: {
-    all: ['geoFences'] as const,
-    list: (filters?: Record<string, unknown>) =>
-      [...queryKeys.geoFences.all, 'list', filters ?? {}] as const,
-    detail: (id: string) => [...queryKeys.geoFences.all, 'detail', id] as const,
-  },
   leave: {
     all: ['leave'] as const,
     types: () => [...queryKeys.leave.all, 'types'] as const,

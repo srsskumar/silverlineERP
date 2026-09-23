@@ -61,7 +61,6 @@ describe('every picker actually applies it', () => {
     expect(read('app/admin/page.tsx')).toContain("type:'employee'");
     expect(read('app/approvals/delegations/page.tsx')).toContain('<UserPicker');
     expect(read('components/EmployeePicker.tsx')).toContain("status = 'ACTIVE'");
-    expect(read('app/geo-fences/page.tsx')).toContain("status: 'ACTIVE'");
     expect(read('components/EmployeeForm.tsx')).toContain("status: 'ACTIVE'");
   });
 

@@ -218,8 +218,8 @@ async function run(db: PoolClient): Promise<void> {
   }
 
   // --------------------------------------------------------- org_units ----
-  // A real District → Mandal → Village → Site chain, so geo-fence fallback and
-  // scoped reads have a tree to walk.
+  // A real District → Mandal → Village → Site chain, so scoped reads have a
+  // tree to walk.
   const districts: string[] = [];
   const mandals: string[] = [];
   const villages: string[] = [];
@@ -428,69 +428,9 @@ async function run(db: PoolClient): Promise<void> {
     count("device_registrations");
   }
 
-  // -------------------------------------------------------- geo_fences ----
-  const fences: string[] = [];
-  for (let i = 0; i < TARGET; i += 1) {
-    const circle = i % 3 !== 0;
-    const lat = 17.2 + (i % 40) * 0.02;
-    const lng = 78.2 + (i % 30) * 0.02;
-    const scope = pick(["site", "village", "mandal", "district"] as const, i);
-    const scopeId =
-      scope === "site" ? pick(sites, i)
-      : scope === "village" ? pick(villages, i)
-      : scope === "mandal" ? pick(mandals, i)
-      : pick(districts, i);
-    const row = await one<{ id: string }>(
-      `INSERT INTO geo_fences (org_id,name,scope_type,scope_id,geometry_type,geometry,
-         tolerance_meters,accuracy_threshold_meters,status,created_by,updated_by,version)
-       VALUES ($1,$2,$3,$4::uuid,$5,$6::jsonb,$7,$8,$9,$10::uuid,$10::uuid,1)
-       RETURNING id`,
-      [
-        orgId,
-        `${pick(SITES, i)} fence ${i}`,
-        scope,
-        scopeId,
-        circle ? "circle" : "polygon",
-        JSON.stringify(
-          circle
-            ? { lat, lng, radius_m: 150 + (i % 8) * 50 }
-            : {
-                points: [
-                  [lat, lng], [lat + 0.008, lng], [lat + 0.008, lng + 0.008], [lat, lng + 0.008],
-                ],
-              },
-        ),
-        (i % 5) * 10,
-        i % 4 === 0 ? 50 + (i % 5) * 25 : null,
-        i % 15 === 0 ? "INACTIVE" : "ACTIVE",
-        pick(users, i),
-      ],
-    );
-    fences.push(row.id);
-    count("geo_fences");
-  }
-
-  // One active direct assignment per employee, at most (partial unique index).
-  for (let i = 0; i < TARGET; i += 1) {
-    const r = await db.query(
-      `INSERT INTO geo_fence_employee_assignments
-         (org_id,geo_fence_id,employee_id,status,created_by,updated_by,version)
-       VALUES ($1,$2::uuid,$3::uuid,$4,$5::uuid,$5::uuid,1)
-       ON CONFLICT (org_id, geo_fence_id, employee_id) DO NOTHING`,
-      [
-        orgId,
-        pick(fences, i),
-        employees[i]!,
-        // Only every third employee keeps an ACTIVE direct fence; the rest are
-        // retired history, which is what the precedence rule falls back from.
-        i % 3 === 0 ? "ACTIVE" : "INACTIVE",
-        pick(users, i),
-      ],
-    );
-    count("geo_fence_employee_assignments", r.rowCount ?? 0);
-  }
-
   // -------------------------------------------------------- attendance ----
+  // No geo-fences (decision 2026-09-22): punches carry a position but are not
+  // judged against a boundary, so the fence columns are left at their defaults.
   const activeEmployees = await all<{ id: string }>(
     "SELECT id FROM employees WHERE org_id=$1 AND status='ACTIVE' ORDER BY emp_no",
     [orgId],
@@ -501,9 +441,9 @@ async function run(db: PoolClient): Promise<void> {
     const workDate = daysAgo(1 + (i % 45));
     const inEvent = await one<{ id: string }>(
       `INSERT INTO attendance_events (employee_id,event_type,client_timestamp,server_timestamp,
-         lat,lng,gps_accuracy,geofence_result,geofence_id,mock_location,device_id,app_version,
-         idempotency_key,device_signals,geofence_version)
-       VALUES ($1::uuid,'CHECK_IN',$2,$2,$3,$4,$5,$6,$7::uuid,$8,$9,'1.4.0',$10,$11::jsonb,1)
+         lat,lng,gps_accuracy,mock_location,device_id,app_version,
+         idempotency_key,device_signals)
+       VALUES ($1::uuid,'CHECK_IN',$2,$2,$3,$4,$5,$6,$7,'1.4.0',$8,$9::jsonb)
        RETURNING id`,
       [
         employeeId,
@@ -511,8 +451,6 @@ async function run(db: PoolClient): Promise<void> {
         17.2 + (i % 40) * 0.02,
         78.2 + (i % 30) * 0.02,
         4 + (i % 20),
-        pick(["INSIDE", "INSIDE", "INSIDE", "OUTSIDE", "NO_FENCE"] as const, i),
-        pick(fences, i),
         i % 29 === 0,
         `handset-${TAG}-${i}`,
         `seed-${TAG}-in-${i}`,
@@ -530,9 +468,9 @@ async function run(db: PoolClient): Promise<void> {
     );
     const outEvent = await one<{ id: string }>(
       `INSERT INTO attendance_events (employee_id,event_type,client_timestamp,server_timestamp,
-         lat,lng,gps_accuracy,geofence_result,geofence_id,mock_location,device_id,app_version,
-         idempotency_key,device_signals,geofence_version)
-       VALUES ($1::uuid,'CHECK_OUT',$2,$2,$3,$4,$5,'INSIDE',$6::uuid,false,$7,'1.4.0',$8,NULL,1)
+         lat,lng,gps_accuracy,mock_location,device_id,app_version,
+         idempotency_key,device_signals)
+       VALUES ($1::uuid,'CHECK_OUT',$2,$2,$3,$4,$5,false,$6,'1.4.0',$7,NULL)
        RETURNING id`,
       [
         employeeId,
@@ -540,7 +478,6 @@ async function run(db: PoolClient): Promise<void> {
         17.2 + (i % 40) * 0.02,
         78.2 + (i % 30) * 0.02,
         4 + (i % 15),
-        pick(fences, i),
         `handset-${TAG}-${i}`,
         `seed-${TAG}-out-${i}`,
       ],
@@ -549,12 +486,12 @@ async function run(db: PoolClient): Promise<void> {
 
     const rec = await db.query(
       `INSERT INTO attendance_records (employee_id,work_date,check_in_event_id,check_out_event_id,
-         check_in_at,check_out_at,total_hours,status,geofence_violation)
-       VALUES ($1::uuid,$2::date,$3::uuid,$4::uuid,$5,$6,9.00,'COMPLETE',$7)
+         check_in_at,check_out_at,total_hours,status)
+       VALUES ($1::uuid,$2::date,$3::uuid,$4::uuid,$5,$6,9.00,'COMPLETE')
        ON CONFLICT (employee_id, work_date) DO NOTHING RETURNING id`,
       [
         employeeId, workDate, inEvent.id, outEvent.id,
-        `${workDate}T03:30:00.000Z`, `${workDate}T12:30:00.000Z`, i % 7 === 0,
+        `${workDate}T03:30:00.000Z`, `${workDate}T12:30:00.000Z`,
       ],
     );
     if (rec.rowCount) {
@@ -572,10 +509,10 @@ async function run(db: PoolClient): Promise<void> {
       [
         pick(activeEmployees, i).id,
         records.length ? pick(records, i) : null,
-        pick(["OUTSIDE_GEOFENCE", "SYSTEM_FLAG", "REGULARIZATION"] as const, i),
+        pick(["SYSTEM_FLAG", "SYSTEM_FLAG", "REGULARIZATION"] as const, i),
         pick([
-          "Punch location is outside the assigned geo-fence; queued for review",
-          "Supervisor moved the muster point to the far gate",
+          "Mock location detected; manual review required",
+          "Punch came from a device that appears to be an emulator; queued for review",
           "Network was down at the site all morning",
         ], i),
         i % 2 === 0 ? "SYSTEM" : "USER",
@@ -1390,8 +1327,8 @@ async function seedPlatform(db: PoolClient, ctx: Ctx): Promise<void> {
       [
         orgId, pick(users, i), `10.${i % 250}.0.${(i * 5) % 250}`,
         "Mozilla/5.0 (Linux; Android 14) Silverline/1.4.0",
-        pick(["auth.login", "employee.create", "task.status.change", "payroll.run.lock", "geo_fence.create"], i),
-        pick(["user", "employee", "task", "payroll_run", "geo_fence"], i),
+        pick(["auth.login", "employee.create", "task.status.change", "payroll.run.lock", "leave.decide"], i),
+        pick(["user", "employee", "task", "payroll_run", "leave_request"], i),
         ctxTasks.length ? pick(ctxTasks, i) : null,
         JSON.stringify({ status: "TO_DO" }),
         JSON.stringify({ status: "IN_PROGRESS" }),

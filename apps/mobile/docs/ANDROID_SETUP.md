@@ -19,8 +19,7 @@ on modules that are not in it:
 | Module | Why Expo Go cannot host it |
 |---|---|
 | `expo-maps` | Native Google Maps view, needs a per-app Maps API key baked into the manifest |
-| `expo-location` + `expo-task-manager` | Background geofencing needs `ACCESS_BACKGROUND_LOCATION` and a registered foreground service declared in the app manifest |
-| `expo-background-task` | Same, a manifest-declared background worker |
+| `expo-task-manager` + `expo-background-task` | The sync worker is a manifest-declared background task |
 | `expo-secure-store`, `expo-local-authentication` | Keystore and biometric prompts bound to the app's own package signature |
 | `expo-notifications` | Push registration is tied to the app's package name |
 | `expo-sqlite`, `expo-camera` | Present in Expo Go but configured here through config plugins that only apply in a native build |
@@ -199,7 +198,7 @@ emulator -avd silverline_api36
 
 Alternatively plug in a physical phone with **Developer options > USB debugging**
 enabled, and accept the "Allow USB debugging" prompt on the phone. A real device
-is the better target for this app: geofencing, biometrics, and the camera are all
+is the better target for this app: GPS, biometrics, and the camera are all
 either stubbed or awkward on an emulator.
 
 ## Verify before building
@@ -225,7 +224,7 @@ npm run check:android
 
 ## Running the app
 
-`src/device/geofencing.ts` and `src/device/signals.ts` import `@silverline/shared`
+`src/device/signals.ts` and the survey screens import `@silverline/shared`
 at runtime, and that package resolves to `packages/shared/dist/`, which is
 gitignored. On a fresh clone it has to be built once or Metro fails to bundle:
 
@@ -465,9 +464,8 @@ and recreate it against `system-images;android-36;google_apis;arm64-v8a`.
 Expected today. See [The Google Maps API key](#the-google-maps-api-key); the key
 is not currently injected into the manifest.
 
-### Background geofencing never fires
+### The app asks for location only while in use
 
-Not a build problem. Android requires the user to grant background location
-separately from foreground location, through **Settings > Apps > Silverline ERP >
-Permissions > Location > Allow all the time**. The in-app prompt can only request
-"While using the app"; Android sends the user to Settings for "Always".
+Expected. Silverline has no geo-fencing (decision 2026-09-22), so the app no
+longer requests background location or declares a location foreground service;
+the punch position is read in the foreground when the user punches.

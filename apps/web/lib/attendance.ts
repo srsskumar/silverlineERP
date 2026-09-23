@@ -23,11 +23,12 @@ import type { CursorPage } from './employees';
  */
 
 export type PunchEventType = 'CHECK_IN' | 'CHECK_OUT';
-export type RecordStatus = 'PRESENT' | 'PARTIAL' | 'ABSENT' | 'VIOLATION';
+export type RecordStatus = 'PRESENT' | 'PARTIAL' | 'ABSENT';
 export type ExceptionType =
   | 'MISSED_PUNCH'
   | 'LATE_CHECKIN'
   | 'EARLY_CHECKOUT'
+  /** Legacy: raised while geo-fencing existed (removed 2026-09-22). Never filed anew. */
   | 'OUTSIDE_GEOFENCE'
   | 'REGULARIZATION'
   | 'SYSTEM_FLAG';
@@ -52,7 +53,6 @@ export interface AttendanceRecord {
   check_in_at?: string | null;
   check_out_at?: string | null;
   total_hours?: number | null;
-  geofence_violation?: boolean | null;
   version: number;
   [key: string]: unknown;
 }
@@ -158,7 +158,6 @@ export interface ListRecordsParams {
   from?: string;
   to?: string;
   status?: string;
-  violation?: string;
   limit?: number;
   cursor?: string | null;
 }
@@ -169,7 +168,6 @@ export function buildRecordsQuery(params: ListRecordsParams = {}): string {
   if (params.from) search.set('from', params.from);
   if (params.to) search.set('to', params.to);
   if (params.status) search.set('status', params.status);
-  if (params.violation) search.set('violation', params.violation);
   if (params.limit) search.set('limit', String(params.limit));
   if (params.cursor) search.set('cursor', params.cursor);
   const qs = search.toString();
@@ -206,7 +204,7 @@ export async function listRecords(params: ListRecordsParams = {}): Promise<Curso
  * the day was refused as a duplicate.
  */
 export async function listMyRecords(
-  params: Omit<ListRecordsParams, 'employee_id' | 'violation'> = {},
+  params: Omit<ListRecordsParams, 'employee_id'> = {},
 ): Promise<CursorPage<AttendanceRecord>> {
   const url = buildRecordsQuery(params).replace('/api/v1/attendance/records', '/api/v1/attendance/me');
   const { data, request_id } = await apiRequest<unknown>(url, { method: 'GET' });
@@ -303,10 +301,8 @@ export interface AttendanceMapEvent {
   at: string;
   lat: number;
   lng: number;
-  geofence_result: string;
-  geofence_id: string | null;
   /** Precomputed server-side so the map colours by one field. */
-  outcome: 'ok' | 'review' | 'outside';
+  outcome: 'ok' | 'review';
 }
 
 /**
