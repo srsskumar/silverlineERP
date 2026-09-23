@@ -53,7 +53,7 @@ function ProjectFinanceScreen() {
 
   const projects = useQuery({
     queryKey: ["projects"],
-    queryFn: getProjects,
+    queryFn: () => getProjects(),
     enabled: canRead,
   });
   const openProjects = (projects.data ?? []).filter(
