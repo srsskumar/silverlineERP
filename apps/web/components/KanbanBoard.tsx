@@ -98,7 +98,7 @@ export function KanbanBoard({
   const nameById = React.useMemo(() => {
     const map = new Map<string, string>();
     for (const row of people.data?.rows ?? []) {
-      if (row?.id) map.set(String(row.id), String(row.username ?? ''));
+      if (row?.id) map.set(String(row.id), String(row.name ?? row.username ?? ''));
     }
     return map;
   }, [people.data]);
