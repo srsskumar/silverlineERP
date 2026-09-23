@@ -40,6 +40,21 @@ describe('inventory integrity',()=>{
  it('calculates invoice totals using decimal arithmetic',async()=>{
   const v=(await call('POST','vendors',{code:'V1',name:'Vendor'})).json();const r=await call('POST','invoices',{serial_number:'INV',vendor_id:v.id,hsn:'1234',gst_enabled:true,gst_rate:'18',subtotal:'0.10',payment_mode:'BANK',reference:'PO'});expect(r.statusCode).toBe(201);expect(r.json().total).toBe('0.1200');
  });
+ it('links an invoice to the purchase order it bills against — B-014',async()=>{
+  // invoiceSchema had no purchase_order_id field, so a vendor invoice could
+  // never be linked to its PO through the API and POST /invoices/:id/match
+  // always 422ed with NO_PURCHASE_ORDER, even for a real invoice on a real
+  // order.
+  const v=(await call('POST','vendors',{code:'V2',name:'Vendor Two'})).json();
+  const po=(await call('POST','purchase-orders',{po_number:'PO-LINK-1',vendor_id:v.id,po_date:'2026-09-15',lines:[{description:'Cement',unit:'bag',quantity:10,unit_rate:400}]})).json().data;
+  const inv=await call('POST','invoices',{serial_number:'INV-LINK-1',vendor_id:v.id,hsn:'1234',gst_enabled:false,gst_rate:'0',subtotal:'4000',payment_mode:'BANK',reference:'PO-LINK-1',purchase_order_id:po.id});
+  expect(inv.statusCode).toBe(201);
+  expect(inv.json().purchase_order_id).toBe(po.id);
+  const stored=await pool.query('SELECT purchase_order_id FROM invoices WHERE id=$1',[inv.json().id]);
+  expect(stored.rows[0].purchase_order_id).toBe(po.id);
+  const match=await call('POST',`invoices/${inv.json().id}/match`,{});
+  expect(match.json().code).not.toBe('NO_PURCHASE_ORDER');
+ });
  it('rejects cross-organization references',async()=>{
   const other=(await pool.query("INSERT INTO organizations(name) VALUES('Other') RETURNING id")).rows[0].id;
   const v=(await pool.query("INSERT INTO vendors(org_id,code,name) VALUES($1,'X','Foreign') RETURNING id",[other])).rows[0].id;
