@@ -2707,7 +2707,7 @@ export const gcpSchema = z.object({
    * the same thing as `remarks` -- that is how the point was fixed, this is
    * how to find it standing at the village with no equipment.
    */
-  located_at: z.string().trim().max(255).nullable().optional(),
+  landmark: z.string().trim().max(255).nullable().optional(),
   established_on: pastDate.nullable().optional(),
 }).strict().superRefine((v, ctx) => {
   // A grid reference with no zone cannot be resolved to a place, and a zone
@@ -2744,7 +2744,7 @@ export const gcpPatchSchema = z.object({
   northing_m: z.number().finite().min(0).max(10_000_000).nullable().optional(),
   grid_zone: z.string().trim().max(16).nullable().optional(),
   remarks: z.string().max(2000).nullable().optional(),
-  located_at: z.string().trim().max(255).nullable().optional(),
+  landmark: z.string().trim().max(255).nullable().optional(),
   established_on: pastDate.nullable().optional(),
 }).strict()
   .refine(v => Object.keys(v).length > 0, 'Change at least one field')

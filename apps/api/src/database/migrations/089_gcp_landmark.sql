@@ -9,4 +9,4 @@
 -- party, because nothing recorded a landmark.
 
 ALTER TABLE survey_village_gcps
-  ADD COLUMN IF NOT EXISTS located_at varchar(255);
+  ADD COLUMN IF NOT EXISTS landmark varchar(255);
