@@ -1486,3 +1486,65 @@ describe("planned dates stay in order (QA-WORK)", () => {
     expect(taskPatched.statusCode).toBe(422);
   });
 });
+
+describe("editing a project's manager and type (B-023)", () => {
+  // The web edit page (apps/web/components/projects/ProjectForm.tsx) renders
+  // "Project manager" and "Project type" as editable in edit mode, and always
+  // sends `name` alongside whatever else changed. projectPatchSchema had no
+  // key for either field, so zod silently stripped them: the request 200'd,
+  // the version bumped, and the value never moved -- a save that reports
+  // success and changes nothing.
+  it("actually moves project_manager_id and project_type_id when PATCHed alongside name", async () => {
+    const h = await adminHeaders();
+    const types = await typeMap();
+    const typeCodes = Object.keys(types);
+    const project = await mkProject(h);
+    const manager = await mkUser(["PROJECT_MANAGER"], "mgrB023");
+    const before = await pool.query("SELECT name FROM projects WHERE id = $1", [project.id]);
+    const name = (before.rows[0] as { name: string }).name;
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/projects/${project.id}`,
+      headers: { ...h, "if-match": String(project.version) },
+      payload: {
+        name,
+        project_manager_id: manager.id,
+        project_type_id: types[typeCodes[0]],
+      },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const body = res.json() as { project_manager_id: string; project_type_id: string };
+    expect(body.project_manager_id).toBe(manager.id);
+    expect(body.project_type_id).toBe(types[typeCodes[0]]);
+
+    const row = await pool.query(
+      "SELECT project_manager_id, project_type_id FROM projects WHERE id = $1",
+      [project.id],
+    );
+    expect(row.rows[0].project_manager_id).toBe(manager.id);
+    expect(row.rows[0].project_type_id).toBe(types[typeCodes[0]]);
+  });
+
+  it("refuses a project_manager_id from another organisation (404)", async () => {
+    const h = await adminHeaders();
+    const project = await mkProject(h);
+    const foreignOrg = await pool.query(
+      "INSERT INTO organizations (name) VALUES ($1) RETURNING id",
+      [`Other org B023 ${Date.now()}`],
+    );
+    const foreignUser = await pool.query(
+      "INSERT INTO users (org_id, username, password_hash) VALUES ($1, $2, 'x') RETURNING id",
+      [(foreignOrg.rows[0] as { id: string }).id, `foreign_b023_${Date.now()}`],
+    );
+    const before = await pool.query("SELECT name FROM projects WHERE id = $1", [project.id]);
+    const name = (before.rows[0] as { name: string }).name;
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/projects/${project.id}`,
+      headers: { ...h, "if-match": String(project.version) },
+      payload: { name, project_manager_id: (foreignUser.rows[0] as { id: string }).id },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});
