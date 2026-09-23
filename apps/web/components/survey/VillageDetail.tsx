@@ -1198,7 +1198,17 @@ function Billing({
                             {editing === String(c.id) ? 'Cancel' : 'Edit'}
                           </Button>
                           <Button type="button" variant="ghost"
-                            onClick={() => remove.mutate(String(c.id))}>Remove</Button>
+                            onClick={() => {
+                              // A claim once removed is not a decision on it,
+                              // it is gone: getting it back means
+                              // re-submitting and re-approving it, and if it
+                              // had already gone to the department that is a
+                              // real delay on real money.
+                              if (window.confirm(
+                                `Remove this milestone ${c.milestone} claim (${c.percent}%)? `
+                                + 'It will have to be re-submitted and re-approved from scratch.',
+                              )) remove.mutate(String(c.id));
+                            }}>Remove</Button>
                         </div>
                       ) : null}
                     </TD>
@@ -1482,7 +1492,16 @@ function CertifiedTotals({ village, canCertify }: { village: Row; canCertify: bo
                       <TD className="text-right">
                         {r.certified !== null ? (
                           <Button type="button" variant="ghost"
-                            onClick={() => clear.mutate(code)}>Clear</Button>
+                            onClick={() => {
+                              // Reverses a certification: the village goes
+                              // back to reporting whatever the daily returns
+                              // sum to, which is not necessarily the same
+                              // number and feeds every roll-up above it.
+                              if (window.confirm(
+                                `Clear the certified figure for ${r.label}? `
+                                + 'The village will report the daily total again instead.',
+                              )) clear.mutate(code);
+                            }}>Clear</Button>
                         ) : null}
                       </TD>
                     ) : null}
@@ -1994,7 +2013,15 @@ function ControlPoints({ village, canManage }: { village: Row; canManage: boolea
                   {canManage ? (
                     <TD className="text-right">
                       <Button type="button" variant="ghost"
-                        onClick={() => remove.mutate(String(g.id))}>Remove</Button>
+                        onClick={() => {
+                          // Everything surveyed from this point references
+                          // it; removing it is a decision about the record,
+                          // not a typo fix.
+                          if (window.confirm(
+                            `Remove control point ${g.point_code}? Anything surveyed from it `
+                            + 'keeps its own coordinates, but this point is gone.',
+                          )) remove.mutate(String(g.id));
+                        }}>Remove</Button>
                     </TD>
                   ) : null}
                 </TR>

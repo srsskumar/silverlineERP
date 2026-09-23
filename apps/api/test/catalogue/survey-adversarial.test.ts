@@ -9,7 +9,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildWorld, idem, uniq, workDate, type CatalogueWorld, type Headers } from "./fixture.js";
+import { buildWorld, idem, NOW, uniq, workDate, type CatalogueWorld, type Headers } from "./fixture.js";
 
 let w: CatalogueWorld;
 let programmeId: string;
@@ -286,5 +286,159 @@ describe("a crew member reaching past their own programme", () => {
       village_name: "Not theirs to add", village_code: uniq("NT"), mandal_id: mandalId,
     });
     expect([401, 403, 404]).toContain(r.status);
+  });
+});
+
+describe("a crew member reaching past their own village", () => {
+  // Being on the programme is not the same fact as being posted to a
+  // particular village on it. `directEmployee` is put on `villageId`'s crew
+  // below; `siteEmployee` (the other seeded active employee) never is, but
+  // both end up "on the programme" once either one is crewed anywhere on
+  // it — visibleProgrammes() answers at the programme level. A ground
+  // control point is planted by whoever is standing on it, so it needs the
+  // stronger, village-level check.
+  let ownVillage: string;
+  let otherVillage: string;
+
+  beforeAll(async () => {
+    const started = await post(w.admin, `/api/v1/survey/villages/${villageId}/start-gt`, {
+      started_on: workDate(), expected_end_on: workDate(),
+      employee_ids: [w.directEmployee],
+    });
+    expect(started.status, JSON.stringify(started.body)).toBe(201);
+    ownVillage = villageId;
+
+    const v2 = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Not their crew's village", village_code: uniq("NC"),
+      mandal_id: mandalId, total_extent_ac: 50,
+    });
+    otherVillage = String(v2.data.id);
+    // siteEmployee is crewed on this one instead, so siteUser reads as "on
+    // the programme" without being on ownVillage's crew.
+    const started2 = await post(w.admin, `/api/v1/survey/villages/${otherVillage}/start-gt`, {
+      started_on: workDate(), expected_end_on: workDate(),
+      employee_ids: [w.siteEmployee],
+    });
+    expect(started2.status, JSON.stringify(started2.body)).toBe(201);
+  });
+
+  it("may plant a point on the village it is actually crewed to", async () => {
+    const r = await post(w.directUser, `/api/v1/survey/villages/${ownVillage}/gcps`, {
+      point_code: uniq("OWN"), latitude: 16.5, longitude: 80.6,
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+
+  it("is refused a point on a village elsewhere on the same programme", async () => {
+    // Before the fix this returned 201: directUser is "on the programme"
+    // (crewed on ownVillage) but never on otherVillage's crew.
+    const r = await post(w.directUser, `/api/v1/survey/villages/${otherVillage}/gcps`, {
+      point_code: uniq("OTH"), latitude: 16.5, longitude: 80.6,
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(403);
+    expect(r.body.code).toBe("NOT_YOUR_VILLAGE");
+  });
+
+  it("a supervisor (survey.manage) is not held to the crew list", async () => {
+    const r = await post(w.admin, `/api/v1/survey/villages/${otherVillage}/gcps`, {
+      point_code: uniq("SUP"), latitude: 16.5, longitude: 80.6,
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+});
+
+describe("a day filed before the crew was ever on the ground", () => {
+  it("accepts a return dated before ground truthing started, flagged rather than silent", async () => {
+    // Not refused: `started_on` is itself something somebody typed, and a
+    // hard refusal would block backfilling the first few days once the
+    // paperwork catches up. It must not be silent, though — before the fix
+    // this entry carried no sign anything was odd about its date.
+    const v = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Backdate village", village_code: uniq("BD"),
+      mandal_id: mandalId, total_extent_ac: 40,
+    });
+    const bdVillage = String(v.data.id);
+    const started = await post(w.admin, `/api/v1/survey/villages/${bdVillage}/start-gt`, {
+      started_on: workDate(), expected_end_on: workDate(), employee_ids: [w.directEmployee],
+    });
+    expect(started.status, JSON.stringify(started.body)).toBe(201);
+
+    const before = new Date(NOW);
+    before.setDate(before.getDate() - 30);
+    const r = await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: bdVillage, entry_date: before.toISOString().slice(0, 10),
+      teams_deployed: 1, values: { GOVT_LAND_EXTENT_AC: 5 },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.data.warnings?.length, JSON.stringify(r.data)).toBeGreaterThan(0);
+    expect(r.data.warnings[0]).toContain("starting on");
+  });
+
+  it("carries no warning for a day on or after the start date", async () => {
+    const v = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Ordinary village", village_code: uniq("OR"),
+      mandal_id: mandalId, total_extent_ac: 40,
+    });
+    const village = String(v.data.id);
+    await post(w.admin, `/api/v1/survey/villages/${village}/start-gt`, {
+      started_on: workDate(), expected_end_on: workDate(), employee_ids: [w.directEmployee],
+    });
+    const r = await post(w.admin, "/api/v1/survey/entries", {
+      survey_village_id: village, entry_date: workDate(),
+      teams_deployed: 1, values: { GOVT_LAND_EXTENT_AC: 5 },
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.data.warnings ?? []).toEqual([]);
+  });
+});
+
+describe("what an observer is shown of a contact", () => {
+  it("drops phone and email from the government observer's copy", async () => {
+    const c = await post(w.admin, `/api/v1/survey/projects/${programmeId}/contacts`, {
+      side: "GOVT", name: "Test Tahsildar", designation: "Tahsildar", phone: "9100000000",
+      email: "tahsildar@example.invalid",
+    });
+    expect(c.status, JSON.stringify(c.body)).toBe(201);
+
+    const asObserver = await get(w.role.GOVT_OBSERVER, `/api/v1/survey/projects/${programmeId}/contacts`);
+    expect(asObserver.status, JSON.stringify(asObserver.body)).toBe(200);
+    const row = (asObserver.data as Array<Record<string, unknown>>)
+      .find((x) => x.id === c.data.id);
+    expect(row, JSON.stringify(asObserver.data)).toBeTruthy();
+    expect(row).not.toHaveProperty("phone");
+    expect(row).not.toHaveProperty("email");
+    expect(row!.name).toBe("Test Tahsildar");
+
+    const asStaff = await get(w.admin, `/api/v1/survey/projects/${programmeId}/contacts`);
+    const staffRow = (asStaff.data as Array<Record<string, unknown>>)
+      .find((x) => x.id === c.data.id);
+    expect(staffRow!.phone).toBe("9100000000");
+  });
+});
+
+describe("the billing register's programme filter", () => {
+  it("accepts survey_project_id as well as project_id", async () => {
+    const byProjectId = await get(w.admin, `/api/v1/survey/billing?project_id=${programmeId}`);
+    expect(byProjectId.status, JSON.stringify(byProjectId.body)).toBe(200);
+    const bySurveyProjectId = await get(
+      w.admin, `/api/v1/survey/billing?survey_project_id=${programmeId}`);
+    expect(bySurveyProjectId.status, JSON.stringify(bySurveyProjectId.body)).toBe(200);
+    expect(bySurveyProjectId.data.length).toBe(byProjectId.data.length);
+  });
+});
+
+describe("the progress screen's district filter, given a dashboard's district id", () => {
+  it("narrows the same way whether it is handed a name or the dashboard's id", async () => {
+    const dash = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard?level=district`);
+    expect(dash.status, JSON.stringify(dash.body)).toBe(200);
+    const district = (dash.data.options?.districts ?? [])[0];
+    if (!district) return; // nothing districted on this programme in this run
+    const byName = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/progress?district=${encodeURIComponent(district.name)}`);
+    const byId = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/progress?district=${encodeURIComponent(district.id)}`);
+    expect(byId.status, JSON.stringify(byId.body)).toBe(200);
+    expect(byId.data.filter.villages).toBe(byName.data.filter.villages);
+    expect(byId.data.filter.villages).toBeGreaterThan(0);
   });
 });
