@@ -427,6 +427,59 @@ describe("the billing register's programme filter", () => {
   });
 });
 
+describe("concurrent stage-set calls on the same village", () => {
+  it("keeps the audit trail honest when two calls race", async () => {
+    // Regression: `villageOr404` was called here without a row lock, so two
+    // concurrent stage-set calls each read "what it was" before either had
+    // written "what it is now". The upsert itself is atomic — the state a
+    // screen reads afterwards was never wrong — but the decision of whether
+    // to write a `survey_stage_history` row, and what `from_state` to write
+    // on it, was made from that stale read. Fired at real concurrency
+    // (before the fix) that produced fewer history rows than calls, some
+    // carrying a `from_state` the row had already moved past — a stage
+    // history a variance review or a billing dispute cannot trust.
+    const v = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Race village", village_code: uniq("RV"),
+      mandal_id: mandalId, total_extent_ac: 50,
+    });
+    const raceVillageId = String(v.data.id);
+
+    const calls = Array.from({ length: 8 }, (_, i) => post(
+      w.admin, `/api/v1/survey/villages/${raceVillageId}/stage`,
+      i % 2 === 0
+        ? { stage_code: "GROUND_TRUTHING", state: "IN_PROGRESS", remarks: `race-${i}` }
+        : {
+          stage_code: "GROUND_TRUTHING", state: "COMPLETED",
+          completed_on: workDate(), remarks: `race-${i}`,
+        },
+    ));
+    const results = await Promise.all(calls);
+    for (const r of results) expect(r.status, JSON.stringify(r.body)).toBe(200);
+
+    const history = (await w.pool.query(
+      `SELECT from_state, to_state, remarks, changed_at
+         FROM survey_stage_history
+        WHERE survey_village_id = $1
+        ORDER BY changed_at, id`,
+      [raceVillageId])).rows;
+
+    // Every one of the eight calls asked for a state different from the one
+    // before it (the sequence strictly alternates), so a village that has
+    // never seen this stage before must end up with exactly eight
+    // transitions on record — one per call, not fewer.
+    expect(history.length, JSON.stringify(history)).toBe(8);
+
+    // And the chain has to be honest: each row's "from" is the row before
+    // it's "to" (null for the very first), never a state some other,
+    // interleaved call had already overtaken by the time this one wrote.
+    let expectedFrom: string | null = null;
+    for (const row of history) {
+      expect(row.from_state, JSON.stringify(history)).toBe(expectedFrom);
+      expectedFrom = row.to_state;
+    }
+  });
+});
+
 describe("the progress screen's district filter, given a dashboard's district id", () => {
   it("narrows the same way whether it is handed a name or the dashboard's id", async () => {
     const dash = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard?level=district`);
