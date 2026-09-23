@@ -5,7 +5,12 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildModuleLauncher, LAUNCHER_EXCLUDED_CODES, type CatalogEntryLike } from "../src/modulesLauncher";
+import {
+  BUILT_MODULE_ROUTES,
+  buildModuleLauncher,
+  LAUNCHER_EXCLUDED_CODES,
+  type CatalogEntryLike,
+} from "../src/modulesLauncher";
 
 const CATALOG: CatalogEntryLike[] = [
   { code: "dashboard", label: "Dashboard", group: "Overview" },
@@ -18,6 +23,11 @@ const CATALOG: CatalogEntryLike[] = [
   { code: "leave", label: "Leave", group: "People" },
   { code: "assets", label: "Assets", group: "Operations" },
   { code: "security", label: "Security", group: "Organisation" },
+  { code: "pipeline", label: "Pipeline", group: "Commercial" },
+  { code: "clients", label: "Clients", group: "Commercial" },
+  { code: "tenders", label: "Tenders", group: "Commercial" },
+  { code: "employees", label: "Directory", group: "People" },
+  { code: "attendance-exceptions", label: "Exceptions", group: "People" },
 ];
 
 describe("buildModuleLauncher", () => {
@@ -27,7 +37,21 @@ describe("buildModuleLauncher", () => {
     for (const excluded of LAUNCHER_EXCLUDED_CODES) {
       assert.equal(codes.includes(excluded), false, `${excluded} should not appear in the launcher`);
     }
-    assert.deepEqual(codes.sort(), ["dashboard", "documents", "inbox", "inventory", "security"].sort());
+    assert.deepEqual(
+      codes.sort(),
+      [
+        "dashboard",
+        "documents",
+        "inbox",
+        "inventory",
+        "security",
+        "pipeline",
+        "clients",
+        "tenders",
+        "employees",
+        "attendance-exceptions",
+      ].sort(),
+    );
   });
 
   it("hides a module an admin switched off, even if it would otherwise show", () => {
@@ -40,9 +64,13 @@ describe("buildModuleLauncher", () => {
   it("groups items in catalog order, one group per distinct `group` value", () => {
     const groups = buildModuleLauncher(CATALOG, {});
     const titles = groups.map((g) => g.title);
-    assert.deepEqual(titles, ["Overview", "Work", "Operations", "Organisation"]);
+    assert.deepEqual(titles, ["Overview", "Work", "Operations", "Organisation", "Commercial", "People"]);
     const ops = groups.find((g) => g.title === "Operations")!;
     assert.deepEqual(ops.items.map((i) => i.code), ["documents", "inventory"]);
+    const commercial = groups.find((g) => g.title === "Commercial")!;
+    assert.deepEqual(commercial.items.map((i) => i.code), ["pipeline", "clients", "tenders"]);
+    const people = groups.find((g) => g.title === "People")!;
+    assert.deepEqual(people.items.map((i) => i.code), ["employees", "attendance-exceptions"]);
   });
 
   it("marks a built module's route and an unbuilt one as coming soon", () => {
@@ -53,6 +81,16 @@ describe("buildModuleLauncher", () => {
     assert.equal(documents.route, "/documents");
     assert.equal(dashboard.comingSoon, true);
     assert.match(dashboard.route, /^\/coming-soon\?/);
+  });
+
+  it("wires this round's five CRM/HR modules to their real routes", () => {
+    const groups = buildModuleLauncher(CATALOG, {});
+    const byCode = new Map(groups.flatMap((g) => g.items).map((i) => [i.code, i]));
+    for (const code of ["pipeline", "clients", "tenders", "employees", "attendance-exceptions"]) {
+      const item = byCode.get(code)!;
+      assert.equal(item.comingSoon, false, `${code} should be built`);
+      assert.equal(item.route, BUILT_MODULE_ROUTES[code]);
+    }
   });
 
   it("respects an absent modules map by showing everything not excluded", () => {

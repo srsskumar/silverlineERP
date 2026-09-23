@@ -1019,4 +1019,310 @@ export async function postInventoryTransaction(
   return asItem(data, "data");
 }
 
+// --- CRM: Clients (§6.3) ------------------------------------------------------
+
+export interface ClientRow {
+  id: string;
+  code: string;
+  name: string;
+  client_type: "GOVERNMENT" | "PRIVATE" | string;
+  category?: string | null;
+  state?: string | null;
+  district?: string | null;
+  mandal?: string | null;
+  village?: string | null;
+  address_line?: string | null;
+  pincode?: string | null;
+  website?: string | null;
+  pan?: string | null;
+  payment_terms?: string | null;
+  credit_limit?: string | number | null;
+  status?: string;
+  version: number;
+  [k: string]: unknown;
+}
+
+export interface ClientContact {
+  id: string;
+  name: string;
+  designation?: string | null;
+  department?: string | null;
+  phone?: string | null;
+  alternate_phone?: string | null;
+  email?: string | null;
+  contact_type?: string;
+  [k: string]: unknown;
+}
+
+export async function getClients(params?: {
+  search?: string;
+  client_type?: string;
+  status?: string;
+}): Promise<{ items: ClientRow[]; hasMore: boolean }> {
+  const q = new URLSearchParams({ limit: "50" });
+  if (params?.search) q.set("search", params.search);
+  if (params?.client_type) q.set("client_type", params.client_type);
+  if (params?.status) q.set("status", params.status);
+  const { data } = await cachedRead(`getClients:${q.toString()}`, () =>
+    apiFetch<{ data?: ClientRow[]; has_more?: boolean }>(`/api/v1/clients?${q.toString()}`));
+  const body = data as { data?: ClientRow[]; has_more?: boolean } | null;
+  return { items: body?.data ?? [], hasMore: body?.has_more ?? false };
+}
+
+export async function getClient(id: string): Promise<ClientRow & { contacts: ClientContact[] }> {
+  const { data } = await cachedRead(`client:${id}`, () => apiFetch(`/api/v1/clients/${id}`));
+  return asItem(data, "data");
+}
+
+/** One state's GST registration for a client (§6.5) — a client holds one per state. */
+export interface GstRegistration {
+  id: string;
+  gstin: string;
+  state_code: string;
+  registration_type: string;
+  is_primary: boolean;
+  [k: string]: unknown;
+}
+
+export async function getClientGstRegistrations(clientId: string): Promise<GstRegistration[]> {
+  const { data } = await cachedRead(`client-gst:${clientId}`, () =>
+    apiFetch<{ data?: GstRegistration[] }>(`/api/v1/parties/client/${clientId}/gst-registrations`));
+  return (data as { data?: GstRegistration[] } | null)?.data ?? [];
+}
+
+// --- CRM: Pipeline / leads (§7) ------------------------------------------------
+
+export interface LeadRow {
+  id: string;
+  lead_no: string;
+  organization_name: string;
+  lead_type: "GOVERNMENT" | "PRIVATE" | string;
+  stage: string;
+  status: string;
+  source: string;
+  client_name?: string | null;
+  estimated_value?: string | number | null;
+  owner_id?: string | null;
+  owner_username?: string | null;
+  next_follow_up_date?: string | null;
+  notes?: string | null;
+  version: number;
+  [k: string]: unknown;
+}
+
+export interface LeadDetail extends LeadRow {
+  opportunities: unknown[];
+  timeline: Array<{
+    id: string;
+    interaction_type: string;
+    summary: string;
+    occurred_at: string;
+    logged_by_username?: string | null;
+  }>;
+  /** What the stage machine will accept next — never offer a move the server refuses. */
+  allowed_stages: string[];
+}
+
+export async function getLeads(params?: {
+  stage?: string;
+  search?: string;
+}): Promise<{ items: LeadRow[]; hasMore: boolean }> {
+  const q = new URLSearchParams({ limit: "50" });
+  if (params?.stage) q.set("stage", params.stage);
+  if (params?.search) q.set("search", params.search);
+  const { data } = await cachedRead(`getLeads:${q.toString()}`, () =>
+    apiFetch<{ data?: LeadRow[]; has_more?: boolean }>(`/api/v1/leads?${q.toString()}`));
+  const body = data as { data?: LeadRow[]; has_more?: boolean } | null;
+  return { items: body?.data ?? [], hasMore: body?.has_more ?? false };
+}
+
+/** §7.5 pipeline value by stage — the same shape the web board/report use. */
+export async function getLeadsPipeline(): Promise<
+  Array<{ stage: string; count: number; value: string }>
+> {
+  const { data } = await cachedRead("getLeadsPipeline", () =>
+    apiFetch<{ data?: Array<{ stage: string; count: number; value: string }> }>(
+      "/api/v1/leads/pipeline",
+    ));
+  return (data as { data?: Array<{ stage: string; count: number; value: string }> } | null)
+    ?.data ?? [];
+}
+
+export async function getLead(id: string): Promise<LeadDetail> {
+  const { data } = await cachedRead(`lead:${id}`, () => apiFetch(`/api/v1/leads/${id}`));
+  return asItem<LeadDetail>(data, "data");
+}
+
+/**
+ * §7.2 stage transition WITH If-Match. LOST/DISQUALIFIED require lost_reason
+ * (mirrors leadStageSchema; see validateLeadStageChange in leadsFormat.ts).
+ * CONVERTED is deliberately not offered here — it only happens through the
+ * opportunity → tender → conversion pipeline, which is desktop work.
+ */
+export async function postLeadStage(
+  id: string,
+  stage: string,
+  version: number,
+  lostReason?: string,
+): Promise<LeadRow> {
+  const { data } = await apiFetch(`/api/v1/leads/${id}/stage`, {
+    method: "POST",
+    headers: { "If-Match": String(version) },
+    body: { stage, ...(lostReason ? { lost_reason: lostReason } : {}) },
+  });
+  return asItem<LeadRow>(data, "data");
+}
+
+// --- Tenders (§8) — read-only on mobile ----------------------------------------
+
+export interface TenderRow {
+  id: string;
+  tender_no: string;
+  tender_type: string;
+  status: string;
+  client_id?: string | null;
+  client_name?: string | null;
+  department?: string | null;
+  authority?: string | null;
+  reference_number?: string | null;
+  estimated_value?: string | number | null;
+  bid_value?: string | number | null;
+  closing_date?: string | null;
+  opening_date?: string | null;
+  submission_date?: string | null;
+  outstanding_required?: number;
+  version: number;
+  [k: string]: unknown;
+}
+
+export interface TenderDetail extends TenderRow {
+  eligibility: Array<{
+    id: string;
+    requirement_name: string;
+    is_required: boolean;
+    item_status: string;
+  }>;
+  corrigenda: unknown[];
+  competitors: unknown[];
+  instruments: unknown[];
+  project: { id: string; code: string; name: string; status: string } | null;
+  allowed_statuses: string[];
+  outstanding_required: number;
+}
+
+export async function getTenders(params?: {
+  status?: string;
+  search?: string;
+}): Promise<{ items: TenderRow[]; hasMore: boolean }> {
+  const q = new URLSearchParams({ limit: "50", sort: "closing" });
+  if (params?.status) q.set("status", params.status);
+  if (params?.search) q.set("search", params.search);
+  const { data } = await cachedRead(`getTenders:${q.toString()}`, () =>
+    apiFetch<{ data?: TenderRow[]; has_more?: boolean }>(`/api/v1/tenders?${q.toString()}`));
+  const body = data as { data?: TenderRow[]; has_more?: boolean } | null;
+  return { items: body?.data ?? [], hasMore: body?.has_more ?? false };
+}
+
+export async function getTender(id: string): Promise<TenderDetail> {
+  const { data } = await cachedRead(`tender:${id}`, () => apiFetch(`/api/v1/tenders/${id}`));
+  return asItem<TenderDetail>(data, "data");
+}
+
+// --- Employee directory (§1) — read-only on mobile -----------------------------
+
+/**
+ * A masked directory row. apps/api's employee list ALWAYS masks Aadhaar/PAN/
+ * bank account to their last four digits, whoever asks (HR-15) — the full
+ * numbers exist only on GET /employees/:id for a holder of employee.pii.read,
+ * and that read is itself audited server-side. This client renders whatever
+ * the server sends and never asks for more.
+ */
+export interface DirectoryEmployee {
+  id: string;
+  emp_no: string;
+  first_name: string;
+  last_name: string | null;
+  phone: string;
+  phone_secondary?: string | null;
+  email: string | null;
+  designation: string | null;
+  department: string | null;
+  status: "DRAFT" | "ACTIVE" | "SUSPENDED" | "EXITED" | string;
+  reports_to_name?: string | null;
+  date_of_joining?: string | null;
+  aadhaar_last4?: string | null;
+  pan_last4?: string | null;
+  bank_account_last4?: string | null;
+  [k: string]: unknown;
+}
+
+export async function getEmployeeDirectory(params?: {
+  q?: string;
+  status?: string;
+}): Promise<{ items: DirectoryEmployee[]; nextCursor: string | null; hasMore: boolean }> {
+  const q = new URLSearchParams({ limit: "50" });
+  if (params?.q) q.set("q", params.q);
+  if (params?.status) q.set("status", params.status);
+  const { data } = await cachedRead(`getEmployeeDirectory:${q.toString()}`, () =>
+    apiFetch<{ data?: DirectoryEmployee[]; next_cursor?: string | null; has_more?: boolean }>(
+      `/api/v1/employees?${q.toString()}`,
+    ));
+  const body = data as
+    | { data?: DirectoryEmployee[]; next_cursor?: string | null; has_more?: boolean }
+    | null;
+  return { items: body?.data ?? [], nextCursor: body?.next_cursor ?? null, hasMore: body?.has_more ?? false };
+}
+
+export async function getEmployee(id: string): Promise<DirectoryEmployee> {
+  const { data } = await cachedRead(`employee:${id}`, () => apiFetch(`/api/v1/employees/${id}`));
+  return asItem<DirectoryEmployee>(data);
+}
+
+// --- Attendance exceptions: decision only ---------------------------------------
+//
+// There is no GET /attendance/exceptions list or single-item route (apps/api's
+// S2 contract gap — confirmed against apps/api/src/modules/attendance/routes.ts,
+// which registers only POST .../exceptions and PATCH .../:id/decision). See
+// attendanceExceptionsFormat.ts's header for how the web client and this one
+// both work around it, from ids the caller already knows rather than a queue.
+
+export interface AttendanceExceptionRow {
+  id: string;
+  employee_id: string;
+  attendance_record_id: string | null;
+  exception_type: string;
+  reason: string | null;
+  status: "PENDING" | "APPROVED" | "REJECTED" | string;
+  version: number;
+  submitted_by?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  review_note?: string | null;
+  work_date?: string | null;
+  claimed_check_in?: string | null;
+  claimed_check_out?: string | null;
+  created_at?: string;
+  [k: string]: unknown;
+}
+
+/**
+ * Decide an exception this device already knows the id (and version) of.
+ * REJECT does not require `note` server-side (attendanceExceptionDecisionSchema
+ * makes it optional either way) — unlike Approvals' rejection, so this screen
+ * does not invent that requirement either.
+ */
+export async function postAttendanceExceptionDecision(
+  id: string,
+  decision: "APPROVE" | "REJECT",
+  version: number,
+  note?: string,
+): Promise<AttendanceExceptionRow> {
+  const { data } = await apiFetch(`/api/v1/attendance/exceptions/${id}/decision`, {
+    method: "PATCH",
+    headers: { "If-Match": String(version) },
+    body: { decision, ...(note ? { note } : {}) },
+  });
+  return asItem<AttendanceExceptionRow>(data);
+}
+
 // --- Geo-fences: removed 2026-09-22 (Silverline has no geo-fencing) ---------
