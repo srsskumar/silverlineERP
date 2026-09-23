@@ -124,6 +124,17 @@ describe('orgUnit + holiday schemas', () => {
     expect(holidaySchema.safeParse({ date: '2026-01-26', name: 'Local Fest', type: 'FESTIVAL' }).success).toBe(false);
   });
 
+  it(
+    'accepts scope_type left on its blank "Org-wide" option (A-009: the create dialog\'s ' +
+      '<select id="hol-scope-type"> defaults to "", which z.enum(...).optional() alone rejects)',
+    () => {
+      expect(
+        holidaySchema.safeParse({ date: '2026-01-26', name: 'Republic Day', type: 'national', scope_type: '' })
+          .success,
+      ).toBe(true);
+    },
+  );
+
   it('importRowSchema requires the identity quartet', () => {
     expect(importRowSchema.safeParse(VALID_EMPLOYEE).success).toBe(true);
     const { phone: _omit, ...noPhone } = VALID_EMPLOYEE;

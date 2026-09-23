@@ -69,6 +69,23 @@ const optionalEmail = z
 
 const optionalDate = dateString().optional().or(z.literal('').transform(() => undefined)).pipe(dateString().optional());
 
+/**
+ * An optional enum backed by a `<select>` (A-008/A-009).
+ *
+ * `z.enum(values).optional()` only treats `undefined` as "not set" — the
+ * `""` a native `<select>`'s blank first option submits fails enum
+ * validation instead of being treated as unset, which blocks the whole form
+ * (not just that field) the moment the picker is left on its placeholder.
+ * Every other optional field in this file already tolerates `""` this way;
+ * enum fields need the same treatment.
+ */
+const optionalEnum = <T extends [string, ...string[]]>(values: T) =>
+  z
+    .enum(values)
+    .optional()
+    .or(z.literal('').transform(() => undefined))
+    .pipe(z.enum(values).optional());
+
 export const GENDERS = ['MALE', 'FEMALE', 'OTHER'] as const;
 export const EMPLOYEE_STATUSES = ['DRAFT', 'ACTIVE', 'ON_LEAVE', 'EXITED', 'TERMINATED'] as const;
 export const ORG_UNIT_TYPES = ['district', 'division', 'mandal', 'village', 'site'] as const;
@@ -80,7 +97,7 @@ const employeeBaseFields = {
   last_name: optionalText(100),
   father_name: optionalText(200),
   date_of_birth: optionalDate,
-  gender: z.enum(GENDERS).optional(),
+  gender: optionalEnum(GENDERS),
   phone: z.string().trim().regex(PHONE_RE, 'Enter a valid phone number'),
   phone_secondary: optionalPhone,
   email: optionalEmail,
@@ -221,7 +238,7 @@ export const holidaySchema = z
     date: dateString('Holiday date must be YYYY-MM-DD'),
     name: z.string().trim().min(1, 'Name is required').max(255),
     type: z.enum(HOLIDAY_TYPES, { errorMap: () => ({ message: 'Pick a holiday type' }) }),
-    scope_type: z.enum(ORG_UNIT_TYPES).optional(),
+    scope_type: optionalEnum(ORG_UNIT_TYPES),
     scope_id: z.string().trim().min(1).max(100).optional(),
   })
   .superRefine((v, ctx) => {

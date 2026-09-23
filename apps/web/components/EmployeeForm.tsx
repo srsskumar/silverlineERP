@@ -7,7 +7,6 @@ import { useQuery } from '@tanstack/react-query';
 import {
   employeeCreateSchema,
   employeeUpdateSchema,
-  EMPLOYEE_STATUSES,
   GENDERS,
   type EmployeeCreateInput,
 } from '@/lib/validation';
@@ -94,6 +93,10 @@ export function EmployeeForm({
     for (const k of Object.keys(out)) {
       if (out[k] === '' || out[k] === undefined) delete out[k];
     }
+    // status has no control in this form (A-008) but react-hook-form still
+    // carries it in `values` because it was part of `defaultValues` on
+    // edit — drop it so a save never resurrects the field PATCH rejects.
+    delete out.status;
     if (typeof out.skills === 'string') {
       const parts = (out.skills as string)
         .split(',')
@@ -136,16 +139,15 @@ export function EmployeeForm({
         <FormField label="Employee No *" htmlFor="emp_no" error={err('emp_no')}>
           <Input id="emp_no" invalid={!!errors.emp_no} disabled={mode === 'edit'} {...register('emp_no')} />
         </FormField>
-        <FormField label="Status" htmlFor="status" error={err('status')}>
-          <select id="status" className={inputClass} {...register('status')}>
-            <option value="">Select status</option>
-            {EMPLOYEE_STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </FormField>
+        {/*
+          * No writable Status control here (A-008): the API creates every
+          * employee as DRAFT regardless of what this form sends, and
+          * PATCH /employees/:id 422s outright the instant a `status` key is
+          * present in the body ("Status is immutable here; use
+          * exit/reactivate") -- so a picker here either did nothing or broke
+          * every save, depending on mode. Status changes go through the
+          * dedicated exit/reactivate actions on the detail page instead.
+          */}
         <FormField label="First name *" htmlFor="first_name" error={err('first_name')}>
           <Input id="first_name" invalid={!!errors.first_name} {...register('first_name')} />
         </FormField>
