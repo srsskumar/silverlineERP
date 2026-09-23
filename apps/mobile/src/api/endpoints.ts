@@ -653,9 +653,22 @@ export interface AppNotification {
   [k: string]: unknown;
 }
 
-export async function getNotifications(unread?: boolean): Promise<Page<AppNotification>> {
-  const q = unread ? "?unread=true" : "";
-  const { data } = await apiFetch(`/api/v1/notifications${q}`);
+/**
+ * unread=true|false kept as the original boolean shorthand (More tab's
+ * preview card calls this bare); a params object adds cursor paging and an
+ * explicit limit for the full Inbox screen (app/inbox.tsx) without breaking
+ * that call site.
+ */
+export async function getNotifications(
+  unreadOrParams?: boolean | { unread?: boolean; cursor?: string; limit?: number },
+): Promise<Page<AppNotification>> {
+  const params =
+    typeof unreadOrParams === "boolean" ? { unread: unreadOrParams } : (unreadOrParams ?? {});
+  const q = new URLSearchParams();
+  if (params.unread) q.set("unread", "true");
+  if (params.cursor) q.set("cursor", params.cursor);
+  q.set("limit", String(params.limit ?? 30));
+  const { data } = await apiFetch(`/api/v1/notifications?${q.toString()}`);
   return asPage<AppNotification>(data);
 }
 
@@ -663,19 +676,62 @@ export async function patchNotificationRead(id: string): Promise<void> {
   await apiFetch(`/api/v1/notifications/${id}/read`, { method: "PATCH" });
 }
 
-// --- Projects ------------------------------------------------------------------
+export async function postNotificationsReadAll(): Promise<{ marked: number }> {
+  const { data } = await apiFetch<{ marked?: number }>("/api/v1/notifications/read-all", {
+    method: "POST",
+    body: {},
+  });
+  return { marked: (data as { marked?: number } | null)?.marked ?? 0 };
+}
+
+// --- Projects (§4) ---------------------------------------------------------------
+//
+// Frozen contract mirrors apps/web/lib/projects.ts:
+//   GET /api/v1/projects?status=&q=&limit= -> {data:[...],has_more,next_cursor}
+//   GET /api/v1/projects/:id -> flat {...project fields, workflow, counts:{total,open,done}}
+// Board/task editing stays on the web (and the phone's own Tasks tab already
+// covers "my tasks"); this is the manager's list + summary view.
 
 export interface Project {
   id: string;
   name: string;
   code?: string;
   status?: string;
+  workspace_id?: string;
+  project_type_id?: string | null;
+  project_manager_id?: string | null;
+  planned_start_date?: string | null;
+  planned_end_date?: string | null;
+  priority?: string | null;
+  project_kind?: "GOVERNMENT" | "PRIVATE" | string | null;
+  contract_value?: number | string | null;
+  contract_gst_included?: boolean | null;
+  contract_gst_rate?: number | null;
+  work_order_number?: string | null;
+  tender_id?: string | null;
+  version?: number;
   [k: string]: unknown;
 }
 
-export async function getProjects(): Promise<Project[]> {
-  const { data } = await cachedRead("getProjects", () => apiFetch("/api/v1/projects?limit=100"));
+export interface ProjectDetail extends Project {
+  workflow?: { statuses?: string[]; allowed_transitions?: Record<string, string[]> };
+  counts: { total: number; open: number; done: number };
+}
+
+export async function getProjects(params?: { status?: string; q?: string }): Promise<Project[]> {
+  const q = new URLSearchParams({ limit: "100" });
+  if (params?.status) q.set("status", params.status);
+  if (params?.q) q.set("q", params.q);
+  const { data } = await cachedRead(`getProjects:${q.toString()}`, () =>
+    apiFetch(`/api/v1/projects?${q.toString()}`));
   return asList<Project>(data);
+}
+
+export async function getProject(id: string): Promise<ProjectDetail> {
+  const { data } = await cachedRead(`project:${id}`, () => apiFetch(`/api/v1/projects/${id}`));
+  // Server returns a flat body (fields + workflow + counts siblings), not a
+  // {project:{...}} envelope — asItem with no key passes it through as-is.
+  return asItem<ProjectDetail>(data);
 }
 
 // --- Documents (§46 register) -----------------------------------------------
@@ -1700,6 +1756,95 @@ export async function getPayrollRunPayslips(
   const { data } = await cachedRead(`getPayrollRunPayslips:${runId}:${cursor ?? ""}`, () =>
     apiFetch(`/api/v1/payroll/runs/${runId}/payslips?${q.toString()}`));
   return asPage<PayrollRunPayslipRow>(data);
+}
+
+// --- Planning (cycles) -----------------------------------------------------
+//
+// apps/api/src/modules/planning/routes.ts: GET /api/v1/cycles?project_id=
+// requires cycle.read + read access to that project, returns raw rows (no
+// envelope beyond {data,has_more}). Cycle create/start/close stay on the web
+// (project.manage-level actions); this is a read-only "what iteration are we
+// in, what's next" view for a chosen project.
+
+export interface Cycle {
+  id: string;
+  project_id: string;
+  name: string;
+  start_date: string;
+  end_date: string;
+  status: "PLANNED" | "ACTIVE" | "CLOSED" | string;
+  goal?: string | null;
+  rollover?: "NEXT" | "BACKLOG" | string;
+  metrics?: { planned?: number; completed?: number; remaining?: number; next_cycle_id?: string | null } | null;
+  version: number;
+  [k: string]: unknown;
+}
+
+export async function getCycles(projectId: string): Promise<Cycle[]> {
+  const q = new URLSearchParams({ project_id: projectId, limit: "100" });
+  const { data } = await cachedRead(`getCycles:${projectId}`, () =>
+    apiFetch(`/api/v1/cycles?${q.toString()}`));
+  return asList<Cycle>(data);
+}
+
+// --- Reports (S6) ------------------------------------------------------------
+//
+// apps/api/src/modules/s6/routes.ts (generate) + jobs/routes.ts (list). A
+// generated report needs both report.generate and the domain's own *.read
+// permission; REPORT_TYPE_META in apps/web/lib/reports.ts has the full
+// type->permission map (mirrored below so the picker only offers types the
+// caller can actually run). Mobile always requests format "pdf": it is the
+// one binary content-type api/client.ts already unwraps to bytes (see
+// src/ui/Payslip.tsx), so a generated report can be saved/shared the same
+// way a payslip is, with no changes to the shared fetch wrapper. CSV/XLSX
+// reports (e.g. from a desktop-created recurring schedule) still show up in
+// "Your reports" with their status, just without a working Save button here.
+export const REPORT_TYPE_META: ReadonlyArray<{ type: string; label: string; permission: string }> = [
+  { type: "projects", label: "Project progress", permission: "project.read" },
+  { type: "cycles", label: "Cycle velocity", permission: "cycle.read" },
+  { type: "audit", label: "Audit trail", permission: "audit.read" },
+  { type: "inventory", label: "Inventory", permission: "inventory.read" },
+  { type: "assets", label: "Assets", permission: "asset.manage" },
+  { type: "invoices", label: "Invoices", permission: "inventory.read" },
+  { type: "payroll", label: "Payroll", permission: "payroll.read" },
+  { type: "employees", label: "Employees", permission: "employees.read" },
+  { type: "attendance", label: "Attendance", permission: "attendance.read" },
+  { type: "tasks", label: "Tasks", permission: "task.read" },
+  { type: "leave", label: "Leave", permission: "leave.read" },
+];
+
+export interface ReportJob {
+  id: string;
+  type: string;
+  format: "csv" | "xlsx" | "pdf" | string;
+  status: "PENDING" | "READY" | "FAILED" | string;
+  error?: string | null;
+  rows: number | string;
+  download_url: string;
+  created_at?: string;
+  [k: string]: unknown;
+}
+
+export async function getReports(): Promise<{ items: ReportJob[]; hasMore: boolean }> {
+  const { data } = await apiFetch<{ data?: ReportJob[]; has_more?: boolean }>(
+    "/api/v1/reports?limit=20",
+  );
+  const body = data as { data?: ReportJob[]; has_more?: boolean } | null;
+  return { items: body?.data ?? [], hasMore: body?.has_more ?? false };
+}
+
+export async function postReport(type: string): Promise<ReportJob> {
+  const { data } = await apiFetch<ReportJob>("/api/v1/reports", {
+    method: "POST",
+    body: { type, format: "pdf" },
+  });
+  return asItem<ReportJob>(data);
+}
+
+/** Raw PDF bytes for a READY report (api/client.ts unwraps application/pdf). */
+export async function getReportPdf(downloadUrl: string): Promise<Uint8Array> {
+  const { data } = await apiFetch<Uint8Array>(downloadUrl);
+  return data;
 }
 
 // --- Geo-fences: removed 2026-09-22 (Silverline has no geo-fencing) ---------
