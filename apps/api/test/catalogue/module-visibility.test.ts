@@ -132,7 +132,7 @@ describe("setting an override", () => {
 describe("GET /api/v1/auth/me exposes the caller's own resolved modules", () => {
   it("merges across every role the user holds -- visible if any of them shows it", async () => {
     const username = `cat_combo_${uniq()}`;
-    const comboId = await createUser(w.pool, w.orgId, { username, roles: ["EMPLOYEE", "TEAM_LEAD"] });
+    await createUser(w.pool, w.orgId, { username, roles: ["EMPLOYEE", "TEAM_LEAD"] });
     try {
       // Neither EMPLOYEE nor TEAM_LEAD holds audit.read by default, so
       // "audit" starts hidden for both.
@@ -149,9 +149,11 @@ describe("GET /api/v1/auth/me exposes the caller's own resolved modules", () => 
       });
       expect(after.json().modules.audit).toBe(true);
     } finally {
+      // The user itself is left in place rather than deleted: signing in
+      // wrote an audit event that references it, and audit_events keeps a
+      // foreign key to the actor on purpose. The next suite's beforeAll
+      // truncates the world fresh.
       await setModule("EMPLOYEE", "audit", null);
-      await w.pool.query("DELETE FROM user_roles WHERE user_id = $1", [comboId]);
-      await w.pool.query("DELETE FROM users WHERE id = $1", [comboId]);
     }
   });
 
