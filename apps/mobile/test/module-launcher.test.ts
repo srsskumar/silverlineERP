@@ -9,6 +9,7 @@ import {
   BUILT_MODULE_ROUTES,
   buildModuleLauncher,
   LAUNCHER_EXCLUDED_CODES,
+  WEB_ONLY_CODES,
   type CatalogEntryLike,
 } from "../src/modulesLauncher";
 
@@ -52,6 +53,17 @@ describe("buildModuleLauncher", () => {
         "attendance-exceptions",
       ].sort(),
     );
+  });
+
+  it("never lists a web-only module such as Org locations, not even as Coming soon", () => {
+    const groups = buildModuleLauncher(
+      [...CATALOG, { code: "org-locations", label: "Locations", group: "Organisation" }],
+      {},
+    );
+    const codes = groups.flatMap((g) => g.items.map((i) => i.code));
+    assert.equal(codes.includes("org-locations"), false);
+    assert.equal(WEB_ONLY_CODES.includes("org-locations"), true);
+    assert.equal("org-locations" in BUILT_MODULE_ROUTES, false);
   });
 
   it("hides a module an admin switched off, even if it would otherwise show", () => {

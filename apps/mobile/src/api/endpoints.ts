@@ -2025,36 +2025,6 @@ export async function getAutomationExecutions(ruleId: string): Promise<Automatio
   return asList<AutomationExecution>(data);
 }
 
-// --- Org units / locations (round 4) ------------------------------------------
-
-export type OrgUnitType = "district" | "division" | "mandal" | "village" | "site";
-
-export interface OrgUnit {
-  id: string;
-  type: OrgUnitType;
-  code: string;
-  name: string;
-  parent_id: string | null;
-  status: string;
-  version: number;
-  [k: string]: unknown;
-}
-
-export async function getOrgUnits(params?: {
-  type?: OrgUnitType;
-  q?: string;
-  cursor?: string;
-  limit?: number;
-}): Promise<Page<OrgUnit>> {
-  const q = new URLSearchParams({ limit: String(params?.limit ?? 50) });
-  if (params?.type) q.set("type", params.type);
-  if (params?.q) q.set("q", params.q);
-  if (params?.cursor) q.set("cursor", params.cursor);
-  const { data } = await cachedRead(`getOrgUnits:${q.toString()}`, () =>
-    apiFetch(`/api/v1/org/units?${q.toString()}`));
-  return asPage<OrgUnit>(data);
-}
-
 // --- Holidays (round 4) --------------------------------------------------------
 
 export interface Holiday {

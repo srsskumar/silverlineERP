@@ -46,6 +46,13 @@ export const LAUNCHER_EXCLUDED_CODES: readonly string[] = [
   "survey",
 ];
 
+/**
+ * Catalog codes the owner decided stay on the web only — never listed in the
+ * launcher, not even as "Coming soon". Org locations (2026-09-24): the
+ * District→Site hierarchy is admin set-up, not something a field user looks up.
+ */
+export const WEB_ONLY_CODES: readonly string[] = ["org-locations"];
+
 /** Catalog codes this round of mobile work actually built a screen for. */
 export const BUILT_MODULE_ROUTES: Readonly<Record<string, string>> = {
   documents: "/documents",
@@ -69,7 +76,6 @@ export const BUILT_MODULE_ROUTES: Readonly<Record<string, string>> = {
   "asset-movements": "/asset-movements",
   analytics: "/analytics",
   automation: "/automation",
-  "org-locations": "/org-locations",
   "org-holidays": "/org-holidays",
 };
 
@@ -93,7 +99,7 @@ export function buildModuleLauncher(
   const groupByTitle = new Map<string, LauncherGroup>();
 
   for (const entry of catalog) {
-    if (exclude.has(entry.code)) continue;
+    if (exclude.has(entry.code) || WEB_ONLY_CODES.includes(entry.code)) continue;
     if (!canSeeModule(modules, entry.code)) continue;
 
     let group = groupByTitle.get(entry.group);
