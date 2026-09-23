@@ -566,8 +566,10 @@ describe("UT-ATT-06 retry identical punch and retry same Idempotency-Key", () =>
       employee_id: employeeId,
       event_type: "CHECK_IN",
       client_timestamp: new Date().toISOString(),
-      latitude: GEO.awayFromSite.lat,
-      longitude: GEO.awayFromSite.lng,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
+      // The hold that is left once the fence is gone.
+      mock_location: true,
     };
     const first = await w.app.inject({
       method: "POST",
