@@ -338,6 +338,9 @@ export interface AttendanceEventInput {
   latitude?: number;
   longitude?: number;
   gps_accuracy?: number;
+  /** WGS84 ellipsoidal altitude, metres, when the OS gives one. */
+  altitude?: number;
+  altitude_accuracy?: number;
   mock_location?: boolean;
   device_id?: string;
   app_version?: string;

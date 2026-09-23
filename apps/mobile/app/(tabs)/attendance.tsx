@@ -31,6 +31,7 @@ import {
 import { loadLastFix, saveLastFix } from "../../src/device/lastFix";
 import { buildPunchSignals } from "../../src/device/signals";
 import { submitQueued } from "../../src/sync/engine";
+import { punchPlaceLine } from "../../src/attendance/place";
 import { validateAttendanceException } from "../../src/validators";
 import {
   Badge,
@@ -180,6 +181,9 @@ function AttendanceScreen() {
         latitude: fx.latitude,
         longitude: fx.longitude,
         gps_accuracy: fx.accuracy ?? undefined,
+        // Raw ellipsoidal altitude; the server stores the EGM96 height beside it.
+        ...(typeof fx.altitude === "number" ? { altitude: fx.altitude } : {}),
+        ...(typeof fx.altitudeAccuracy === "number" ? { altitude_accuracy: fx.altitudeAccuracy } : {}),
         mock_location: fx.mocked,
         device_id: Device.modelName ?? undefined,
         app_version: "mobile/1.0.0",
@@ -419,7 +423,7 @@ function AttendanceScreen() {
             <ListRow
               key={r.id}
               title={r.work_date ? day(r.work_date) : r.id.slice(0, 8)}
-              subtitle={r.check_in_at ? `In ${clock(r.check_in_at)}` : undefined}
+              subtitle={punchPlaceLine(r, (iso) => clock(iso))}
               right={<Badge text={String(r.status ?? "?")} tone={statusTone(String(r.status ?? ""))} />}
               last={i === arr.length - 1}
             />

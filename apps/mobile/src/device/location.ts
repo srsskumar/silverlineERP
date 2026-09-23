@@ -21,6 +21,13 @@ export interface PunchFix {
   /** OS mock-location flag — passed through, never hidden from backend. */
   mocked: boolean;
   timestamp: number;
+  /**
+   * Ellipsoidal (WGS84) altitude and its accuracy, metres; null when the
+   * OS has none. The server turns it into a height on the EGM96 geoid for
+   * the survey record, which is why it is sent raw rather than adjusted.
+   */
+  altitude?: number | null;
+  altitudeAccuracy?: number | null;
 }
 
 export async function getPunchFix(): Promise<PunchFix> {
@@ -37,6 +44,8 @@ export async function getPunchFix(): Promise<PunchFix> {
     accuracy: pos.coords.accuracy ?? null,
     mocked: pos.mocked ?? false,
     timestamp: pos.timestamp,
+    altitude: pos.coords.altitude ?? null,
+    altitudeAccuracy: pos.coords.altitudeAccuracy ?? null,
   };
 }
 
