@@ -95,6 +95,27 @@ describe("recording a control point", () => {
     expect(list.data.map((g: any) => g.point_code)).toEqual(["GCP-1", "GCP-2"]);
   });
 
+  it("records a landmark, so the point can be found again with no equipment", async () => {
+    const r = await post(w.admin, `/api/v1/survey/villages/${villageA}/gcps`, {
+      point_code: "GCP-3", latitude: 17.61, longitude: 83.21,
+      located_at: "Panchayat office, on the compound wall",
+    });
+    expect(r.status).toBe(201);
+    expect(r.data.located_at).toBe("Panchayat office, on the compound wall");
+
+    const patched = await patch(
+      { ...w.admin, "if-match": String(r.data.version) },
+      `/api/v1/survey/gcps/${r.data.id}`,
+      { located_at: "Government hospital gate" },
+    );
+    expect(patched.status).toBe(200);
+    expect(patched.data.located_at).toBe("Government hospital gate");
+
+    const list = await get(w.admin, `/api/v1/survey/villages/${villageA}/gcps`);
+    expect(list.data.find((g: any) => g.point_code === "GCP-3").located_at)
+      .toBe("Government hospital gate");
+  });
+
   it("refuses the same name twice on one village, and says what to do", async () => {
     const r = await post(w.admin, `/api/v1/survey/villages/${villageA}/gcps`, {
       point_code: "GCP-1", latitude: 17.6, longitude: 83.2,

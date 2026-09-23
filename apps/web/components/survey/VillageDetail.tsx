@@ -1775,7 +1775,7 @@ function ControlPoints({ village, canManage }: { village: Row; canManage: boolea
   const blank = {
     point_code: '', latitude: '', longitude: '', elevation_m: '',
     easting_m: '', northing_m: '', grid_zone: '',
-    established_on: '', remarks: '',
+    established_on: '', remarks: '', located_at: '',
   };
   const [form, setForm] = React.useState(blank);
 
@@ -1800,6 +1800,7 @@ function ControlPoints({ village, canManage }: { village: Row; canManage: boolea
         grid_zone: form.grid_zone.trim() || undefined,
         established_on: form.established_on || undefined,
         remarks: form.remarks.trim() || undefined,
+        located_at: form.located_at.trim() || undefined,
       },
     }),
     onError: (e) => toast.error('The control point was not recorded', messageOf(e)),
@@ -1869,6 +1870,15 @@ function ControlPoints({ village, canManage }: { village: Row; canManage: boolea
             <input type="date" className={field} value={form.established_on}
               max={businessToday()}
               onChange={(e) => setForm({ ...form, established_on: e.target.value })} />
+          </label>
+          <label className="text-2xs text-text-subtle sm:col-span-2">
+            Where it is
+            <input className={field} value={form.located_at}
+              placeholder="Panchayat office, Government hospital, Temple gate…"
+              onChange={(e) => setForm({ ...form, located_at: e.target.value })} />
+            <span className="mt-0.5 block">
+              A landmark, for whoever goes looking for it with no equipment.
+            </span>
           </label>
           <label className="text-2xs text-text-subtle">
             Latitude (degrees)
@@ -1973,6 +1983,9 @@ function ControlPoints({ village, canManage }: { village: Row; canManage: boolea
                 <TR key={String(g.id)}>
                   <TD>
                     <div className="font-medium text-text">{String(g.point_code)}</div>
+                    {g.located_at ? (
+                      <div className="text-2xs text-text-subtle">{String(g.located_at)}</div>
+                    ) : null}
                     {g.established_on ? (
                       <div className="text-2xs text-text-subtle">
                         {day(String(g.established_on))}

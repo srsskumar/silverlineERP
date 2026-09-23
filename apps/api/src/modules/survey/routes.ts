@@ -3068,13 +3068,14 @@ export async function registerSurveyRoutes(
           const row = (await db.query(
             `INSERT INTO survey_village_gcps(org_id, survey_village_id, point_code,
                latitude, longitude, elevation_m, easting_m, northing_m, grid_zone,
-               remarks, established_on, created_by, updated_by)
-             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12) RETURNING *`,
+               remarks, located_at, established_on, created_by, updated_by)
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13) RETURNING *`,
             [u.orgId, id, input.point_code, input.latitude, input.longitude,
               input.elevation_m ?? null,
               input.easting_m ?? null, input.northing_m ?? null,
               input.grid_zone?.trim() || null,
               input.remarks ?? null,
+              input.located_at?.trim() || null,
               input.established_on ?? null, u.id])).rows[0];
           return {
             ...row,
@@ -3124,7 +3125,8 @@ export async function registerSurveyRoutes(
 
           const sets: string[] = [], values: unknown[] = [id];
           for (const key of ['point_code', 'latitude', 'longitude', 'elevation_m',
-            'easting_m', 'northing_m', 'grid_zone', 'remarks', 'established_on'] as const) {
+            'easting_m', 'northing_m', 'grid_zone', 'remarks', 'located_at',
+            'established_on'] as const) {
             if (input[key] !== undefined) { values.push(input[key]); sets.push(`${key} = $${values.length}`); }
           }
           if (!sets.length) return row;

@@ -94,6 +94,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "085_punch_coordinates_and_place", file: "085_punch_coordinates_and_place.sql" },
   { version: "086_notification_stage", file: "086_notification_stage.sql" },
   { version: "087_notification_stage_label", file: "087_notification_stage_label.sql" },
+  { version: "089_gcp_located_at", file: "089_gcp_located_at.sql" },
 ];
 
 /**
