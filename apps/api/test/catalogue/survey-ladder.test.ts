@@ -685,7 +685,7 @@ describe("how long, and sitting with whom (§074)", () => {
     // A handful stuck for months drags a mean somewhere no village is.
     expect(gt!.median_days).not.toBeNull();
     expect(gt!.max_days).toBeGreaterThanOrEqual(gt!.median_days);
-    expect((r.data.stage_days as unknown[]).length).toBe(5);
+    expect((r.data.stage_days as unknown[]).length).toBe(6);
   });
 
   it("names who each village is with, and who has nobody", async () => {
@@ -783,17 +783,18 @@ describe("the mandal roll-up (§075)", () => {
   });
 });
 
-describe("the eleven rungs as figures (§076)", () => {
+describe("the thirteen rungs as figures (§076, extended by §086)", () => {
   it("sends every rung with its extent, in the order of the work", async () => {
     const r = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
     const rows = r.data.totals.positions as Array<Record<string, number | string>>;
-    expect(rows).toHaveLength(11);
+    expect(rows).toHaveLength(13);
     expect(rows.map(x => x.key)).toEqual([
       "NOT_STARTED", "GT_IN_PROGRESS", "GT_COMPLETED",
       "GT_QC_IN_PROGRESS", "GT_QC_COMPLETED",
       "VECTORIZATION_IN_PROGRESS", "VECTORIZATION_COMPLETED",
       "DATA_SUBMITTED", "DATA_APPROVED",
       "FINAL_SUBMITTED", "FINAL_APPROVED",
+      "NOTIFICATION_IN_PROGRESS", "NOTIFICATION_ISSUED",
     ]);
     for (const row of rows) {
       for (const field of ["villages", "extent_ac", "extent_sqkm",
