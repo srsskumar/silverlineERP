@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { buildAuthenticate,requirePermission } from '../../common/auth.js';
 import { actor,parse,page,mutate,inOrg,fail } from '../../common/domain.js';
-import { isIndianMobile,formatIndianMobile,MFA_POLICIES,mfaFloorRole,GST_STATE_CODES,canManageAccount } from '@silverline/shared';
+import { isIndianMobile,formatIndianMobile,MFA_POLICIES,mfaFloorRole,GST_STATE_CODES,canManageAccount,MODULE_CATALOG,MODULE_CODES } from '@silverline/shared';
 
 export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jwtSecret:string}) {
  const {pool}=opts,auth=buildAuthenticate(opts),guard=(p:string)=>requirePermission(auth,p);
@@ -281,6 +281,71 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
          JOIN users us ON us.id=ur.user_id
         WHERE r.code=$1 AND us.org_id=$2)`,[code,u.orgId]);
    return {code,default_scope:i.default_scope};
+  })};
+ });
+
+ /**
+  * Which screens a role sees, on top of what its permissions already allow.
+  *
+  * A module hidden here is a link the shell does not render -- nothing more.
+  * A role with visibility off for "billing" that still holds rabill.read
+  * gets an ordinary 200 calling the billing routes directly: every route
+  * keeps the permission and scope checks it always had, untouched. See
+  * MODULE_VISIBILITY_IS_NOT_A_PERMISSION in packages/shared/src/modules.ts,
+  * and the invariant test that proves it.
+  *
+  * No row for a role+module pair means "defer to whether the role holds the
+  * module's permission", computed here rather than stored, so an
+  * organisation that never opens this screen behaves exactly as before it
+  * existed.
+  */
+ app.get('/api/v1/admin/module-visibility',{preHandler:guard('admin.configure')},async req=>{
+  const u=actor(req);
+  const roles=(await pool.query("SELECT code,name FROM roles WHERE org_id IS NULL OR org_id=$1 ORDER BY code",[u.orgId])).rows as Array<{code:string;name:string}>;
+  const grants=(await pool.query("SELECT r.code AS role_code,rp.permission_code FROM role_permissions rp JOIN roles r ON r.id=rp.role_id WHERE r.org_id IS NULL OR r.org_id=$1",[u.orgId])).rows as Array<{role_code:string;permission_code:string}>;
+  const held=new Map<string,Set<string>>();
+  for(const g of grants){if(!held.has(g.role_code))held.set(g.role_code,new Set());held.get(g.role_code)!.add(g.permission_code);}
+  const overrides=(await pool.query("SELECT role_code,module_code,visible FROM role_module_visibility WHERE org_id=$1",[u.orgId])).rows as Array<{role_code:string;module_code:string;visible:boolean}>;
+  const overrideMap=new Map<string,boolean>(overrides.map(o=>[`${o.role_code}:${o.module_code}`,o.visible]));
+  const cells=roles.flatMap(r=>MODULE_CATALOG.map(m=>{
+   // No permission at all (only /security today) is offered to anybody
+   // signed in, so it defaults to visible the same way nav.ts renders it.
+   const defaultVisible=m.permission?(held.get(r.code)?.has(m.permission)??false):true;
+   const override=overrideMap.get(`${r.code}:${m.code}`);
+   return {role_code:r.code,module_code:m.code,visible:override??defaultVisible,default_visible:defaultVisible,source:override===undefined?'default':'override'};
+  }));
+  return {data:{roles,modules:MODULE_CATALOG.map(m=>({code:m.code,label:m.label,group:m.group,permission:m.permission??null})),cells}};
+ });
+
+ app.put('/api/v1/admin/module-visibility',{preHandler:guard('admin.configure')},async req=>{
+  const u=actor(req);
+  const i=parse(z.object({role_code:z.string().min(1).max(100),module_code:z.string().min(1).max(64),visible:z.boolean().nullable()}),req.body);
+  if(!(MODULE_CODES as readonly string[]).includes(i.module_code))fail('NOT_FOUND','There is no such module. Reload the list to see the modules as they stand.',404);
+  return {data:await mutate(pool,req,'admin.module_visibility','role',async db=>{
+   const role=(await db.query('SELECT code FROM roles WHERE code=$1 AND (org_id IS NULL OR org_id=$2)',[i.role_code,u.orgId])).rows[0];
+   if(!role)fail('NOT_FOUND','There is no such role. Reload the list to see the roles as they stand.',404);
+   /*
+    * A super administrator's modules can never be hidden, for the same
+    * reason its scope can't be narrowed (role-visibility, above): it is the
+    * role that puts things right when a rule has been set wrong, and a
+    * screen it cannot see is a control it cannot reach.
+    */
+   if(i.visible===false&&mfaFloorRole(i.role_code)){
+    fail('ROLE_MUST_SEE_ALL',
+     'A super administrator has to be able to see every screen — it is the role that puts '
+     +'the others right when a visibility rule is set wrong.',422);
+   }
+   if(i.visible===null){
+    await db.query('DELETE FROM role_module_visibility WHERE org_id=$1 AND role_code=$2 AND module_code=$3',[u.orgId,i.role_code,i.module_code]);
+   } else {
+    await db.query(
+     `INSERT INTO role_module_visibility(org_id,role_code,module_code,visible,updated_by)
+      VALUES($1,$2,$3,$4,$5)
+      ON CONFLICT (org_id,role_code,module_code)
+      DO UPDATE SET visible=EXCLUDED.visible, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+     [u.orgId,i.role_code,i.module_code,i.visible,u.id]);
+   }
+   return {role_code:i.role_code,module_code:i.module_code,visible:i.visible};
   })};
  });
 }

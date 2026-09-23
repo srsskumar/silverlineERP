@@ -35,3 +35,4 @@ export * from "./assets.js";
 export * from "./impersonation.js";
 export * from "./assignments.js";
 export * from "./supply.js";
+export * from "./modules.js";

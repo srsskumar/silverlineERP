@@ -14,6 +14,7 @@ import {
   canImpersonate,
   impersonateSchema,
   IMPERSONATION_DEFAULT_MINUTES,
+  MODULE_CATALOG,
 } from "@silverline/shared";
 import { writeAudit } from "../../common/audit.js";
 import { buildAuthenticate, requirePermission } from "../../common/auth.js";
@@ -423,6 +424,55 @@ export async function registerAuthRoutes(
         mfa_enabled: boolean;
         last_login_at: Date | null;
       };
+      /*
+       * Which screens this session's own roles see (owner request,
+       * 2026-09-24): resolved once here, from the same override table and
+       * the same "does the role hold the permission" rule the admin screen
+       * uses, so every client filters its own nav from one call it already
+       * makes rather than re-implementing the resolution or needing
+       * admin.configure just to read its own visibility.
+       *
+       * Visible if ANY role this user holds shows it visible -- a person
+       * holding two roles is not stuck with the more restrictive one's view.
+       *
+       * Display only, same as the admin screen: it decides what this
+       * response says to render, never what a route accepts. Nothing here
+       * removes a permission or a scope check from any endpoint.
+       */
+      const moduleGrants = (
+        await opts.pool.query(
+          `SELECT r.code AS role_code, rp.permission_code
+             FROM roles r
+             LEFT JOIN role_permissions rp ON rp.role_id = r.id
+            WHERE r.code = ANY($1::text[])`,
+          [user.roles],
+        )
+      ).rows as Array<{ role_code: string; permission_code: string | null }>;
+      const heldByRole = new Map<string, Set<string>>();
+      for (const g of moduleGrants) {
+        if (!g.permission_code) continue;
+        if (!heldByRole.has(g.role_code)) heldByRole.set(g.role_code, new Set());
+        heldByRole.get(g.role_code)!.add(g.permission_code);
+      }
+      const moduleOverrides = (
+        await opts.pool.query(
+          `SELECT role_code, module_code, visible
+             FROM role_module_visibility
+            WHERE org_id = $1 AND role_code = ANY($2::text[])`,
+          [user.orgId, user.roles],
+        )
+      ).rows as Array<{ role_code: string; module_code: string; visible: boolean }>;
+      const overrideMap = new Map<string, boolean>(
+        moduleOverrides.map((o) => [`${o.role_code}:${o.module_code}`, o.visible]),
+      );
+      const modules: Record<string, boolean> = {};
+      for (const m of MODULE_CATALOG) {
+        modules[m.code] = user.roles.some((roleCode) => {
+          const override = overrideMap.get(`${roleCode}:${m.code}`);
+          if (override !== undefined) return override;
+          return m.permission ? (heldByRole.get(roleCode)?.has(m.permission) ?? false) : true;
+        });
+      }
       return reply.status(200).send({
         user: {
           ...full,
@@ -432,6 +482,7 @@ export async function registerAuthRoutes(
         },
         roles: user.roles,
         permissions: user.permissions,
+        modules,
         /*
          * §075. Null for everybody nearly all of the time; when it is not,
          * the web application has everything it needs to put a banner up
