@@ -1223,7 +1223,23 @@ export async function registerSurveyRoutes(
     const input = parse(stageRemarkSchema, req.body);
     return {
       data: await mutate(pool, req, 'survey.stage.set', 'survey_village_stage', async db => {
-        await villageOr404(db, u.orgId, id, u);
+        /*
+         * Locked for the whole of this call (§note: race in §066/§071's
+         * pattern), not just read.
+         *
+         * Two stage-set calls on the same village used to both read "what it
+         * was" before either had written "what it is now" — the ordinary
+         * shape of a lost update, except what was lost here was the audit
+         * trail rather than the state: concurrent calls could each believe
+         * they were the only one moving the stage, so `survey_stage_history`
+         * recorded fewer transitions than actually happened, some of them
+         * with a `from_state` that had already been overtaken by the time
+         * they wrote it. The state a screen reads afterwards was always
+         * correct — the upsert below is atomic — but the record of how it
+         * got there was not, and that record is what a variance review or a
+         * dispute over when a stage closed is built on.
+         */
+        await villageOr404(db, u.orgId, id, u, true);
         const stage = (await db.query(
           'SELECT * FROM survey_stages WHERE org_id = $1 AND code = $2 AND active',
           [u.orgId, input.stage_code])).rows[0];

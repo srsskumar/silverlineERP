@@ -481,6 +481,85 @@ describe("the billing register's programme filter", () => {
   });
 });
 
+describe("concurrent stage-set calls on the same village", () => {
+  it("keeps the audit trail honest when two calls race", async () => {
+    // Regression: `villageOr404` was called here without a row lock, so two
+    // concurrent stage-set calls each read "what it was" before either had
+    // written "what it is now". The upsert itself is atomic — the state a
+    // screen reads afterwards was never wrong — but the decision of whether
+    // to write a `survey_stage_history` row, and what `from_state` to write
+    // on it, was made from that stale read. Fired at real concurrency
+    // (before the fix) that produced fewer history rows than calls, some
+    // carrying a `from_state` the row had already moved past — a stage
+    // history a variance review or a billing dispute cannot trust.
+    const v = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Race village", village_code: uniq("RV"),
+      mandal_id: mandalId, total_extent_ac: 50,
+    });
+    const raceVillageId = String(v.data.id);
+
+    const calls = Array.from({ length: 8 }, (_, i) => post(
+      w.admin, `/api/v1/survey/villages/${raceVillageId}/stage`,
+      i % 2 === 0
+        ? {
+          stage_code: "GROUND_TRUTHING", state: "IN_PROGRESS", remarks: `race-${i}`,
+          gt_govt_staff_allocated: 2, gt_crew_allocated: 2,
+        }
+        : {
+          stage_code: "GROUND_TRUTHING", state: "COMPLETED",
+          completed_on: workDate(), remarks: `race-${i}`,
+        },
+    ));
+    const results = await Promise.all(calls);
+    for (const r of results) expect(r.status, JSON.stringify(r.body)).toBe(200);
+
+    // Ordered by physical insertion order, not `changed_at`: `now()` is the
+    // *transaction's* start time, not the moment the row was actually
+    // written, so two calls queued behind the same lock can carry
+    // `changed_at` values in the opposite order to the writes they describe.
+    // Each row here is inserted exactly once, by a transaction that only
+    // reaches its INSERT after the previous holder of the lock has
+    // committed, so heap order is the true, causal order of the race.
+    const history = (await w.pool.query(
+      `SELECT from_state, to_state, remarks, changed_at
+         FROM survey_stage_history
+        WHERE survey_village_id = $1
+        ORDER BY ctid`,
+      [raceVillageId])).rows;
+
+    // Eight calls alternate IN_PROGRESS/COMPLETED, but concurrent calls have
+    // no guaranteed order of execution -- the lock says who goes next only
+    // once the others are queued, not which of the eight goes first. Two
+    // calls asking for the same state can legitimately land back to back
+    // (one is then a real no-op, and rightly writes nothing), so the count
+    // of history rows is not fixed at eight. What is fixed, win or lose the
+    // race for a turn, is that every row that IS written tells the truth.
+    expect(history.length, JSON.stringify(history)).toBeGreaterThan(0);
+
+    // The chain has to be honest: each row's "from" is the row before it's
+    // "to" (null for the very first), never a state some other, interleaved
+    // call had already overtaken by the time this one wrote. This is
+    // exactly what broke before the village row was locked: a stale read let
+    // two calls each believe they were moving from the same "previous"
+    // state, so the row written after the first transition already carried
+    // a from_state the table had moved past.
+    let expectedFrom: string | null = null;
+    for (const row of history) {
+      expect(row.from_state, JSON.stringify(history)).toBe(expectedFrom);
+      expectedFrom = row.to_state;
+    }
+
+    // And the row itself agrees with its own history: whatever state the
+    // stage actually holds now is the "to" of the last transition on record.
+    const stored = (await w.pool.query(
+      `SELECT vs.state FROM survey_village_stages vs
+         JOIN survey_stages s ON s.id = vs.stage_id
+        WHERE vs.survey_village_id = $1 AND s.code = 'GROUND_TRUTHING'`,
+      [raceVillageId])).rows[0];
+    expect(stored.state).toBe(expectedFrom);
+  });
+});
+
 describe("the progress screen's district filter, given a dashboard's district id", () => {
   it("narrows the same way whether it is handed a name or the dashboard's id", async () => {
     const dash = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard?level=district`);
