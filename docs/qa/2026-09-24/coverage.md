@@ -383,7 +383,7 @@ No mobile equivalent of the balances admin screen (`leave.admin`) — expected, 
 
 | Element | File:Line |
 |---|---|
-| Row `<a href={href} onClick={onOpen}>` — **navigates to `/record?type=...&id=...`** | InboxList.tsx:65,124 |
+| Row `<a href={href} onClick={onOpen}>` — `href = inboxEntityHref(item)` | InboxList.tsx:65,82,124 |
 | "Mark as read" `<Button onClick={e=>{stopPropagation();mark}}>` | InboxList.tsx:135,138 |
 | "Mark all read" `<Button>` | InboxList.tsx:242 |
 | Filter/reset `<Button>` | InboxList.tsx:245 |
@@ -398,7 +398,7 @@ No mobile equivalent of the balances admin screen (`leave.admin`) — expected, 
 | Type filter chips | 103,109 |
 | Row tap → `openRow(n)` | 145 |
 
-`openRow` (lines 58-67) **only calls `patchNotificationRead`** — it does not navigate anywhere. There is no mobile equivalent of web's `/record` deep-link redirect page, and no per-type routing table mapping a notification's `entity_type`/`entity_id` to a mobile screen+id.
+`openRow` (lines 58-67) **only calls `patchNotificationRead`** — it does not navigate anywhere. There is no mobile equivalent of web's `inboxEntityHref()` (`apps/web/lib/notifications.ts:157`), and no per-type routing table mapping a notification's `entity_type`/`entity_id` to a mobile screen+id.
 
 **API** — `apps/api/src/modules/s5/routes.ts`. `canReadNotif = NOTIF_READ` (line 303).
 
@@ -408,7 +408,7 @@ No mobile equivalent of the balances admin screen (`leave.admin`) — expected, 
 | PATCH /notifications/:id/read | 1409 |
 | POST /notifications/read-all | 1443 |
 
-**Parity**: ⚠ **Confirmed known gap — "notification deep links on mobile."** Web's `InboxList.tsx:65` sends the user to `/record?type=<entity_type>&id=<id>` (`apps/web/app/record/page.tsx`, which dynamically renders the right detail view for employee/leave/payroll/project/task/board/attendance). Mobile's `openRow` (`apps/mobile/app/inbox.tsx:58`) marks-read only and does not push to any screen — tapping a notification does nothing visible beyond the read-state change. Seeded in findings-a.md.
+**Parity**: ⚠ **Confirmed known gap — "notification deep links on mobile."** Web's `InboxList.tsx:82` computes `href = inboxEntityHref(item)`; `inboxEntityHref()` (`apps/web/lib/notifications.ts:157`) returns the server-supplied `item.href` when present, else `/leave/:entity_id` for `LEAVE*` types, else `null` (a `null` href renders the row without a link, per `RowShell` at InboxList.tsx:58-60 — task rows are resolved separately by the caller, per the function's own doc comment at notifications.ts:139-142, into `/projects/:projectId/tasks/:taskId`). This is *not* the `/record?type=&id=` page — that path is built by `apps/web/lib/routes.ts`'s `staticHref`/`boardViewHref` for the unrelated v2 "Workbench" `Collection`/board-view links, not by the inbox. Mobile's `openRow` (`apps/mobile/app/inbox.tsx:58`) marks-read only and does not push to any screen regardless of what the row's target would be — tapping a notification does nothing visible beyond the read-state change. Seeded in findings-a.md.
 
 ---
 
@@ -882,8 +882,8 @@ Also confirmed: **no "New advance" or "New RA-bill" creation control anywhere in
 
 No permission gate of its own — falls through to each embedded detail view's own `RequirePermission`.
 
-**Mobile** — no equivalent route exists (confirmed: `find apps/mobile/app -iname "*record*"` → no matches). This is the mechanism the inbox-deep-link gap (Lane A) depends on — see Inbox section above.
+**Mobile** — no equivalent route exists (confirmed: `find apps/mobile/app -iname "*record*"` → no matches). **Correction**: this page is built from `apps/web/lib/routes.ts`'s `staticHref`/`boardViewHref` (used by the v2 "Workbench" `Collection` row-select and board-view links), not by the inbox — the inbox's own link resolver is `inboxEntityHref()` (`apps/web/lib/notifications.ts:157`, see Inbox section above), which never targets `/record`. The two are separate mechanisms that happen to serve a similar purpose (id → detail view); mobile lacks a generic equivalent of *either* one.
 
 **API**: none (client-side routing only).
 
-**Parity**: N/A as a route (mobile has per-screen navigation instead of one generic redirect), but its *absence* is precisely why mobile notification taps can't deep-link — there is no single mobile screen (or router table) that "type+id → open".
+**Parity**: N/A as a route (mobile has per-screen navigation instead of one generic redirect). Its absence doesn't by itself explain the mobile inbox gap (that's `inboxEntityHref`'s absence, not `/record`'s) — but it does mean mobile has no single "type+id → open" fallback for any surface that leans on this page's dispatch (e.g. a bare project/task/board id from elsewhere in the web UI has nowhere mobile-equivalent to resolve to).
