@@ -34,6 +34,9 @@ export type ExceptionType =
   | 'SYSTEM_FLAG';
 export type ExceptionDecision = 'APPROVE' | 'REJECT';
 
+export { placeLabel, type PlaceStatus } from './place';
+import type { PlaceStatus } from './place';
+
 export interface AttendanceEvent {
   id: string;
   employee_id: string;
@@ -42,17 +45,36 @@ export interface AttendanceEvent {
   latitude?: number | null;
   longitude?: number | null;
   gps_accuracy?: number | null;
+  altitude?: number | null;
+  altitude_accuracy?: number | null;
+  /** UTM on WGS-1984; zone and hemisphere name the grid (44N for the owner's sites). */
+  utm_zone?: number | null;
+  utm_hemisphere?: string | null;
+  utm_easting?: number | null;
+  utm_northing?: number | null;
+  /** Orthometric height on the EGM96 geoid, metres. */
+  height_egm96?: number | null;
+  place_name?: string | null;
+  place_detail?: Record<string, unknown> | null;
+  place_status?: PlaceStatus;
   [key: string]: unknown;
 }
 
 export interface AttendanceRecord {
   id: string;
   employee_id: string;
+  /** From the API's employee join; absent on a row straight from a write. */
+  employee_name?: string | null;
+  employee_emp_no?: string | null;
   work_date: string;
   status: RecordStatus | string;
   check_in_at?: string | null;
   check_out_at?: string | null;
   total_hours?: number | null;
+  check_in_place_name?: string | null;
+  check_in_place_status?: PlaceStatus;
+  check_out_place_name?: string | null;
+  check_out_place_status?: PlaceStatus;
   version: number;
   [key: string]: unknown;
 }
@@ -75,6 +97,9 @@ export interface PunchInput {
   latitude?: number;
   longitude?: number;
   gps_accuracy?: number;
+  /** Ellipsoidal (WGS84) altitude and its accuracy, when the device gives them. */
+  altitude?: number;
+  altitude_accuracy?: number;
   mock_location?: boolean;
   device_id?: string;
   app_version?: string;

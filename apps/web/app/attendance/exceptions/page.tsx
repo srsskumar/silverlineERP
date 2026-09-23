@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import Link from '@/components/AppLink';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { AppShell } from '@/components/AppShell';
@@ -21,6 +21,8 @@ import { applyFieldErrors } from '@/lib/form-errors';
 import { AttendanceStatusBadge } from '@/components/AttendanceStatusBadge';
 import { DecisionDialog } from '@/components/DecisionDialog';
 import { ExceptionDialog } from '@/components/ExceptionDialog';
+import { EmployeePicker } from '@/components/EmployeePicker';
+import { PersonName } from '@/components/PersonName';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -44,6 +46,7 @@ function RegularizeCard({ onCreated }: { onCreated: (ex: AttendanceException) =>
   const [created, setCreated] = React.useState<AttendanceException | null>(null);
   const {
     register,
+    control,
     handleSubmit,
     reset,
     setError,
@@ -79,8 +82,14 @@ function RegularizeCard({ onCreated }: { onCreated: (ex: AttendanceException) =>
       <h2 className="text-sm font-semibold text-text">Request regularization</h2>
       <p className="mt-1 text-xs text-text-muted">Creates an exception carrying the claimed times; it appears in the known-ids queue below.</p>
       <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="mt-3 grid gap-3 sm:grid-cols-2" noValidate>
-        <FormField label="Employee ID *" htmlFor="reg-employee" error={errors.employee_id?.message}>
-          <Input id="reg-employee" {...register('employee_id')} />
+        <FormField label="Employee *" htmlFor="reg-employee" error={errors.employee_id?.message}>
+          <Controller
+            control={control}
+            name="employee_id"
+            render={({ field }) => (
+              <EmployeePicker id="reg-employee" value={field.value ?? ''} onChange={field.onChange} />
+            )}
+          />
         </FormField>
         <FormField label="Work date (YYYY-MM-DD) *" htmlFor="reg-date" error={errors.work_date?.message}>
           <Input id="reg-date" placeholder="2026-09-01" {...register('work_date')} />
@@ -134,7 +143,7 @@ function ExceptionsManager() {
 
   const runLookup = async () => {
     if (!lookupEmployee.trim() || !DATE_RE.test(lookupDate.trim())) {
-      setLookup({ loading: false, error: new Error('Enter an employee ID and a work date (YYYY-MM-DD).'), record: null, searched: true });
+      setLookup({ loading: false, error: new Error('Pick an employee and enter a work date (YYYY-MM-DD).'), record: null, searched: true });
       return;
     }
     setLookup({ loading: true, error: null, record: null, searched: true });
@@ -159,8 +168,8 @@ function ExceptionsManager() {
       <div className="rounded-lg border border-border bg-surface p-4">
         <h2 className="text-sm font-semibold text-text">1 · Load record by employee + date</h2>
         <div className="mt-3 grid gap-3 sm:grid-cols-3 sm:items-end">
-          <FormField label="Employee ID" htmlFor="exc-lookup-emp">
-            <Input id="exc-lookup-emp" value={lookupEmployee} onChange={(e) => setLookupEmployee(e.target.value)} />
+          <FormField label="Employee" htmlFor="exc-lookup-emp">
+            <EmployeePicker id="exc-lookup-emp" status={null} value={lookupEmployee} onChange={setLookupEmployee} />
           </FormField>
           <FormField label="Work date (YYYY-MM-DD)" htmlFor="exc-lookup-date">
             <Input id="exc-lookup-date" placeholder="2026-09-01" value={lookupDate} onChange={(e) => setLookupDate(e.target.value)} />
@@ -176,6 +185,7 @@ function ExceptionsManager() {
         {lookup.record ? (
           <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-border px-3 py-2 text-sm">
             <AttendanceStatusBadge status={String(lookup.record.status)} />
+            <PersonName id={lookup.record.employee_id} name={lookup.record.employee_name} empNo={lookup.record.employee_emp_no} />
             <span className="font-mono text-xs text-text-muted">{lookup.record.id} · {lookup.record.work_date}</span>
             <Link href={`/attendance/records/${lookup.record.id}`} className="text-primary hover:underline">
               Open record

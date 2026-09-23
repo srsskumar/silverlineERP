@@ -21,7 +21,10 @@ describe('organisation settings', () => {
     expect(initial).toMatchObject({
       name: 'Silverline', timezone: 'Asia/Kolkata', session_timeout_minutes: '720',
       match_rate_pct: '2', match_quantity_pct: '', retention_days: '', locale: '',
+      attendance_future_tolerance_minutes: '',
     });
+    // The punch clock tolerance reads back the way it was set.
+    expect(settingsInitial({ id: 'o3', settings: { attendance_future_tolerance_minutes: 2 } }).attendance_future_tolerance_minutes).toBe('2');
     // A brand-new organisation: nothing pretends to have been chosen.
     expect(settingsInitial({ id: 'o2', name: 'Demo Org', settings: {} }).session_timeout_minutes).toBe('');
     expect(settingsInitial(null).name).toBe('');
@@ -36,6 +39,8 @@ describe('organisation settings', () => {
       name: 'Silverline',
       settings: { timezone: 'Asia/Kolkata', gst_state_code: '37', session_timeout_minutes: 720, match_tolerance: { rate_pct: 2.5 } },
     });
+    // Zero is a value: an organisation may refuse any forward skew at all.
+    expect(settingsBody({ attendance_future_tolerance_minutes: '0' }).settings).toEqual({ attendance_future_tolerance_minutes: 0 });
     // Nothing filled: an empty merge rather than a row of blanks the API would refuse.
     expect(settingsBody({ name: '', timezone: '' })).toEqual({ settings: {} });
   });

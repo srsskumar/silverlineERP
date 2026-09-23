@@ -55,6 +55,7 @@ Silverline has no geo-fencing (owner decision, 2026-09-22). The UT-GEO-01..11 ro
 | UT-GEO-11 | RETIRED | Read organization fence list as ordinary employee | No geo-fencing | 14.2 (withdrawn) |
 | UT-GEO-12 | P1 | Normalize geocoder result and invalid provider rows | Only finite coordinates are returned; provider payload is not leaked | 15.3, 20 |
 | UT-GEO-13 | P1 | Exercise geocoder rate slot and cache | Same query is cached; uncached provider calls serialize to at most one per second | 15.3 |
+| UT-GEO-14 | P1 | Worker names the place of a positioned punch | Oldest positioned punches are reverse geocoded in a bounded batch; a provider failure is counted and given up after three; "nothing here" is final; GEOCODING_REVERSE=off stops the pass | 8.1, 15.3, owner request 2026-09-23 |
 | UT-ATT-01 | P0 | Check in as active eligible employee with a position | Immutable event and workday record created; position and accuracy stored, no fence verdict | 8.1 |
 | UT-ATT-02 | RETIRED | Check in outside effective fence | No geo-fencing: a punch is accepted from anywhere | 9.1, 23.2 (withdrawn) |
 | UT-ATT-03 | RETIRED | Punch with accuracy above threshold | No geo-fencing: accuracy is stored, never judged | 9.1 (withdrawn) |
@@ -65,6 +66,8 @@ Silverline has no geo-fencing (owner decision, 2026-09-22). The UT-GEO-01..11 ro
 | UT-ATT-08 | P0 | Punch with client clock beyond skew window | Routes to review with client and server timestamps retained | 8.1 |
 | UT-ATT-09 | P0 | Punch after payroll lock | Rejected unless authorized override carries reason and audit | BR-05 |
 | UT-ATT-10 | P1 | Burn evidence watermark | Pixels contain employee, coordinates, accuracy, date/time and village; metadata stored separately | 9.2 |
+| UT-ATT-11 | P1 | Punch from a device clock ahead of the server | Accepted within the forward tolerance (5 min, org setting) with client_timestamp kept as sent; beyond it 422 FUTURE_PUNCH naming the minutes ahead and the fix | 8.1, owner request 2026-09-23 |
+| UT-ATT-12 | P1 | Punch stores UTM on WGS-1984 and the EGM96 height | A positioned punch carries utm_zone/hemisphere (44N for the owner's sites), easting and northing to 2 dp, and altitude − EGM96 undulation; a punch without a position stores none | 8.1, owner request 2026-09-23 |
 
 ### Leave payroll holidays and time
 

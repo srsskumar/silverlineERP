@@ -1,13 +1,12 @@
 'use client';
 
 import * as React from 'react';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { useAuth } from './AuthProvider';
 import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 import { punchEvent, type PunchResult } from '@/lib/attendance';
-import { listEmployees } from '@/lib/employees';
 import { punchFormSchema, type PunchFormInput } from '@/lib/validation';
 import { ApiClientError } from '@/lib/apiClient';
 import { Button } from './ui/Button';
@@ -15,10 +14,8 @@ import { ErrorCard } from './ui/ErrorCard';
 import { FormField } from './ui/FormField';
 import { Input } from './ui/Input';
 import { DecisionBadge } from './DecisionBadge';
+import { EmployeePicker } from './EmployeePicker';
 import { day } from '@/lib/finance';
-
-const inputClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 function nowLocalInput(): string {
   const d = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000);
@@ -26,7 +23,26 @@ function nowLocalInput(): string {
 }
 
 /**
- * Manual web punch (testing/admin). Gated by attendance.punch.
+ * What the red box is headed, for the refusals a person can do something
+ * about. A device clock ahead of the server is the one that kept coming
+ * back: "Punch rejected (FUTURE_PUNCH)" told the supervisor a code, not
+ * that the fix was on the machine in front of them.
+ */
+export function punchErrorTitle(error: unknown): string {
+  if (!(error instanceof ApiClientError) || !error.code) return 'Punch failed';
+  switch (error.code) {
+    case 'FUTURE_PUNCH': return 'Punch rejected: this device’s clock is ahead';
+    case 'DUPLICATE_CHECKIN': return 'Punch rejected: already checked in today';
+    case 'CHECKOUT_WITHOUT_CHECKIN': return 'Punch rejected: no check-in to close';
+    case 'RECORD_CLOSED': return 'Punch rejected: the day is already closed';
+    case 'EMPLOYEE_INACTIVE': return 'Punch rejected: employee is not active';
+    default: return `Punch rejected (${error.code})`;
+  }
+}
+
+/**
+ * Punch on behalf of somebody else. Gated by attendance.punch (and, for
+ * anybody but yourself, attendance.decide on the server).
  * Renders the 201 / 200 / 202 outcomes distinctly; 422 codes surface inline.
  */
 export function PunchPanel({ onPunched }: { onPunched?: (r: PunchResult) => void }) {
@@ -34,11 +50,10 @@ export function PunchPanel({ onPunched }: { onPunched?: (r: PunchResult) => void
   const canPunch = hasPermission({ permissions: session?.permissions }, PERMISSIONS.ATTENDANCE_PUNCH);
   const [result, setResult] = React.useState<PunchResult | null>(null);
   const [submitError, setSubmitError] = React.useState<unknown>(null);
-  const [empSearch, setEmpSearch] = React.useState('');
-  const [pickerOpen, setPickerOpen] = React.useState(false);
 
   const {
     register,
+    control,
     handleSubmit,
     setValue,
     watch,
@@ -47,15 +62,7 @@ export function PunchPanel({ onPunched }: { onPunched?: (r: PunchResult) => void
     resolver: zodResolver(punchFormSchema),
     defaultValues: { employee_id: '', event_type: 'CHECK_IN', latitude: undefined, longitude: undefined, gps_accuracy: undefined },
   });
-  const employeeId = watch('employee_id');
   const eventType = watch('event_type');
-
-  const searchQuery = useQuery({
-    queryKey: ['employees', 'punch-search', empSearch.trim()],
-    queryFn: () => listEmployees({ q: empSearch.trim(), limit: 8 }),
-    enabled: pickerOpen && empSearch.trim().length > 0,
-    staleTime: 30_000,
-  });
 
   const mutation = useMutation({
     mutationFn: (v: PunchFormInput) =>
@@ -83,54 +90,19 @@ export function PunchPanel({ onPunched }: { onPunched?: (r: PunchResult) => void
     );
   }
 
-  const candidates = searchQuery.data?.data ?? [];
-
   return (
     <div className="flex flex-col gap-4">
       <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="flex flex-col gap-4" noValidate>
         <div className="grid gap-4 sm:grid-cols-2">
           <FormField label="Employee *" htmlFor="punch-employee" error={errors.employee_id?.message}>
-            <div className="flex flex-col gap-1">
-              <Input
-                id="punch-employee"
-                placeholder="Employee ID…"
-                invalid={!!errors.employee_id}
-                value={employeeId}
-                onChange={(e) => {
-                  setValue('employee_id', e.target.value, { shouldValidate: true });
-                  setEmpSearch(e.target.value);
-                  setPickerOpen(true);
-                }}
-                onFocus={() => setPickerOpen(true)}
-              />
-              {pickerOpen && empSearch.trim().length > 0 && (
-                <div className="rounded-md border border-border bg-surface shadow-sm">
-                  {searchQuery.isLoading ? (
-                    <p className="px-3 py-2 text-xs text-text-muted">Searching…</p>
-                  ) : candidates.length === 0 ? (
-                    <p className="px-3 py-2 text-xs text-text-muted">No matches — you can still punch a raw ID.</p>
-                  ) : (
-                    candidates.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        className="block w-full px-3 py-1.5 text-left text-xs hover:bg-surface-sunken"
-                        onClick={() => {
-                          setValue('employee_id', c.id, { shouldValidate: true });
-                          setEmpSearch('');
-                          setPickerOpen(false);
-                        }}
-                      >
-                        <span className="font-medium text-text">
-                          {String(c.first_name)} {c.last_name ? String(c.last_name) : ''}
-                        </span>{' '}
-                        <span className="font-mono text-text-muted">{c.emp_no}</span>
-                      </button>
-                    ))
-                  )}
-                </div>
+            {/* By name: the owner's example of a box that wanted a pasted UUID. */}
+            <Controller
+              control={control}
+              name="employee_id"
+              render={({ field }) => (
+                <EmployeePicker id="punch-employee" value={field.value ?? ''} onChange={field.onChange} />
               )}
-            </div>
+            />
           </FormField>
           <FormField label="Event *" htmlFor="punch-type">
             <div className="flex gap-2" role="radiogroup" aria-label="Event type">
@@ -171,14 +143,7 @@ export function PunchPanel({ onPunched }: { onPunched?: (r: PunchResult) => void
       </form>
 
       {submitError ? (
-        <ErrorCard
-          title={
-            submitError instanceof ApiClientError && submitError.code
-              ? `Punch rejected (${submitError.code})`
-              : 'Punch failed'
-          }
-          error={submitError}
-        />
+        <ErrorCard title={punchErrorTitle(submitError)} error={submitError} />
       ) : null}
 
       {result && !submitError ? (

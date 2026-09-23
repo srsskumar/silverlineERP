@@ -1,0 +1,2 @@
+# The EGM96 geoid grid is 16-bit binary; a line-ending conversion would corrupt it.
+*.pgm binary

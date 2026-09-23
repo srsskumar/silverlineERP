@@ -47,6 +47,7 @@ export function OrgSettingsForm() {
         { key: 'locale', label: 'Locale' },
         { key: 'gst_state_code', label: 'Our GST state', type: 'select', options: GST_STATE_OPTIONS },
         { key: 'session_timeout_minutes', label: 'Sign out after this many idle minutes (5 to 1440; blank means a week)', type: 'number' },
+        { key: 'attendance_future_tolerance_minutes', label: 'Accept a punch from a device clock up to this many minutes fast (0 to 15; blank means 5)', type: 'number' },
         { key: 'retention_days', label: 'Keep records for this many days (30 or more)', type: 'number' },
         { key: 'match_quantity_pct', label: 'Three-way match: quantity tolerance (%)', type: 'number' },
         { key: 'match_rate_pct', label: 'Three-way match: rate tolerance (%)', type: 'number' },

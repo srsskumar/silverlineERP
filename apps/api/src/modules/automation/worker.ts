@@ -4,6 +4,7 @@ import {runReportJobs} from "../jobs/reports.js";
 import {runScheduledJobs} from "../jobs/scheduled.js";
 import {runSurveyAlerts} from "../jobs/surveyAlerts.js";
 import {drainSurveyAlertMail} from "../jobs/surveyMail.js";
+import {reverseGeocodingEnabled,runPlaceNames} from "../jobs/placeNames.js";
 import { createHmac } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { request } from 'node:https';
@@ -138,6 +139,9 @@ export async function runJobs(app:FastifyInstance,pool:Pool,jwtSecret:string):Pr
   });
   await isolated('push delivery',()=>runPushDelivery(pool));
   await isolated('provider jobs',()=>runProviderJobs(pool));
+  // Naming the place each positioned punch was made from, a bounded batch
+  // per pass at the geocoder's one request a second. Off by GEOCODING_REVERSE=off.
+  if(reverseGeocodingEnabled())await isolated('punch place names',()=>runPlaceNames(pool));
   return count;
  }finally{await lock.query('COMMIT').catch(()=>lock.query('ROLLBACK').catch(()=>{}));lock.release();}
 }
