@@ -210,11 +210,17 @@ export const orgUnitUpdateSchema = z.object({
 });
 export type OrgUnitUpdateInput = z.infer<typeof orgUnitUpdateSchema>;
 
+// Must mirror the API's holidayTypeSchema (packages/shared/src/s1.ts) exactly —
+// a client that accepts a value the server doesn't (e.g. the old free-text
+// "PUBLIC"/"FESTIVAL" placeholder) turns every such submission into a
+// guaranteed 422 (A-007).
+export const HOLIDAY_TYPES = ['national', 'regional', 'local', 'weekly_off', 'manual'] as const;
+
 export const holidaySchema = z
   .object({
     date: dateString('Holiday date must be YYYY-MM-DD'),
     name: z.string().trim().min(1, 'Name is required').max(255),
-    type: z.string().trim().min(1, 'Type is required').max(50),
+    type: z.enum(HOLIDAY_TYPES, { errorMap: () => ({ message: 'Pick a holiday type' }) }),
     scope_type: z.enum(ORG_UNIT_TYPES).optional(),
     scope_id: z.string().trim().min(1).max(100).optional(),
   })

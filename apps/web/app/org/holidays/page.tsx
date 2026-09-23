@@ -10,7 +10,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 import { createHoliday, listHolidays } from '@/lib/holidays';
 import { queryKeys } from '@/lib/query-keys';
-import { holidaySchema, ORG_UNIT_TYPES, type HolidayInput } from '@/lib/validation';
+import { holidaySchema, HOLIDAY_TYPES, ORG_UNIT_TYPES, type HolidayInput } from '@/lib/validation';
 import { applyFieldErrors } from '@/lib/form-errors';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -33,12 +33,12 @@ function CreateHolidayDialog({ open, year, onClose }: { open: boolean; year: num
     formState: { errors, isSubmitting },
   } = useForm<HolidayInput>({
     resolver: zodResolver(holidaySchema),
-    defaultValues: { date: `${year}-01-01`, name: '', type: 'PUBLIC' },
+    defaultValues: { date: `${year}-01-01`, name: '', type: 'national' },
   });
 
   React.useEffect(() => {
     if (open) {
-      reset({ date: `${year}-01-01`, name: '', type: 'PUBLIC' });
+      reset({ date: `${year}-01-01`, name: '', type: 'national' });
       setSubmitError(null);
     }
   }, [open, year, reset]);
@@ -69,7 +69,13 @@ function CreateHolidayDialog({ open, year, onClose }: { open: boolean; year: num
             <Input id="hol-name" invalid={!!errors.name} {...register('name')} />
           </FormField>
           <FormField label="Type *" htmlFor="hol-type" error={errors.type?.message}>
-            <Input id="hol-type" placeholder="PUBLIC / FESTIVAL / REGIONAL…" {...register('type')} />
+            <select id="hol-type" className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm" {...register('type')}>
+              {HOLIDAY_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
           </FormField>
           <div className="grid grid-cols-2 gap-3">
             <FormField label="Scope type" htmlFor="hol-scope-type" error={errors.scope_type?.message}>

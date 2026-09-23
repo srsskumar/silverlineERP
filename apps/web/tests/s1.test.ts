@@ -109,10 +109,19 @@ describe('orgUnit + holiday schemas', () => {
   });
 
   it('accepts a valid holiday and rejects scope_id without scope_type', () => {
-    expect(holidaySchema.safeParse({ date: '2026-01-26', name: 'Republic Day', type: 'PUBLIC' }).success).toBe(true);
+    expect(holidaySchema.safeParse({ date: '2026-01-26', name: 'Republic Day', type: 'national' }).success).toBe(true);
     expect(
-      holidaySchema.safeParse({ date: '2026-01-26', name: 'Local Fest', type: 'FESTIVAL', scope_id: 'd1' }).success,
+      holidaySchema.safeParse({ date: '2026-01-26', name: 'Local Fest', type: 'national', scope_id: 'd1' }).success,
     ).toBe(false);
+  });
+
+  it('rejects a holiday type the API does not accept (A-007: the create form let anyone type PUBLIC/FESTIVAL, which the server always 422s)', () => {
+    // The API's holidayTypeSchema (packages/shared/src/s1.ts) only accepts
+    // national/regional/local/weekly_off/manual, but the old placeholder text
+    // on the Type field ("PUBLIC / FESTIVAL / REGIONAL…") suggested uppercase
+    // words that were never valid — every one of them 422s server-side.
+    expect(holidaySchema.safeParse({ date: '2026-01-26', name: 'Republic Day', type: 'PUBLIC' }).success).toBe(false);
+    expect(holidaySchema.safeParse({ date: '2026-01-26', name: 'Local Fest', type: 'FESTIVAL' }).success).toBe(false);
   });
 
   it('importRowSchema requires the identity quartet', () => {
