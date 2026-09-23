@@ -2276,9 +2276,11 @@ describe('billing waits for an acceptance (§078)', () => {
     })).toEqual([1, 2]);
   });
 
-  it('says the deliverables are awaiting approval rather than missing', () => {
+  it('says notification is awaiting approval rather than missing (§086)', () => {
     const label = (c: string) => c.replace(/_/g, ' ').toLowerCase();
-    const note = milestoneBlockedNote(3, { FINAL_DELIVERABLES: 'IN_PROGRESS' }, label);
+    const note = milestoneBlockedNote(3, {
+      FINAL_DELIVERABLES: 'COMPLETED', NOTIFICATION: 'IN_PROGRESS',
+    }, label);
     expect(note).toMatch(/not finished/i);
     expect(note).toMatch(/signed off/i);
   });
