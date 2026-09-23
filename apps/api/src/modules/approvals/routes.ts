@@ -30,19 +30,42 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
    * A requisition has no status route of its own: it is submitted here and
    * waits. Without this, a fully approved ladder left the requisition at
    * SUBMITTED forever, and no order could ever be raised against it -- the
-   * test suite papered over the gap by updating the row directly. Orders and
-   * claims are not touched: both read the instance and move themselves, with
-   * checks of their own that belong in their modules.
+   * test suite papered over the gap by updating the row directly.
+   *
+   * An order does have its own `/status` route, but that route only ever
+   * *checks* the ladder ("an order reaches APPROVED only when its approval
+   * instance says so") -- something still has to be the one that actually
+   * flips the status once the ladder clears, the same as a requisition.
+   * Left unhandled, an approved order sat at PENDING_APPROVAL forever and
+   * every caller (including this test suite, by writing the row directly)
+   * had to reach past the API to move it. A rejected order has no REJECTED
+   * status of its own (`PO_STATUSES`) -- DRAFT is its rework state, and
+   * PENDING_APPROVAL already allows falling back to DRAFT.
+   *
+   * Claims are the one type still left alone: they read the instance and
+   * move themselves via their own decision route, with checks that belong
+   * in their module.
    */
   async function reflectOnDocument(
     db: PoolClient, instance: Record<string, any>, outcome: 'APPROVED' | 'REJECTED', actorId: string,
   ) {
-    if (instance.document_type !== 'PURCHASE_REQUISITION') return;
-    await db.query(
-      `UPDATE purchase_requisitions SET status = $2, version = version + 1,
-         updated_at = now(), updated_by = $3
-       WHERE id = $1 AND approval_id = $4 AND status = 'SUBMITTED'`,
-      [instance.document_id, outcome, actorId, instance.id]);
+    if (instance.document_type === 'PURCHASE_REQUISITION') {
+      await db.query(
+        `UPDATE purchase_requisitions SET status = $2, version = version + 1,
+           updated_at = now(), updated_by = $3
+         WHERE id = $1 AND approval_id = $4 AND status = 'SUBMITTED'`,
+        [instance.document_id, outcome, actorId, instance.id]);
+      return;
+    }
+    if (instance.document_type === 'PURCHASE_ORDER') {
+      const next = outcome === 'APPROVED' ? 'APPROVED' : 'DRAFT';
+      await db.query(
+        `UPDATE purchase_orders SET status = $2, version = version + 1,
+           updated_at = now(), updated_by = $3
+         WHERE id = $1 AND approval_id = $4 AND status = 'PENDING_APPROVAL'`,
+        [instance.document_id, next, actorId, instance.id]);
+      return;
+    }
   }
 
   /** Live delegations in the org, as the pure layer wants them. */
