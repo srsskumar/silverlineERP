@@ -62,6 +62,20 @@ export const DUP_WINDOW_MIN = 5;
 /** |client_timestamp - server_now| beyond this forces REQUIRES_REVIEW. */
 export const SKEW_WINDOW_MIN = 15;
 
+/**
+ * How far ahead of the server a client clock may run and still punch.
+ *
+ * A device clock a couple of minutes fast is the commonest clock fault
+ * there is, and it used to refuse every punch from that device as "in the
+ * future". Within this many minutes the punch is accepted and the client's
+ * time is recorded as sent -- server_timestamp is what attendance is built
+ * from anyway. Beyond it the punch is refused with FUTURE_PUNCH and told by
+ * how much the clock is ahead, so the fix is on the device, not in a review
+ * queue. The organization setting `attendance_future_tolerance_minutes`
+ * overrides it, up to the skew window.
+ */
+export const FUTURE_TOLERANCE_MIN = 5;
+
 // ---------------------------------------------------------------------------
 // Coordinates
 // ---------------------------------------------------------------------------
@@ -151,6 +165,13 @@ export const attendanceEventSchema = z
     latitude: latSchema.optional(),
     longitude: lngSchema.optional(),
     gps_accuracy: z.number().min(0).max(100000).optional(),
+    /**
+     * Ellipsoidal (WGS84) altitude from the device, metres, and its
+     * accuracy. Optional: browsers and phones often have neither. When
+     * present the server also stores the EGM96 orthometric height.
+     */
+    altitude: z.number().min(-1000).max(20000).optional(),
+    altitude_accuracy: z.number().min(0).max(100000).optional(),
     mock_location: z.boolean().default(false),
     device_id: z.string().max(255).optional(),
     app_version: z.string().max(50).optional(),

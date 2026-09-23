@@ -111,6 +111,118 @@ async function searchPlaces(query: string): Promise<PlaceSearchResult[]> {
   }
 }
 
+/* ------------------------------------------------------------------------
+ * Reverse geocoding: the place a punch was made from.
+ *
+ * Asked by the background worker, never by the punch route: the provider is
+ * a public service with a one-request-per-second courtesy limit and a ten
+ * second timeout, and nobody punching in should wait on either. Results are
+ * cached by position rounded to about a hundred metres, since a crew punches
+ * from the same few places all week.
+ * --------------------------------------------------------------------- */
+
+/** What the address object from the provider is reduced to. */
+export interface PlaceResolution {
+  /** "Kondapur, Hyderabad, Telangana" -- null when the provider knew nothing. */
+  place_name: string | null;
+  /** The provider's address object, kept whole for the detail screen. */
+  place_detail: Record<string, unknown> | null;
+}
+
+const reverseCache = new Map<string, { expiresAt: number; data: PlaceResolution }>();
+
+/** Cache key: three decimals is about 110 m of latitude, 105 m of longitude at Hyderabad. */
+export function reverseCacheKey(lat: number, lng: number): string {
+  return `${lat.toFixed(3)},${lng.toFixed(3)}`;
+}
+
+function firstText(address: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const v = address[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return null;
+}
+
+/**
+ * The most specific settled place, then the district, then the state.
+ *
+ * A supervisor reads "Kondapur, Hyderabad, Telangana" and knows where that
+ * is; the provider's display_name runs to a dozen comma-separated parts
+ * beginning with a house number. Parts that repeat (a city that is its own
+ * district) are said once.
+ */
+export function placeNameFromAddress(address: Record<string, unknown> | null | undefined): string | null {
+  if (!address) return null;
+  const parts = [
+    firstText(address, ["village", "hamlet", "neighbourhood", "suburb", "town", "city", "municipality"]),
+    firstText(address, ["city", "town", "state_district", "county", "district"]),
+    firstText(address, ["state", "region", "province"]),
+  ];
+  const out: string[] = [];
+  for (const p of parts) {
+    if (p && !out.includes(p)) out.push(p);
+  }
+  return out.length ? out.join(", ") : firstText(address, ["country"]);
+}
+
+/** Nominatim's zoom for "settlement": village or suburb, not street or house. */
+const REVERSE_ZOOM = "14";
+
+/**
+ * Name the place at a position. Throws on a provider fault (the caller
+ * counts attempts); resolves with a null name when the provider answers
+ * but knows nothing there, which is final.
+ */
+export async function reverseGeocode(lat: number, lng: number): Promise<PlaceResolution> {
+  const key = reverseCacheKey(lat, lng);
+  const cached = reverseCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+  await waitForPlaceSearchSlot();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const base = (process.env["GEOCODING_BASE_URL"] ?? "https://nominatim.openstreetmap.org").replace(/\/$/, "");
+    const url = new URL(`${base}/reverse`);
+    url.searchParams.set("lat", String(lat));
+    url.searchParams.set("lon", String(lng));
+    url.searchParams.set("format", "jsonv2");
+    url.searchParams.set("zoom", REVERSE_ZOOM);
+    url.searchParams.set("addressdetails", "1");
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        "Accept-Language": "en-IN,en;q=0.8",
+        "User-Agent": process.env["GEOCODING_USER_AGENT"] ?? "SilverlineERP/1.0",
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`Geocoder returned ${response.status}`);
+    const body = await response.json() as Record<string, unknown> | null;
+    // "Unable to geocode" comes back as 200 with an error field: the
+    // provider answered, and the answer is that there is nothing there.
+    const address = body && typeof body["address"] === "object" && body["address"] !== null && !("error" in body)
+      ? body["address"] as Record<string, unknown>
+      : null;
+    const data: PlaceResolution = {
+      place_name: placeNameFromAddress(address),
+      place_detail: address
+        ? { ...address, display_name: typeof body?.["display_name"] === "string" ? body["display_name"] : undefined }
+        : null,
+    };
+    if (reverseCache.size >= 500) reverseCache.delete(reverseCache.keys().next().value ?? "");
+    reverseCache.set(key, { expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1_000, data });
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** For tests: forget cached answers. */
+export function clearReverseCache(): void {
+  reverseCache.clear();
+}
+
 export async function registerGeoRoutes(
   app: FastifyInstance,
   opts: GeoRoutesOptions,

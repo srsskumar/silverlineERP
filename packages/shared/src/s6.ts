@@ -163,11 +163,25 @@ export const REPORT_COLUMNS: Record<ReportType, string[]> = {
   attendance: [
     "id",
     "employee_id",
+    "employee_name",
+    "emp_no",
     "work_date",
     "status",
     "check_in_at",
     "check_out_at",
     "total_hours",
+    // Where each end of the day was punched (owner request 2026-09-23):
+    // the place name, UTM on WGS-1984 and the EGM96 height of the event.
+    "check_in_place_name",
+    "check_in_utm_zone",
+    "check_in_utm_easting",
+    "check_in_utm_northing",
+    "check_in_height_egm96",
+    "check_out_place_name",
+    "check_out_utm_zone",
+    "check_out_utm_easting",
+    "check_out_utm_northing",
+    "check_out_height_egm96",
   ],
   tasks: [
     "id",

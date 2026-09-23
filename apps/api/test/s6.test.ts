@@ -910,8 +910,12 @@ describe("reports", () => {
     });
     const attCsv = parseCsv(attDl.body);
     expect(attCsv.header).toEqual([
-      "id", "employee_id", "work_date", "status",
+      "id", "employee_id", "employee_name", "emp_no", "work_date", "status",
       "check_in_at", "check_out_at", "total_hours",
+      "check_in_place_name", "check_in_utm_zone", "check_in_utm_easting",
+      "check_in_utm_northing", "check_in_height_egm96",
+      "check_out_place_name", "check_out_utm_zone", "check_out_utm_easting",
+      "check_out_utm_northing", "check_out_height_egm96",
     ]);
     expect(attCsv.rows[0]?.[1]).toBe(empRow);
 

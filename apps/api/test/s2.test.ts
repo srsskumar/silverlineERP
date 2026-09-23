@@ -13,6 +13,8 @@ import {
   ADMIN_USERNAME,
   seedDatabase,
 } from "../src/database/seed.js";
+import { FUTURE_TOLERANCE_MIN, toUtm } from "@silverline/shared";
+import { geoidHeight } from "../src/common/geoid.js";
 
 process.env["UPLOADS_DIR"] = join(tmpdir(), `sl-s2-test-${process.pid}`);
 
@@ -511,13 +513,97 @@ describe("attendance punches", () => {
     expect((db.rows[0] as { source: string }).source).toBe("SYSTEM");
   });
 
-  it("rejects future punches (422 FUTURE_PUNCH)", async () => {
+  it("rejects future punches (422 FUTURE_PUNCH) and says how far ahead the clock is", async () => {
     const h = await adminHeaders();
     const empId = await activeEmployee(h);
-    const future = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+    const future = new Date(Date.now() + (FUTURE_TOLERANCE_MIN + 5) * 60 * 1000).toISOString();
     const res = await punch(h, checkinBody(empId, { client_timestamp: future }), nextKey());
     expect(res.statusCode).toBe(422);
-    expect((res.json() as { code: string }).code).toBe("FUTURE_PUNCH");
+    const body = res.json() as { code: string; message: string };
+    expect(body.code).toBe("FUTURE_PUNCH");
+    // The fix is on the device, so the message says what is wrong with it.
+    expect(body.message).toMatch(/ahead of the server by 10 minutes/);
+    expect(body.message).toMatch(/date and time/);
+  });
+
+  it("accepts a punch from a clock a few minutes fast, keeping the client time as sent", async () => {
+    /*
+     * A supervisor's browser was three minutes ahead and every on-behalf
+     * punch was refused as "in the future". server_timestamp is what the
+     * day is built from, so a small forward skew costs nothing to allow.
+     */
+    const h = await adminHeaders();
+    const empId = await activeEmployee(h);
+    const fast = new Date(Date.now() + 3 * 60 * 1000);
+    const res = await punch(h, checkinBody(empId, { client_timestamp: fast.toISOString() }), nextKey());
+    expect(res.statusCode, res.body).toBe(201);
+    const body = res.json() as { event: { client_timestamp: string; server_timestamp: string } };
+    expect(new Date(body.event.client_timestamp).getTime()).toBe(fast.getTime());
+    expect(new Date(body.event.server_timestamp).getTime()).toBeLessThan(fast.getTime());
+  });
+
+  it("lets the organization tighten the forward tolerance", async () => {
+    const h = await adminHeaders();
+    const empId = await activeEmployee(h);
+    await pool.query(
+      `UPDATE organizations SET settings = settings || '{"attendance_future_tolerance_minutes": 1}'::jsonb WHERE id = $1`,
+      [orgId],
+    );
+    try {
+      const fast = new Date(Date.now() + 3 * 60 * 1000).toISOString();
+      const res = await punch(h, checkinBody(empId, { client_timestamp: fast }), nextKey());
+      expect(res.statusCode).toBe(422);
+      const body = res.json() as { code: string; message: string };
+      expect(body.code).toBe("FUTURE_PUNCH");
+      expect(body.message).toMatch(/up to 1 is allowed/);
+    } finally {
+      await pool.query(
+        `UPDATE organizations SET settings = settings - 'attendance_future_tolerance_minutes' WHERE id = $1`,
+        [orgId],
+      );
+    }
+  });
+
+  it("stores UTM on WGS-1984 and the EGM96 height beside a positioned punch", async () => {
+    const h = await adminHeaders();
+    const empId = await activeEmployee(h);
+    const res = await punch(h, checkinBody(empId, { altitude: 920.5, altitude_accuracy: 12 }), nextKey());
+    expect(res.statusCode, res.body).toBe(201);
+    const ev = (res.json() as { event: Record<string, unknown> }).event;
+    // Bengaluru is zone 43 North; the metres agree with the shared projection.
+    const expected = toUtm(CENTER.lat, CENTER.lng)!;
+    expect(ev.utm_zone).toBe(43);
+    expect(ev.utm_hemisphere).toBe("N");
+    expect(ev.utm_easting).toBeCloseTo(expected.easting, 2);
+    expect(ev.utm_northing).toBeCloseTo(expected.northing, 2);
+    expect(ev.altitude).toBe(920.5);
+    expect(ev.altitude_accuracy).toBe(12);
+    // Orthometric: the phone's ellipsoidal altitude less the geoid undulation.
+    expect(ev.height_egm96).toBeCloseTo(920.5 - geoidHeight(CENTER.lat, CENTER.lng)!, 1);
+    // The place is named later, by the worker.
+    expect(ev.place_name).toBeNull();
+    expect(ev.place_status).toBe("resolving");
+    const stored = await pool.query(
+      "SELECT utm_zone, utm_easting, height_egm96, place_resolved_at FROM attendance_events WHERE id = $1::uuid",
+      [ev.id],
+    );
+    expect(stored.rows[0].utm_zone).toBe(43);
+    expect(Number(stored.rows[0].utm_easting)).toBeCloseTo(expected.easting, 2);
+    expect(stored.rows[0].place_resolved_at).toBeNull();
+  });
+
+  it("stores no UTM, height or place for a punch without a position", async () => {
+    const h = await adminHeaders();
+    const empId = await activeEmployee(h);
+    const res = await punch(h, checkinBody(empId, {
+      latitude: undefined, longitude: undefined, gps_accuracy: undefined, altitude: 500,
+    }), nextKey());
+    expect(res.statusCode, res.body).toBe(201);
+    const ev = (res.json() as { event: Record<string, unknown> }).event;
+    expect(ev.utm_zone).toBeNull();
+    expect(ev.utm_easting).toBeNull();
+    expect(ev.height_egm96).toBeNull();
+    expect(ev.place_status).toBe("none");
   });
 
   it("requires Idempotency-Key (422 MISSING_IDEMPOTENCY_KEY)", async () => {

@@ -6,7 +6,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { SKEW_WINDOW_MIN } from "@silverline/shared";
+import { FUTURE_TOLERANCE_MIN, SKEW_WINDOW_MIN } from "@silverline/shared";
 import {
   GEO,
   buildWorld,
@@ -742,7 +742,22 @@ describe("UT-ATT-08 punch with client clock beyond skew window", () => {
     expect(res.statusCode).toBe(201);
   });
 
-  it("rejects a client timestamp in the future outright", async () => {
+  it("rejects a client timestamp further ahead than the tolerance, naming the clock fault", async () => {
+    const { employeeId } = await freshWorker();
+    const res = await punch({
+      employee_id: employeeId,
+      client_timestamp: new Date(Date.now() + (FUTURE_TOLERANCE_MIN + 3) * 60_000).toISOString(),
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
+    });
+    // Not a review: a punch cannot have happened yet, and the fix is on the device.
+    expect(res.statusCode).toBe(422);
+    const body = res.json() as { code: string; message: string };
+    expect(body.code).toBe("FUTURE_PUNCH");
+    expect(body.message).toMatch(/clock is ahead of the server by 8 minutes/);
+  });
+
+  it("accepts a client timestamp a minute ahead: a fast clock is not a future punch", async () => {
     const { employeeId } = await freshWorker();
     const res = await punch({
       employee_id: employeeId,
@@ -750,9 +765,7 @@ describe("UT-ATT-08 punch with client clock beyond skew window", () => {
       latitude: GEO.atSite.lat,
       longitude: GEO.atSite.lng,
     });
-    // Not a review: a punch cannot have happened yet.
-    expect(res.statusCode).toBe(422);
-    expect((res.json() as { code: string }).code).toBe("FUTURE_PUNCH");
+    expect(res.statusCode, res.body).toBe(201);
   });
 });
 

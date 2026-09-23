@@ -59,6 +59,31 @@ npx tsc -p tsconfig.json && npx tsc -p tsconfig.check.json
 | `UPLOADS_DIR` | `./uploads` | local document storage root (S1 driver; files under `<dir>/<employee_id>/`) |
 | `REPORTS_DIR` | `./exports` | local CSV report storage root (S6; files `<dir>/<report_id>.csv`, created at runtime) |
 | `PUNCH_RATE_LIMIT_MAX` | `30` | attendance punches per authed user (else IP) per minute (S6) |
+| `GEOCODING_BASE_URL` | `https://nominatim.openstreetmap.org` | place search (`/search`) and the punch place names (`/reverse`); any Nominatim-compatible endpoint |
+| `GEOCODING_USER_AGENT` | `SilverlineERP/1.0` | sent to the geocoder, which requires one that identifies the deployment |
+| `GEOCODING_REVERSE` | `on` | `off` stops the worker naming punch places (the punches still store coordinates; names are filled in once it is back on) |
+
+### Coordinates and place names on punches (migration 085)
+
+Every positioned punch stores, at insert, its UTM easting/northing on
+WGS-1984 (`utm_zone`/`utm_hemisphere` say which grid, e.g. 44N for the
+owner's sites) and, when the device sent an `altitude`, the EGM96
+orthometric height (`height_egm96`; grid in `src/data`, see its README).
+The place name (`place_name`, e.g. "Kondapur, Hyderabad, Telangana", with
+the geocoder's full address in `place_detail`) is filled in afterwards by
+the worker (`npm run worker`): each pass names up to 30 positioned punches
+that have no `place_resolved_at`, oldest first, at the geocoder's one
+request a second; a punch the provider fails on three times is marked
+resolved without a name rather than retried forever, and a punch the
+provider cannot place is final at once. Screens show "resolving" until then.
+
+Punches recorded before migration 085 get their UTM columns from a one-off
+script, never from the migration:
+
+    npm run backfill:utm --workspace=apps/api -- --dry-run   # count only
+    npm run backfill:utm --workspace=apps/api                # fill them in
+
+It is idempotent and batched; their place names come from the worker.
 
 ## Key endpoints
 

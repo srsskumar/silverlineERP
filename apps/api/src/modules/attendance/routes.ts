@@ -7,6 +7,7 @@ import { z } from "zod";
 import {
   ApiError,
   DUP_WINDOW_MIN,
+  FUTURE_TOLERANCE_MIN,
   PERMISSIONS,
   P1_PERMISSIONS,
   S2_PERMISSIONS,
@@ -20,6 +21,7 @@ import {
   encodeCursor,
   isValidIdempotencyKey,
   toFieldErrors,
+  toUtm,
 } from "@silverline/shared";
 import { businessDay } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from "../../common/auth.js";
@@ -29,6 +31,7 @@ import { detectMovementAnomaly } from "@silverline/shared";
 import { sendError } from "../../common/httpErrors.js";
 import { emitNotification } from "../s5/notify.js";
 import { parseIfMatch } from '../../common/ifMatch.js';
+import { orthometricHeight } from '../../common/geoid.js';
 
 export interface AttendanceRoutesOptions {
   pool: Pool;
@@ -72,6 +75,16 @@ interface EventRow {
   device_id: string | null;
   app_version: string | null;
   idempotency_key: string | null;
+  altitude: number | null;
+  altitude_accuracy: number | null;
+  utm_zone: number | null;
+  utm_hemisphere: string | null;
+  utm_easting: string | number | null;
+  utm_northing: string | number | null;
+  height_egm96: string | number | null;
+  place_name: string | null;
+  place_detail: Record<string, unknown> | null;
+  place_resolved_at: Date | string | null;
 }
 
 interface RecordRow {
@@ -84,6 +97,16 @@ interface RecordRow {
   check_out_at: Date | string | null;
   total_hours: string | number | null;
   status: string;
+  /* From the joins in RECORD_SELECT; absent on a row RETURNING from a write. */
+  first_name?: string | null;
+  last_name?: string | null;
+  emp_no?: string | null;
+  check_in_place_name?: string | null;
+  check_in_positioned?: boolean | null;
+  check_in_place_resolved_at?: Date | string | null;
+  check_out_place_name?: string | null;
+  check_out_positioned?: boolean | null;
+  check_out_place_resolved_at?: Date | string | null;
 }
 
 interface ExceptionRow {
@@ -128,7 +151,46 @@ function toEventShape(row: EventRow) {
     mock_location: row.mock_location,
     device_id: row.device_id,
     app_version: row.app_version,
+    altitude: num(row.altitude),
+    altitude_accuracy: num(row.altitude_accuracy),
+    // UTM on WGS-1984; the zone and hemisphere say which grid the metres
+    // are on. Null on a punch without a position, and on rows from before
+    // migration 085 until the backfill has run.
+    utm_zone: row.utm_zone === null || row.utm_zone === undefined ? null : Number(row.utm_zone),
+    utm_hemisphere: row.utm_hemisphere ?? null,
+    utm_easting: num(row.utm_easting),
+    utm_northing: num(row.utm_northing),
+    // Orthometric height on the EGM96 geoid, metres.
+    height_egm96: num(row.height_egm96),
+    place_name: row.place_name ?? null,
+    place_detail: row.place_detail ?? null,
+    place_resolved_at: iso(row.place_resolved_at ?? null),
+    place_status: placeStatus(row.lat !== null && row.lat !== undefined, row.place_name ?? null, row.place_resolved_at ?? null),
   };
+}
+
+function num(v: string | number | null | undefined): number | null {
+  return v === null || v === undefined ? null : Number(v);
+}
+
+/**
+ * Where a punch stands on its place name, for a screen to say in one word.
+ *
+ *   none       no position was sent, so there is no place to name
+ *   resolving  positioned; the worker has not named it yet
+ *   named      the worker named it
+ *   unnamed    the worker asked and the geocoder had nothing, or gave up
+ */
+export type PlaceStatus = "none" | "resolving" | "named" | "unnamed";
+
+export function placeStatus(
+  positioned: boolean,
+  placeName: string | null,
+  resolvedAt: Date | string | null,
+): PlaceStatus {
+  if (!positioned) return "none";
+  if (placeName) return "named";
+  return resolvedAt ? "unnamed" : "resolving";
 }
 
 function toRecordShape(row: RecordRow) {
@@ -148,6 +210,24 @@ function toRecordShape(row: RecordRow) {
       row.total_hours === null || row.total_hours === undefined
         ? null
         : Number(row.total_hours),
+    // The person, by name, so no screen has to print the id (see 3be0eae).
+    employee_name:
+      row.first_name === undefined
+        ? undefined
+        : [row.first_name, row.last_name].filter(Boolean).join(" ") || null,
+    employee_emp_no: row.emp_no === undefined ? undefined : row.emp_no ?? null,
+    // Where each end of the day was punched, from the events the record
+    // points at. A row straight from an INSERT has no joins and says nothing.
+    check_in_place_name: row.check_in_place_name ?? null,
+    check_in_place_status:
+      row.check_in_positioned === undefined
+        ? undefined
+        : placeStatus(row.check_in_positioned === true, row.check_in_place_name ?? null, row.check_in_place_resolved_at ?? null),
+    check_out_place_name: row.check_out_place_name ?? null,
+    check_out_place_status:
+      row.check_out_positioned === undefined
+        ? undefined
+        : placeStatus(row.check_out_positioned === true, row.check_out_place_name ?? null, row.check_out_place_resolved_at ?? null),
   };
 }
 
@@ -188,10 +268,125 @@ function toExceptionShape(row: ExceptionRow) {
  */
 const EVENT_COLS = `id, employee_id, event_type, client_timestamp,
   server_timestamp, lat, lng, gps_accuracy, mock_location, device_id,
-  app_version, idempotency_key, device_signals`;
+  app_version, idempotency_key, device_signals,
+  altitude, altitude_accuracy, utm_zone, utm_hemisphere, utm_easting,
+  utm_northing, height_egm96, place_name, place_detail, place_resolved_at`;
 
 const RECORD_COLS = `id, employee_id, work_date, check_in_event_id,
   check_out_event_id, check_in_at, check_out_at, total_hours, status`;
+
+/**
+ * A record with the person's name and the place of each punch alongside.
+ *
+ * One SELECT for every read of the register -- the list, the detail, and
+ * a person's own history -- so all three say the same thing about a day.
+ * The employee join was already there for the tenant check; the two event
+ * joins bring the place names the worker fills in (migration 085).
+ */
+const RECORD_SELECT = `SELECT ${RECORD_COLS.split(",").map((c) => `r.${c.trim()}`).join(", ")},
+    e.first_name, e.last_name, e.emp_no,
+    ci.place_name AS check_in_place_name,
+    (ci.lat IS NOT NULL) AS check_in_positioned,
+    ci.place_resolved_at AS check_in_place_resolved_at,
+    co.place_name AS check_out_place_name,
+    (co.lat IS NOT NULL) AS check_out_positioned,
+    co.place_resolved_at AS check_out_place_resolved_at
+  FROM attendance_records r
+  JOIN employees e ON e.id = r.employee_id
+  LEFT JOIN attendance_events ci ON ci.id = r.check_in_event_id
+  LEFT JOIN attendance_events co ON co.id = r.check_out_event_id`;
+
+/**
+ * The columns a punch's position is projected into at insert time.
+ *
+ * UTM (WGS-1984) from the latitude and longitude, and the EGM96 height
+ * from the altitude when one was sent. Pure arithmetic and a grid lookup;
+ * neither can fail on a valid position, and neither is ever allowed to
+ * fail a punch -- a fault here stores the punch with nulls and logs.
+ */
+function projectedPosition(d: {
+  latitude?: number; longitude?: number; altitude?: number;
+}): {
+  utm_zone: number | null; utm_hemisphere: string | null;
+  utm_easting: number | null; utm_northing: number | null;
+  height_egm96: number | null;
+} {
+  const none = { utm_zone: null, utm_hemisphere: null, utm_easting: null, utm_northing: null, height_egm96: null };
+  if (d.latitude === undefined || d.longitude === undefined) return none;
+  try {
+    const utm = toUtm(d.latitude, d.longitude);
+    return {
+      utm_zone: utm?.zone ?? null,
+      utm_hemisphere: utm?.hemisphere ?? null,
+      utm_easting: utm?.easting ?? null,
+      utm_northing: utm?.northing ?? null,
+      height_egm96: orthometricHeight(d.altitude, d.latitude, d.longitude),
+    };
+  } catch (err) {
+    console.error("punch position projection failed", err);
+    return none;
+  }
+}
+
+/** Store a punch exactly as it arrived, with its projected position. */
+async function insertPunch(
+  db: Pool,
+  a: {
+    employeeId: string;
+    d: {
+      event_type: string;
+      latitude?: number; longitude?: number; gps_accuracy?: number;
+      altitude?: number; altitude_accuracy?: number;
+      mock_location?: boolean; device_id?: string; app_version?: string;
+      survey_village_id?: string;
+      progress_deferred_reason?: string; progress_deferred_remarks?: string;
+    };
+    clientTime: Date;
+    serverNow: Date;
+    idemKey: string;
+    storedSignals: unknown | null;
+  },
+): Promise<EventRow> {
+  const { d } = a;
+  const pos = projectedPosition(d);
+  const ins = await db.query(
+    `INSERT INTO attendance_events
+       (employee_id, event_type, client_timestamp, server_timestamp,
+        lat, lng, gps_accuracy,
+        mock_location, device_id, app_version, idempotency_key, device_signals,
+        survey_village_id, progress_deferred_reason, progress_deferred_remarks,
+        altitude, altitude_accuracy, utm_zone, utm_hemisphere, utm_easting,
+        utm_northing, height_egm96)
+     VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,
+        $13::uuid,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+     RETURNING ${EVENT_COLS}`,
+    [
+      a.employeeId,
+      d.event_type,
+      a.clientTime.toISOString(),
+      a.serverNow.toISOString(),
+      d.latitude ?? null,
+      d.longitude ?? null,
+      d.gps_accuracy ?? null,
+      d.mock_location ?? false,
+      d.device_id ?? null,
+      d.app_version ?? null,
+      a.idemKey,
+      a.storedSignals ? JSON.stringify(a.storedSignals) : null,
+      d.survey_village_id ?? null,
+      d.progress_deferred_reason ?? null,
+      d.progress_deferred_remarks ?? null,
+      d.altitude ?? null,
+      d.altitude_accuracy ?? null,
+      pos.utm_zone,
+      pos.utm_hemisphere,
+      pos.utm_easting,
+      pos.utm_northing,
+      pos.height_egm96,
+    ],
+  );
+  return ins.rows[0] as EventRow;
+}
 
 const EXCEPTION_COLS = `id, employee_id, attendance_record_id, exception_type,
   reason, document_id, source, status, version, submitted_by, reviewed_by,
@@ -802,52 +997,49 @@ export async function registerAttendanceRoutes(
     if (Math.abs(clientTime.getTime() - serverNow.getTime()) > SKEW_MS) {
       const workDate = workDateFor(serverNow);
       const rec = await todayRecord(db, emp.id, workDate);
-      const ins = await db.query(
-        `INSERT INTO attendance_events
-           (employee_id, event_type, client_timestamp, server_timestamp,
-            lat, lng, gps_accuracy,
-            mock_location, device_id, app_version, idempotency_key, device_signals,
-            survey_village_id, progress_deferred_reason, progress_deferred_remarks)
-         VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,
-            $13::uuid,$14,$15)
-         RETURNING ${EVENT_COLS}`,
-        [
-          emp.id,
-          d.event_type,
-          clientTime.toISOString(),
-          serverNow.toISOString(),
-          d.latitude ?? null,
-          d.longitude ?? null,
-          d.gps_accuracy ?? null,
-          d.mock_location ?? false,
-          d.device_id ?? null,
-          d.app_version ?? null,
-          idemKey,
-          storedSignals ? JSON.stringify(storedSignals) : null,
-          d.survey_village_id ?? null,
-          d.progress_deferred_reason ?? null,
-          d.progress_deferred_remarks ?? null,
-        ],
-      );
+      const held = await insertPunch(db, {
+        employeeId: emp.id, d, clientTime, serverNow, idemKey, storedSignals,
+      });
       const message = `client_timestamp differs from server time by more than ${SKEW_WINDOW_MIN} minutes; queued for review`;
       const exceptionId = await createSystemException(db, {
         employeeId: emp.id,
         recordId: rec?.id ?? null,
-        eventId: (ins.rows[0] as EventRow).id,
+        eventId: held.id,
         type: "SYSTEM_FLAG",
         reason: message,
       });
       return review(reply, "TIMESTAMP_SKEW", exceptionId, message);
     }
 
-    // 3. Client timestamps in the future are rejected outright.
-    if (clientTime.getTime() > serverNow.getTime()) {
+    /*
+     * 3. A client clock ahead of the server.
+     *
+     * A device a couple of minutes fast is the commonest clock fault there
+     * is, and it used to refuse every punch from that device as "in the
+     * future" -- which is what happened to a supervisor punching on behalf
+     * of a crew from a browser three minutes ahead. Within the tolerance the
+     * punch is accepted and client_timestamp is kept as sent, because
+     * server_timestamp is what the day is built from anyway. Beyond it the
+     * punch is refused, and the message says by how much the clock is out
+     * so the fix happens on the device rather than in a review queue.
+     */
+    const aheadMs = clientTime.getTime() - serverNow.getTime();
+    const toleranceMin = Math.min(
+      SKEW_WINDOW_MIN,
+      Number.isInteger(settings.attendance_future_tolerance_minutes)
+        ? Number(settings.attendance_future_tolerance_minutes)
+        : FUTURE_TOLERANCE_MIN,
+    );
+    if (aheadMs > toleranceMin * 60 * 1000) {
+      const aheadMin = Math.ceil(aheadMs / 60000);
       return sendError(reply, req.requestId, {
         status: 422,
         code: "FUTURE_PUNCH",
-        message: "client_timestamp is in the future",
+        message:
+          `This device's clock is ahead of the server by ${aheadMin} minute${aheadMin === 1 ? "" : "s"} ` +
+          `(up to ${toleranceMin} is allowed). Set the device's date and time to automatic, or correct it, and punch again.`,
         fieldErrors: [
-          { field: "client_timestamp", message: "client_timestamp cannot be in the future" },
+          { field: "client_timestamp", message: `client_timestamp is ${aheadMin} minutes ahead of the server` },
         ],
       });
     }
@@ -946,34 +1138,9 @@ export async function registerAttendanceRoutes(
      * sent, is kept as evidence rather than judged against a boundary.
      */
     async function storeEvent(): Promise<EventRow> {
-      const ins = await db.query(
-        `INSERT INTO attendance_events
-           (employee_id, event_type, client_timestamp, server_timestamp,
-            lat, lng, gps_accuracy,
-            mock_location, device_id, app_version, idempotency_key, device_signals,
-            survey_village_id, progress_deferred_reason, progress_deferred_remarks)
-         VALUES ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,
-            $13::uuid,$14,$15)
-         RETURNING ${EVENT_COLS}`,
-        [
-          emp!.id,
-          d.event_type,
-          clientTime.toISOString(),
-          serverNow.toISOString(),
-          d.latitude ?? null,
-          d.longitude ?? null,
-          d.gps_accuracy ?? null,
-          d.mock_location ?? false,
-          d.device_id ?? null,
-          d.app_version ?? null,
-          idemKey,
-          storedSignals ? JSON.stringify(storedSignals) : null,
-          d.survey_village_id ?? null,
-          d.progress_deferred_reason ?? null,
-          d.progress_deferred_remarks ?? null,
-        ],
-      );
-      return ins.rows[0] as EventRow;
+      return insertPunch(db, {
+        employeeId: emp!.id, d, clientTime, serverNow, idemKey, storedSignals,
+      });
     }
 
     /**
@@ -1077,13 +1244,13 @@ export async function registerAttendanceRoutes(
     const q=parsed.data,user=req.authUser!;
     const link=(await opts.pool.query('SELECT employee_id FROM users WHERE id=$1 AND org_id=$2',[user.id,user.orgId])).rows[0];
     if(!link?.employee_id)throw new ApiError({status:404,code:'NO_EMPLOYEE_LINK',message:'No employee linked to this user'});
-    const values:unknown[]=[link.employee_id],clauses=['employee_id=$1'];
-    if(q.from){values.push(q.from);clauses.push('work_date>=$'+values.length+'::date');}
-    if(q.to){values.push(q.to);clauses.push('work_date<=$'+values.length+'::date');}
-    if(q.status){values.push(q.status);clauses.push('status=$'+values.length);}
-    if(q.cursor){const c=decodeCursor<RecordCursor>(q.cursor);if(!c)throw new ApiError({status:422,code:'VALIDATION_ERROR',message:'Invalid cursor'});values.push(c.work_date,c.id);clauses.push('(work_date,id)<($'+(values.length-1)+'::date,$'+values.length+'::uuid)');}
+    const values:unknown[]=[link.employee_id],clauses=['r.employee_id=$1'];
+    if(q.from){values.push(q.from);clauses.push('r.work_date>=$'+values.length+'::date');}
+    if(q.to){values.push(q.to);clauses.push('r.work_date<=$'+values.length+'::date');}
+    if(q.status){values.push(q.status);clauses.push('r.status=$'+values.length);}
+    if(q.cursor){const c=decodeCursor<RecordCursor>(q.cursor);if(!c)throw new ApiError({status:422,code:'VALIDATION_ERROR',message:'Invalid cursor'});values.push(c.work_date,c.id);clauses.push('(r.work_date,r.id)<($'+(values.length-1)+'::date,$'+values.length+'::uuid)');}
     values.push(q.limit+1);
-    const rows=(await opts.pool.query('SELECT '+RECORD_COLS+' FROM attendance_records WHERE '+clauses.join(' AND ')+' ORDER BY work_date DESC,id DESC LIMIT $'+values.length,values)).rows as RecordRow[];
+    const rows=(await opts.pool.query(RECORD_SELECT+' WHERE '+clauses.join(' AND ')+' ORDER BY r.work_date DESC,r.id DESC LIMIT $'+values.length,values)).rows as RecordRow[];
     const page=rows.slice(0,q.limit).map(toRecordShape),last=page.at(-1),more=rows.length>q.limit;
     return reply.send({data:page,has_more:more,next_cursor:more&&last?encodeCursor({work_date:last.work_date,id:last.id}):null});
   });
@@ -1146,9 +1313,7 @@ export async function registerAttendanceRoutes(
     }
     values.push(limit + 1);
     const res = await opts.pool.query(
-      `SELECT ${RECORD_COLS.split(",").map((c) => `r.${c.trim()}`).join(", ")}
-       FROM attendance_records r
-       JOIN employees e ON e.id = r.employee_id
+      `${RECORD_SELECT}
        WHERE ${clauses.join(" AND ")}
        ORDER BY r.work_date DESC, r.id DESC LIMIT $${values.length}`,
       values as string[],
@@ -1268,9 +1433,7 @@ export async function registerAttendanceRoutes(
     }
     const { id } = req.params as { id: string };
     const res = await opts.pool.query(
-      `SELECT ${RECORD_COLS.split(",").map((c) => `r.${c.trim()}`).join(", ")}
-       FROM attendance_records r
-       JOIN employees e ON e.id = r.employee_id
+      `${RECORD_SELECT}
        WHERE r.id = $1::uuid AND e.org_id = $2`,
       [id, user.orgId],
     );

@@ -1025,12 +1025,23 @@ async function buildAttendanceReport(
   }
   const res = await pool.query(
     `SELECT r.id, r.employee_id, r.work_date, r.status, r.check_in_at,
-       r.check_out_at, r.total_hours
+       r.check_out_at, r.total_hours,
+       e.first_name, e.last_name, e.emp_no,
+       ci.place_name AS ci_place, ci.utm_zone AS ci_zone, ci.utm_hemisphere AS ci_hemi,
+       ci.utm_easting AS ci_e, ci.utm_northing AS ci_n, ci.height_egm96 AS ci_h,
+       co.place_name AS co_place, co.utm_zone AS co_zone, co.utm_hemisphere AS co_hemi,
+       co.utm_easting AS co_e, co.utm_northing AS co_n, co.height_egm96 AS co_h
      FROM attendance_records r
      JOIN employees e ON e.id = r.employee_id
+     LEFT JOIN attendance_events ci ON ci.id = r.check_in_event_id
+     LEFT JOIN attendance_events co ON co.id = r.check_out_event_id
      WHERE ${where} ORDER BY r.work_date ASC, r.id ASC`,
     params as string[],
   );
+  const text = (v: unknown) => (v === null || v === undefined ? "" : String(v));
+  const metres = (v: unknown) => (v === null || v === undefined ? "" : Number(v).toFixed(2));
+  // "44N": the zone and hemisphere together name the grid the metres are on.
+  const zone = (z: unknown, h: unknown) => (z === null || z === undefined ? "" : `${z}${text(h)}`);
   const rows = (
     res.rows as Array<{
       id: string;
@@ -1040,10 +1051,17 @@ async function buildAttendanceReport(
       check_in_at: Date | string | null;
       check_out_at: Date | string | null;
       total_hours: string | number | null;
+      first_name: string; last_name: string | null; emp_no: string;
+      ci_place: string | null; ci_zone: number | null; ci_hemi: string | null;
+      ci_e: string | null; ci_n: string | null; ci_h: string | null;
+      co_place: string | null; co_zone: number | null; co_hemi: string | null;
+      co_e: string | null; co_n: string | null; co_h: string | null;
     }>
   ).map((r) => [
     r.id,
     r.employee_id,
+    [r.first_name, r.last_name].filter(Boolean).join(" "),
+    r.emp_no,
     dateOnly(r.work_date) ?? "",
     r.status,
     iso(r.check_in_at) ?? "",
@@ -1051,6 +1069,8 @@ async function buildAttendanceReport(
     r.total_hours === null || r.total_hours === undefined
       ? ""
       : String(Number(r.total_hours)),
+    text(r.ci_place), zone(r.ci_zone, r.ci_hemi), metres(r.ci_e), metres(r.ci_n), metres(r.ci_h),
+    text(r.co_place), zone(r.co_zone, r.co_hemi), metres(r.co_e), metres(r.co_n), metres(r.co_h),
   ]);
   return { total, rows };
 }
