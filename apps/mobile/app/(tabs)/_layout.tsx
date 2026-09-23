@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../../src/auth/AuthContext";
 import { getMyVillages } from "../../src/api/endpoints";
+import { TAB_MODULE_CODES } from "../../src/rbac";
 import { font, useTheme } from "../../src/theme";
 
 /** Outline when idle, filled when active — the platform convention. */
@@ -20,7 +21,7 @@ const ICONS = {
 
 export default function TabsLayout() {
   const t = useTheme();
-  const { ready, signedIn, user, canDo } = useAuth();
+  const { ready, signedIn, user, canDo, canSeeModule } = useAuth();
   // A fixed tab bar height is used as given, with no room added for the
   // system bar; edge to edge on Android 15 then draws the gesture bar over
   // the labels. The inset is added back here.
@@ -46,7 +47,19 @@ export default function TabsLayout() {
     enabled: signedIn && maySeeSurvey,
     retry: false,
   });
-  const showSurvey = maySeeSurvey && (mine.data?.villages.length ?? 0) > 0;
+  /*
+   * Module visibility narrows the tab bar on top of whatever each tab's
+   * permission check already decided -- an admin hiding a module from a role
+   * hides its tab, but never brings back a tab a permission already refused.
+   * Home and More have no matching catalog code (see TAB_MODULE_CODES) and
+   * are never hidden this way.
+   */
+  const showAttendance = canSeeModule(TAB_MODULE_CODES.attendance!);
+  const showTasks = canSeeModule(TAB_MODULE_CODES.tasks!);
+  const showLeave = canSeeModule(TAB_MODULE_CODES.leave!);
+  const showAssets = canSeeModule(TAB_MODULE_CODES.assets!);
+  const showSurvey =
+    maySeeSurvey && (mine.data?.villages.length ?? 0) > 0 && canSeeModule(TAB_MODULE_CODES.survey!);
 
   if (!ready) return null;
   if (!signedIn) return <Redirect href="/(auth)/login" />;
@@ -75,14 +88,11 @@ export default function TabsLayout() {
       })}
     >
       <Tabs.Screen name="index" options={{ title: "Home" }} />
-      <Tabs.Screen name="attendance" options={{ title: "Attendance" }} />
-      <Tabs.Screen name="tasks" options={{ title: "Tasks" }} />
-      <Tabs.Screen name="leave" options={{ title: "Leave" }} />
-      <Tabs.Screen name="assets" options={{ title: "Assets" }} />
-      <Tabs.Screen
-        name="survey"
-        options={{ title: "Survey", href: showSurvey ? undefined : null }}
-      />
+      <Tabs.Screen name="attendance" options={{ title: "Attendance", href: showAttendance ? undefined : null }} />
+      <Tabs.Screen name="tasks" options={{ title: "Tasks", href: showTasks ? undefined : null }} />
+      <Tabs.Screen name="leave" options={{ title: "Leave", href: showLeave ? undefined : null }} />
+      <Tabs.Screen name="assets" options={{ title: "Assets", href: showAssets ? undefined : null }} />
+      <Tabs.Screen name="survey" options={{ title: "Survey", href: showSurvey ? undefined : null }} />
       <Tabs.Screen name="more" options={{ title: "More" }} />
     </Tabs>
   );

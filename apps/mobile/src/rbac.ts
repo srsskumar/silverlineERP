@@ -63,6 +63,9 @@ export const PERMISSIONS = {
   // the app asks for.
   SURVEY_READ: "survey.read",
   SURVEY_ENTER: "survey.enter",
+  // Assets tab (mirrors apps/api's asset.* codes; no S-number of its own).
+  ASSET_READ: "asset.read",
+  ASSET_MANAGE: "asset.manage",
 } as const;
 
 export type PermissionCode =
@@ -83,7 +86,7 @@ export function can(
   return need.every((p) => granted.includes(p as string));
 }
 
-export type TabKey = "home" | "attendance" | "tasks" | "leave" | "survey" | "more";
+export type TabKey = "home" | "attendance" | "tasks" | "leave" | "assets" | "survey" | "more";
 
 /**
  * Which permissions gate each bottom tab's *content*.
@@ -95,6 +98,7 @@ export const TAB_PERMISSIONS: Record<TabKey, string[]> = {
   attendance: [PERMISSIONS.ATTENDANCE_PUNCH, PERMISSIONS.ATTENDANCE_READ],
   tasks: [PERMISSIONS.TASK_READ],
   leave: [PERMISSIONS.LEAVE_REQUEST, PERMISSIONS.LEAVE_READ],
+  assets: [PERMISSIONS.ASSET_READ],
   /*
    * Read gates the tab; entry gates the forms inside it. They differ on
    * purpose: an auditor or a client viewer may be on a village's crew list
@@ -126,3 +130,56 @@ export function canAny(
   if (!granted) return false;
   return codes.some((c) => granted.includes(c as string));
 }
+
+/*
+ * Module visibility (round 2 of the mobile rollout).
+ *
+ * GET /api/v1/auth/me now returns a top-level `modules: Record<string,
+ * boolean>` -- one entry per code in the shared MODULE_CATALOG
+ * (packages/shared/src/modules.ts), already resolved for the caller's own
+ * roles and OR'd across every role they hold, exactly the way the web admin
+ * screen resolves it.
+ *
+ * This is a UI convenience layered OVER the permission system, exactly as on
+ * the web: hiding a module here narrows what this client renders, and must
+ * never be the only thing standing between a screen and its data -- the
+ * server keeps every permission and scope check it already had. So this is
+ * combined with the existing permission checks (`can`/`canAny` above), never
+ * used in their place: visibility can only narrow, never widen, what a
+ * permission already allows.
+ */
+
+/**
+ * Whether the signed-in user's roles show `code` as visible.
+ *
+ * `modules` is undefined before /auth/me has ever answered (a cold app, or a
+ * cached session predating this field) and can be missing an individual code
+ * (one added to the catalog after this device last synced). Both read as
+ * "not yet known" and default to visible, so a slow network or a stale cache
+ * never narrows a screen beyond what the permission check already allowed —
+ * only an admin's explicit `false` hides anything.
+ */
+export function canSeeModule(
+  modules: Record<string, boolean> | undefined | null,
+  code: string,
+): boolean {
+  if (!modules) return true;
+  return modules[code] !== false;
+}
+
+/**
+ * The module-catalog code each bottom tab is narrowed by, on top of the
+ * permission check TAB_PERMISSIONS already applies to its content.
+ *
+ * Home and More have no one-to-one catalog entry — Home is a personal
+ * landing page stitched from several modules, and More is the launcher for
+ * everything else in the catalog — so neither appears here and neither is
+ * ever hidden by module visibility.
+ */
+export const TAB_MODULE_CODES: Partial<Record<TabKey, string>> = {
+  attendance: "attendance",
+  tasks: "my-work",
+  leave: "leave",
+  assets: "assets",
+  survey: "survey",
+};

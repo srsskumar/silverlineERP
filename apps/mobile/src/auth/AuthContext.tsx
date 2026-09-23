@@ -29,7 +29,7 @@ import {
   getRefreshToken,
   saveTokens,
 } from "../device/auth";
-import { can } from "../rbac";
+import { can, canSeeModule } from "../rbac";
 
 interface AuthState {
   ready: boolean;
@@ -38,12 +38,16 @@ interface AuthState {
   user: MeResponse["user"] | null;
   roles: string[];
   permissions: string[];
+  /** The admin-configured nav-visibility map from /auth/me. See rbac.ts. */
+  modules: Record<string, boolean> | undefined;
   login: (
     username: string, password: string,
   ) => Promise<"ok" | "mfa" | "change-password">;
   verifyMfa: (code: string) => Promise<void>;
   logout: () => Promise<void>;
   canDo: (required: string | readonly string[]) => boolean;
+  /** Whether this user's roles show module `code` as visible. UI-only — see rbac.ts. */
+  canSeeModule: (code: string) => boolean;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -222,10 +226,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user: session?.user ?? null,
       roles: session?.roles ?? [],
       permissions: session?.permissions ?? [],
+      modules: session?.modules,
       login,
       verifyMfa,
       logout,
       canDo: (required) => can(session?.permissions, required),
+      canSeeModule: (code) => canSeeModule(session?.modules, code),
     }),
     [ready, session, mfaPending, login, verifyMfa, logout],
   );

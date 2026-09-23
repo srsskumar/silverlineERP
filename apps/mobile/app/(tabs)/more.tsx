@@ -7,11 +7,13 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Switch, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
 import { Payslip } from "../../src/ui/Payslip";
 import { apiFetch } from "../../src/api/client";
 import { registerDevice } from "../../src/device/registration";
 import { useAuth } from "../../src/auth/AuthContext";
 import { getEmployeesMe, getNotifications } from "../../src/api/endpoints";
+import { buildModuleLauncher } from "../../src/modulesLauncher";
 import {
   getBiometricState,
   setBiometricEnabled,
@@ -35,7 +37,7 @@ import {
   Title,
 } from "../../src/ui/primitives";
 import { radius, space, useTheme } from "../../src/theme";
-import { dayTime } from "@silverline/shared";
+import { dayTime, MODULE_CATALOG } from "@silverline/shared";
 
 const CHANNELS = [
   { key: "push", label: "Push" },
@@ -45,8 +47,13 @@ const CHANNELS = [
 
 function MoreScreen() {
   const t = useTheme();
-  const { user, roles, logout } = useAuth();
+  const { user, roles, logout, modules } = useAuth();
   const sync = useSyncEngine();
+
+  // Every other catalog module this user's roles show as visible — the four
+  // built this round route to their real screens, everything else opens a
+  // plain "coming soon" placeholder. See src/modulesLauncher.ts.
+  const launcherGroups = buildModuleLauncher(MODULE_CATALOG, modules);
 
   const preferences = useQuery({
     queryKey: ["notification-preferences"],
@@ -119,11 +126,29 @@ function MoreScreen() {
 
   return (
     <Screen>
-      <Title>Account</Title>
+      <Title>More</Title>
       <Muted style={{ marginTop: 2, marginBottom: space.lg }}>
-        Your profile, security and device settings.
+        Every module your roles can see, plus your profile and device settings.
       </Muted>
 
+      {launcherGroups.map((group) => (
+        <View key={group.title}>
+          <SectionLabel>{group.title}</SectionLabel>
+          <Card>
+            {group.items.map((item, i, arr) => (
+              <ListRow
+                key={item.code}
+                title={item.label}
+                right={item.comingSoon ? <Badge text="SOON" tone="neutral" /> : undefined}
+                onPress={() => router.push(item.route)}
+                last={i === arr.length - 1}
+              />
+            ))}
+          </Card>
+        </View>
+      ))}
+
+      <SectionLabel>Account</SectionLabel>
       <Card>
         <Row gap={space.md}>
           <View

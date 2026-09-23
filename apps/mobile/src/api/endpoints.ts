@@ -82,6 +82,17 @@ export interface MeResponse {
   };
   roles: string[];
   permissions: string[];
+  /**
+   * Which of the shared MODULE_CATALOG's codes (packages/shared/src/modules.ts)
+   * this user's roles show as visible, already OR'd across every role they
+   * hold. UI-only, same invariant as the web admin screen it mirrors: a
+   * `false` here hides a nav destination, never a permission — every route
+   * this app calls keeps its own guard regardless of what this map says.
+   * Optional because an older cached session (written before this field
+   * existed) may not have it; absence reads as "show everything the
+   * permission checks already allow" (see rbac.ts's canSeeModule).
+   */
+  modules?: Record<string, boolean>;
 }
 
 export async function getMe(): Promise<MeResponse> {
@@ -665,6 +676,347 @@ export interface Project {
 export async function getProjects(): Promise<Project[]> {
   const { data } = await cachedRead("getProjects", () => apiFetch("/api/v1/projects?limit=100"));
   return asList<Project>(data);
+}
+
+// --- Documents (§46 register) -----------------------------------------------
+
+/**
+ * A register row — apps/api/src/modules/documents is a compliance INDEX of
+ * licences, policies and certificates, not a file store: the bytes (where
+ * they exist at all) stay in whichever module recorded them, and this module
+ * has no download route of its own. There is nothing here to fetch bytes
+ * for, so this client is read-only: the register and what needs renewing.
+ */
+export interface DocumentRow {
+  id: string;
+  title: string;
+  type_code: string;
+  type_label: string;
+  category: string;
+  owner_type: string;
+  owner_id: string | null;
+  reference_number: string | null;
+  issuing_authority: string | null;
+  issued_on: string | null;
+  valid_from: string | null;
+  expires_on: string | null;
+  state: "VALID" | "EXPIRING" | "EXPIRED" | "SUPERSEDED" | string;
+  days_remaining: number | null;
+  blocks_operations: boolean;
+  confidential: boolean;
+  restricted: boolean;
+  notes: string | null;
+  version: number;
+  [k: string]: unknown;
+}
+
+export interface DocumentSummary {
+  blocking?: number;
+  blocking_soon?: number;
+  [k: string]: unknown;
+}
+
+export async function getDocuments(params?: {
+  owner_type?: string;
+  type_code?: string;
+  category?: string;
+  state?: string;
+  blocking?: boolean;
+}): Promise<{ items: DocumentRow[]; total: number; summary: DocumentSummary | null }> {
+  const q = new URLSearchParams({ limit: "100" });
+  if (params?.owner_type) q.set("owner_type", params.owner_type);
+  if (params?.type_code) q.set("type_code", params.type_code);
+  if (params?.category) q.set("category", params.category);
+  if (params?.state) q.set("state", params.state);
+  if (params?.blocking) q.set("blocking", "true");
+  const { data } = await cachedRead(`getDocuments:${q.toString()}`, () =>
+    apiFetch<{ data?: DocumentRow[]; total?: number; summary?: DocumentSummary }>(
+      `/api/v1/documents?${q.toString()}`,
+    ));
+  const body = data as { data?: DocumentRow[]; total?: number; summary?: DocumentSummary } | null;
+  return { items: body?.data ?? [], total: body?.total ?? 0, summary: body?.summary ?? null };
+}
+
+export async function getDocumentRenewals(
+  withinDays = 60,
+): Promise<{ items: DocumentRow[]; blocking: number; blockingSoon: number }> {
+  const { data } = await cachedRead(`getDocumentRenewals:${withinDays}`, () =>
+    apiFetch<{ data?: DocumentRow[]; blocking?: number; blocking_soon?: number }>(
+      `/api/v1/documents/renewals?within_days=${withinDays}`,
+    ));
+  const body = data as { data?: DocumentRow[]; blocking?: number; blocking_soon?: number } | null;
+  return {
+    items: body?.data ?? [],
+    blocking: body?.blocking ?? 0,
+    blockingSoon: body?.blocking_soon ?? 0,
+  };
+}
+
+export async function getDocument(
+  id: string,
+): Promise<DocumentRow & { supersedes: DocumentRow | null }> {
+  const { data } = await cachedRead(`document:${id}`, () => apiFetch(`/api/v1/documents/${id}`));
+  return asItem(data, "data");
+}
+
+// --- Approvals (§41) ---------------------------------------------------------
+
+export interface ApprovalStep {
+  id: string;
+  sequence: number;
+  status: "PENDING" | "APPROVED" | "REJECTED" | "SKIPPED" | string;
+  approver_role: string | null;
+  approver_user_id: string | null;
+  acted_by: string | null;
+  acted_by_username?: string | null;
+  acted_at?: string | null;
+  acted_on_behalf_of_username?: string | null;
+  comments?: string | null;
+  pending_since: string | null;
+  sla_hours: number | null;
+}
+
+export interface ApprovalInstance {
+  id: string;
+  document_type: string;
+  document_id: string;
+  amount: number | string;
+  status: "PENDING" | "APPROVED" | "REJECTED" | "RECALLED" | "SUPERSEDED" | string;
+  version: number;
+  requested_by: string;
+  requested_by_username?: string;
+  project_code?: string | null;
+  policy_name?: string | null;
+  current_sequence?: number | null;
+  created_at?: string;
+  decided_at?: string | null;
+  rejection_reason?: string | null;
+  // Present only on /approvals/inbox rows, which join the step directly.
+  step_id?: string;
+  sequence?: number;
+  pending_since?: string | null;
+  sla_hours?: number | null;
+  [k: string]: unknown;
+}
+
+/** The signed-in user's queue — steps only they (or their delegator) may act on next. */
+export async function getApprovalInbox(): Promise<ApprovalInstance[]> {
+  const { data } = await apiFetch<{ data?: ApprovalInstance[] }>("/api/v1/approvals/inbox");
+  return asList<ApprovalInstance>(data);
+}
+
+/** This user's own requests (approval.read alone means "mine"; read_all sees everyone's). */
+export async function getMyApprovals(params?: {
+  status?: string;
+  documentType?: string;
+}): Promise<ApprovalInstance[]> {
+  const q = new URLSearchParams({ limit: "100", mine: "true" });
+  if (params?.status) q.set("status", params.status);
+  if (params?.documentType) q.set("document_type", params.documentType);
+  const { data } = await apiFetch<{ data?: ApprovalInstance[] }>(`/api/v1/approvals?${q.toString()}`);
+  return asList<ApprovalInstance>(data);
+}
+
+export async function getApproval(
+  id: string,
+): Promise<ApprovalInstance & { steps: ApprovalStep[]; next_step: ApprovalStep | null }> {
+  const { data } = await apiFetch(`/api/v1/approvals/${id}`);
+  return asItem(data, "data");
+}
+
+/**
+ * Approve or reject the step currently waiting on this user.
+ *
+ * REJECT requires `comments` (shared approvalDecisionSchema); APPROVE does
+ * not. The server also refuses a self-approval (`SELF_APPROVAL`, 403) and an
+ * out-of-sequence decision (`OUT_OF_SEQUENCE`) — this call surfaces both as an
+ * ordinary ApiError for the screen to show.
+ */
+export async function postApprovalDecision(
+  id: string,
+  decision: "APPROVE" | "REJECT",
+  version: number,
+  comments?: string,
+): Promise<ApprovalInstance> {
+  const { data } = await apiFetch(`/api/v1/approvals/${id}/decision`, {
+    method: "POST",
+    headers: { "If-Match": String(version) },
+    body: { decision, ...(comments ? { comments } : {}) },
+  });
+  return asItem<ApprovalInstance>(data, "data");
+}
+
+/** The requester withdraws their own request before it is decided. */
+export async function postApprovalRecall(
+  id: string,
+  version: number,
+  reason: string,
+): Promise<ApprovalInstance> {
+  const { data } = await apiFetch(`/api/v1/approvals/${id}/recall`, {
+    method: "POST",
+    headers: { "If-Match": String(version) },
+    body: { reason },
+  });
+  return asItem<ApprovalInstance>(data, "data");
+}
+
+// --- Expenses (§16) ----------------------------------------------------------
+
+export interface ExpenseLine {
+  id?: string;
+  category: string;
+  expense_date: string;
+  description: string;
+  amount: number | string;
+  units?: number | null;
+  vendor_name?: string | null;
+  invoice_no?: string | null;
+  billable_to_client?: boolean;
+  allowed_amount?: number | string;
+  excess_amount?: number | string;
+  policy_exception?: boolean;
+  exception_notes?: string | null;
+  [k: string]: unknown;
+}
+
+export interface ExpenseClaim {
+  id: string;
+  claim_no: string;
+  status: "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED" | "WITHDRAWN" | "REIMBURSED" | string;
+  version: number;
+  claim_date: string;
+  purpose: string;
+  total_claimed: number | string;
+  total_allowed: number | string;
+  total_excess: number | string;
+  policy_exception: boolean;
+  project_code?: string | null;
+  reimbursed_amount?: number | string;
+  lines?: ExpenseLine[];
+  [k: string]: unknown;
+}
+
+export async function getExpenseClaims(params?: { status?: string }): Promise<ExpenseClaim[]> {
+  const q = new URLSearchParams({ limit: "100" });
+  if (params?.status) q.set("status", params.status);
+  const { data } = await cachedRead(`getExpenseClaims:${q.toString()}`, () =>
+    apiFetch<{ data?: ExpenseClaim[] }>(`/api/v1/expense-claims?${q.toString()}`));
+  return asList<ExpenseClaim>(data);
+}
+
+export async function getExpenseClaim(id: string): Promise<ExpenseClaim> {
+  const { data } = await cachedRead(`expense-claim:${id}`, () =>
+    apiFetch(`/api/v1/expense-claims/${id}`));
+  return asItem<ExpenseClaim>(data, "data");
+}
+
+/** Draft creation only — lines are frozen at this point; submit separately. */
+export async function postExpenseClaim(
+  input: {
+    claim_no: string;
+    claim_date: string;
+    purpose: string;
+    project_id?: string | null;
+    lines: ExpenseLine[];
+  },
+  idempotencyKey?: string,
+): Promise<ExpenseClaim> {
+  const { data } = await apiFetch(`/api/v1/expense-claims`, {
+    method: "POST",
+    idempotencyKey,
+    body: input,
+  });
+  return asItem<ExpenseClaim>(data, "data");
+}
+
+export async function postExpenseClaimSubmit(
+  id: string,
+  version: number,
+): Promise<ExpenseClaim> {
+  const { data } = await apiFetch(`/api/v1/expense-claims/${id}/submit`, {
+    method: "POST",
+    headers: { "If-Match": String(version) },
+  });
+  return asItem<ExpenseClaim>(data, "data");
+}
+
+export async function postExpenseClaimWithdraw(
+  id: string,
+  version: number,
+  reason: string,
+): Promise<ExpenseClaim> {
+  const { data } = await apiFetch(`/api/v1/expense-claims/${id}/withdraw`, {
+    method: "POST",
+    headers: { "If-Match": String(version) },
+    body: { reason },
+  });
+  return asItem<ExpenseClaim>(data, "data");
+}
+
+// --- Inventory (§0 stock ledger) ----------------------------------------------
+
+export interface InventoryItem {
+  id: string;
+  code: string;
+  name: string;
+  unit: string;
+  low_stock_threshold: number | string;
+  unit_cost: number | string;
+  status: "ACTIVE" | "INACTIVE" | string;
+  vendor_id?: string | null;
+  /** Signed sum of every IN/OUT/transfer posted against this item. */
+  available: string;
+  version: number;
+  [k: string]: unknown;
+}
+
+export interface StockTransaction {
+  id: string;
+  item_id: string;
+  item_name?: string;
+  direction: "IN" | "OUT";
+  quantity: number | string;
+  reference: string;
+  project_id?: string | null;
+  reason?: string | null;
+  created_at?: string;
+  [k: string]: unknown;
+}
+
+export async function getInventoryItems(params?: { search?: string }): Promise<InventoryItem[]> {
+  const q = new URLSearchParams({ limit: "100" });
+  if (params?.search) q.set("search", params.search);
+  const { data } = await cachedRead(`getInventoryItems:${q.toString()}`, () =>
+    apiFetch<{ data?: InventoryItem[] }>(`/api/v1/inventory/items?${q.toString()}`));
+  return asList<InventoryItem>(data);
+}
+
+export async function getInventoryTransactions(itemId?: string): Promise<StockTransaction[]> {
+  const q = new URLSearchParams({ limit: "50" });
+  if (itemId) q.set("item_id", itemId);
+  const { data } = await cachedRead(`getInventoryTransactions:${q.toString()}`, () =>
+    apiFetch<{ data?: StockTransaction[] }>(`/api/v1/inventory/transactions?${q.toString()}`));
+  return asList<StockTransaction>(data);
+}
+
+/** Posts a stock movement. Requires inventory.manage — inventory.read alone can only look. */
+export async function postInventoryTransaction(
+  input: {
+    item_id: string;
+    direction: "IN" | "OUT";
+    quantity: number;
+    reference: string;
+    reason?: string;
+    project_id?: string | null;
+  },
+  idempotencyKey?: string,
+): Promise<StockTransaction & { available: string; low_stock: boolean }> {
+  const { data } = await apiFetch(`/api/v1/inventory/transactions`, {
+    method: "POST",
+    idempotencyKey,
+    body: input,
+  });
+  return asItem(data, "data");
 }
 
 // --- Geo-fences: removed 2026-09-22 (Silverline has no geo-fencing) ---------
