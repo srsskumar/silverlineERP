@@ -88,20 +88,11 @@ export default function TabsLayout() {
       })}
     >
       <Tabs.Screen name="index" options={{ title: "Home" }} />
-      <Tabs.Screen
-        name="attendance"
-        options={{ title: "Attendance", href: showAttendance ? undefined : null }}
-      />
+      <Tabs.Screen name="attendance" options={{ title: "Attendance", href: showAttendance ? undefined : null }} />
       <Tabs.Screen name="tasks" options={{ title: "Tasks", href: showTasks ? undefined : null }} />
       <Tabs.Screen name="leave" options={{ title: "Leave", href: showLeave ? undefined : null }} />
-      <Tabs.Screen
-        name="assets"
-        options={{ title: "Assets", href: showAssets ? undefined : null }}
-      />
-      <Tabs.Screen
-        name="survey"
-        options={{ title: "Survey", href: showSurvey ? undefined : null }}
-      />
+      <Tabs.Screen name="assets" options={{ title: "Assets", href: showAssets ? undefined : null }} />
+      <Tabs.Screen name="survey" options={{ title: "Survey", href: showSurvey ? undefined : null }} />
       <Tabs.Screen name="more" options={{ title: "More" }} />
     </Tabs>
   );
