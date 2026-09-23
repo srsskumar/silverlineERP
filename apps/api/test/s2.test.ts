@@ -513,7 +513,7 @@ describe("attendance punches", () => {
     expect((db.rows[0] as { source: string }).source).toBe("SYSTEM");
   });
 
-  it("rejects future punches (422 FUTURE_PUNCH) and says how far ahead the clock is", async () => {
+  it("UT-ATT-11 rejects future punches (422 FUTURE_PUNCH) and says how far ahead the clock is", async () => {
     const h = await adminHeaders();
     const empId = await activeEmployee(h);
     const future = new Date(Date.now() + (FUTURE_TOLERANCE_MIN + 5) * 60 * 1000).toISOString();
@@ -526,7 +526,7 @@ describe("attendance punches", () => {
     expect(body.message).toMatch(/date and time/);
   });
 
-  it("accepts a punch from a clock a few minutes fast, keeping the client time as sent", async () => {
+  it("UT-ATT-11 accepts a punch from a clock a few minutes fast, keeping the client time as sent", async () => {
     /*
      * A supervisor's browser was three minutes ahead and every on-behalf
      * punch was refused as "in the future". server_timestamp is what the
@@ -564,7 +564,7 @@ describe("attendance punches", () => {
     }
   });
 
-  it("stores UTM on WGS-1984 and the EGM96 height beside a positioned punch", async () => {
+  it("UT-ATT-12 stores UTM on WGS-1984 and the EGM96 height beside a positioned punch", async () => {
     const h = await adminHeaders();
     const empId = await activeEmployee(h);
     const res = await punch(h, checkinBody(empId, { altitude: 920.5, altitude_accuracy: 12 }), nextKey());
@@ -592,7 +592,7 @@ describe("attendance punches", () => {
     expect(stored.rows[0].place_resolved_at).toBeNull();
   });
 
-  it("stores no UTM, height or place for a punch without a position", async () => {
+  it("UT-ATT-12 stores no UTM, height or place for a punch without a position", async () => {
     const h = await adminHeaders();
     const empId = await activeEmployee(h);
     const res = await punch(h, checkinBody(empId, {

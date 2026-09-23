@@ -91,7 +91,7 @@ describe("placeNameFromAddress", () => {
   });
 });
 
-describe("worker names positioned punches", () => {
+describe("UT-GEO-14 worker names positioned punches", () => {
   beforeEach(clearPending);
 
   it("names the oldest first, keeps the address whole, and marks the punch resolved", async () => {
