@@ -48,20 +48,68 @@ data unless noted "(static)" for a code-reading-only check.
   zero failed requests. Stale baseline artifact, not a current bug; disregard that file's "403"
   verdicts on this page without re-checking live.
 
+## Round 2 — additional clean-attack results (before the walk-status table)
+
+- **Audit pagination attack pass** (live, `qa-admin-admin` token): `limit=999999999` → 422
+  `too_big`; `limit=-5` → 422 `too_small`; a garbage (non-base64/JSON) cursor → 422 `invalid_string`;
+  a structurally-valid base64url-JSON cursor with a non-UUID `id` → clean 422 `Malformed resource
+  id` (not a raw DB error/500 — `decodeCursor`'s result is further validated before use); a cursor
+  JSON missing `id` entirely → 200 with an empty page (odd but not a crash or a leak). All clean.
+- **Role delete-in-use**: no such endpoint exists — `apps/api/src/modules/admin/routes.ts` has no
+  `DELETE /admin/roles/:id` (only `POST /admin/roles` create and `PATCH .../mfa`); roles cannot be
+  deleted at all via API or UI. N/A, not a gap.
+- **Remove your own last admin permission**: `PUT /admin/users/:id/roles` refuses outright with
+  `SELF_ROLE_CHANGE` the instant `id === caller.id` (`admin/routes.ts:133`) — you can never touch
+  your own roles at all, let alone strip them; and `keepAdministrator()` is called after every
+  other user's role change to guarantee at least one active `users.manage`+`admin.configure` holder
+  remains org-wide. Attacked and found clean.
+- **Attendance exceptions decide flow**: read (not live-clicked) in depth — version-conflict
+  (optimistic concurrency), single-transition-only (`PENDING → APPROVED|REJECTED`, re-deciding an
+  already-decided exception 422s `INVALID_TRANSITION`), a payroll-lock guard, and two independent
+  self-decision guards (submitter, and same-employee-as-decider) are all present
+  (`apps/api/src/modules/attendance/routes.ts:1556-1700`). Matches the same deliberate-hardening
+  pattern already verified live for leave/payroll in round 1; not re-run live this session given
+  time budget, but the code shape gives no reason to suspect a gap.
+- **Payroll policy schema parity**: `apps/web/lib/validation.ts`'s `payrollPolicySchema`
+  (`per_day_divisor` 1–31 int, `pf_pct` 0–100) matches `packages/shared/src/p1.ts`'s server schema
+  exactly. No mismatch.
+- **Admin MutationForm enum parity**: `auth_status` (`ACTIVE`/`DISABLED`) and `mfa_policy`
+  (`INHERIT`/`REQUIRED`/`EXEMPT`) options in `admin/page.tsx`'s per-user security form match
+  `packages/shared/src/auth.ts`'s `MFA_POLICIES` and the API's inline `auth_status` enum exactly.
+  This form also doesn't share the A-009 bug shape (its `<select>` always has a real current value
+  as default, and it isn't a client-side `zodResolver` form).
+- **Mobile grep for the A-007/A-008/A-009 bug shapes**: searched `apps/mobile` for
+  `ON_LEAVE`/`TERMINATED`/`PUBLIC`/`FESTIVAL` — none found. Consistent with employees and holidays
+  being read-only on mobile (no create/edit forms to carry the bug).
+
 ## Walk status by module
 
 | Module | Walked | Notes |
 |---|---|---|
-| Auth/MFA/security | Partial | Login/MFA/password-change flows reviewed by code + existing crawl data; MFA disable/enroll floor reviewed deeply (→ A-005). No fresh Playwright element-by-element walk of `/login`, `/mfa`, `/security` tooltips/buttons done this session. |
-| Admin (users/roles/module-visibility) | Partial | Self-edit and role-floor protections verified (code + live crawl matrix across 6 roles). Role-visibility/module-visibility CRUD payload edge cases (negative/duplicate IDs, XSS in role name) not yet live-attacked. |
-| Org holidays | Partial | Create/patch schema and scope-type cross-check reviewed (static). Live create/patch with attack inputs (blank/whitespace/10k/unicode name, `<script>`, same-date duplicate) not yet run. Mobile web-only exclusion for org-locations confirmed via code (hardcoded `WEB_ONLY_CODES`), not live-toggled. |
-| Employees | Partial | Schema bounds reviewed (all fields have max-length; required fields have min(1)). Cross-org IDOR verified clean. Bulk-import edge cases, document upload, and live create/edit attack-input pass not yet run. |
-| Attendance | Partial | Punch-scope gate live-verified (A-003). Regularization, exceptions decide flow, IST-midnight/reversed-timestamp punches, mock-location/movement-anomaly review paths not yet live-attacked. |
-| Leave | Done for the decision/state-machine/idempotency surface (A-004 + clean list above). Balance upsert (negative/huge opening_balance), overlapping-date requests, and LOP-vs-Sunday business rule (see memory) not separately re-verified this session. |
-| Payroll | Partial | Run-lifecycle state machine reviewed (static) + cross-org IDOR verified + page-render false-positive chased down and cleared. Policy edit (divisor/PF% bounds), cost-ledger reverse/post, and payslip generation numeric edge cases not yet live-attacked. |
-| My-payslip | Done | A-002 comment fixed; underlying "no mobile screen" gap left OPEN (documented, not P0/P1). |
-| Audit | Partial | SQL-injection lead chased and cleared; filter/pagination attack inputs (huge limit, malformed cursor) not yet run. |
+| Auth/MFA/security | Partial | Login/MFA/password-change flows reviewed by code + existing crawl data; MFA disable/enroll floor reviewed deeply (→ A-005). No fresh Playwright element-by-element walk of `/login`, `/mfa`, `/security` tooltips/buttons done this session (round 2 also did not get to this — see Round 2 report). |
+| Admin (users/roles/module-visibility) | Partial | Self-edit, role-floor, self-role-change and last-administrator protections verified (code + live). Enum parity for the per-user security form verified clean (round 2). Role-visibility/module-visibility CRUD payload edge cases (negative/duplicate IDs, XSS in role name) not yet live-attacked. |
+| Org holidays | Done for create-form correctness | A-007 (Type field guaranteed-422) and half of A-009 (scope_type blank-option) found and fixed round 2, both live-reproduced and regression-tested. Attack inputs on Name (blank/10k/unicode/`<script>`) not live-run — the field is a plain `z.string().trim().min(1).max(255)` on both client and server with no special handling, and holiday names render through plain React text interpolation (`{h.name}`) which auto-escapes, so this is low-risk but not confirmed live. Mobile web-only exclusion for org-locations confirmed via code, not live-toggled. |
+| Employees | Done for edit-form correctness | **A-008 (P0, every employee edit broken) and half of A-009 (gender blank-option) found live-reproduced and fixed round 2** — this was the headline finding of this round. Bulk-import edge cases, document upload, and attack-string inputs (10k/unicode/XSS on name fields) not yet live-run, though schema bounds were reviewed in round 1 and rendering goes through plain React interpolation. |
+| Attendance | Partial | Punch-scope gate live-verified (A-003, round 1). Exceptions-decide state machine reviewed in depth (round 2, static) — version conflict, single-transition, payroll-lock and dual self-decision guards all present; not live-clicked. IST-midnight/reversed-timestamp punches and mock-location/movement-anomaly paths not attacked. |
+| Leave | Done for the decision/state-machine/idempotency surface (round 1) plus schema review (round 2: no optional-enum-select bug shape present — `leave_type_id` is a required min(1) string, not an enum). Balance upsert bounds, overlapping-date requests, and LOP-vs-Sunday business rule not separately re-verified. |
+| Payroll | Partial | Run-lifecycle state machine reviewed (round 1) + cross-org IDOR verified + policy-schema parity confirmed exact (round 2). Cost-ledger reverse/post and payslip generation numeric edge cases not yet live-attacked. |
+| My-payslip | Done | A-002 comment fixed (round 1); underlying "no mobile screen" gap left OPEN (documented, not P0/P1). |
+| Audit | Done for pagination/filter attack surface | Round 2: huge/negative limit, garbage cursor, structurally-valid-but-garbage cursor, and a cursor missing a required field all handled cleanly (422s or an empty page, never a 500 or a raw DB error). SQL-injection lead chased and cleared in round 1. |
 | Inbox | Not walked further | A-001 (mobile deep links) is a known, explicitly out-of-scope gap for this task per the brief — left OPEN for Task 5. No additional inbox work done. |
+
+**Not walked this round, honestly listed**: a live Playwright element-by-element click-through
+(every button/tab/tooltip, per role, per the brief's step 1) was **not** performed as a browser
+automation pass in round 2 — time went instead into deep reading + live API/schema reproduction of
+the create/edit forms, which surfaced three real, high-value, previously-undetected bugs
+(A-007/A-008/A-009) that a page-level crawl (round 1's tool) structurally cannot catch, since it
+never submits a form. A full 5-role × ~17-page interactive UI crawl (login/mfa/security tooltips,
+admin role/module-visibility CRUD payload attacks, attendance exceptions live decide-and-replay,
+bulk employee import, 10k/unicode/emoji/RTL/XSS string attacks rendered back on screen) remains
+open for a follow-up pass. Given the shape of A-008 (a whole-feature-breaking bug that a
+page-render-only crawl missed twice — round 1's baseline crawl included `/employees/:id` and never
+submitted the edit form), the highest-value next step for a successor is almost certainly to run
+*actual form submissions* (not just page loads) across the remaining Lane A create/edit surfaces
+before spending time on tooltip-text/dead-link auditing.
 
 None of the above partial items surfaced P0/P1 evidence during this session's probing — they are
 listed so a successor can pick up exactly where this pass left off rather than re-deriving scope
