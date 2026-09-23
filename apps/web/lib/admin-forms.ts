@@ -19,6 +19,7 @@ export interface OrgSettingsRow {
     locale?: string;
     gst_state_code?: string;
     session_timeout_minutes?: number;
+    attendance_future_tolerance_minutes?: number;
     retention_days?: number;
     match_tolerance?: { quantity_pct?: number; rate_pct?: number; value_absolute?: number };
   } | null;
@@ -42,6 +43,7 @@ export function settingsInitial(row: OrgSettingsRow | null | undefined): FormVal
     locale: text(s.locale),
     gst_state_code: text(s.gst_state_code),
     session_timeout_minutes: text(s.session_timeout_minutes),
+    attendance_future_tolerance_minutes: text(s.attendance_future_tolerance_minutes),
     retention_days: text(s.retention_days),
     match_quantity_pct: text(m.quantity_pct),
     match_rate_pct: text(m.rate_pct),
@@ -65,6 +67,7 @@ export function settingsBody(values: FormValues): { name?: string; settings: Rec
   put('locale', str('locale'));
   put('gst_state_code', str('gst_state_code'));
   put('session_timeout_minutes', num('session_timeout_minutes'));
+  put('attendance_future_tolerance_minutes', num('attendance_future_tolerance_minutes'));
   put('retention_days', num('retention_days'));
   const tolerance: Record<string, number> = {};
   for (const [field, key] of [['match_quantity_pct', 'quantity_pct'], ['match_rate_pct', 'rate_pct'], ['match_value_absolute', 'value_absolute']] as const) {

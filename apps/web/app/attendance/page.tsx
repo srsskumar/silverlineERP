@@ -9,6 +9,9 @@ import { Forbidden } from '@/components/Forbidden';
 import { useAuth } from '@/components/AuthProvider';
 import { AttendanceStatusBadge } from '@/components/AttendanceStatusBadge';
 import { PunchPanel } from '@/components/PunchPanel';
+import { EmployeePicker } from '@/components/EmployeePicker';
+import { PersonName } from '@/components/PersonName';
+import { PlaceName } from '@/components/PunchPlace';
 import type { PunchClusterMapProps } from '@/components/map/PunchClusterMap';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -81,8 +84,9 @@ function RecordsTable() {
 
       <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4 lg:flex-row lg:items-end">
         <div className="flex-1">
-          <label htmlFor="rec-employee" className="text-sm font-medium text-text-muted">Employee ID</label>
-          <Input id="rec-employee" placeholder="Filter by employee…" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} />
+          <label htmlFor="rec-employee" className="text-sm font-medium text-text-muted">Employee</label>
+          {/* Any status: the register is history, and somebody who has left still has days in it. */}
+          <EmployeePicker id="rec-employee" status={null} value={employeeId} onChange={setEmployeeId} placeholder="Everybody — type a name to filter" />
         </div>
         <div>
           <label htmlFor="rec-from" className="text-sm font-medium text-text-muted">From</label>
@@ -177,6 +181,7 @@ function RecordsTable() {
                   <th className="px-3 py-2 text-left font-medium text-text-muted">Check in</th>
                   <th className="px-3 py-2 text-left font-medium text-text-muted">Check out</th>
                   <th className="px-3 py-2 text-left font-medium text-text-muted">Hours</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-muted">Where</th>
                   <th className="px-3 py-2 text-left font-medium text-text-muted">Action</th>
                 </tr>
               </thead>
@@ -184,13 +189,27 @@ function RecordsTable() {
                 {rows.map((r) => (
                   <tr key={r.id}>
                     <td className="px-3 py-2 font-mono text-xs text-text">{day(r.work_date)}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-text-muted">{r.employee_id}</td>
+                    <td className="px-3 py-2 text-xs text-text">
+                      <PersonName id={r.employee_id} name={r.employee_name} empNo={r.employee_emp_no} />
+                    </td>
                     <td className="px-3 py-2">
                       <AttendanceStatusBadge status={String(r.status)} />
                     </td>
                     <td className="px-3 py-2 text-xs text-text-muted">{clock(r.check_in_at)}</td>
                     <td className="px-3 py-2 text-xs text-text-muted">{clock(r.check_out_at)}</td>
                     <td className="px-3 py-2 text-text">{formatHours(r.total_hours)}</td>
+                    <td className="px-3 py-2 text-xs text-text-muted">
+                      {/* The place each end of the day was punched from; one name when both are the same. */}
+                      {r.check_in_at ? (
+                        <PlaceName name={r.check_in_place_name} status={r.check_in_place_status} />
+                      ) : '—'}
+                      {r.check_out_at && r.check_out_place_name !== r.check_in_place_name ? (
+                        <>
+                          {' → '}
+                          <PlaceName name={r.check_out_place_name} status={r.check_out_place_status} />
+                        </>
+                      ) : null}
+                    </td>
                     <td className="px-3 py-2">
                       <Link href={`/attendance/records/${r.id}`} className="text-primary hover:underline">
                         View

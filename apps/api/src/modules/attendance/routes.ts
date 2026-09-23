@@ -824,6 +824,8 @@ export async function registerAttendanceRoutes(
     if (!idemKey) {
       return;
     }
+    // Narrowed for the closures below, which cannot see the return above.
+    const punchKey: string = idemKey;
     const user = req.authUser;
     if (!user) {
       return sendError(reply, req.requestId, {
@@ -1139,7 +1141,7 @@ export async function registerAttendanceRoutes(
      */
     async function storeEvent(): Promise<EventRow> {
       return insertPunch(db, {
-        employeeId: emp!.id, d, clientTime, serverNow, idemKey, storedSignals,
+        employeeId: emp!.id, d, clientTime, serverNow, idemKey: punchKey, storedSignals,
       });
     }
 

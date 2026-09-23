@@ -8,10 +8,12 @@ import { Badge } from './ui/Badge';
 import { Skeleton } from './ui/Skeleton';
 import { useToast } from './ui/Toast';
 import { useAuth } from './AuthProvider';
+import { ApiClientError } from '@/lib/apiClient';
 import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 import { getMyEmployee } from '@/lib/employees';
 import { listMyRecords, punchEvent, type PunchResult } from '@/lib/attendance';
 import { clock, day, businessToday } from '@/lib/finance';
+import { PlaceName } from './PunchPlace';
 
 /**
  * §079 -- punching in, for the person doing it.
@@ -148,6 +150,13 @@ export function PunchClock() {
           latitude: here.latitude,
           longitude: here.longitude,
           gps_accuracy: here.accuracy,
+          // Browsers seldom have an altitude; when one does, the server
+          // turns it into a height above the EGM96 geoid for the survey record.
+          ...(typeof here.altitude === 'number' && Number.isFinite(here.altitude)
+            ? { altitude: here.altitude,
+                ...(typeof here.altitudeAccuracy === 'number' && Number.isFinite(here.altitudeAccuracy)
+                  ? { altitude_accuracy: here.altitudeAccuracy } : {}) }
+            : {}),
         } : {}),
       });
     },
@@ -156,7 +165,15 @@ export function PunchClock() {
       toast.success(next === 'CHECK_IN' ? 'Punched in' : 'Punched out');
       await queryClient.invalidateQueries({ queryKey: ['attendance'] });
     },
-    onError: (e) => toast.error('Could not save the punch',
+    onError: (e) => toast.error(
+      /*
+       * A clock ahead of the server is the one refusal the person can fix
+       * themselves, so it is named as such and the server's message -- which
+       * says by how many minutes -- is shown in full.
+       */
+      e instanceof ApiClientError && e.code === 'FUTURE_PUNCH'
+        ? 'Punch rejected: this device\u2019s clock is ahead'
+        : 'Could not save the punch',
       e instanceof Error ? e.message : undefined),
   });
 
@@ -212,6 +229,19 @@ export function PunchClock() {
           </dd>
         </div>
       </dl>
+
+      {/* Where the last punch was made, by name: the village or town the
+          coordinates resolve to, once the worker has looked it up. */}
+      {record?.check_in_at ? (
+        <p className="mt-2 text-xs text-text-muted" data-testid="last-punch-place">
+          {record.check_out_at ? 'Punched out from ' : 'Punched in from '}
+          <PlaceName
+            className="text-text"
+            name={record.check_out_at ? record.check_out_place_name : record.check_in_place_name}
+            status={record.check_out_at ? record.check_out_place_status : record.check_in_place_status}
+          />
+        </p>
+      ) : null}
 
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <Button

@@ -19,6 +19,8 @@ import { FormField } from '@/components/ui/FormField';
 import { Input } from '@/components/ui/Input';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { day, dayTime } from '@/lib/finance';
+import { PersonName } from '@/components/PersonName';
+import { EventPosition, PlaceName } from '@/components/PunchPlace';
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -75,7 +77,10 @@ export function RecordDetailView({ id }: { id: string }) {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h1 className="text-xl font-bold text-text">
-                  {day(record.work_date)} <span className="font-mono text-sm font-normal text-text-muted">{record.employee_id}</span>
+                  {day(record.work_date)}{' '}
+                  <span className="text-sm font-normal text-text-muted">
+                    <PersonName id={record.employee_id} name={record.employee_name} empNo={record.employee_emp_no} />
+                  </span>
                 </h1>
                 <div className="mt-2 flex items-center gap-2">
                   <AttendanceStatusBadge status={String(record.status)} />
@@ -92,6 +97,12 @@ export function RecordDetailView({ id }: { id: string }) {
               <DetailRow label="Check in" value={dayTime(record.check_in_at)} />
               <DetailRow label="Check out" value={dayTime(record.check_out_at)} />
               <DetailRow label="Total hours" value={formatHours(record.total_hours)} />
+              {record.check_in_at ? (
+                <DetailRow label="Checked in from" value={<PlaceName name={record.check_in_place_name} status={record.check_in_place_status} />} />
+              ) : null}
+              {record.check_out_at ? (
+                <DetailRow label="Checked out from" value={<PlaceName name={record.check_out_place_name} status={record.check_out_place_status} />} />
+              ) : null}
             </dl>
           </div>
 
@@ -114,12 +125,8 @@ export function RecordDetailView({ id }: { id: string }) {
                           {decision && <Badge tone="success">{decision}</Badge>}
                           {review && <Badge tone="warning">{review}</Badge>}
                         </div>
-                        <p className="font-mono text-xs text-text-muted">
-                          {e.id}
-                          {typeof e.latitude === 'number' && typeof e.longitude === 'number'
-                            ? ` · ${e.latitude},${e.longitude}${typeof e.gps_accuracy === 'number' ? ` ±${e.gps_accuracy}m` : ''}`
-                            : ' · no GPS'}
-                        </p>
+                        <p className="font-mono text-xs text-text-muted">{e.id}</p>
+                        <EventPosition event={e} />
                       </div>
                     </li>
                   );
