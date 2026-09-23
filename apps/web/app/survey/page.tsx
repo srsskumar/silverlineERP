@@ -182,7 +182,15 @@ export default function SurveyPage() {
 
   const progress = useQuery({
     queryKey: ['survey-progress', projectId, level, range, scope],
-    enabled: canRead && !!projectId && tab === 'progress',
+    // `!observerOnly` too: a client viewer holds survey.read (so `canRead`
+    // alone said yes) but is routed to the observer's page below, which
+    // never renders the Progress screen this query feeds. Without this the
+    // query still fired the moment `tab` state picked up a `?tab=progress`
+    // URL — the page looked right, but the network tab showed a request the
+    // server always had to 404, to a route a client is not meant to reach at
+    // all. "The queries behind them are never issued" (below) was not quite
+    // true for this one.
+    enabled: canRead && !observerOnly && !!projectId && tab === 'progress',
     queryFn: async () => {
       const q = new URLSearchParams({ level, from: range.from, to: range.to });
       if (scope.district) q.set('district', scope.district);

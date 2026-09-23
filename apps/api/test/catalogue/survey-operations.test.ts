@@ -1182,6 +1182,44 @@ describe("alerting on work that has stopped", () => {
        WHERE n.entity_id = $1 AND u.employee_id = $2`, [id, w.directEmployee]);
     expect(mine.rowCount, "the crew member hears about it").toBeGreaterThan(0);
   });
+
+  it("does not let the worst case go unheard when more than a hundred villages are silent", async () => {
+    // The silent-village query is capped at 100 rows a pass, because an
+    // unbounded scan every few minutes is its own problem. Uncapped
+    // ordering meant the cap decided which hundred arbitrarily -- in
+    // practice, whichever the table scan reached first. A village that
+    // has *never* filed a return is created last here, after a hundred
+    // villages that filed something recently enough to just barely miss
+    // the cutoff; before the fix this row lost the race for the cap in
+    // Postgres's natural scan order and never got an alert while the
+    // condition persisted. Ordering oldest-silent-first means "never
+    // filed anything" always sorts to the very front, however many
+    // others are waiting behind it.
+    for (let i = 0; i < 100; i += 1) {
+      const id = await newVillage(`Silent distractor ${i}`);
+      await post(w.admin, `/api/v1/survey/villages/${id}/crew`, {
+        employee_id: w.directEmployee, stage_code: "GROUND_TRUTHING",
+      });
+      // Filed four days ago: silent enough to match (SILENT_DAYS is 3),
+      // but not the worst case in the batch.
+      await w.pool.query(
+        `INSERT INTO survey_entries(org_id, survey_project_id, survey_village_id, entry_date,
+           teams_deployed, created_by, updated_by)
+         VALUES ($1, $2, $3, CURRENT_DATE - 4, 1, $4, $4)`,
+        [w.orgId, programmeId, id, w.adminId]);
+    }
+    const worst = await newVillage("Never once filed");
+    await post(w.admin, `/api/v1/survey/villages/${worst}/crew`, {
+      employee_id: w.directEmployee, stage_code: "GROUND_TRUTHING",
+    });
+
+    await runSurveyAlerts(w.pool);
+
+    const worstAlert = (await alertsFor(worst))
+      .find(r => String(r.event_key).startsWith("survey.silent:"));
+    expect(worstAlert, "the never-filed village still got an alert").toBeTruthy();
+    expect(worstAlert!.body).toContain("no return has ever been filed");
+  });
 });
 
 describe("adding and correcting one village by hand", () => {

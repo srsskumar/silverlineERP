@@ -93,12 +93,20 @@ export default function SurveySetupPage() {
           {projects.data?.length ? (
             <>
               <Toolbar>
-                <label className="flex items-center gap-2 text-xs text-text-muted">
+                {/*
+                  * `min-w-0` on the label and `max-w-full` on the select: a
+                  * flex child otherwise refuses to shrink below its content's
+                  * width, and a long programme name in the selected option
+                  * (not just the visible options) was pushing this row wider
+                  * than a phone screen — the page gained a horizontal
+                  * scrollbar rather than the name wrapping or truncating.
+                  */}
+                <label className="flex min-w-0 items-center gap-2 text-xs text-text-muted">
                   Programme
                   <select
                     value={projectId}
                     onChange={(e) => setProjectId(e.target.value)}
-                    className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+                    className="max-w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
                   >
                     {projects.data.map((p) => (
                       <option key={p.id} value={p.id}>
@@ -709,7 +717,11 @@ function BoardLink({ programme }: { programme: Row }) {
     },
   });
 
-  const field = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
+  // `max-w-full`: a native select otherwise sizes itself to its longest
+  // option text (a programme's full "CODE — Name" pairing here), which on a
+  // phone screen was wider than the screen itself — a horizontal scrollbar
+  // on the whole page for one dropdown.
+  const field = 'max-w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
 
   return (
     <Section title="Put the work on the task board">

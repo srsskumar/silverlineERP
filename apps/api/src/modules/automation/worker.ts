@@ -42,17 +42,17 @@ export function failureText(e:unknown):string{
  * so a single bad report schedule stopped every webhook, push and
  * automation until somebody noticed -- and nothing said why they had.
  */
-export async function isolated(name:string,job:()=>Promise<unknown>):Promise<void>{
- try{await job();}
- catch(e){console.error(`Background job "${name}" failed: ${failureText(e)}`);}
+export async function isolated<T>(name:string,job:()=>Promise<T>):Promise<T|undefined>{
+ try{return await job();}
+ catch(e){console.error(`Background job "${name}" failed: ${failureText(e)}`);return undefined;}
 }
 
-export async function runJobs(app:FastifyInstance,pool:Pool,jwtSecret:string):Promise<{events:number;deliveries:number}> {
+export async function runJobs(app:FastifyInstance,pool:Pool,jwtSecret:string):Promise<{events:number;deliveries:number;survey_alerts:number;survey_alert_mail:number}> {
  // The run holds one connection for its exclusivity lock and issues every
  // other query alongside it, so a pool of one deadlocks against itself and
  // surfaces ten seconds later as an opaque 500. Say so instead.
  if(pool.options?.max!==undefined&&pool.options.max<2)throw new Error('Background processing needs PGPOOL_MAX>=2 (it holds one connection for its lock while working); got '+pool.options.max);
- const lock=await pool.connect(),count={events:0,deliveries:0};
+ const lock=await pool.connect(),count={events:0,deliveries:0,survey_alerts:0,survey_alert_mail:0};
  try {
   // A session-level lock is not usable through a transaction-mode connection
   // pooler, which hands the same backend to a different client between
@@ -64,10 +64,18 @@ export async function runJobs(app:FastifyInstance,pool:Pool,jwtSecret:string):Pr
   await isolated('scheduled jobs',()=>runScheduledJobs(app,pool,jwtSecret));
   // Survey alerts (§27). Failing here must not stop the rest of the pass:
   // the bottleneck report still shows everything these would have said.
-  await isolated('survey alerts',()=>runSurveyAlerts(pool));
+  //
+  // Counted into the pass's own summary, which used to say "events: 0,
+  // deliveries: 0" on a run that had in fact just raised and queued real
+  // alerts — those numbers only ever counted domain-event and webhook
+  // traffic. An operator watching this endpoint for "is anything actually
+  // happening" had no way to tell survey alerts were running at all.
+  const alertResult=await isolated('survey alerts',()=>runSurveyAlerts(pool));
+  count.survey_alerts+=alertResult?.alerts??0;
   // Finding what is wrong and telling somebody about it are separate passes:
   // a mail relay having a bad afternoon must not stop the finding.
-  await isolated('survey alert mail',()=>drainSurveyAlertMail(pool));
+  const mailResult=await isolated('survey alert mail',()=>drainSurveyAlertMail(pool));
+  count.survey_alert_mail+=mailResult?.sent??0;
   await isolated('report jobs',()=>runReportJobs(app,pool,jwtSecret));
   await isolated('automation events',async()=>{
   const events=await pool.query('SELECT * FROM domain_events WHERE processed_at IS NULL AND attempts<8 AND next_attempt_at<=now() ORDER BY created_at LIMIT 25');

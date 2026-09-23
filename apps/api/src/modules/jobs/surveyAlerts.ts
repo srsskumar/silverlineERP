@@ -115,6 +115,16 @@ export async function runSurveyAlerts(
   // Keyed on today, so it is at most one alert a day per village. A village
   // with nobody on it is not silent, it is simply not being worked, and
   // saying otherwise would bury the ones that matter.
+  //
+  // Ordered oldest-silent-first, unlike this once was: an organisation with
+  // more than a hundred villages silent at once (rare, but this one has
+  // both real programmes and a QA one running at scale) was capped at an
+  // arbitrary hundred of them with no ORDER BY, in whichever order Postgres
+  // happened to scan the table. A village outside that hundred was not
+  // merely late for its alert, it never got one — the same hundred (or a
+  // similarly-sized, effectively arbitrary set) tended to win the scan every
+  // run. Longest silent first means the worst cases surface even when there
+  // are more of them than one pass can carry.
   findings.push(...(await pool.query(
     `SELECT sv.org_id, sv.id AS village_id, sv.survey_project_id AS project_id,
             'survey.silent:' || sv.id || ':' || CURRENT_DATE AS event_key,
@@ -132,6 +142,8 @@ export async function runSurveyAlerts(
              (SELECT max(e.entry_date) FROM survey_entries e
               WHERE e.survey_village_id = sv.id),
              CURRENT_DATE - ($1::int + 1)) < CURRENT_DATE - $1::int
+     ORDER BY (SELECT max(e.entry_date) FROM survey_entries e
+                WHERE e.survey_village_id = sv.id) ASC NULLS FIRST
      LIMIT 100`, [SILENT_DAYS])).rows.map(r => ({
     org_id: r.org_id, village_id: r.village_id, project_id: r.project_id,
     event_key: r.event_key, kind: 'NO_PROGRESS_RECORDED',
@@ -161,6 +173,7 @@ export async function runSurveyAlerts(
                            WHERE e2.survey_village_id = sv.id)
        AND e.entry_date >= CURRENT_DATE - 7
      GROUP BY sv.org_id, sv.id, sv.survey_project_id, ou.name, e.entry_date
+     ORDER BY e.entry_date ASC
      LIMIT 100`)).rows.map(r => ({
     org_id: r.org_id, village_id: r.village_id, project_id: r.project_id,
     event_key: r.event_key, kind: 'ROVERS_IDLE',
