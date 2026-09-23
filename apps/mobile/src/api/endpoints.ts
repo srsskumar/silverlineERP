@@ -1325,4 +1325,381 @@ export async function postAttendanceExceptionDecision(
   return asItem<AttendanceExceptionRow>(data);
 }
 
+// --- RA bills / project finance (§15, §37.3) ---------------------------------
+
+/**
+ * Running-account billing is a project's own bill register: everything —
+ * increments, deductions, advance recovery, the net payable — is computed
+ * server-side from the measurement a bill claims and the project's deduction
+ * policy. Nothing here composes a bill; this client only reads the register a
+ * field or site manager checks a figure against. Raising, certifying and
+ * disputing a bill stay on the web, where the measurement book and the
+ * deduction policy are worked out.
+ */
+export interface RaBillDeduction {
+  id: string;
+  head: string;
+  label: string;
+  basis?: string | null;
+  rate_pct?: number | string | null;
+  amount: number | string;
+  reason?: string | null;
+  [k: string]: unknown;
+}
+
+export interface RaBillItem {
+  id: string;
+  boq_item_id: string;
+  item_code?: string;
+  description?: string;
+  unit?: string;
+  cumulative_quantity: number | string;
+  previous_quantity: number | string;
+  rate: number | string;
+  this_amount: number | string;
+  [k: string]: unknown;
+}
+
+export interface RaBill {
+  id: string;
+  project_id: string;
+  bill_no: number;
+  bill_type: "RA" | "FINAL" | string;
+  status: "DRAFT" | "SUBMITTED" | "CERTIFIED" | "PAID" | "CANCELLED" | string;
+  period_from?: string | null;
+  period_to?: string | null;
+  gross_value: number | string;
+  gst_amount?: number | string;
+  total_deductions?: number | string;
+  net_payable: number | string;
+  certified_amount?: number | string | null;
+  certified_at?: string | null;
+  submitted_at?: string | null;
+  paid_at?: string | null;
+  due_date?: string | null;
+  disputed?: boolean;
+  dispute_reason?: string | null;
+  cancelled_reason?: string | null;
+  version: number;
+  items?: RaBillItem[];
+  deductions?: RaBillDeduction[];
+  allowed_statuses?: string[];
+  [k: string]: unknown;
+}
+
+export async function getProjectRaBills(projectId: string): Promise<RaBill[]> {
+  const { data } = await cachedRead(`getProjectRaBills:${projectId}`, () =>
+    apiFetch<{ data?: RaBill[] }>(`/api/v1/projects/${projectId}/ra-bills`));
+  return asList<RaBill>(data);
+}
+
+export async function getRaBill(id: string): Promise<RaBill> {
+  const { data } = await cachedRead(`ra-bill:${id}`, () => apiFetch(`/api/v1/ra-bills/${id}`));
+  return asItem<RaBill>(data, "data");
+}
+
+// --- Ledgers: receivables and payables ageing (§58) --------------------------
+
+/**
+ * Both ledgers report a live position — who owes us and how late, whom we
+ * must pay and by when — computed fresh on every read. There is nothing to
+ * post from a phone: a collections call or a payment run is a desk job with
+ * the full client or vendor statement in front of it, not a field lookup.
+ */
+export interface AgeingBuckets {
+  NOT_DUE: number;
+  D1_30: number;
+  D31_60: number;
+  D61_90: number;
+  OVER_90: number;
+}
+
+export interface AgeingTotals {
+  buckets: AgeingBuckets;
+  undated: number;
+  disputed: number;
+  retention: number;
+  onHold: number;
+  total: number;
+  overdue: number;
+}
+
+export interface ArClientBill {
+  bill_id: string;
+  bill_no: number;
+  bill_type: string;
+  project_code?: string | null;
+  project_name?: string | null;
+  billed: number;
+  settled: number;
+  outstanding: number;
+  retention: number;
+  due_date: string | null;
+  certified_at?: string | null;
+  disputed: boolean;
+  dispute_reason?: string | null;
+  [k: string]: unknown;
+}
+
+export interface ArClient extends AgeingTotals {
+  client_id: string | null;
+  client_name: string;
+  credit: {
+    limit: number | null;
+    outstanding: number;
+    uninvoiced: number;
+    exposure: number;
+    headroom: number | null;
+    breached: boolean;
+    utilisationPct: number | null;
+  };
+  bills: ArClientBill[];
+}
+
+export interface ArAgeing extends AgeingTotals {
+  as_of: string;
+  dso: number | null;
+  periodDays: number;
+  clients: ArClient[];
+}
+
+export async function getArAgeing(params?: {
+  as_of?: string;
+  period_days?: number;
+}): Promise<ArAgeing> {
+  const q = new URLSearchParams();
+  if (params?.as_of) q.set("as_of", params.as_of);
+  if (params?.period_days) q.set("period_days", String(params.period_days));
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  const { data } = await cachedRead(`getArAgeing:${suffix}`, () =>
+    apiFetch<{ data?: ArAgeing }>(`/api/v1/ar/ageing${suffix}`));
+  return asItem<ArAgeing>(data, "data");
+}
+
+export interface ApVendorInvoice {
+  invoice_id: string;
+  serial_number: string;
+  total: number;
+  settled: number;
+  outstanding: number;
+  contractual_due_date: string | null;
+  statutory_due_date: string | null;
+  effective_due_date: string | null;
+  is_msme: boolean;
+  days_overdue: number;
+  accrued_interest: number;
+  disputed: boolean;
+  on_hold: boolean;
+  hold_reason?: string | null;
+  match_status?: string | null;
+  has_purchase_order: boolean;
+  open_run_no?: string | null;
+  [k: string]: unknown;
+}
+
+export interface ApVendor extends AgeingTotals {
+  vendor_id: string | null;
+  vendor_name: string;
+  accrued_interest: number;
+  invoices: ApVendorInvoice[];
+}
+
+export interface ApAgeing extends AgeingTotals {
+  as_of: string;
+  msme_accrued_interest: number;
+  msme_outstanding: number;
+  vendors: ApVendor[];
+}
+
+export async function getApAgeing(params?: { as_of?: string }): Promise<ApAgeing> {
+  const q = new URLSearchParams();
+  if (params?.as_of) q.set("as_of", params.as_of);
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  const { data } = await cachedRead(`getApAgeing:${suffix}`, () =>
+    apiFetch<{ data?: ApAgeing }>(`/api/v1/ap/ageing${suffix}`));
+  return asItem<ApAgeing>(data, "data");
+}
+
+// --- Procurement (§6.6, §13.2, §43) ------------------------------------------
+
+export interface RequisitionLine {
+  id?: string;
+  line_no?: number;
+  item_id?: string | null;
+  description: string;
+  unit: string;
+  quantity: number | string;
+  estimated_rate?: number | string | null;
+  remarks?: string | null;
+  [k: string]: unknown;
+}
+
+export interface Requisition {
+  id: string;
+  requisition_no: string;
+  project_id?: string | null;
+  project_code?: string | null;
+  status: "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED" | "CONVERTED" | "CANCELLED" | string;
+  requested_by_username?: string;
+  required_by?: string | null;
+  justification: string;
+  estimated_value: number | string;
+  version: number;
+  lines?: RequisitionLine[];
+  purchase_orders?: Array<{ id: string; po_number: string; status: string; total_value: number | string }>;
+  allowed_statuses?: string[];
+  [k: string]: unknown;
+}
+
+export async function getRequisitions(params?: {
+  status?: string;
+  project_id?: string;
+}): Promise<{ items: Requisition[]; hasMore: boolean }> {
+  const q = new URLSearchParams({ limit: "50" });
+  if (params?.status) q.set("status", params.status);
+  if (params?.project_id) q.set("project_id", params.project_id);
+  const { data } = await cachedRead(`getRequisitions:${q.toString()}`, () =>
+    apiFetch<{ data?: Requisition[]; has_more?: boolean }>(`/api/v1/requisitions?${q.toString()}`));
+  const body = data as { data?: Requisition[]; has_more?: boolean } | null;
+  return { items: body?.data ?? [], hasMore: body?.has_more ?? false };
+}
+
+export async function getRequisition(id: string): Promise<Requisition> {
+  const { data } = await cachedRead(`requisition:${id}`, () => apiFetch(`/api/v1/requisitions/${id}`));
+  return asItem<Requisition>(data, "data");
+}
+
+/** Draft creation only — a requisition is submitted for approval separately. */
+export async function postRequisition(
+  input: {
+    requisition_no: string;
+    project_id?: string | null;
+    required_by?: string;
+    justification: string;
+    lines: RequisitionLine[];
+  },
+  idempotencyKey?: string,
+): Promise<Requisition> {
+  const { data } = await apiFetch(`/api/v1/requisitions`, {
+    method: "POST",
+    idempotencyKey,
+    body: input,
+  });
+  return asItem<Requisition>(data, "data");
+}
+
+export async function postRequisitionSubmit(id: string, version: number): Promise<Requisition> {
+  const { data } = await apiFetch(`/api/v1/requisitions/${id}/submit`, {
+    method: "POST",
+    headers: { "If-Match": String(version) },
+  });
+  return asItem<Requisition>(data, "data");
+}
+
+export interface PurchaseOrder {
+  id: string;
+  po_number: string;
+  vendor_id: string;
+  vendor_name?: string;
+  project_id?: string | null;
+  status: string;
+  po_date: string;
+  delivery_date?: string | null;
+  total_value: number | string;
+  version: number;
+  lines?: unknown[];
+  amendments?: unknown[];
+  allowed_statuses?: string[];
+  [k: string]: unknown;
+}
+
+export async function getPurchaseOrders(params?: {
+  status?: string;
+  vendor_id?: string;
+}): Promise<{ items: PurchaseOrder[]; hasMore: boolean }> {
+  const q = new URLSearchParams({ limit: "50" });
+  if (params?.status) q.set("status", params.status);
+  if (params?.vendor_id) q.set("vendor_id", params.vendor_id);
+  const { data } = await cachedRead(`getPurchaseOrders:${q.toString()}`, () =>
+    apiFetch<{ data?: PurchaseOrder[]; has_more?: boolean }>(`/api/v1/purchase-orders?${q.toString()}`));
+  const body = data as { data?: PurchaseOrder[]; has_more?: boolean } | null;
+  return { items: body?.data ?? [], hasMore: body?.has_more ?? false };
+}
+
+export async function getPurchaseOrder(id: string): Promise<PurchaseOrder> {
+  const { data } = await cachedRead(`purchase-order:${id}`, () => apiFetch(`/api/v1/purchase-orders/${id}`));
+  return asItem<PurchaseOrder>(data, "data");
+}
+
+// --- Payroll (P1) --------------------------------------------------------------
+
+/**
+ * The org-wide run register — status, period and totals per run — distinct
+ * from the employee's own "My payslip" already on mobile (getEmployeesMe's
+ * sibling, /api/v1/payslips/me, wired into the More tab's Payslip card). This
+ * is the manager's view: is a run open, calculated, under review, approved or
+ * locked, and what did it total. Generating, approving and locking a run stay
+ * on the web — a period-close action, not a phone lookup.
+ */
+export interface PayrollRun {
+  id: string;
+  period_start: string;
+  period_end: string;
+  status: "OPEN" | "VALIDATING" | "CALCULATED" | "REVIEW" | "APPROVED" | "LOCKED" | string;
+  version: number;
+  employee_count: number;
+  total_gross: number;
+  total_deductions: number;
+  total_net: number;
+  warnings: Array<{ type: string; employee_id: string; message: string }>;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  approve_note?: string | null;
+  locked_by?: string | null;
+  locked_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  [k: string]: unknown;
+}
+
+export async function getPayrollRuns(params?: {
+  status?: string;
+  cursor?: string;
+  limit?: number;
+}): Promise<Page<PayrollRun>> {
+  const q = new URLSearchParams();
+  if (params?.status) q.set("status", params.status);
+  if (params?.cursor) q.set("cursor", params.cursor);
+  q.set("limit", String(params?.limit ?? 20));
+  const { data } = await cachedRead(`getPayrollRuns:${q.toString()}`, () =>
+    apiFetch(`/api/v1/payroll/runs?${q.toString()}`));
+  return asPage<PayrollRun>(data);
+}
+
+export async function getPayrollRun(id: string): Promise<PayrollRun> {
+  const { data } = await cachedRead(`payroll-run:${id}`, () => apiFetch(`/api/v1/payroll/runs/${id}`));
+  return asItem<PayrollRun>(data);
+}
+
+export interface PayrollRunPayslipRow {
+  id: string;
+  employee_id: string;
+  emp_no: string;
+  employee_name: string;
+  gross: number;
+  total_deductions: number;
+  net_pay: number;
+}
+
+export async function getPayrollRunPayslips(
+  runId: string,
+  cursor?: string,
+): Promise<Page<PayrollRunPayslipRow>> {
+  const q = new URLSearchParams({ limit: "50" });
+  if (cursor) q.set("cursor", cursor);
+  const { data } = await cachedRead(`getPayrollRunPayslips:${runId}:${cursor ?? ""}`, () =>
+    apiFetch(`/api/v1/payroll/runs/${runId}/payslips?${q.toString()}`));
+  return asPage<PayrollRunPayslipRow>(data);
+}
+
 // --- Geo-fences: removed 2026-09-22 (Silverline has no geo-fencing) ---------

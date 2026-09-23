@@ -57,6 +57,11 @@ export const BUILT_MODULE_ROUTES: Readonly<Record<string, string>> = {
   tenders: "/tenders",
   employees: "/employees",
   "attendance-exceptions": "/attendance-exceptions",
+  "project-finance": "/project-finance",
+  receivables: "/receivables",
+  payables: "/payables",
+  procurement: "/procurement",
+  payroll: "/payroll",
 };
 
 /**

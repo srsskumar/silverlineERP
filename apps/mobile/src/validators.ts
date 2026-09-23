@@ -232,6 +232,43 @@ export function validateExpenseClaim(input: {
 }
 
 /**
+ * POST /api/v1/requisitions — shared requisitionSchema, narrowed to what this
+ * screen collects (a single line): requisition_no, justification and one
+ * line's description/unit/quantity. The server computes estimated_value from
+ * the lines; this is only the cheap "is the form fillable" pre-check.
+ */
+export function validateRequisitionCreate(input: {
+  requisition_no: string;
+  justification: string;
+  description: string;
+  unit: string;
+  quantity: number | string;
+}): ValidationResult {
+  const errors: FieldError[] = [];
+  if (!req(errors, "requisition_no", input.requisition_no, "A requisition number is required")) {
+    // pushed above
+  } else if ((input.requisition_no as string).trim().length > 50) {
+    errors.push({ field: "requisition_no", message: "Requisition number must be ≤ 50 characters" });
+  }
+  if (!req(errors, "justification", input.justification, "Say why this is needed")) {
+    // pushed above
+  } else if ((input.justification as string).trim().length > 2000) {
+    errors.push({ field: "justification", message: "Justification must be ≤ 2000 characters" });
+  }
+  req(errors, "description", input.description, "Description is required");
+  if (!req(errors, "unit", input.unit, "Unit is required")) {
+    // pushed above
+  } else if ((input.unit as string).trim().length > 20) {
+    errors.push({ field: "unit", message: "Unit must be ≤ 20 characters" });
+  }
+  const quantity = Number(input.quantity);
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    errors.push({ field: "quantity", message: "Quantity must be greater than zero" });
+  }
+  return result(errors);
+}
+
+/**
  * POST /api/v1/inventory/transactions — shared stockSchema.
  * item_id + direction + a positive quantity + a reference are required;
  * the server itself refuses an OUT that would take stock negative.
