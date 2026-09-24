@@ -1062,7 +1062,14 @@ describe("alerting on work that has stopped", () => {
     const overdue = rows.find(r => String(r.event_key).startsWith("survey.overdue:"));
     expect(overdue, JSON.stringify(rows)).toBeTruthy();
     expect(overdue!.title).toContain("past its completion date");
-    expect(overdue!.body).toContain("5 days ago");
+    // Counted the way the job counts, from the organisation's day as it is
+    // now, so a run that crosses IST midnight between the fixture and the
+    // job still agrees with it (fix round 1, item 4).
+    const days = Number((await w.pool.query(
+      `SELECT (((now() AT TIME ZONE 'Asia/Kolkata')::date) - expected_completion_on)::int AS d
+         FROM survey_villages WHERE id = $1`, [id])).rows[0].d);
+    expect(days).toBeGreaterThanOrEqual(5);
+    expect(overdue!.body).toContain(`${days} days ago`);
   });
 
   it("does not say it twice, however often the worker runs", async () => {
