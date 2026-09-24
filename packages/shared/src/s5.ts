@@ -191,6 +191,13 @@ export const NOTIFICATION_TYPES = [
   "MENTION",
   "LEAVE_DECIDED",
   "ATTENDANCE_DECIDED",
+  // An exited employee's open tasks are unassigned in the same transaction
+  // as the exit (owner decision 2026-09-24 #1); the project's manager is
+  // told which tasks now need a new assignee. The `type` column's own check
+  // constraint was dropped in 009_v2.sql and never restored, so this needs
+  // no migration to be storable -- only this catalogue, which is what the
+  // API layer (and the Inbox filter chips) validate against.
+  "TASK_REASSIGN_NEEDED",
 ] as const;
 
 export const notificationTypeSchema = z.enum(NOTIFICATION_TYPES);

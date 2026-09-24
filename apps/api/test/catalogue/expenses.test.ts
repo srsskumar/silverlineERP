@@ -922,6 +922,131 @@ describe("expense receipts (B-003)", () => {
   });
 });
 
+describe("expense.read_all sees everything but edits only your own (owner decision 2026-09-24 #5)", () => {
+  // expense.read_all used to double as an edit bypass on every edit path
+  // (routes.ts's requireClaimOwnerOrReadAll and the inline check in the
+  // lines PUT). PROJECT_MANAGER, PAYROLL_OFFICER and HR_MANAGER all hold
+  // both expense.manage and expense.read_all, so any of them could edit a
+  // claim they never raised and are not the claimant of. Reading stays
+  // (§P-002's own AUDITOR list test above); only editing is narrowed to the
+  // claimant.
+  async function draftClaim() {
+    return makeClaim(
+      [{ category: "TRAVEL", expense_date: "2026-05-01", description: "Taxi", amount: 300 }],
+    );
+  }
+
+  it("refuses a read_all holder editing another claimant's lines", async () => {
+    const claim = await draftClaim();
+    const res = await put(
+      { ...w.role.PROJECT_MANAGER, ...(await ver("expense_claims", claim.id)) },
+      `/api/v1/expense-claims/${claim.id}/lines`,
+      { lines: [{ category: "TRAVEL", expense_date: "2026-05-01", description: "Bus", amount: 100 }] },
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
+  });
+
+  it("refuses a read_all holder attaching a receipt to another claimant's claim", async () => {
+    const claim = await draftClaim();
+    const res = await post(w.role.PAYROLL_OFFICER, `/api/v1/expense-claims/${claim.id}/receipts`, {
+      file_name: "not-mine.pdf", content_base64: Buffer.from("%PDF-1.4").toString("base64"),
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
+  });
+
+  it("refuses a read_all holder removing a receipt from another claimant's claim", async () => {
+    const claim = await draftClaim();
+    const upload = await post(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
+      file_name: "theirs.pdf", content_base64: Buffer.from("%PDF-1.4").toString("base64"),
+    });
+    expect(upload.status, JSON.stringify(upload.body)).toBe(201);
+    const res = await del(w.role.HR_MANAGER, `/api/v1/expense-claims/${claim.id}/receipts/${upload.data.id}`);
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
+  });
+
+  it("still lets the claimant edit their own claim's lines, receipts included", async () => {
+    const claim = await draftClaim();
+    const linesRes = await put(
+      { ...w.directUser, ...(await ver("expense_claims", claim.id)) },
+      `/api/v1/expense-claims/${claim.id}/lines`,
+      { lines: [{ category: "TRAVEL", expense_date: "2026-05-01", description: "Bus", amount: 100 }] },
+    );
+    expect(linesRes.status, JSON.stringify(linesRes.body)).toBe(200);
+
+    const upload = await post(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
+      file_name: "mine.pdf", content_base64: Buffer.from("%PDF-1.4").toString("base64"),
+    });
+    expect(upload.status, JSON.stringify(upload.body)).toBe(201);
+
+    const removed = await del(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts/${upload.data.id}`);
+    expect(removed.status, JSON.stringify(removed.body)).toBe(200);
+  });
+
+  it("still lets a read_all holder read the claim and its receipts", async () => {
+    const claim = await draftClaim();
+    const read = await get(w.role.PROJECT_MANAGER, `/api/v1/expense-claims/${claim.id}`);
+    expect(read.status, JSON.stringify(read.body)).toBe(200);
+    const list = await get(w.role.PROJECT_MANAGER, `/api/v1/expense-claims/${claim.id}/receipts`);
+    expect(list.status, JSON.stringify(list.body)).toBe(200);
+  });
+});
+
+describe("submit is claimant-only too (policy batch fix round 1, item 2)", () => {
+  // The lines/receipts edit paths were narrowed to the claimant in the
+  // original decision-5 change above, but submit (DRAFT/REJECTED ->
+  // SUBMITTED) was missed: it only checked expense.manage, so any of
+  // PROJECT_MANAGER/PAYROLL_OFFICER/HR_MANAGER (all hold expense.manage)
+  // could submit a claim they never raised and are not the claimant of.
+  async function draftClaim() {
+    return makeClaim(
+      [{ category: "TRAVEL", expense_date: "2026-05-01", description: "Taxi", amount: 300 }],
+    );
+  }
+
+  it("refuses a read_all-and-manage holder submitting another claimant's claim", async () => {
+    const claim = await draftClaim();
+    const res = await post(
+      { ...w.role.PROJECT_MANAGER, ...(await ver("expense_claims", claim.id)) },
+      `/api/v1/expense-claims/${claim.id}/submit`, {});
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
+    const still = await w.pool.query("SELECT status FROM expense_claims WHERE id = $1", [claim.id]);
+    expect(still.rows[0].status).toBe("DRAFT");
+  });
+
+  it("still lets the claimant submit their own claim", async () => {
+    const claim = await draftClaim();
+    const res = await post(
+      { ...w.directUser, ...(await ver("expense_claims", claim.id)) },
+      `/api/v1/expense-claims/${claim.id}/submit`, {});
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.data.status).toBe("SUBMITTED");
+  });
+
+  it("leaves the approval decision and reimbursement flow untouched, end to end", async () => {
+    // clearLadder submits as the claimant (its own default `raiser`), so
+    // this exercises the guard on the happy path and proves the flow past
+    // it -- approve, then reimburse -- still works.
+    const claim = await draftClaim();
+    await clearLadder(claim.id);
+    const decided = await post(
+      { ...w.role.PROJECT_MANAGER, ...(await ver("expense_claims", claim.id)) },
+      `/api/v1/expense-claims/${claim.id}/decision`, { status: "APPROVED" });
+    expect(decided.status, JSON.stringify(decided.body)).toBe(200);
+    const reimbursed = await post(
+      { ...w.role.PAYROLL_OFFICER, ...(await ver("expense_claims", claim.id)) },
+      `/api/v1/expense-claims/${claim.id}/reimburse`,
+      { amount: 300, paid_on: "2026-05-10", mode: "NEFT" });
+    expect(reimbursed.status, JSON.stringify(reimbursed.body)).toBe(201);
+    expect(reimbursed.data.claim_settled).toBe(true);
+    const settled = await get(w.admin, `/api/v1/expense-claims/${claim.id}`);
+    expect(settled.data.status).toBe("REIMBURSED");
+  });
+});
+
 describe("app-wide body limit (fix round 1, B-002 review)", () => {
   it("refuses an oversized body with 413 on an ordinary route, not just the receipts one", async () => {
     // The receipts route alone raises its own bodyLimit; every other route

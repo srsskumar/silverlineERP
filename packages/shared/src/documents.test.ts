@@ -312,7 +312,7 @@ describe('schemas', () => {
 });
 
 describe('role grants', () => {
-  it('lets an auditor read everything but delete nothing', () => {
+  it('lets an auditor place a hold and read everything, but delete nothing', () => {
     // An auditor who can destroy evidence is not a control.
     const auditor = DOCUMENT_ROLE_GRANTS.AUDITOR;
     expect(auditor).toContain('document.read');
@@ -321,12 +321,25 @@ describe('role grants', () => {
     expect(auditor).not.toContain('document.delete');
   });
 
-  it('gives releasing a hold its own permission, held where placing one is', () => {
+  it('does not let an auditor release the hold it placed (owner decision 2026-09-24 #4)', () => {
+    // Placing a hold is a control; lifting one is the step that makes the
+    // document deletable again, and an auditor is not the role that decides
+    // a hold's protection is no longer needed. AUDITOR keeps
+    // document.legalhold -- it can still place a hold -- but not
+    // document.legalhold.release.
+    expect(DOCUMENT_ROLE_GRANTS.AUDITOR).toContain('document.legalhold');
+    expect(DOCUMENT_ROLE_GRANTS.AUDITOR).not.toContain('document.legalhold.release');
+  });
+
+  it('gives releasing a hold its own permission, held where placing one is (except AUDITOR)', () => {
     // Migration 082 seeds the release to exactly the roles that could place
     // a hold before the two were split, so nobody lost the ability and
-    // nobody gained it.
+    // nobody gained it. 112_auditor_legalhold_release then narrows AUDITOR
+    // specifically (owner decision 2026-09-24 #4): it may place a hold but
+    // not release one, so it is the one role excluded from the invariant.
     expect(DOCUMENT_PERMISSIONS).toContain('document.legalhold.release');
     for (const [role, grants] of Object.entries(DOCUMENT_ROLE_GRANTS)) {
+      if (role === 'AUDITOR') continue;
       expect(grants.includes('document.legalhold.release'), role)
         .toBe(grants.includes('document.legalhold'));
     }

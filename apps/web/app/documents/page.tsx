@@ -23,6 +23,7 @@ import {
   registerHeadline, retentionNote, stateTone, type DocumentState,
 } from '@/lib/document-register';
 import { DeleteDocumentButton } from '@/components/documents/DeleteDocumentButton';
+import { DueForPurgePanel } from '@/components/documents/DueForPurgePanel';
 
 type Row = Record<string, any>;
 
@@ -43,7 +44,7 @@ export default function DocumentsPage() {
   const canRelease = hasPermission(perms, 'document.legalhold.release');
   const canDelete = hasPermission(perms, 'document.delete');
 
-  const [tab, setTab] = React.useState<'renewals' | 'register'>('renewals');
+  const [tab, setTab] = React.useState<'renewals' | 'register' | 'purge'>('renewals');
   const [within, setWithin] = React.useState(60);
   const [filters, setFilters] = React.useState({ category: '', owner_type: '', state: '' });
   const [adding, setAdding] = React.useState(false);
@@ -98,6 +99,12 @@ export default function DocumentsPage() {
               onClick={() => setTab('register')}>
               The register
             </Button>
+            {canDelete ? (
+              <Button type="button" variant={tab === 'purge' ? 'secondary' : 'ghost'}
+                onClick={() => setTab('purge')}>
+                Due for purge
+              </Button>
+            ) : null}
           </div>
           {tab === 'renewals' ? (
             <label className="flex items-center gap-2 text-xs text-text-muted">
@@ -126,6 +133,8 @@ export default function DocumentsPage() {
 
         {tab === 'renewals' ? (
           <Renewals query={renewals} canManage={canManage} within={within} />
+        ) : tab === 'purge' ? (
+          canDelete ? <DueForPurgePanel /> : null
         ) : (
           <Register
             query={register} filters={filters} setFilters={setFilters} summary={summary}

@@ -435,10 +435,10 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
           fail('CLAIM_NOT_EDITABLE',
             `A ${String(claim.status).toLowerCase()} claim cannot be edited. Withdraw it, or raise a new one.`);
         }
-        if (String(claim.requested_by) !== u.id && String(claim.claimant_user_id) !== u.id
-            && !u.permissions.includes('expense.read_all')) {
-          fail('FORBIDDEN', 'This claim belongs to someone else', 403);
-        }
+        // expense.read_all widens who may *see* every claim; it is not an
+        // edit right. Only the claimant (or whoever keyed the claim in on
+        // their behalf) may change its lines -- owner decision 2026-09-24 #5.
+        requireClaimOwner(u, claim);
         // Fingerprints follow the lines they belong to, so replacing the lines
         // must release the bills they claimed.
         await db.query('DELETE FROM expense_receipt_fingerprints WHERE claim_id = $1', [id]);
@@ -526,6 +526,11 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
       data: await mutate(pool, req, 'expense.claim.submit', 'expense_claim', async db => {
         const claim = await inOrg(db, 'expense_claims', id, u.orgId, true);
         version(req, claim as { version: number });
+        // Submitting is an edit -- moving the claim into the approval
+        // ladder -- so it gets the same claimant-only guard as the lines
+        // and receipts routes (owner decision 2026-09-24 #5; missed here in
+        // the original pass, closed in policy batch fix round 1 item 2).
+        requireClaimOwner(u, claim);
         if (!canTransition(claim.status as ExpenseClaimStatus, 'SUBMITTED')) {
           fail('INVALID_TRANSITION', `A ${String(claim.status).toLowerCase()} claim cannot be submitted`);
         }
@@ -797,10 +802,17 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
     }
   }
 
-  /** The claimant, whoever keyed the claim in, or a full read-all holder. */
-  function requireClaimOwnerOrReadAll(u: ReturnType<typeof actor>, claim: Record<string, any>) {
-    if (String(claim.requested_by) !== u.id && String(claim.claimant_user_id) !== u.id
-        && !u.permissions.includes('expense.read_all')) {
+  /**
+   * The claimant, or whoever keyed the claim in on their behalf.
+   *
+   * expense.read_all is deliberately not checked here: it lets a holder see
+   * every claim, not edit one they did not raise and are not the claimant
+   * of. Approvers act through the approval flow (approval.act), and an
+   * over-cap approval still needs expense.override -- neither of those is
+   * this check (owner decision 2026-09-24 #5).
+   */
+  function requireClaimOwner(u: ReturnType<typeof actor>, claim: Record<string, any>) {
+    if (String(claim.requested_by) !== u.id && String(claim.claimant_user_id) !== u.id) {
       fail('FORBIDDEN', 'This claim belongs to someone else', 403);
     }
   }
@@ -831,7 +843,7 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
     const row = await mutate(pool, req, 'expense.receipt.upload', 'expense_receipt', async db => {
       const claim = await inOrg(db, 'expense_claims', id, u.orgId, true);
       requireEditableForReceipts(claim);
-      requireClaimOwnerOrReadAll(u, claim);
+      requireClaimOwner(u, claim);
 
       const ext = input.file_name.split('.').pop()?.toLowerCase() ?? '';
       if (!input.file_name.includes('.') || !(ALLOWED_RECEIPT_EXTENSIONS as readonly string[]).includes(ext)) {
@@ -894,7 +906,7 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
       data: await mutate(pool, req, 'expense.receipt.remove', 'expense_receipt', async db => {
         const claim = await inOrg(db, 'expense_claims', id, u.orgId, true);
         requireEditableForReceipts(claim);
-        requireClaimOwnerOrReadAll(u, claim);
+        requireClaimOwner(u, claim);
         const row = (await db.query(
           'DELETE FROM expense_receipts WHERE id = $1 AND claim_id = $2 AND org_id = $3 RETURNING id',
           [receiptId, id, u.orgId])).rows[0];

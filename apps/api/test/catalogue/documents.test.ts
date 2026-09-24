@@ -365,6 +365,262 @@ describe("§46.6 retention and legal hold", () => {
   });
 });
 
+describe("due-for-purge report and explicit purge (owner decision 2026-09-24 #3)", () => {
+  it("lists what is past retention, excluding legal hold and anything not yet due", async () => {
+    const due = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const notDue = await orgDoc({ expires_on: dayOffset(-10) });
+    const held = await orgDoc({ expires_on: dayOffset(-365 * 20) });
+    await post({ ...w.admin, ...(await ver(held.id)) }, `/api/v1/documents/${held.id}/legal-hold`,
+      { legal_hold: true, reason: "Ongoing dispute" });
+
+    const r = await get(w.admin, "/api/v1/documents/due-for-purge");
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const ids = r.data.map((d: any) => d.id);
+    expect(ids).toContain(due.id);
+    expect(ids).not.toContain(notDue.id);
+    expect(ids).not.toContain(held.id);
+    const row = r.data.find((d: any) => d.id === due.id);
+    expect(row.retain_until).toBeTruthy();
+  });
+
+  it("excludes a revision a later one still refers to", async () => {
+    const old = await orgDoc({ expires_on: dayOffset(-365 * 20) });
+    await post(w.admin, `/api/v1/documents/${old.id}/renew`, { expires_on: dayOffset(400) });
+    const r = await get(w.admin, "/api/v1/documents/due-for-purge");
+    expect(r.data.map((d: any) => d.id)).not.toContain(old.id);
+  });
+
+  it("refuses the whole batch when one selected document is on legal hold", async () => {
+    const due = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const held = await orgDoc({ expires_on: dayOffset(-365 * 20) });
+    await post({ ...w.admin, ...(await ver(held.id)) }, `/api/v1/documents/${held.id}/legal-hold`,
+      { legal_hold: true, reason: "Ongoing dispute" });
+
+    const r = await post(w.admin, "/api/v1/documents/purge",
+      { ids: [due.id, held.id], reason: "Year-end retention sweep" });
+    expect(r.status, JSON.stringify(r.body)).toBe(409);
+    expect(r.body.code).toBe("PURGE_REFUSED");
+
+    // Nothing was deleted -- not even the one that qualified on its own.
+    expect((await get(w.admin, `/api/v1/documents/${due.id}`)).status).toBe(200);
+    expect((await get(w.admin, `/api/v1/documents/${held.id}`)).status).toBe(200);
+  });
+
+  it("refuses the whole batch when one selected document is not yet due", async () => {
+    const due = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const notDue = await orgDoc({ expires_on: dayOffset(-10) });
+
+    const r = await post(w.admin, "/api/v1/documents/purge",
+      { ids: [due.id, notDue.id], reason: "Year-end retention sweep" });
+    expect(r.status, JSON.stringify(r.body)).toBe(409);
+    expect(r.body.code).toBe("PURGE_REFUSED");
+    expect((await get(w.admin, `/api/v1/documents/${due.id}`)).status).toBe(200);
+    expect((await get(w.admin, `/api/v1/documents/${notDue.id}`)).status).toBe(200);
+  });
+
+  it("purges the selection once every item qualifies, fully audited with the reason", async () => {
+    const first = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const second = await orgDoc({ expires_on: dayOffset(-365 * 5) });
+
+    const r = await post(w.admin, "/api/v1/documents/purge",
+      { ids: [first.id, second.id], reason: "Year-end retention sweep, batch 2026-09" });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.purged_count).toBe(2);
+
+    expect((await get(w.admin, `/api/v1/documents/${first.id}`)).status).toBe(404);
+    expect((await get(w.admin, `/api/v1/documents/${second.id}`)).status).toBe(404);
+
+    const audit = await w.pool.query(
+      `SELECT after_state, actor_id FROM audit_events
+        WHERE action = 'document.purge' AND entity_type = 'document_purge' AND org_id = $1
+        ORDER BY created_at DESC LIMIT 1`,
+      [w.orgId],
+    );
+    expect(audit.rows).toHaveLength(1);
+    const state = audit.rows[0].after_state;
+    expect(state.reason).toBe("Year-end retention sweep, batch 2026-09");
+    expect(state.purged.map((p: any) => p.id).sort()).toEqual([first.id, second.id].sort());
+
+    /*
+     * Purge only ever removes the register row -- never the source content
+     * (controller ruling, fix round 1 item 1: the owner decides that
+     * separately, in the morning). So the audit payload has to carry enough
+     * about what was removed that anyone can later tell exactly what it
+     * was and go find the surviving content at its source.
+     */
+    const row = state.purged.find((p: any) => p.id === first.id);
+    expect(row).toMatchObject({
+      id: first.id,
+      title: first.title,
+      type_code: "LABOUR_LICENCE",
+      owner_type: "organization",
+      owner_id: null,
+      source_type: null,
+      source_id: null,
+      issued_on: null,
+      expires_on: dayOffset(-365 * 4),
+    });
+    expect(row.basis).toContain("Contract Labour");
+    expect(row.retain_until).toBeTruthy();
+  });
+
+  it("carries owner and source through the purge audit for an owned, sourced document", async () => {
+    const doc = await post(w.admin, "/api/v1/documents", {
+      type_code: "MEDICAL_FITNESS", owner_type: "employee", owner_id: w.directEmployee,
+      title: "Old medical certificate", expires_on: dayOffset(-365 * 4),
+      source_type: "employee_document", source_id: w.directEmployee,
+    });
+    expect(doc.status, JSON.stringify(doc.body)).toBe(201);
+
+    const r = await post(w.admin, "/api/v1/documents/purge",
+      { ids: [doc.data.id], reason: "Retention sweep" });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+
+    const audit = await w.pool.query(
+      `SELECT after_state FROM audit_events
+        WHERE action = 'document.purge' AND entity_type = 'document_purge' AND org_id = $1
+        ORDER BY created_at DESC LIMIT 1`,
+      [w.orgId],
+    );
+    const row = audit.rows[0].after_state.purged[0];
+    expect(row).toMatchObject({
+      id: doc.data.id,
+      owner_type: "employee",
+      owner_id: w.directEmployee,
+      source_type: "employee_document",
+      source_id: w.directEmployee,
+    });
+  });
+
+  it("refuses a purge with no reason", async () => {
+    const due = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const r = await post(w.admin, "/api/v1/documents/purge", { ids: [due.id] });
+    expect(r.status).toBe(422);
+  });
+
+  it("keeps the report and the purge action to document.delete holders", async () => {
+    const due = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const list = await get(w.role.PROJECT_MANAGER, "/api/v1/documents/due-for-purge");
+    expect(list.status).toBe(403);
+    const purge = await post(w.role.PROJECT_MANAGER, "/api/v1/documents/purge",
+      { ids: [due.id], reason: "Should be refused" });
+    expect(purge.status).toBe(403);
+  });
+
+  it("computes 'today' in the organisation's own timezone, not a fixed default (fix round 1, item 4)", async () => {
+    // Same D-006/orgTodaySql pattern audit-filters.test.ts uses to pin this
+    // down: the route has to read organizations.settings->>'timezone' for
+    // *this* org, not fall back to a hardcoded Asia/Kolkata default the way
+    // businessDay() (with no timezone argument) silently did.
+    await w.pool.query(
+      `UPDATE organizations SET settings = settings || '{"timezone":"Pacific/Kiritimati"}'::jsonb WHERE id = $1`,
+      [w.orgId],
+    );
+    try {
+      const expected = (await w.pool.query(
+        `SELECT to_char((now() AT TIME ZONE 'Pacific/Kiritimati')::date, 'YYYY-MM-DD') AS today`,
+      )).rows[0].today;
+      const r = await get(w.admin, "/api/v1/documents/due-for-purge");
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      // due-for-purge's response is flat -- {data: [...items], as_of, ...}
+      // -- so as_of lives on the raw body, not under the `data` the send()
+      // helper unwraps (that unwrap gives the items array for this route).
+      expect(r.body.as_of).toBe(expected);
+    } finally {
+      await w.pool.query(
+        `UPDATE organizations SET settings = settings || '{"timezone":"Asia/Kolkata"}'::jsonb WHERE id = $1`,
+        [w.orgId],
+      );
+    }
+  });
+
+  it("paginates with a cursor, at most `limit` rows a page (fix round 1, item 4)", async () => {
+    // Earlier tests in this file leave their own never-purged "due" rows
+    // behind on purpose (a refused batch purges nothing), so the org's due
+    // list is already longer than 2 by the time this runs -- walking every
+    // page with limit=1 until exhausted proves real pagination regardless
+    // of exactly how many rows that turns out to be, rather than assuming
+    // only these two documents exist.
+    const first = await orgDoc({ expires_on: dayOffset(-365 * 4), title: `Purge page A ${uniq()}` });
+    const second = await orgDoc({ expires_on: dayOffset(-365 * 4), title: `Purge page B ${uniq()}` });
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    for (let guard = 0; guard < 200; guard += 1) {
+      const url = "/api/v1/documents/due-for-purge?limit=1"
+        + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
+      const page = await get(w.admin, url);
+      expect(page.status, JSON.stringify(page.body)).toBe(200);
+      // Same flat-response shape as above: page.data IS the items array.
+      expect(page.data.length).toBeLessThanOrEqual(1);
+      pages += 1;
+      for (const d of page.data) seen.push(d.id);
+      if (!page.body.has_more) break;
+      cursor = page.body.next_cursor;
+      expect(typeof cursor).toBe("string");
+    }
+    expect(pages).toBeGreaterThan(1);
+    expect(new Set(seen).size).toBe(seen.length); // no id repeated across pages
+    expect(seen).toContain(first.id);
+    expect(seen).toContain(second.id);
+  });
+
+  it("refuses a limit over 100", async () => {
+    const r = await get(w.admin, "/api/v1/documents/due-for-purge?limit=101");
+    expect(r.status).toBe(422);
+  });
+
+  it("treats a second purge of an already-purged id as a clean no-op, not a 409 for the whole batch (fix round 1, item 4)", async () => {
+    const already = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const first = await post(w.admin, "/api/v1/documents/purge",
+      { ids: [already.id], reason: "First purge" });
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+
+    const next = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const second = await post(w.admin, "/api/v1/documents/purge",
+      { ids: [already.id, next.id], reason: "Retry with one already gone" });
+    expect(second.status, JSON.stringify(second.body)).toBe(200);
+    expect(second.data.purged_count).toBe(1);
+    expect(second.data.purged[0].id).toBe(next.id);
+    expect(second.data.skipped).toHaveLength(1);
+    expect(second.data.skipped[0]).toMatchObject({ id: already.id });
+    expect(second.data.skipped[0].reason).toBeTruthy();
+
+    expect((await get(w.admin, `/api/v1/documents/${next.id}`)).status).toBe(404);
+  });
+
+  it("never touches, or blocks a batch on, another organisation's document id (fix round 1, item 4)", async () => {
+    // w.other's org is built with a raw SQL insert, after 047's own
+    // document-type seed already ran against every org that existed at
+    // migration time -- so it has no document_types rows of its own. One
+    // is seeded here, directly, purely so the API call below has a type to
+    // attach to.
+    await w.pool.query(
+      `INSERT INTO document_types (org_id, code, label, category, retention_years)
+       VALUES ($1, 'LABOUR_LICENCE', 'Labour licence', 'STATUTORY', 3)
+       ON CONFLICT (org_id, code) DO NOTHING`,
+      [w.otherOrgId],
+    );
+    const otherDoc = await post(w.other.admin, "/api/v1/documents", {
+      type_code: "LABOUR_LICENCE", owner_type: "organization",
+      title: `Other org licence ${uniq()}`, expires_on: dayOffset(-365 * 4),
+    });
+    expect(otherDoc.status, JSON.stringify(otherDoc.body)).toBe(201);
+    const own = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+
+    const r = await post(w.admin, "/api/v1/documents/purge",
+      { ids: [own.id, otherDoc.data.id], reason: "Cross-org id in the batch" });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.purged_count).toBe(1);
+    expect(r.data.purged[0].id).toBe(own.id);
+    expect(r.data.skipped.map((s: any) => s.id)).toContain(otherDoc.data.id);
+
+    const stillThere = await get(w.other.admin, `/api/v1/documents/${otherDoc.data.id}`);
+    expect(stillThere.status).toBe(200);
+  });
+});
+
 describe("§46.6.3 confidentiality", () => {
   it("withholds the detail of a confidential document but still lists it", async () => {
     // Hiding the row outright would leave a lapsed medical certificate
@@ -515,37 +771,32 @@ describe("§46.4 revising what never expires", () => {
 });
 
 describe("§46.6.2 releasing a hold is its own permission", () => {
-  it("refuses a release to a role that may place a hold but not lift one", async () => {
-    // Take the release away from the auditor for this test only; the suite
-    // runs in one fork, so no other file sees the change.
-    const roleId = (await w.pool.query("SELECT id FROM roles WHERE code = 'AUDITOR'")).rows[0].id;
-    await w.pool.query(
-      "DELETE FROM role_permissions WHERE role_id = $1 AND permission_code = 'document.legalhold.release'",
-      [roleId]);
-    try {
-      const doc = await orgDoc({ expires_on: dayOffset(-365 * 20) });
-      const held = await post({ ...w.role.AUDITOR, ...(await ver(doc.id)) },
-        `/api/v1/documents/${doc.id}/legal-hold`, { legal_hold: true, reason: "Statutory audit" });
-      expect(held.status).toBe(200);
+  it("refuses a release to a role that may place a hold but not lift one (AUDITOR, owner decision 2026-09-24 #4)", async () => {
+    // AUDITOR is now that role by design (112_auditor_legalhold_release.sql,
+    // packages/shared's DOCUMENT_ROLE_GRANTS.AUDITOR): it holds
+    // document.legalhold but not document.legalhold.release, so no manual
+    // grant surgery is needed to exercise this -- it is the seeded state.
+    const doc = await orgDoc({ expires_on: dayOffset(-365 * 20) });
+    const held = await post({ ...w.role.AUDITOR, ...(await ver(doc.id)) },
+      `/api/v1/documents/${doc.id}/legal-hold`, { legal_hold: true, reason: "Statutory audit" });
+    expect(held.status).toBe(200);
 
-      const released = await post({ ...w.role.AUDITOR, ...(await ver(doc.id)) },
-        `/api/v1/documents/${doc.id}/legal-hold`, { legal_hold: false });
-      expect(released.status).toBe(403);
-      expect(released.body.message).toContain("document.legalhold.release");
-      const after = await get(w.admin, `/api/v1/documents/${doc.id}`);
-      expect(after.data.legal_hold).toBe(true);
-    } finally {
-      await w.pool.query(
-        `INSERT INTO role_permissions (role_id, permission_code)
-         VALUES ($1, 'document.legalhold.release') ON CONFLICT DO NOTHING`, [roleId]);
-    }
+    const released = await post({ ...w.role.AUDITOR, ...(await ver(doc.id)) },
+      `/api/v1/documents/${doc.id}/legal-hold`, { legal_hold: false });
+    expect(released.status).toBe(403);
+    expect(released.body.message).toContain("document.legalhold.release");
+    const after = await get(w.admin, `/api/v1/documents/${doc.id}`);
+    expect(after.data.legal_hold).toBe(true);
   });
 
   it("lets a role with the release permission lift the hold", async () => {
+    // ADMIN holds every document permission, release included -- AUDITOR no
+    // longer does (owner decision 2026-09-24 #4), so this exercises the
+    // permission with a role that still has it.
     const doc = await orgDoc({ expires_on: dayOffset(-365 * 20) });
-    await post({ ...w.role.AUDITOR, ...(await ver(doc.id)) },
+    await post({ ...w.admin, ...(await ver(doc.id)) },
       `/api/v1/documents/${doc.id}/legal-hold`, { legal_hold: true, reason: "Statutory audit" });
-    const released = await post({ ...w.role.AUDITOR, ...(await ver(doc.id)) },
+    const released = await post({ ...w.admin, ...(await ver(doc.id)) },
       `/api/v1/documents/${doc.id}/legal-hold`, { legal_hold: false });
     expect(released.status, JSON.stringify(released.body)).toBe(200);
     expect(released.data.legal_hold).toBe(false);

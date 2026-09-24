@@ -10,6 +10,7 @@ import { getEmployee, patchEmployee } from '@/lib/employees';
 import { queryKeys } from '@/lib/query-keys';
 import { displayMasked, displayEmployeeName } from '@/lib/masking';
 import { Badge } from '@/components/ui/Badge';
+import { OnLeaveBadge } from '@/components/OnLeaveBadge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
@@ -80,6 +81,7 @@ export function EmployeeDetailView({ id }: { id: string }) {
                 </h1>
                 <div className="mt-2 flex items-center gap-2">
                   <Badge>{emp.status}</Badge>
+                  <OnLeaveBadge onLeaveToday={emp.on_leave_today} />
                   <span className="text-xs text-text-muted">v{emp.version}</span>
                 </div>
               </div>

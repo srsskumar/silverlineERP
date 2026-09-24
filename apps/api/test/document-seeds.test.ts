@@ -106,14 +106,32 @@ const releaseSql = readFileSync(
   'utf8',
 );
 
+/**
+ * Migration 112 (owner decision 2026-09-24 #4) narrows AUDITOR specifically:
+ * it may place a hold but not release one. 082's blanket "release wherever
+ * hold is granted" rule no longer holds for that one pairing, so it is
+ * checked here and subtracted back out of `pairs` below.
+ */
+const revokeSql = readFileSync(
+  fileURLToPath(new URL('../src/database/migrations/112_auditor_legalhold_release.sql', import.meta.url)),
+  'utf8',
+);
+
 describe('document permission grants', () => {
   const placed = [...grantSql.matchAll(/\('([A-Z_]+)','(document\.[a-z]+)'\)/g)]
     .map(m => [m[1], m[2]] as const);
+  const revokesAuditorRelease = /'document\.legalhold\.release'/.test(revokeSql)
+    && /code = 'AUDITOR'/.test(revokeSql) && /^DELETE FROM role_permissions/m.test(revokeSql);
   const pairs = [
     ...placed,
     ...placed.filter(([, p]) => p === 'document.legalhold')
-      .map(([r]) => [r, 'document.legalhold.release'] as const),
+      .map(([r]) => [r, 'document.legalhold.release'] as const)
+      .filter(([r, p]) => !(revokesAuditorRelease && r === 'AUDITOR' && p === 'document.legalhold.release')),
   ];
+
+  it('112 actually revokes what it claims to (or the filter above is vacuous)', () => {
+    expect(revokesAuditorRelease).toBe(true);
+  });
 
   it('grants the release of a hold to exactly the roles that hold document.legalhold', () => {
     expect(releaseSql).toMatch(/permission_code = 'document\.legalhold'/);

@@ -52,6 +52,7 @@ import {
 } from "../../common/idempotency.js";
 import { parseIfMatch } from '../../common/ifMatch.js';
 import { orgTodaySql } from "../../common/orgTime.js";
+import { emitNotification } from "../s5/notify.js";
 
 export interface EmployeeRoutesOptions {
   pool: Pool;
@@ -111,6 +112,7 @@ interface EmployeeRow {
   version: number;
   created_at: Date | string;
   updated_at: Date | string;
+  on_leave_today?: boolean;
 }
 
 function dateOnly(v: Date | string | null): string | null {
@@ -192,6 +194,10 @@ function toShape(row: EmployeeRow, canSeePii: boolean) {
     version: row.version,
     created_at: iso(row.created_at),
     updated_at: iso(row.updated_at),
+    // A badge, not a status (owner decision 2026-09-24 #2): whether today
+    // falls inside an *approved* leave request, computed in SQL from the
+    // organisation's own calendar day.
+    on_leave_today: Boolean(row.on_leave_today),
   };
 }
 
@@ -272,7 +278,22 @@ const SELECT_COLS = `id, org_id, emp_no, first_name, last_name, father_name,
    */
   (SELECT COALESCE(NULLIF(trim(concat_ws(' ', m.first_name, m.last_name)), ''), m.emp_no)
      FROM employees m WHERE m.id = employees.reports_to) AS reports_to_name,
-  (SELECT m.emp_no FROM employees m WHERE m.id = employees.reports_to) AS reports_to_emp_no`;
+  (SELECT m.emp_no FROM employees m WHERE m.id = employees.reports_to) AS reports_to_emp_no,
+  /*
+   * "On leave today" is a badge, not a status (owner decision 2026-09-24
+   * #2): derived on read from approved leave covering the organisation's
+   * current calendar day, never stored, so it is never a status somebody
+   * forgot to clear. orgTodaySql matches the org-timezone day the leave and
+   * audit modules already use (D-006/D-013) -- CURRENT_DATE alone is the
+   * database session's UTC day, which is still "yesterday" in India before
+   * 05:30.
+   */
+  EXISTS (
+    SELECT 1 FROM leave_requests lr
+     WHERE lr.employee_id = employees.id AND lr.status = 'APPROVED'
+       AND lr.from_date <= ${orgTodaySql('employees.org_id')}
+       AND lr.to_date >= ${orgTodaySql('employees.org_id')}
+  ) AS on_leave_today`;
 
 /**
  * The designation a write means, as both an id and a label.
@@ -1443,37 +1464,48 @@ export async function registerEmployeeRoutes(
         )
       ).rows.map((r: { id: string }) => r.id);
       /*
-       * Open tasks stay on the person, and each is flagged on its own audit
-       * trail. The catalogue is explicit (UT-WORK-06): work held by a
-       * departing employee is neither silently reassigned nor deleted -- it
-       * stays visible and attributable so a project manager can decide who
-       * takes it, and the assign route already refuses new work for them.
-       * Forcing BLOCKED instead would break projects whose workflow has no
-       * such status or no edge into it. Whether exit should unassign is a
-       * product decision, not one to make here.
+       * Open tasks are unassigned, in the same transaction as the exit
+       * (owner decision 2026-09-24 #1). The catalogue used to flag them and
+       * leave them on the departing person (UT-WORK-06) -- deliberately, per
+       * that entry's own note that whether exit should unassign was a
+       * product decision left open. It has since been made: work must not
+       * sit attributed to someone who is gone, so it comes off them here,
+       * and each affected project's manager is notified with the task list
+       * so a human decides who takes it next. Closed tasks (DONE, CANCELLED)
+       * are untouched -- there is nothing to hand off.
        */
       const openTasks =
         accountIds.length === 0
           ? []
           : ((
               await db.query(
-                `SELECT id, project_id, assignee_id FROM tasks
+                `SELECT id, project_id, assignee_id, title FROM tasks
                   WHERE org_id = $1 AND assignee_id = ANY($2::uuid[])
-                    AND status NOT IN ('DONE', 'CANCELLED')`,
+                    AND status NOT IN ('DONE', 'CANCELLED')
+                  FOR UPDATE`,
                 [user.orgId, accountIds],
               )
-            ).rows as Array<{ id: string; project_id: string; assignee_id: string }>);
+            ).rows as Array<{ id: string; project_id: string; assignee_id: string; title: string }>);
+      if (openTasks.length > 0) {
+        await db.query(
+          `UPDATE tasks SET assignee_id = NULL, version = version + 1,
+             updated_by = $2::uuid, updated_at = NOW()
+           WHERE id = ANY($1::uuid[])`,
+          [openTasks.map((t) => t.id), user.id],
+        );
+      }
       for (const task of openTasks) {
         await writeAudit(db, {
           orgId: user.orgId,
           actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
           actorIp: meta.ip,
           actorUserAgent: meta.userAgent,
-          action: "task.assignee_exited",
+          action: "task.unassigned",
           entityType: "task",
           entityId: task.id,
+          beforeState: { assignee_id: task.assignee_id },
           afterState: {
-            assignee_id: task.assignee_id,
+            assignee_id: null,
             project_id: task.project_id,
             exited_employee_id: id,
             needs_reassignment: true,
@@ -1481,6 +1513,64 @@ export async function registerEmployeeRoutes(
           reason: `Assignee exited: ${reason}`,
           requestId: req.requestId,
         });
+      }
+
+      // One notification per affected project, to that project's manager --
+      // not one per task, so a manager with five orphaned tasks on the same
+      // project gets a single inbox entry rather than five.
+      const byProject = new Map<string, Array<{ id: string; title: string }>>();
+      for (const task of openTasks) {
+        const list = byProject.get(task.project_id) ?? [];
+        list.push({ id: task.id, title: task.title });
+        byProject.set(task.project_id, list);
+      }
+      let hrManagerId: string | null | undefined; // resolved lazily, at most once
+      const notifiedManagers: string[] = [];
+      for (const [projectId, tasksForProject] of byProject) {
+        const project = (
+          await db.query(
+            "SELECT name, project_manager_id FROM projects WHERE id = $1 AND org_id = $2",
+            [projectId, user.orgId],
+          )
+        ).rows[0] as { name: string; project_manager_id: string | null } | undefined;
+        /*
+         * A project with no manager, or one whose manager is the very
+         * person exiting, has nobody left to tell. The org's HR manager
+         * stands in -- offboarding is HR's business even on someone else's
+         * project -- and if this org has none either, the person who acted
+         * on the exit is at least somebody who knows it happened (policy
+         * batch fix round 1, item 3).
+         */
+        let recipientId = project?.project_manager_id ?? null;
+        if (!recipientId || accountIds.includes(recipientId)) {
+          if (hrManagerId === undefined) {
+            hrManagerId = (
+              await db.query(
+                `SELECT u.id FROM users u
+                   JOIN user_roles ur ON ur.user_id = u.id
+                   JOIN roles r ON r.id = ur.role_id
+                  WHERE u.org_id = $1 AND u.auth_status = 'ACTIVE' AND r.code = 'HR_MANAGER'
+                  ORDER BY u.created_at ASC
+                  LIMIT 1`,
+                [user.orgId],
+              )
+            ).rows[0]?.id ?? null;
+          }
+          recipientId = hrManagerId ?? user.id;
+        }
+        const taskList = tasksForProject.map((t) => `- ${t.title}`).join("\n");
+        const projectLabel = project ? ` on ${project.name}` : "";
+        await emitNotification(db, {
+          orgId: user.orgId,
+          recipientId,
+          type: "TASK_REASSIGN_NEEDED",
+          title: `${tasksForProject.length} task${tasksForProject.length === 1 ? "" : "s"} need reassignment${projectLabel}`,
+          body: `${body.first_name} ${body.last_name ?? ""}`.trim()
+            + ` exited and left these tasks unassigned${projectLabel}:\n${taskList}`,
+          entityType: "project",
+          entityId: projectId,
+        });
+        notifiedManagers.push(recipientId);
       }
 
       await writeAudit(db, {
@@ -1497,7 +1587,8 @@ export async function registerEmployeeRoutes(
           offboarding: {
             disabled_user_ids: disabled,
             cancelled_leave_request_ids: cancelledLeave,
-            open_task_ids_needing_reassignment: openTasks.map((t) => t.id),
+            unassigned_task_ids: openTasks.map((t) => t.id),
+            notified_project_manager_ids: notifiedManagers,
           },
         },
         reason,

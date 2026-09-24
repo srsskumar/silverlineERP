@@ -471,6 +471,21 @@ export const legalHoldSchema = z.object({
   path: ['reason'],
 });
 
+/**
+ * POST /api/v1/documents/purge (owner decision 2026-09-24 #3).
+ *
+ * No auto-purge exists anywhere: this is the one and only way a document is
+ * ever deleted for retention, and it always carries a reason -- the confirm
+ * is the request itself, made explicitly by an admin who has seen the "due
+ * for purge" report first.
+ */
+export const documentPurgeSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1, 'Select at least one document').max(100),
+  reason: z.string().min(3, 'Say why these are being purged').max(500),
+});
+
+export type DocumentPurgeInput = z.infer<typeof documentPurgeSchema>;
+
 /* ----------------------------------------------------------- permissions */
 
 export const DOCUMENT_PERMISSIONS = [
@@ -494,8 +509,10 @@ export const DOCUMENT_ROLE_GRANTS: Record<RoleCode, string[]> = {
   PAYROLL_OFFICER: ['document.read', 'document.confidential'],
   // Reads everything including the confidential types, and places a hold.
   // Cannot delete: an auditor who can destroy evidence is not a control.
-  AUDITOR: ['document.read', 'document.confidential', 'document.legalhold',
-    'document.legalhold.release'],
+  // Cannot release a hold either (owner decision 2026-09-24 #4): placing one
+  // protects a document, releasing it is the step that makes the document
+  // deletable again, and that is not an auditor's call to make alone.
+  AUDITOR: ['document.read', 'document.confidential', 'document.legalhold'],
   TEAM_LEAD: ['document.read'],
   SALES_BD_EXECUTIVE: ['document.read'],
   // Sees the register for their own employer's documents through the employee

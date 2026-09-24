@@ -60,6 +60,8 @@ export interface EmployeeListItem {
   phonepe_number?: string | null;
   salary_basic?: number | string | null;
   date_of_joining?: string | null;
+  /** A badge, not a status (owner decision 2026-09-24 #2): approved leave covers today. */
+  on_leave_today?: boolean;
   [key: string]: unknown;
 }
 
