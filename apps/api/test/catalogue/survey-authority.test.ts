@@ -42,8 +42,8 @@ const post = (h: Headers, u: string, p?: unknown) => send("POST", h, u, p);
 /** An employee record and a signed-in user for it, with the given roles. */
 async function person(roles: string[], reportsTo: string | null = null) {
   const employeeId = String((await w.pool.query(
-    `INSERT INTO employees (org_id, emp_no, first_name, last_name, phone, date_of_joining, reports_to)
-     VALUES ($1, $2, 'Auth', 'Person', $3, CURRENT_DATE, $4) RETURNING id`,
+    `INSERT INTO employees (org_id, emp_no, first_name, last_name, phone, date_of_joining, reports_to, status)
+     VALUES ($1, $2, 'Auth', 'Person', $3, CURRENT_DATE, $4, 'ACTIVE') RETURNING id`,
     [w.orgId, uniq("AUTH"), `9${Math.floor(100000000 + Math.random() * 899999999)}`, reportsTo],
   )).rows[0].id);
   const username = uniq("auth").toLowerCase();

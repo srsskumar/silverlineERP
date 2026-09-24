@@ -1321,6 +1321,35 @@ export async function registerSurveyRoutes(
         }
 
         /*
+         * The start date is kept unless this call says otherwise (SV-007).
+         *
+         * Omitting started_on used to write NULL over the recorded start, so
+         * "mark it complete" through the API erased when the stage began and
+         * with it every duration and variance measured from it. Sending
+         * started_on: null still clears it on purpose.
+         */
+        const held = (await db.query(
+          `SELECT started_on FROM survey_village_stages
+            WHERE survey_village_id = $1 AND stage_id = $2`, [id, stage.id])).rows[0];
+        const startedOn = input.started_on !== undefined
+          ? input.started_on : iso(held?.started_on);
+        // Work that has not happened yet is not a date anybody can record,
+        // and a finish before the start is a typo (SV-008).
+        const now = today();
+        if (startedOn && input.started_on !== undefined && startedOn > now) {
+          fail('VALIDATION_ERROR', `A stage cannot start in the future (${startedOn}).`, 422);
+        }
+        if (input.completed_on && input.completed_on > now) {
+          fail('VALIDATION_ERROR',
+            `A stage cannot be completed in the future (${input.completed_on}).`, 422);
+        }
+        if (input.completed_on && startedOn && input.completed_on < startedOn) {
+          fail('VALIDATION_ERROR',
+            `This stage started on ${startedOn}; it cannot be completed on ${input.completed_on}.`,
+            422);
+        }
+
+        /*
          * Signing ground truthing off late must say why (§074).
          *
          * The other moment the question can be put, and the last one worth
@@ -1446,7 +1475,7 @@ export async function registerSurveyRoutes(
                          updated_at = now(), updated_by = EXCLUDED.updated_by
            RETURNING *`,
           [u.orgId, id, stage.id, input.state,
-            input.started_on ?? null, input.completed_on ?? null,
+            startedOn ?? null, input.completed_on ?? null,
             input.remarks ?? null,
             input.expected_start_on ?? null, input.expected_end_on ?? null,
             input.variance_reason ?? null, input.variance_remarks ?? null,
