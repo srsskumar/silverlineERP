@@ -40,6 +40,16 @@ describe('inventory integrity',()=>{
  it('calculates invoice totals using decimal arithmetic',async()=>{
   const v=(await call('POST','vendors',{code:'V1',name:'Vendor'})).json();const r=await call('POST','invoices',{serial_number:'INV',vendor_id:v.id,hsn:'1234',gst_enabled:true,gst_rate:'18',subtotal:'0.10',payment_mode:'BANK',reference:'PO'});expect(r.statusCode).toBe(201);expect(r.json().total).toBe('0.1200');
  });
+ it('rounds header-only invoice tax exactly, not through a float round (fix round 2, item 3)',async()=>{
+  // 13.25 x 18% is exactly 2.385, which rounds to 2.39 -- but the float
+  // product is 2.3849999999999997868..., so Math.round(subtotal*rate/100)
+  // rounds it down to 2.38 instead.
+  const v=(await call('POST','vendors',{code:'V2',name:'Vendor Two'})).json();
+  const r=await call('POST','invoices',{serial_number:'INV-2',vendor_id:v.id,hsn:'1234',gst_enabled:true,gst_rate:'18',subtotal:'13.25',payment_mode:'BANK',reference:'PO'});
+  expect(r.statusCode).toBe(201);
+  expect(r.json().tax).toBe('2.3900');
+  expect(r.json().total).toBe('15.6400');
+ });
  it('links an invoice to the purchase order it bills against — B-014',async()=>{
   // invoiceSchema had no purchase_order_id field, so a vendor invoice could
   // never be linked to its PO through the API and POST /invoices/:id/match

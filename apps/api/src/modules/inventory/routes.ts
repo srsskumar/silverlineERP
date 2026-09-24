@@ -3,7 +3,7 @@ import { likeContains } from "../../common/like.js";
 import {scopedReads} from "../../common/scopedReads.js";
 import type { FastifyInstance,FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
-import { vendorSchema,itemSchema,stockSchema,invoiceSchema,invoiceLinesUpdateSchema,computeInvoice,assetSchema,assetLookupSchema,assetAssignSchema,assetBulkAssignSchema,assetTransferSchema,assetAllocationEditSchema,assetLookupCode,assetTransitionSchema,assetAuditSchema,assetLocation,type InvoiceLineInput as GstInvoiceLineInput } from '@silverline/shared';
+import { vendorSchema,itemSchema,stockSchema,invoiceSchema,invoiceLinesUpdateSchema,computeInvoice,assetSchema,assetLookupSchema,assetAssignSchema,assetBulkAssignSchema,assetTransferSchema,assetAllocationEditSchema,assetLookupCode,assetTransitionSchema,assetAuditSchema,assetLocation,percentOf,type InvoiceLineInput as GstInvoiceLineInput } from '@silverline/shared';
 import { buildAuthenticate,requirePermission,scopesForPermission } from '../../common/auth.js';
 import { actor,parse,page,inOrg,mutate,version,fail,projectAccess,employeeAccess } from '../../common/domain.js';
 import { itemDeltaSql,itemOnHand,lowStockLevel,notifyLowStockCrossing } from '../../common/stockLedger.js';
@@ -329,7 +329,11 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    let subtotal=Number(i.subtotal);
    let gstEnabled=i.gst_enabled;
    let gstRate=Number(i.gst_rate);
-   let tax=gstEnabled?round2(subtotal*gstRate/100):0;
+   // percentOf, not round2(subtotal*gstRate/100) (fix round 2, item 3): the
+   // float product mis-rounds exact-half-paisa cases (13.25 x 18% is exactly
+   // 2.385, whose float product is 2.3849999999999997868..., rounding down
+   // to 2.38 instead of 2.39).
+   let tax=gstEnabled?percentOf(subtotal,gstRate):0;
    let total=round2(subtotal+tax);
    let computed:ReturnType<typeof computeInvoice>|null=null;
    if(i.lines?.length){
