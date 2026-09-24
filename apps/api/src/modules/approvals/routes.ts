@@ -8,6 +8,7 @@ import {
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
+import { resolveScopes } from '../../common/scopes.js';
 
 /**
  * Approval engine (§41).
@@ -361,13 +362,30 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     };
   });
 
-  /** The acting user's queue, delegations included. */
+  /**
+   * The acting user's queue, delegations and project scope included.
+   *
+   * DECISION (2026-09-24): a project-scoped approver (§4.1 -- TEAM_LEAD and
+   * PROJECT_MANAGER default to an assigned-project scope) must see only
+   * documents in a project their own approval.act scope covers, plus
+   * org-wide (project-less) documents they are otherwise eligible for --
+   * not every pending step across the organisation. A global scope (most
+   * other roles, and anyone with an explicit null-scope assignment) is
+   * unaffected.
+   */
   app.get('/api/v1/approvals/inbox', { preHandler: guard('approval.act') }, async req => {
     const u = actor(req);
+    const scopes = resolveScopes(u.scopes);
     const delegations = await delegationsFor(pool, u.orgId);
-    const principals = delegations
-      .filter(d => d.toUserId === u.id && d.validFrom <= today() && today() <= d.validTo)
-      .map(d => d.fromUserId);
+    const liveDelegationsToMe = delegations
+      .filter(d => d.toUserId === u.id && d.validFrom <= today() && today() <= d.validTo);
+    const principals = liveDelegationsToMe.map(d => d.fromUserId);
+    // A role-based step ("any PROJECT_MANAGER") names no one person; canAct
+    // already lets a live delegate of any role holder act on it (owner
+    // decision 2026-09-24), so the inbox has to offer it to them too, not
+    // only a step assigned to them by name.
+    const delegatedRoles = [...new Set(liveDelegationsToMe.flatMap(d => d.fromUserRoles ?? []))];
+    const roleMatch = [...new Set([...(u.roles ?? []), ...delegatedRoles])];
     const rows = (await pool.query(
       `SELECT i.*, s.id AS step_id, s.sequence, s.approver_role, s.approver_user_id, s.pending_since, s.sla_hours
        FROM approval_steps s JOIN approval_instances i ON i.id = s.instance_id
@@ -375,8 +393,11 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
          AND (s.approver_role = ANY($2::text[]) OR s.approver_user_id = ANY($3::uuid[]))
          -- maker-checker: never show somebody their own request
          AND i.requested_by <> $4
+         -- project scope: org-wide documents always show; a scoped approver
+         -- (not global) sees a project one only when it is theirs.
+         AND ($5::boolean OR i.project_id IS NULL OR i.project_id = ANY($6::uuid[]))
        ORDER BY s.pending_since NULLS LAST, i.created_at`,
-      [u.orgId, u.roles ?? [], [u.id, ...principals], u.id])).rows;
+      [u.orgId, roleMatch, [u.id, ...principals], u.id, scopes.global, scopes.projects])).rows;
     // Only the step that is actually next may be acted on.
     const actionable = [];
     for (const row of rows) {

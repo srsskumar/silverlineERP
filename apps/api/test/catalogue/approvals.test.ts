@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { workDate, buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
+import { workDate, buildWorld, idem, uniq, createUser, PASSWORD, type CatalogueWorld, type Headers } from "./fixture.js";
 
 let w: CatalogueWorld;
 
@@ -614,6 +614,79 @@ describe("recall and visibility", () => {
     const res = await submit(600_000, "PURCHASE_ORDER", w.role.EMPLOYEE);
     const inbox = await get(w.role.ADMIN, "/api/v1/approvals/inbox");
     expect(inbox.data.some((r: any) => r.id === res.data.id)).toBe(false);
+  });
+});
+
+describe("inbox project scope (owner decision 2026-09-24)", () => {
+  beforeAll(async () => { await ladderPolicy(); }); // level 1: TEAM_LEAD, level 2: PROJECT_MANAGER
+
+  async function loginAs(username: string, password: string): Promise<Headers> {
+    const res = await w.app.inject({
+      method: "POST", url: "/api/v1/auth/login", payload: { username, password },
+    });
+    const body = res.json() as { access_token?: string };
+    return { authorization: `Bearer ${body.access_token}` };
+  }
+
+  /** A fresh PROJECT_MANAGER whose own scope is one project, not the organisation. */
+  async function scopedProjectManager(projectId: string): Promise<Headers> {
+    const username = `cat_scoped_pm_${uniq()}`;
+    const userId = await createUser(w.pool, w.orgId, { username, roles: ["PROJECT_MANAGER"] });
+    await w.pool.query(
+      "UPDATE user_roles SET scope_type = 'project', scope_id = $1 WHERE user_id = $2",
+      [projectId, userId]);
+    return loginAs(username, PASSWORD);
+  }
+
+  /** Clears level 1 (TEAM_LEAD, global scope) so the instance waits at level 2 (PROJECT_MANAGER). */
+  async function toLevel2(instanceId: string) {
+    const cleared = await post({ ...w.role.TEAM_LEAD, ...(await instanceVersion(instanceId)) },
+      `/api/v1/approvals/${instanceId}/decision`, { decision: "APPROVE" });
+    expect(cleared.status, JSON.stringify(cleared.body)).toBe(200);
+  }
+
+  it("shows a project-scoped approver their own project's items and org-wide ones, not another project's", async () => {
+    const mine = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_ORDER", document_id: randomUUID(), amount: 100_000, project_id: w.activeProject,
+    });
+    expect(mine.status, JSON.stringify(mine.body)).toBe(201);
+    await toLevel2(mine.data.id);
+
+    const someoneElses = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_ORDER", document_id: randomUUID(), amount: 100_000, project_id: w.inactiveProject,
+    });
+    expect(someoneElses.status, JSON.stringify(someoneElses.body)).toBe(201);
+    await toLevel2(someoneElses.data.id);
+
+    const orgWide = await submit(100_000); // no project_id at all
+    await toLevel2(orgWide.data.id);
+
+    const scoped = await scopedProjectManager(w.activeProject);
+    const inbox = await get(scoped, "/api/v1/approvals/inbox");
+    expect(inbox.status, JSON.stringify(inbox.body)).toBe(200);
+    const ids = inbox.data.map((r: any) => r.id);
+    expect(ids).toContain(mine.data.id);
+    expect(ids).toContain(orgWide.data.id);
+    expect(ids).not.toContain(someoneElses.data.id);
+  });
+
+  it("still shows a globally-scoped approver items from every project", async () => {
+    const a = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_ORDER", document_id: randomUUID(), amount: 100_000, project_id: w.activeProject,
+    });
+    expect(a.status, JSON.stringify(a.body)).toBe(201);
+    await toLevel2(a.data.id);
+    const b = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_ORDER", document_id: randomUUID(), amount: 100_000, project_id: w.inactiveProject,
+    });
+    expect(b.status, JSON.stringify(b.body)).toBe(201);
+    await toLevel2(b.data.id);
+
+    // The seeded per-role fixture users hold a null (global) scope.
+    const inbox = await get(w.role.PROJECT_MANAGER, "/api/v1/approvals/inbox");
+    const ids = inbox.data.map((r: any) => r.id);
+    expect(ids).toContain(a.data.id);
+    expect(ids).toContain(b.data.id);
   });
 });
 
