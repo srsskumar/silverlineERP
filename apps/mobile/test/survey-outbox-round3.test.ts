@@ -5,7 +5,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { runSurveyEntryOp, supersedeSurveyEntry } from "../src/sync/surveyEntryOp";
-import { draftFromEntry, returnSubmission, type FiledEntry } from "../src/survey/fieldCrew";
+import { conflictReview, draftFromEntry, returnSubmission, type FiledEntry } from "../src/survey/fieldCrew";
 import { emptyDraft } from "../src/survey/returnForm";
 import { D, MEASURES, V, VILLAGE, outbox, server } from "./support/surveyOutbox";
 
@@ -101,3 +101,33 @@ describe("a superseded correction whose amend reply was lost (round 3, item 3)",
   });
 });
 
+describe("the review shows every field the crew can set (round 3, item 2)", () => {
+  const current: FiledEntry & { rovers_used?: number; rovers_idle?: number } = {
+    id: "e1", version: 3, entry_date: D, teams_deployed: 2, notes: "rain",
+    govt_staff_present: 1, crew_present: 4, values: { PVT: 5 }, rovers_used: 1, rovers_idle: 0,
+  };
+  const R1 = "123e4567-e89b-12d3-a456-4266141740a1";
+
+  it("lists teams, attendance, a queued note-clear and instruments, not only measures", () => {
+    const review = conflictReview({
+      survey_village_id: V, entry_date: D, values: { PVT: 5 },
+      teams_deployed: 3, govt_staff_present: 0, crew_present: 4, notes: null,
+      rovers: [{ asset_id: R1, status: "IDLE", idle_reason: "WEATHER", remarks: "rain" }],
+    }, current, MEASURES);
+    const codes = review.differences.map(d => d.code).sort();
+    assert.deepEqual(codes, ["govt_staff_present", "notes", "rovers", "teams_deployed"]);
+    assert.equal(review.draft.teamsDeployed, "3");
+    assert.equal(review.draft.govtStaffPresent, "0");
+    assert.equal(review.draft.clearNotes, true);
+    assert.equal(review.draft.notes, "");
+    assert.deepEqual(review.draft.rovers[R1], { status: "IDLE", idleReason: "WEATHER", remarks: "rain" });
+  });
+
+  it("keeps the server's note when the queued draft did not set one", () => {
+    const review = conflictReview({ survey_village_id: V, entry_date: D, values: { PVT: 5 } },
+      current, MEASURES);
+    assert.equal(review.draft.notes, "rain");
+    assert.equal(review.draft.clearNotes ?? false, false);
+    assert.deepEqual(review.differences, []);
+  });
+});

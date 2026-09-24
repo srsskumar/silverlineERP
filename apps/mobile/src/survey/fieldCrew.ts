@@ -73,6 +73,9 @@ export interface FiledEntry {
   govt_staff_present?: number | null;
   crew_present?: number | null;
   values?: Record<string, number> | null;
+  /** Instrument lines on the day, as GET /survey/entries counts them. */
+  rovers_used?: number | null;
+  rovers_idle?: number | null;
 }
 
 const text = (n: number | null | undefined) =>
@@ -122,14 +125,26 @@ export function conflictReview(
 ): { draft: ReturnDraft; differences: ReviewDifference[] } {
   const theirs = payload.values ?? {};
   const now = current.values ?? {};
-  const draft = draftFromEntry({
+  // Set means set: undefined is "the draft did not say", null on notes is a
+  // queued clear, and neither is overwritten by the server's value (round 3).
+  const set = <T,>(v: T | null | undefined): v is T => v !== undefined && v !== null;
+  const clearsNotes = payload.notes === null;
+  const base = draftFromEntry({
     ...current,
     values: { ...now, ...theirs },
-    teams_deployed: payload.teams_deployed ?? current.teams_deployed,
-    notes: payload.notes ?? current.notes,
-    govt_staff_present: payload.govt_staff_present ?? current.govt_staff_present,
-    crew_present: payload.crew_present ?? current.crew_present,
+    teams_deployed: set(payload.teams_deployed) ? payload.teams_deployed : current.teams_deployed,
+    notes: clearsNotes ? null : set(payload.notes) ? payload.notes : current.notes,
+    govt_staff_present: set(payload.govt_staff_present) ? payload.govt_staff_present : current.govt_staff_present,
+    crew_present: set(payload.crew_present) ? payload.crew_present : current.crew_present,
   }, measures);
+  const draft: ReturnDraft = {
+    ...base,
+    ...(clearsNotes ? { notes: "", clearNotes: true } : {}),
+    // The queued instrument lines come back as they were marked.
+    rovers: Object.fromEntries((payload.rovers ?? []).map(r => [r.asset_id, {
+      status: r.status, idleReason: r.idle_reason ?? null, remarks: r.remarks ?? "",
+    }])),
+  };
   const differences: ReviewDifference[] = [];
   for (const m of measures) {
     if (!(m.code in theirs)) continue;
@@ -137,6 +152,31 @@ export function conflictReview(
     if (a !== b) {
       differences.push({ code: m.code, label: m.label,
         note: `${m.label}: the day now says ${a}; you had ${b}.` });
+    }
+  }
+  const field = (code: string, label: string, nowV: unknown, mine: unknown) => {
+    if ((nowV ?? null) !== (mine ?? null)) {
+      differences.push({ code, label,
+        note: `${label}: the day now says ${nowV ?? "nothing"}; you had ${mine ?? "nothing"}.` });
+    }
+  };
+  if (set(payload.teams_deployed)) field("teams_deployed", "Teams deployed", current.teams_deployed ?? 0, payload.teams_deployed);
+  if (set(payload.govt_staff_present)) field("govt_staff_present", "Government staff present", current.govt_staff_present, payload.govt_staff_present);
+  if (set(payload.crew_present)) field("crew_present", "Crew present", current.crew_present, payload.crew_present);
+  if (clearsNotes && (current.notes ?? "").trim()) {
+    differences.push({ code: "notes", label: "Notes",
+      note: `Notes: the day says "${current.notes}"; you asked to clear it.` });
+  } else if (set(payload.notes) && payload.notes.trim() !== (current.notes ?? "").trim()) {
+    field("notes", "Notes", current.notes, payload.notes);
+  }
+  if (payload.rovers?.length) {
+    const used = payload.rovers.filter(r => r.status === "UTILIZED").length;
+    const idle = payload.rovers.length - used;
+    if (used !== (current.rovers_used ?? 0) || idle !== (current.rovers_idle ?? 0)) {
+      differences.push({ code: "rovers", label: "Instruments",
+        note: `Instruments: the day now has ${current.rovers_used ?? 0} in use and `
+          + `${current.rovers_idle ?? 0} idle; you marked ${used} in use and ${idle} idle. `
+          + "A correction does not change instrument lines on the server (SG-016)." });
     }
   }
   return { draft, differences };
