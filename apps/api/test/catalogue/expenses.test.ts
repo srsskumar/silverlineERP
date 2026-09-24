@@ -994,6 +994,56 @@ describe("expense.read_all sees everything but edits only your own (owner decisi
   });
 });
 
+describe("submit is claimant-only too (policy batch fix round 1, item 2)", () => {
+  // The lines/receipts edit paths were narrowed to the claimant in the
+  // original decision-5 change above, but submit (DRAFT/REJECTED ->
+  // SUBMITTED) was missed: it only checked expense.manage, so any of
+  // PROJECT_MANAGER/PAYROLL_OFFICER/HR_MANAGER (all hold expense.manage)
+  // could submit a claim they never raised and are not the claimant of.
+  async function draftClaim() {
+    return makeClaim(
+      [{ category: "TRAVEL", expense_date: "2026-05-01", description: "Taxi", amount: 300 }],
+    );
+  }
+
+  it("refuses a read_all-and-manage holder submitting another claimant's claim", async () => {
+    const claim = await draftClaim();
+    const res = await post(
+      { ...w.role.PROJECT_MANAGER, ...(await ver("expense_claims", claim.id)) },
+      `/api/v1/expense-claims/${claim.id}/submit`, {});
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
+    const still = await w.pool.query("SELECT status FROM expense_claims WHERE id = $1", [claim.id]);
+    expect(still.rows[0].status).toBe("DRAFT");
+  });
+
+  it("still lets the claimant submit their own claim", async () => {
+    const claim = await draftClaim();
+    const res = await post(
+      { ...w.directUser, ...(await ver("expense_claims", claim.id)) },
+      `/api/v1/expense-claims/${claim.id}/submit`, {});
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.data.status).toBe("SUBMITTED");
+  });
+
+  it("leaves the approval decision and reimbursement flow untouched, end to end", async () => {
+    // clearLadder submits as the claimant (its own default `raiser`), so
+    // this exercises the guard on the happy path and proves the flow past
+    // it -- approve, then reimburse -- still works.
+    const claim = await draftClaim();
+    await clearLadder(claim.id);
+    const decided = await post(
+      { ...w.role.PROJECT_MANAGER, ...(await ver("expense_claims", claim.id)) },
+      `/api/v1/expense-claims/${claim.id}/decision`, { status: "APPROVED" });
+    expect(decided.status, JSON.stringify(decided.body)).toBe(200);
+    const reimbursed = await post(
+      { ...w.role.PAYROLL_OFFICER, ...(await ver("expense_claims", claim.id)) },
+      `/api/v1/expense-claims/${claim.id}/reimburse`, {});
+    expect(reimbursed.status, JSON.stringify(reimbursed.body)).toBe(200);
+    expect(reimbursed.data.status).toBe("REIMBURSED");
+  });
+});
+
 describe("app-wide body limit (fix round 1, B-002 review)", () => {
   it("refuses an oversized body with 413 on an ordinary route, not just the receipts one", async () => {
     // The receipts route alone raises its own bodyLimit; every other route

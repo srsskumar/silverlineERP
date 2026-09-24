@@ -526,6 +526,11 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
       data: await mutate(pool, req, 'expense.claim.submit', 'expense_claim', async db => {
         const claim = await inOrg(db, 'expense_claims', id, u.orgId, true);
         version(req, claim as { version: number });
+        // Submitting is an edit -- moving the claim into the approval
+        // ladder -- so it gets the same claimant-only guard as the lines
+        // and receipts routes (owner decision 2026-09-24 #5; missed here in
+        // the original pass, closed in policy batch fix round 1 item 2).
+        requireClaimOwner(u, claim);
         if (!canTransition(claim.status as ExpenseClaimStatus, 'SUBMITTED')) {
           fail('INVALID_TRANSITION', `A ${String(claim.status).toLowerCase()} claim cannot be submitted`);
         }
