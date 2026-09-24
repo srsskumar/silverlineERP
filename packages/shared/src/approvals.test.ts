@@ -339,6 +339,73 @@ describe('delegation', () => {
       expect(decision.allowed).toBe(true);
       if (decision.allowed) expect(decision.viaDelegation).toBe(false);
     });
+
+    describe('carries the principal’s project scope (fix round 1, I2)', () => {
+      it('lets the delegate act for a project the principal can reach', () => {
+        const decision = canAct({
+          step: roleStep, steps: [roleStep],
+          actorUserId: 'deputy', actorRoles: [], requesterUserId: 'u1',
+          delegations: [delegation({
+            fromUserRoles: ['PROJECT_MANAGER'],
+            fromUserScope: { global: false, projects: ['proj-x'] },
+          })],
+          documentType: 'PURCHASE_ORDER', today: '2026-09-15', projectId: 'proj-x',
+        });
+        expect(decision.allowed).toBe(true);
+      });
+
+      it('refuses the delegate for a project the principal cannot reach', () => {
+        // The delegate borrows boss's PM standing, not a blanket one -- boss
+        // manages proj-x, not proj-y, so the deputy can only act for proj-x.
+        const decision = canAct({
+          step: roleStep, steps: [roleStep],
+          actorUserId: 'deputy', actorRoles: [], requesterUserId: 'u1',
+          delegations: [delegation({
+            fromUserRoles: ['PROJECT_MANAGER'],
+            fromUserScope: { global: false, projects: ['proj-x'] },
+          })],
+          documentType: 'PURCHASE_ORDER', today: '2026-09-15', projectId: 'proj-y',
+        });
+        expect(decision.allowed).toBe(false);
+        if (!decision.allowed) expect(decision.code).toBe('NOT_THE_APPROVER');
+      });
+
+      it('leaves an org-wide document unrestricted, whatever the principal’s scope', () => {
+        const decision = canAct({
+          step: roleStep, steps: [roleStep],
+          actorUserId: 'deputy', actorRoles: [], requesterUserId: 'u1',
+          delegations: [delegation({
+            fromUserRoles: ['PROJECT_MANAGER'],
+            fromUserScope: { global: false, projects: ['proj-x'] },
+          })],
+          documentType: 'PURCHASE_ORDER', today: '2026-09-15', projectId: null,
+        });
+        expect(decision.allowed).toBe(true);
+      });
+
+      it('lets a globally-scoped principal’s delegate reach any project', () => {
+        const decision = canAct({
+          step: roleStep, steps: [roleStep],
+          actorUserId: 'deputy', actorRoles: [], requesterUserId: 'u1',
+          delegations: [delegation({
+            fromUserRoles: ['PROJECT_MANAGER'],
+            fromUserScope: { global: true, projects: [] },
+          })],
+          documentType: 'PURCHASE_ORDER', today: '2026-09-15', projectId: 'proj-y',
+        });
+        expect(decision.allowed).toBe(true);
+      });
+
+      it('stays permissive when an older caller has not supplied the principal’s scope', () => {
+        const decision = canAct({
+          step: roleStep, steps: [roleStep],
+          actorUserId: 'deputy', actorRoles: [], requesterUserId: 'u1',
+          delegations: [delegation({ fromUserRoles: ['PROJECT_MANAGER'] })],
+          documentType: 'PURCHASE_ORDER', today: '2026-09-15', projectId: 'proj-y',
+        });
+        expect(decision.allowed).toBe(true);
+      });
+    });
   });
 });
 

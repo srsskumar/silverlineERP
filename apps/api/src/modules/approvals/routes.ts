@@ -96,6 +96,10 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
    * role-based step ("any PROJECT_MANAGER") and not only a named-approver
    * one: the delegate inherits the principal's eligibility, so the pure
    * layer needs to know what roles the principal actually held.
+   * `from_user_scope` is I2 (fix round 1): the same role-based delegation
+   * must not let a delegate reach a project the principal could not
+   * themselves reach, so the pure layer also needs the principal's own
+   * resolved project scope.
    */
   async function delegationsFor(db: Pool | PoolClient, orgId: string): Promise<Delegation[]> {
     const rows = (await db.query(
@@ -106,15 +110,30 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
        LEFT JOIN roles r ON r.id = ur.role_id
        WHERE d.org_id = $1 AND d.revoked_at IS NULL
        GROUP BY d.id`, [orgId])).rows;
-    return rows.map(r => ({
-      fromUserId: String(r.from_user_id),
-      toUserId: String(r.to_user_id),
-      validFrom: String(r.valid_from).slice(0, 10),
-      validTo: String(r.valid_to).slice(0, 10),
-      documentTypes: Array.isArray(r.document_types) && r.document_types.length ? r.document_types : null,
-      revokedAt: r.revoked_at ? String(r.revoked_at) : null,
-      fromUserRoles: Array.isArray(r.from_user_roles) ? r.from_user_roles.map(String) : [],
-    }));
+    if (!rows.length) return [];
+    const fromUserIds = [...new Set(rows.map(r => String(r.from_user_id)))];
+    const scopeRows = (await db.query(
+      `SELECT user_id, scope_type, scope_id FROM user_roles WHERE user_id = ANY($1::uuid[])`,
+      [fromUserIds])).rows;
+    const scopesByUser = new Map<string, { scope_type: string | null; scope_id: string | null }[]>();
+    for (const r of scopeRows) {
+      const id = String(r.user_id);
+      (scopesByUser.get(id) ?? scopesByUser.set(id, []).get(id)!).push(
+        { scope_type: r.scope_type, scope_id: r.scope_id });
+    }
+    return rows.map(r => {
+      const resolved = resolveScopes(scopesByUser.get(String(r.from_user_id)) ?? []);
+      return {
+        fromUserId: String(r.from_user_id),
+        toUserId: String(r.to_user_id),
+        validFrom: String(r.valid_from).slice(0, 10),
+        validTo: String(r.valid_to).slice(0, 10),
+        documentTypes: Array.isArray(r.document_types) && r.document_types.length ? r.document_types : null,
+        revokedAt: r.revoked_at ? String(r.revoked_at) : null,
+        fromUserRoles: Array.isArray(r.from_user_roles) ? r.from_user_roles.map(String) : [],
+        fromUserScope: { global: resolved.global, projects: resolved.projects },
+      };
+    });
   }
 
   /** The policy that governs a document: project override first, then org. */
@@ -446,6 +465,7 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
           documentType: instance.document_type as ApprovalDocumentType,
           today: today(),
           hasSelfApproveOverride: u.permissions.includes('approval.self_approve'),
+          projectId: instance.project_id ? String(instance.project_id) : null,
         });
         if (!decision.allowed) {
           if (decision.code === 'NOT_THE_APPROVER') {

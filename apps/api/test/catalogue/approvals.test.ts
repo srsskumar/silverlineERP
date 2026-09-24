@@ -629,13 +629,14 @@ describe("inbox project scope (owner decision 2026-09-24)", () => {
   }
 
   /** A fresh PROJECT_MANAGER whose own scope is one project, not the organisation. */
-  async function scopedProjectManager(projectId: string): Promise<Headers> {
+  async function scopedProjectManager(projectId: string): Promise<Headers & { userId: string }> {
     const username = `cat_scoped_pm_${uniq()}`;
     const userId = await createUser(w.pool, w.orgId, { username, roles: ["PROJECT_MANAGER"] });
     await w.pool.query(
       "UPDATE user_roles SET scope_type = 'project', scope_id = $1 WHERE user_id = $2",
       [projectId, userId]);
-    return loginAs(username, PASSWORD);
+    const headers = await loginAs(username, PASSWORD);
+    return { ...headers, userId };
   }
 
   /** Clears level 1 (TEAM_LEAD, global scope) so the instance waits at level 2 (PROJECT_MANAGER). */
@@ -709,6 +710,41 @@ describe("inbox project scope (owner decision 2026-09-24)", () => {
     const ids = inbox.data.map((r: any) => r.id);
     expect(ids).toContain(a.data.id);
     expect(ids).toContain(b.data.id);
+  });
+
+  it("a role-based delegate carries the principal's project scope, not their own (fix round 1, I2)", async () => {
+    // ADMIN (globally scoped) holds no PROJECT_MANAGER role of its own, so
+    // its only route onto a PROJECT_MANAGER-role step is standing in for
+    // the scoped principal below -- and only for a project that principal
+    // actually manages.
+    const principal = await scopedProjectManager(w.activeProject);
+    const today = workDate();
+    const delegation = await post(principal, "/api/v1/approval-delegations", {
+      to_user_id: w.roleUserId.ADMIN, valid_from: today, valid_to: today, reason: "Covering for the scoped PM",
+    });
+    expect(delegation.status, JSON.stringify(delegation.body)).toBe(201);
+
+    const inScope = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_ORDER", document_id: randomUUID(), amount: 100_000, project_id: w.activeProject,
+    });
+    await toLevel2(inScope.data.id);
+    const outOfScope = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_ORDER", document_id: randomUUID(), amount: 100_000, project_id: w.inactiveProject,
+    });
+    await toLevel2(outOfScope.data.id);
+
+    const allowed = await post({ ...w.role.ADMIN, ...(await instanceVersion(inScope.data.id)) },
+      `/api/v1/approvals/${inScope.data.id}/decision`, { decision: "APPROVE" });
+    expect(allowed.status, JSON.stringify(allowed.body)).toBe(200);
+
+    // ADMIN itself is globally scoped (fix round 1, I1's own check would let
+    // it through); only I2's principal-scope check inside canAct refuses
+    // this one, because the *principal* -- not the delegate -- cannot reach
+    // w.inactiveProject.
+    const blocked = await post({ ...w.role.ADMIN, ...(await instanceVersion(outOfScope.data.id)) },
+      `/api/v1/approvals/${outOfScope.data.id}/decision`, { decision: "APPROVE" });
+    expect(blocked.status, JSON.stringify(blocked.body)).toBe(422);
+    expect(blocked.body.code).toBe("NOT_THE_APPROVER");
   });
 });
 

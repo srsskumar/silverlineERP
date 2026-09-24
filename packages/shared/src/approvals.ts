@@ -139,6 +139,16 @@ export interface Delegation {
    * check that without a database lookup of its own.
    */
   fromUserRoles?: string[];
+  /**
+   * The delegating user's own project scope (fix round 1, I2).
+   *
+   * A role-based delegation must not let a delegate reach further than the
+   * principal themselves could: `global` true means every project;
+   * otherwise `projects` is the exhaustive list. Absent (an older caller
+   * that has not supplied it) is treated as unrestricted -- see
+   * `principalCanReachProject`.
+   */
+  fromUserScope?: { global: boolean; projects: string[] };
 }
 
 /**
@@ -231,6 +241,28 @@ export type ApprovalDecision =
   | { allowed: false; code: string; reason: string };
 
 /**
+ * Whether a project the delegate would be deciding for is one the principal
+ * whose authority they are borrowing could themselves access.
+ *
+ * Only meaningful for a role-based step (fix round 1, I2): a named-approver
+ * step already ties one specific person to one specific instance when the
+ * ladder is drawn, so there is nothing for a delegate to over-reach into.
+ * "Any PROJECT_MANAGER" carries no such instance-specific tie, so without
+ * this a delegate with a broader scope than their principal could use a
+ * borrowed role to decide a project the principal never managed. Absent
+ * `projectId` (an org-wide document) or `fromUserScope` (not supplied by an
+ * older caller), this is permissive by design -- both mean "nothing to
+ * narrow by".
+ */
+function principalCanReachProject(
+  projectId: string | null | undefined, scope: Delegation['fromUserScope'],
+): boolean {
+  if (!projectId) return true;
+  if (!scope) return true;
+  return scope.global || scope.projects.includes(projectId);
+}
+
+/**
  * Whether this actor may act on this step right now.
  *
  * Maker-checker is the first gate and the one §4.1 names explicitly: an
@@ -248,8 +280,10 @@ export function canAct(args: {
   documentType: ApprovalDocumentType;
   today?: string;
   hasSelfApproveOverride?: boolean;
+  /** The document's project, for I2's principal-scope check on a role-based delegation. */
+  projectId?: string | null;
 }): ApprovalDecision {
-  const { step, steps, actorUserId, actorRoles, requesterUserId, documentType } = args;
+  const { step, steps, actorUserId, actorRoles, requesterUserId, documentType, projectId } = args;
   if (!step) return { allowed: false, code: 'NOTHING_PENDING', reason: 'There is no step waiting for a decision' };
 
   const actionable = nextActionableStep(steps);
@@ -285,13 +319,17 @@ export function canAct(args: {
     }
     // Nobody named holds this step -- any role holder does. So a delegate
     // inherits it exactly as they would a named approver's step, provided
-    // the person they stand in for actually held the role: a deputy covering
-    // a PM's leave should be able to act on "any PROJECT_MANAGER" the same
-    // as they act on a step assigned to that PM by name.
+    // the person they stand in for actually held the role (and, I2, could
+    // themselves reach this document's project): a deputy covering a PM's
+    // leave should be able to act on "any PROJECT_MANAGER" the same as they
+    // act on a step assigned to that PM by name -- but only for a project
+    // the PM they are covering for actually manages.
     const live = (args.delegations ?? []).filter(d =>
       !d.revokedAt && d.validFrom <= today && today <= d.validTo &&
       (!d.documentTypes || d.documentTypes.length === 0 || d.documentTypes.includes(documentType)));
-    const viaRoleDelegation = live.find(d => d.toUserId === actorUserId && (d.fromUserRoles ?? []).includes(step.approverRole!));
+    const viaRoleDelegation = live.find(d =>
+      d.toUserId === actorUserId && (d.fromUserRoles ?? []).includes(step.approverRole!) &&
+      principalCanReachProject(projectId, d.fromUserScope));
     if (viaRoleDelegation) return { allowed: true, viaDelegation: true, onBehalfOf: viaRoleDelegation.fromUserId };
     return {
       allowed: false, code: 'NOT_THE_APPROVER',
