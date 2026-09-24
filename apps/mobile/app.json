@@ -28,6 +28,9 @@
         "USE_BIOMETRIC",
         "RECEIVE_BOOT_COMPLETED"
       ],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -68,6 +71,13 @@
           "color": "#1a56db"
         }
       ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Choose a photo of a receipt to attach to your expense claim."
+        }
+      ],
+      "expo-document-picker",
       "expo-splash-screen",
       "expo-background-task",
       "expo-sharing",

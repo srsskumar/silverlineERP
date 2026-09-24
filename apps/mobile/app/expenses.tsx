@@ -30,7 +30,7 @@ import {
 } from "../src/api/endpoints";
 import { EXPENSE_CATEGORIES, validateExpenseClaim } from "../src/validators";
 import { categoryLabel, expenseClaimActions, expenseStatusTone } from "../src/expensesFormat";
-import { claimTakesReceipts, formatReceiptSize, receiptIcon } from "../src/expenseReceiptsFormat";
+import { canAddReceipt, claimTakesReceipts, formatReceiptSize, receiptIcon } from "../src/expenseReceiptsFormat";
 import { ReceiptCapture } from "../src/device/ReceiptCapture";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
 import {
@@ -330,7 +330,6 @@ function ExpenseDetail({
   const actions = expenseClaimActions(claim.status);
   const canResubmit = canManage && actions.canSubmit;
   const canWithdraw = canManage && actions.canWithdraw;
-  const canAttach = canManage && claimTakesReceipts(claim.status);
 
   const [showCapture, setShowCapture] = useState(false);
   const [receiptError, setReceiptError] = useState<string | null>(null);
@@ -341,6 +340,14 @@ function ExpenseDetail({
     queryKey: ["expense-receipts", claim.id],
     queryFn: () => getExpenseReceipts(claim.id),
   });
+  // Removing a receipt must stay available even once a claim is AT the
+  // 5-receipt cap (that's how you get back under it) — only adding a new
+  // one is capped, so these are two different gates.
+  const canManageReceipts = canManage && claimTakesReceipts(claim.status);
+  // Same pre-check the picker itself runs on each upload attempt — also
+  // gates whether "Add receipt" shows at all, so a claim already at the
+  // cap doesn't invite a doomed upload.
+  const canAddMore = canManageReceipts && canAddReceipt(claim.status, (receipts.data ?? []).length).ok;
 
   const refreshReceipts = () => void qc.invalidateQueries({ queryKey: ["expense-receipts", claim.id] });
 
@@ -427,7 +434,7 @@ function ExpenseDetail({
               right={
                 viewingId === r.id ? (
                   <Subtle>Opening…</Subtle>
-                ) : canAttach ? (
+                ) : canManageReceipts ? (
                   <Button
                     title="Remove"
                     variant="ghost"
@@ -442,10 +449,10 @@ function ExpenseDetail({
           ))
         )}
       </Card>
-      {canAttach ? (
+      {canAddMore ? (
         <Button
           title="Add receipt"
-          icon="camera-outline"
+          icon="attach-outline"
           variant="secondary"
           style={{ marginTop: space.sm }}
           onPress={() => setShowCapture(true)}
