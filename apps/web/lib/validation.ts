@@ -1265,3 +1265,27 @@ export const shiftFormSchema = z
     active: z.boolean(),
   });
 export type ShiftFormInput = z.infer<typeof shiftFormSchema>;
+
+// ---------------------------------------------------------------------------
+// Tender instruments — EMD/BG (Task 5f, §8.4/§22.2). Mirrors
+// packages/shared/src/crm.ts's instrumentSchema / instrumentStatusSchema.
+// ---------------------------------------------------------------------------
+
+export const INSTRUMENT_TYPES = ['EMD', 'BID_SECURITY_BG', 'PERFORMANCE_BG', 'ADVANCE_BG', 'RETENTION_BG'] as const;
+export const INSTRUMENT_STATUSES = ['ACTIVE', 'RELEASED', 'CLAIMED', 'EXPIRED', 'RENEWED'] as const;
+
+export const instrumentFormSchema = z
+  .object({
+    instrument_type: z.enum(INSTRUMENT_TYPES, { errorMap: () => ({ message: 'Pick an instrument type' }) }),
+    issuing_bank: z.string().trim().min(1, 'Issuing bank is required'),
+    instrument_number: z.string().trim().min(1, 'Instrument number is required').max(100),
+    amount: moneyField(),
+    issue_date: dateString(),
+    expiry_date: dateString(),
+    tender_id: optionalUuid,
+    project_id: optionalUuid,
+    notes: optionalText(2000),
+  })
+  .refine((v) => v.expiry_date >= v.issue_date, { message: 'Expiry cannot precede the issue date', path: ['expiry_date'] })
+  .refine((v) => Boolean(v.tender_id) || Boolean(v.project_id), { message: 'Attach the instrument to a tender or a project', path: ['tender_id'] });
+export type InstrumentFormInput = z.infer<typeof instrumentFormSchema>;

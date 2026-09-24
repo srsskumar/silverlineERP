@@ -13,6 +13,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { statusLabel } from '@/lib/board-visuals';
 import { day, maybeDay } from '@/lib/finance';
+import { TenderInstruments } from '@/components/tenders/TenderInstruments';
 
 type Row = Record<string, any>;
 
@@ -252,18 +253,7 @@ function TenderDetail({ id, onClose, onChanged }: { id: string; onClose: () => v
               </Section>
             ) : null}
 
-            {(t.instruments ?? []).length > 0 ? (
-              <Section title="EMD and guarantees">
-                <ul className="space-y-1.5 text-sm">
-                  {(t.instruments as Row[]).map((i) => (
-                    <li key={i.id} className="flex items-center justify-between gap-2">
-                      <span className="text-text">{statusLabel(String(i.instrument_type))} · {money(i.amount)}</span>
-                      <span className="text-2xs text-text-subtle">expires {day(i.expiry_date)}</span>
-                    </li>
-                  ))}
-                </ul>
-              </Section>
-            ) : null}
+            <TenderInstruments tenderId={id} />
 
             {allowed.length > 0 ? (
               <Section title="Move to">
