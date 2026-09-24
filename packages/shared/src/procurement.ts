@@ -230,16 +230,33 @@ export function matchInvoiceToOrder(
   const byId = new Map(orderLines.map(o => [o.id, o]));
   const byItem = new Map(
     orderLines.filter(o => o.itemId).map(o => [String(o.itemId), o]));
-  const byDescription = new Map(orderLines.map(o => [o.reference, o]));
+  // Several order lines can share a description (two deliveries of the same
+  // material at different rates, say), so a plain description->line map
+  // would keep only the last one and silently point every invoice line at
+  // it. Keep every line with that description, in order, so the fallback
+  // can claim the first one that hasn't already been used by an earlier
+  // invoice line on this same bill, rather than always landing on whichever
+  // came last.
+  const byDescription = new Map<string, OrderLineForMatch[]>();
+  for (const o of orderLines) {
+    const queue = byDescription.get(o.reference) ?? [];
+    queue.push(o);
+    byDescription.set(o.reference, queue);
+  }
+  const claimedByDescription = new Set<string>();
 
   const grouped = new Map<string, InvoiceLineForMatch[]>();
   const extraLines: InvoiceLineForMatch[] = [];
 
   for (const inv of invoiceLines) {
-    const target =
+    let target =
       (inv.poLineId && byId.get(inv.poLineId)) ||
       (inv.itemId && byItem.get(String(inv.itemId))) ||
-      byDescription.get(inv.reference);
+      undefined;
+    if (!target) {
+      target = (byDescription.get(inv.reference) ?? []).find(o => !claimedByDescription.has(o.id));
+      if (target) claimedByDescription.add(target.id);
+    }
     if (!target) { extraLines.push(inv); continue; }
     const bucket = grouped.get(target.id) ?? [];
     bucket.push(inv);

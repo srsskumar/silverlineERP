@@ -199,6 +199,39 @@ describe('matchInvoiceToOrder', () => {
     expect(result.exceptions.some(e => e.code === 'NOT_ON_ORDER')).toBe(true);
   });
 
+  it('claims the first unmatched order line, not the last, when the description fallback has to choose (fix round 1, minor 4)', () => {
+    // Two order lines share a description at different rates and quantities.
+    // Two invoice lines, neither carrying a po_line_id, each priced to match
+    // exactly one of them. The old fallback map kept only the *last* order
+    // line for a given description, so both invoice lines would resolve to
+    // pol-2 and the match would fail even though each invoice line correctly
+    // bills one real order line.
+    const orderLines = [
+      orderLine({ id: 'pol-1', orderedQuantity: 100, orderedRate: 400, receivedQuantity: 100 }),
+      orderLine({ id: 'pol-2', orderedQuantity: 50, orderedRate: 450, receivedQuantity: 50 }),
+    ];
+    const result = matchInvoiceToOrder(orderLines, [
+      invoiceLine({ poLineId: null, itemId: null, quantity: 100, rate: 400 }),
+      invoiceLine({ poLineId: null, itemId: null, quantity: 50, rate: 450 }),
+    ]);
+    expect(result.matched).toBe(true);
+    expect(result.exceptions).toHaveLength(0);
+  });
+
+  it('leaves a third same-description invoice line as an extra once every order line with that description is claimed', () => {
+    const orderLines = [
+      orderLine({ id: 'pol-1', orderedQuantity: 100, receivedQuantity: 100 }),
+      orderLine({ id: 'pol-2', orderedQuantity: 50, receivedQuantity: 50 }),
+    ];
+    const result = matchInvoiceToOrder(orderLines, [
+      invoiceLine({ poLineId: null, itemId: null, quantity: 100, rate: 400 }),
+      invoiceLine({ poLineId: null, itemId: null, quantity: 50, rate: 400 }),
+      invoiceLine({ poLineId: null, itemId: null, quantity: 10, rate: 400 }),
+    ]);
+    expect(result.extraLines).toHaveLength(1);
+    expect(result.extraLines[0].quantity).toBe(10);
+  });
+
   it('still runs the ordinary quantity and rate checks alongside extra-line detection', () => {
     const orderLines = [orderLine({ id: 'pol-1', receivedQuantity: 60 })];
     const result = matchInvoiceToOrder(orderLines, [
