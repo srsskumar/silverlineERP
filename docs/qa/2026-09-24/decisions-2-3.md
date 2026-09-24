@@ -227,3 +227,258 @@ live-DB run performed.
   afterward does not touch web): `tsc --noEmit` clean, `next build` clean,
   full `npx vitest run` — **947 passed, 0 failed** across 77 files.
 - No migrations run against the live DB. No leave-module files touched.
+
+---
+
+# Fix round 1
+
+Same worktree and branch. TDD throughout, one commit per item, same trailer.
+
+## C1 (CRITICAL) — RA bill receipts could be over-allocated or stranded
+
+**Current behaviour found.** `documentValue()` (`apps/api/src/modules/finance/routes.ts`)
+capped a SUBMITTED bill's receipt allocation at `gross_value`, not
+`net_payable` — the figure net of the TDS/retention the bill already
+carries at raise time. Separately, nothing re-checked live allocations
+when a bill's payable itself moved: certifying at a lower figure than
+already claimed, sending a SUBMITTED bill back to DRAFT, or cancelling a
+SUBMITTED or CERTIFIED bill each left money allocated against a payable
+that had shrunk or vanished, with no mechanism to unwind it.
+
+**Change.** `documentValue()` now uses `net_payable` for a SUBMITTED
+bill's invoiced figure (falling back to `certified_amount` only once
+CERTIFIED/PAID). `POST /ra-bills/:id/status`
+(`apps/api/src/modules/billing/routes.ts`) computes live allocations
+(`raBillLiveAllocated`, a sum of unreversed `payment_allocations`) against
+the payable the target status would leave — the certified figure for
+CERTIFIED, unchanged for PAID, zero for DRAFT/CANCELLED — and refuses with
+`RA_BILL_OVER_ALLOCATED` (422), naming the amount to unallocate first, if
+live allocations would exceed it. Both routes already row-lock the bill
+(`inOrg(..., true)` / `documentValue(..., lock=true)`), so a concurrent
+allocation and a status change serialise on that lock instead of racing.
+
+**RED/GREEN.** New describe in `apps/api/test/catalogue/ra-billing.test.ts`:
+RED showed the net_payable cap missing and all four transition guards
+absent (5 failures); GREEN showed the cap enforced, each transition
+(certify below allocated, →DRAFT, →CANCELLED from SUBMITTED, →CANCELLED
+from CERTIFIED) refused while allocated and succeeding once unallocated via
+payment reversal, plus a concurrent allocation-vs-certification race
+(invariant-checked, re-run three times for stability).
+
+**Files.** `apps/api/src/modules/finance/routes.ts`,
+`apps/api/src/modules/billing/routes.ts`,
+`apps/api/test/catalogue/ra-billing.test.ts`.
+
+**Migration.** None.
+
+**Commit.** `20a2dfb fix(billing): refuse to over-allocate or strand an RA bill's receipts`
+
+---
+
+## I1 — POST decision now enforces the inbox's project scope
+
+**Current behaviour found.** `GET /approvals/inbox` filters a scoped
+approver's list to their own projects plus org-wide documents (2026-09-24
+decisions), but `POST /approvals/:id/decision` had no equivalent check — a
+scoped user who knew or guessed a document's id could still decide it
+directly, so the inbox's filtering was cosmetic, not a boundary.
+
+**Change.** The decision route resolves the actor's `approval.act` scope
+(`resolveScopes(u.scopes)`, the same call the inbox makes) right after
+loading the instance and refuses `FORBIDDEN` (403) when the scope is not
+global and the instance's `project_id` is not one it covers — wording
+matches `projectAccess()`'s existing "outside your scope" message.
+
+**RED/GREEN.** RED: a freshly scoped `PROJECT_MANAGER` could decide
+another project's pending item by id (200 instead of 403). GREEN: refused,
+and still free to decide their own project's.
+
+**Files.** `apps/api/src/modules/approvals/routes.ts`,
+`apps/api/test/catalogue/approvals.test.ts`.
+
+**Migration.** None.
+
+**Commit.** `b151cd1 fix(approvals): POST decision enforces the same project scope as the inbox`
+
+---
+
+## I2 — Role-based delegation carries the principal's project scope
+
+**Current behaviour found.** A role-based step ("any PROJECT_MANAGER")
+lets a live delegate inherit the principal's role eligibility, but nothing
+checked that the *principal* could reach the document's project — a
+globally-scoped delegate of a project-scoped PM could decide a project
+that PM never managed, simply by borrowing their role.
+
+**Change.** `Delegation` gains `fromUserScope` (the principal's own
+resolved project scope; `apps/api`'s `delegationsFor` resolves each
+principal's `user_roles` rows the same way `resolveScopes` always has).
+`canAct()` gains a `projectId` parameter; a role-based delegation match
+now also requires `principalCanReachProject(projectId, fromUserScope)` —
+the principal's scope is global, or the project is one of theirs. Absent a
+`projectId` (org-wide document) or `fromUserScope` (older caller), the
+check stays permissive. The decision route passes `instance.project_id`
+through.
+
+**RED/GREEN.** `packages/shared/src/approvals.test.ts` covers
+reachable/unreachable projects, an org-wide document staying unrestricted,
+a globally-scoped principal's delegate reaching anywhere, and the
+permissive default. `apps/api/test/catalogue/approvals.test.ts`: ADMIN
+(globally scoped, no PROJECT_MANAGER role) can decide a role-based step
+only for the project its scoped-PM principal manages — refused
+`NOT_THE_APPROVER` for another project even though ADMIN's own I1 scope
+check would have let it through.
+
+**Files.** `packages/shared/src/approvals.ts`,
+`packages/shared/src/approvals.test.ts`,
+`apps/api/src/modules/approvals/routes.ts`,
+`apps/api/test/catalogue/approvals.test.ts`.
+
+**Migration.** None.
+
+**Commit.** `0a5fdad feat(approvals): role-based delegation carries the principal's project scope`
+
+---
+
+## I3 — Segregation of duties: one person, at most one level
+
+**Current behaviour found.** Nothing stopped the same physical person
+deciding more than one level of an instance: a PM who cleared level 1
+with their own role could then reach for a borrowed ADMIN delegation and
+clear level 2 too. `canAct()` had no memory of who had already acted.
+
+**Change.** `canAct()` is refactored into eligibility resolution
+(`resolveEligibility`, behaviour unchanged) plus a segregation gate
+applied to whatever it returns. The gate compares two identity sets:
+everyone who already decided an earlier level (both `actedByUserId` and,
+if delegated, `actedOnBehalfOf`) against both identities behind the
+current attempt (the actor, and the principal if acting via delegation).
+Any overlap refuses `SEGREGATION_OF_DUTIES`. A skipped step counts as
+decided by nobody. `ApprovalStep` gains `actedOnBehalfOf`; `stepsFor()`
+reads `acted_on_behalf_of` into it.
+
+**RED/GREEN.** `packages/shared/src/approvals.test.ts`: a PM reaching for
+a borrowed ADMIN role after clearing level 1 themselves; a second delegate
+of the same principal finishing what the first delegate started; an
+unrelated decider still allowed; a skipped step not counting.
+`apps/api/test/catalogue/approvals.test.ts` adds the brief's exact case —
+a PM at L1 who is also an ADMIN delegate can't approve L2 — and its
+positive counterpart. Two earlier tests in this file had used the same
+physical actor for both levels of an instance to demonstrate role-based
+delegation, which this rule now correctly refuses; both were adjusted to
+use a second, uninvolved role for the second level (one of those
+adjustments also incidentally cleared a cross-test delegation-cycle
+collision it had introduced with two other tests' own PROJECT_MANAGER/
+ADMIN delegation pairs, all persisted unrevoked in the same run).
+
+**Files.** `packages/shared/src/approvals.ts`,
+`packages/shared/src/approvals.test.ts`,
+`apps/api/src/modules/approvals/routes.ts`,
+`apps/api/test/catalogue/approvals.test.ts`.
+
+**Migration.** None.
+
+**Commit.** `078b038 feat(approvals): segregation of duties -- one person, at most one level`
+
+---
+
+## I4 — Narrow migration 110 to invoice.create (controller ruling)
+
+**Current behaviour found.** Migration 110 (unreleased) gave
+INVENTORY_MANAGER the full `invoice.manage` permission so `POST
+/api/v1/invoices` moving off `inventory.manage` would not take away its
+ability to create a vendor invoice. That grant was too broad —
+`invoice.manage` also covers editing an invoice's lines, changing its
+status, disputing it and recording a three-way match.
+
+**Change.** New `invoice.create` permission
+(`packages/shared/src/financial-control.ts`), narrower than
+`invoice.manage` and meant only for creating a vendor invoice. Every role
+already holding `invoice.manage` is granted `invoice.create` too (nothing
+changes for them); INVENTORY_MANAGER gets `invoice.create` alone,
+replacing its `invoice.manage` grant. `apps/api/src/common/auth.ts` gains
+`requireAnyPermission` (an OR-gate); `POST /api/v1/invoices` uses it with
+`['invoice.create', 'invoice.manage']`. Every other vendor-invoice write
+stays `invoice.manage` only. Migration 110 was rewritten in place (never
+released): inserts the `invoice.create` permission row, grants it to every
+role holding `invoice.manage`, and grants it to INVENTORY_MANAGER
+directly. `apps/web`'s `Can` component (`components/v2/Workbench.tsx`) now
+accepts an array of permissions (any match); the inventory page's "Record
+invoice" panel gates on `["invoice.create", "invoice.manage"]`.
+
+**RED/GREEN.** `packages/shared/src/financial-control.test.ts` pins the
+narrowed grant and that every `invoice.manage` holder also gets
+`invoice.create`. `apps/api/test/catalogue/procurement.test.ts`: the
+three-way-match role test has INVENTORY_MANAGER back among those refused
+(it no longer holds `invoice.manage`); the create-route test's comments
+updated. Web: `tsc`, `next build` and the full web vitest suite (947/947)
+pass with the `Can`/gate changes; no dedicated DOM test was added for the
+array-permission `Can` behaviour or the earlier single-permission gate
+(apps/web/app/inventory/page.tsx has no existing test harness and building
+one for a two-token literal change was judged disproportionate) —
+compilation, build and the existing suite verify it instead.
+
+**Files.** `apps/api/src/common/auth.ts`,
+`apps/api/src/database/migrations/110_invoice_manage_grants.sql`,
+`apps/api/src/modules/inventory/routes.ts`,
+`apps/api/test/catalogue/procurement.test.ts`,
+`apps/web/app/inventory/page.tsx`,
+`apps/web/components/v2/Workbench.tsx`,
+`packages/shared/src/financial-control.ts`,
+`packages/shared/src/financial-control.test.ts`.
+
+**Migration.** `110_invoice_manage_grants.sql` — rewritten (still
+unreleased, no live-DB run performed): inserts the permission row, then
+two idempotent grant inserts.
+
+**Commit.** `75cd207 fix(invoices): narrow the invoice.manage grant to invoice.create`
+
+---
+
+## Minor — seed no longer resurrects a deactivated org-wide fallback
+
+**Current behaviour found.** `seedDatabase()`'s org-wide fallback loop
+only checked for an *active* policy before inserting a default — exactly
+the state left behind after an administrator deactivates the seeded
+default from Approvals → Policies. Re-running the seed (it re-converges
+role grants and other canonical rows every run) would see no active row
+and insert a fresh one on top of that deliberate choice.
+
+**Change.** The check now looks for any org-wide policy row for the
+document type, active or not; only a pair with no policy configured at
+all gets the default. `scripts/seed-volume.ts` (bypasses `seed.ts`
+entirely) gets the same fallback loop and the same either-state check.
+
+**RED/GREEN.** Reuses the state the cross-org-isolation test (item 2)
+already leaves behind — the org-wide PURCHASE_REQUISITION fallback
+deactivated but not deleted. RED: re-seeding resurrected an active row.
+GREEN: no active row reappears, the document type still refuses
+NO_APPROVAL_POLICY, and the untouched PURCHASE_ORDER fallback is
+unaffected. No dedicated test for `scripts/seed-volume.ts` (no existing
+harness, manually-run CLI script, change mirrors seed.ts's tested pattern
+exactly); verified with `tsc --noEmit`.
+
+**Files.** `apps/api/src/database/seed.ts`,
+`apps/api/src/scripts/seed-volume.ts`,
+`apps/api/test/catalogue/approvals.test.ts`.
+
+**Migration.** None.
+
+**Commit.** `0b07bef fix(approvals): seed no longer resurrects a deactivated org-wide fallback`
+
+---
+
+## Fix round 1 — final verification
+
+- Full `apps/api` suite (`npx vitest run` under `nohup`, VM slot g, HEAD
+  `0b07bef`): **2158 passed, 1 failed, 2159 total** (79/80 files). Duration
+  1172s. The one failure is the same pre-existing
+  `test/catalogue/survey-operations.test.ts` date-rollover flake noted after
+  the first batch (VM calendar day 2026-09-24 → 25 mid-session; that one
+  assertion reads the live system clock rather than a frozen test clock).
+  Still no survey file touched by any commit on this branch. Not a
+  regression from fix round 1.
+- Web (touched in I4 only; the Minor commit is apps/api-only): `tsc --noEmit`
+  clean, `next build` clean, full `npx vitest run` — 947 passed, 0 failed
+  across 77 files, verified at the I4 commit and unchanged since.
+- No migrations run against the live DB. No leave-module files touched.
