@@ -98,10 +98,23 @@ export async function buildApp(
   // `parse()` rejects a required field missing from `{}` exactly as it
   // would from `undefined`. A real JSON payload still parses (and still
   // fails loudly if it is malformed).
-  app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+  // Fastify's own default JSON parser already guards against prototype
+  // pollution (via the secure-json-parse dependency it ships with) -- the
+  // plain JSON.parse this used to call did not carry that check over, and a
+  // `"__proto__"`/`"constructor"` key in a body reached zod instead of being
+  // refused at the parser (fix round 1, B-027: a real regression, not the
+  // INFO it was first logged as). `getDefaultJsonParser('error','error')`
+  // is that same secure parser Fastify would have installed itself; only the
+  // empty-body case is still handled here, ahead of it, for B-016/B-020.
+  // Cast to its actual (synchronous, done-callback) shape: getDefaultJsonParser's
+  // declared return type is a union with an async no-done alternative Fastify's
+  // own implementation never returns, and TypeScript cannot call a union of
+  // differing call signatures without this.
+  const secureJsonParser = app.getDefaultJsonParser('error', 'error') as
+    (req: unknown, body: string, done: (err: Error | null, body?: unknown) => void) => void;
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
     if (body === '' || body === undefined) { done(null, {}); return; }
-    try { done(null, JSON.parse(body as string)); }
-    catch (err) { done(err as Error, undefined); }
+    secureJsonParser(req, body as string, done);
   });
   await registerRequestId(app);
   await registerErrorHandler(app);
