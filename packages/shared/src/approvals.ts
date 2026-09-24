@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { RoleCode } from './rbac.js';
+import type { Tone } from './financial-control.js';
 
 /**
  * Approval workflow over a Delegation of Authority matrix (§41, §22.1).
@@ -193,6 +194,23 @@ export function createsDelegationCycle(existing: Delegation[], candidate: Delega
 
 export const APPROVAL_STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'RECALLED', 'SUPERSEDED'] as const;
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
+
+/**
+ * Status-badge tone for an approval instance (fix round 1, item 7, optional
+ * mobile-parity cleanup). Web's generic `financialTone` has no case for
+ * RECALLED (falls through to neutral) and mobile disagreed with web's own
+ * SUPERSEDED=info (mobile read it as danger); this is the one map both now
+ * read. RECALLED reads danger, the same severity mobile always gave it,
+ * closing the web-side gap; SUPERSEDED keeps web's existing info, the same
+ * meaning that status already carries for other document types.
+ */
+export const APPROVAL_STATUS_TONES: Record<ApprovalStatus, Tone> = {
+  PENDING: 'warning',
+  APPROVED: 'success',
+  REJECTED: 'danger',
+  RECALLED: 'danger',
+  SUPERSEDED: 'info',
+};
 
 export const STEP_STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'SKIPPED'] as const;
 export type StepStatus = (typeof STEP_STATUSES)[number];

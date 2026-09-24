@@ -112,7 +112,7 @@ export type { Tone } from '@silverline/shared';
 import type { Tone } from '@silverline/shared';
 import {
   PAYABLE_INVOICE_FLAG_TONES, EXPENSE_CLAIM_STATUS_TONES, RA_BILL_STATUS_TONES,
-  PR_STATUS_TONES, PO_STATUS_TONES,
+  PR_STATUS_TONES, PO_STATUS_TONES, APPROVAL_STATUS_TONES,
 } from '@silverline/shared';
 
 /**
@@ -157,6 +157,14 @@ export function expenseClaimTone(status: string | null | undefined): Tone {
  */
 export function raBillTone(status: string | null | undefined): Tone {
   return (status && RA_BILL_STATUS_TONES[status as keyof typeof RA_BILL_STATUS_TONES]) || 'neutral';
+}
+
+/**
+ * Badge tone for an approval instance's status (fix round 1, item 7).
+ * RECALLED used to fall through `financialTone`'s silent neutral default.
+ */
+export function approvalTone(status: string | null | undefined): Tone {
+  return (status && APPROVAL_STATUS_TONES[status as keyof typeof APPROVAL_STATUS_TONES]) || 'neutral';
 }
 
 /** Badge tone for a purchase requisition's status (mobile-parity sweep, R5 item 4). */

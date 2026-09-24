@@ -3,7 +3,7 @@ import {
   resolveLadder, validateSlabs, effectiveApprovers, createsDelegationCycle,
   nextActionableStep, canAct, requiresReapproval, overdueSteps,
   approvalPolicySchema, approvalDecisionSchema, delegationSchema,
-  APPROVAL_ROLE_GRANTS,
+  APPROVAL_ROLE_GRANTS, APPROVAL_STATUS_TONES, APPROVAL_STATUSES,
   type ApprovalLevel, type ApprovalStep, type Delegation,
 } from './approvals.js';
 
@@ -416,5 +416,18 @@ describe('role grants', () => {
 
   it('gives an employee visibility of their own requests but no authority', () => {
     expect(APPROVAL_ROLE_GRANTS.EMPLOYEE).toEqual(['approval.read']);
+  });
+});
+
+describe('APPROVAL_STATUS_TONES (fix round 1, item 7)', () => {
+  it('has an entry for every approval status, so nothing falls through to a silent default', () => {
+    for (const status of APPROVAL_STATUSES) {
+      expect(APPROVAL_STATUS_TONES[status]).toBeTruthy();
+    }
+  });
+
+  it('reads RECALLED as danger and SUPERSEDED as info, matching what web already uses elsewhere', () => {
+    expect(APPROVAL_STATUS_TONES.RECALLED).toBe('danger');
+    expect(APPROVAL_STATUS_TONES.SUPERSEDED).toBe('info');
   });
 });

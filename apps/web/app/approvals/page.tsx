@@ -18,7 +18,7 @@ import { hasPermission } from '@/lib/permissions';
 import { statusLabel } from '@/lib/board-visuals';
 import { Field, Notice, RecordSheet, Section, StatusBadge, Stat } from '@/components/finance/Primitives';
 import {
-  day, documentHref, documentTypeLabel, money, slaState, DOCUMENT_TYPE_LABELS,
+  approvalTone, day, documentHref, documentTypeLabel, money, slaState, DOCUMENT_TYPE_LABELS,
 } from '@/lib/finance';
 
 type Row = Record<string, any>;
@@ -190,7 +190,7 @@ export default function ApprovalsPage() {
                               {sla.label}
                             </Badge>
                           ) : (
-                            <StatusBadge status={r.status} />
+                            <StatusBadge status={r.status} tone={approvalTone(r.status)} />
                           )}
                         </TD>
                         <TD tone="subtle">
@@ -275,7 +275,7 @@ function ApprovalDetail({ id, onClose, onChanged }: { id: string; onClose: () =>
       ) : (
         <>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
-            <Field label="Status" value={<StatusBadge status={a.status} size="md" />} />
+            <Field label="Status" value={<StatusBadge status={a.status} tone={approvalTone(a.status)} size="md" />} />
             <Field label="Amount" value={money(a.amount)} />
             <Field label="Raised by" value={a.requested_by_username ?? '—'} />
             <Field label="Policy" value={a.policy_name ?? '—'} />
@@ -331,7 +331,7 @@ function ApprovalDetail({ id, onClose, onChanged }: { id: string; onClose: () =>
                         <span className="text-sm font-medium text-text">
                           Level {s.sequence} · {statusLabel(String(s.approver_role ?? 'Named approver'))}
                         </span>
-                        <StatusBadge status={s.status} />
+                        <StatusBadge status={s.status} tone={approvalTone(s.status)} />
                         {isNext && s.status === 'PENDING' ? (
                           <Badge tone={sla.tone} size="sm">{sla.label}</Badge>
                         ) : null}

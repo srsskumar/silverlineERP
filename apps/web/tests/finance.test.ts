@@ -3,7 +3,7 @@ import {
   money, moneyShort, moneyIndian, day, percent,
   documentTypeLabel, documentHref, financialTone, slaState,
   utilisationWidth, categoryLabel, creditBlockLabel,
-  payableFlagTone, expenseClaimTone, raBillTone, requisitionTone, poTone,
+  payableFlagTone, expenseClaimTone, raBillTone, requisitionTone, poTone, approvalTone,
 } from '../lib/finance';
 import { NAV_GROUPS, QUICK_CREATE } from '../lib/nav';
 import {
@@ -176,6 +176,16 @@ describe('requisitionTone / poTone (mobile-parity sweep, R5 item 4)', () => {
 
   it('reads FULLY_RECEIVED as success, closing a gap financialTone itself had', () => {
     expect(poTone('FULLY_RECEIVED')).toBe('success');
+  });
+});
+
+describe('approvalTone (fix round 1, item 7)', () => {
+  it('reads RECALLED as danger, closing a gap financialTone itself had', () => {
+    expect(approvalTone('RECALLED')).toBe('danger');
+  });
+
+  it('reads SUPERSEDED as info, same as every other document type', () => {
+    expect(approvalTone('SUPERSEDED')).toBe('info');
   });
 });
 
