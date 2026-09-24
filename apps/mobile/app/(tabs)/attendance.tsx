@@ -34,7 +34,7 @@ import { submitQueued } from "../../src/sync/engine";
 import { punchPlaceLine } from "../../src/attendance/place";
 import { validateAttendanceException } from "../../src/validators";
 import { useAuth } from "../../src/auth/AuthContext";
-import { TAB_PERMISSIONS, canAny } from "../../src/rbac";
+import { PERMISSIONS, TAB_PERMISSIONS, can, canAny } from "../../src/rbac";
 import {
   Badge,
   Banner,
@@ -87,6 +87,16 @@ function AttendanceScreen() {
    * with no indication the punch itself could never succeed.
    */
   const canAccess = canAny(permissions, TAB_PERMISSIONS.attendance);
+  /**
+   * 5d(5b): attendance.read without attendance.punch (an auditor/inspector
+   * role, per findings-mobile.md) is a real, distinct grant from punching —
+   * the tab used to show Check-in/Check-out (and fire a GPS permission
+   * prompt on mount) to that role too, purely because canAccess is an OR of
+   * the two permissions. The read views (history) stay open to canAccess;
+   * only the punch surface — location, the punch card, regularisation —
+   * needs attendance.punch specifically.
+   */
+  const canPunch = can(permissions, PERMISSIONS.ATTENDANCE_PUNCH);
   const [fix, setFix] = useState<PunchFix | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [msgTone, setMsgTone] = useState<"success" | "warning" | "danger">("success");
@@ -122,7 +132,7 @@ function AttendanceScreen() {
     queryKey: ["survey", "my-villages"],
     queryFn: getMyVillages,
     retry: false,
-    enabled: canAccess,
+    enabled: canPunch,
   });
   const villages = myVillages.data?.villages ?? [];
 
@@ -140,9 +150,9 @@ function AttendanceScreen() {
   }, []);
 
   useEffect(() => {
-    if (!canAccess) return;
+    if (!canPunch) return;
     void locate();
-  }, [locate, canAccess]);
+  }, [locate, canPunch]);
 
   const punch = async (kind: "CHECK_IN" | "CHECK_OUT") => {
     setMsg(null);
@@ -285,9 +295,20 @@ function AttendanceScreen() {
     <Screen>
       <Title>Attendance</Title>
       <Muted style={{ marginTop: 2, marginBottom: space.lg }}>
-        Punch in and out at your assigned site.
+        {canPunch ? "Punch in and out at your assigned site." : "Your attendance history."}
       </Muted>
 
+      {!canPunch ? (
+        <Banner
+          tone="info"
+          icon="lock-closed-outline"
+          title="You can see this but not punch"
+          message="Punching in or out needs the attendance.punch permission. Ask your project manager."
+        />
+      ) : null}
+
+      {canPunch ? (
+      <>
       <Card
         title="Where you are"
         right={fix ? <StatusDot text="Located" tone="success" /> : null}
@@ -437,6 +458,8 @@ function AttendanceScreen() {
           </View>
         ) : null}
       </Card>
+      </>
+      ) : null}
 
       <SectionLabel>Recent punches</SectionLabel>
       <Card>
@@ -461,6 +484,8 @@ function AttendanceScreen() {
         )}
       </Card>
 
+      {canPunch ? (
+      <>
       <SectionLabel>Regularisation</SectionLabel>
       <Card>
         <Muted style={{ marginBottom: space.md }}>
@@ -481,6 +506,8 @@ function AttendanceScreen() {
         />
         {excMsg ? <Subtle style={{ marginTop: space.sm }}>{excMsg}</Subtle> : null}
       </Card>
+      </>
+      ) : null}
     </Screen>
   );
 }
