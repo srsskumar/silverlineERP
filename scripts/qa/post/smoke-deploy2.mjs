@@ -39,13 +39,9 @@ let newInvoiceId = null;
       }],
     });
     check("vendor invoice create w/ po_line_id -> 201", inv.status === 201, `status=${inv.status} body=${JSON.stringify(inv.body).slice(0,200)}`);
-    // NOTE: this route (apps/api/src/modules/inventory/routes.ts POST /invoices)
-    // sends the row bare -- reply.code(201).send(row) -- unlike every other
-    // create endpoint in the API, which wraps as {data: row}. Logged as a
-    // finding; the web has no "create invoice" form calling this route today
-    // (only GET/PATCH-lines/match, which are correctly wrapped) so nothing in
-    // the UI is broken by it yet, but any client written against the API's
-    // usual envelope convention would silently get `undefined` for `.data.id`.
+    // R5-001 FIXED: POST /invoices now wraps as {data: row} like every other
+    // create this route exposes. Kept the dual-tolerant read below anyway --
+    // cheap, and harmless if anything ever reverts it.
     const invId = inv.body?.data?.id ?? inv.body?.id;
     newInvoiceId = invId;
     if (invId) {

@@ -352,7 +352,13 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
 
    if(i.lines?.length&&computed)await writeInvoiceLines(db,u.orgId,r.rows[0].id,i.lines,computed);
    return r.rows[0];
-  });return reply.code(201).send(row);
+  });
+  // R5-001: this route used to send the row bare, unlike every other create
+  // this route itself exposes (GET/PATCH-lines/match all wrap as {data:...}).
+  // Wrapped here to match its own contract; nothing in the current UI called
+  // this route to create an invoice, and every consumer that does (the QA
+  // scripts, the procurement test harness) already tolerates both shapes.
+  return reply.code(201).send({data:row});
  });
  /**
   * Replace a vendor invoice's lines wholesale (task 5c, finding B-004).
