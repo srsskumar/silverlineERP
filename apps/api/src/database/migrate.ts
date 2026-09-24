@@ -100,6 +100,13 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "091_payment_run_execution", file: "091_payment_run_execution.sql" },
   { version: "092_expense_receipts", file: "092_expense_receipts.sql" },
   { version: "093_po_amendment_pre_status", file: "093_po_amendment_pre_status.sql" },
+  // 094-096 are owned by another branch (qa-gaps3: vendor invoices, three-way
+  // match, MSME) and not yet registered here. MIGRATIONS is an ordered,
+  // append-only list of {version,file} pairs applied by loop order, not by
+  // parsing the number out of `version` -- gaps are already normal (078 is
+  // followed by 080 above, skipping 079) and `migrate()` never assumes
+  // contiguity.
+  { version: "097_auditor_base_reads", file: "097_auditor_base_reads.sql" },
 ];
 
 /**
