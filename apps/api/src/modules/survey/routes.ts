@@ -4196,6 +4196,7 @@ export async function registerSurveyRoutes(
               };
             }
 
+            let reversed = 0;
             if (input.action === 'SUBMIT') {
               for (const r of eligible) {
                 // A milestone claimed, returned, and claimed again keeps one
@@ -4229,8 +4230,12 @@ export async function registerSurveyRoutes(
               const locked = (await db.query(
                 `SELECT * FROM survey_village_billing WHERE id = ANY($1::uuid[])
                   ORDER BY id FOR UPDATE`, [eligible.map(r => r.claim_id)])).rows;
+              // Counted from what was actually reversed under the lock, not
+              // from the preview: a claim can stop being paid in between.
               for (const row of locked) {
-                if (row.status === 'PAID') await reverseClaim(db, req, u, row, input.reason!.trim());
+                if (row.status !== 'PAID') continue;
+                await reverseClaim(db, req, u, row, input.reason!.trim());
+                reversed += 1;
               }
             } else {
               await db.query(
@@ -4245,7 +4250,7 @@ export async function registerSurveyRoutes(
 
             return {
               dry_run: false,
-              updated: eligible.length,
+              updated: input.action === 'REVERSE' ? reversed : eligible.length,
               villages: eligible.slice(0, 20).map(r => String(r.village_name)),
               skipped, not_found: notFound, out_of_order: outOfOrder,
             };
