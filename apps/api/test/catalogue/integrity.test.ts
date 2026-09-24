@@ -385,3 +385,49 @@ describe("D-009 two people editing different fields of one catalogue item", () =
     expect(stale.status).toBe(409);
   });
 });
+
+/* ---------------------------------------------------------------- payroll */
+
+describe("payroll run under concurrent calculate and transitions", () => {
+  it("calculates once per employee however many times it is pressed, and moves state exactly once", async () => {
+    const calcs = await Promise.all(Array.from({ length: 5 }, () =>
+      w.app.inject({ method: "POST", url: `/api/v1/payroll/runs/${w.payrollRunId}/calculate`,
+        headers: { ...w.admin, ...idem() }, payload: {} })));
+    expect(calcs.filter(c => c.statusCode >= 500).map(c => c.body)).toEqual([]);
+    const dup = (await w.pool.query(
+      `SELECT employee_id, count(*)::int AS n FROM payslips WHERE payroll_run_id=$1
+        GROUP BY employee_id HAVING count(*) > 1`, [w.payrollRunId])).rows;
+    expect(dup).toEqual([]);
+    const reviews = await Promise.all(Array.from({ length: 4 }, () =>
+      w.app.inject({ method: "POST", url: `/api/v1/payroll/runs/${w.payrollRunId}/submit-review`,
+        headers: { ...w.admin, ...idem() }, payload: {} })));
+    expect(reviews.filter(r => r.statusCode >= 500).map(r => r.body)).toEqual([]);
+    expect(reviews.filter(r => r.statusCode < 300).length).toBeLessThanOrEqual(1);
+  });
+});
+
+/* --------------------------------------------------------------- rounding */
+
+describe("D-010 paise rounding on order lines", () => {
+  it("rounds a line that lands on half a paisa up, as NUMERIC and the invoice side do", async () => {
+    const res = await post(w.admin, "/api/v1/purchase-orders", {
+      po_number: uniq("PO"), vendor_id: w.vendorId, po_date: workDate(),
+      lines: [
+        { description: "Half-paisa A", unit: "KG", quantity: 0.5, unit_rate: 4.35, gst_rate_pct: 0 },
+        { description: "Half-paisa B", unit: "KG", quantity: 0.3, unit_rate: 2.15, gst_rate_pct: 0 },
+        { description: "Taxed", unit: "NOS", quantity: 1, unit_rate: 2.25, gst_rate_pct: 18 },
+      ],
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const lines = (await w.pool.query(
+      "SELECT taxable_value::text AS t, tax_amount::text AS x, line_total::text AS l FROM purchase_order_lines WHERE purchase_order_id=$1 ORDER BY line_no",
+      [res.data.id])).rows;
+    // 0.5 x 4.35 = 2.175 and 0.3 x 2.15 = 0.645; 2.25 x 18% = 0.405.
+    expect(lines.map(l => l.t)).toEqual(["2.18", "0.65", "2.25"]);
+    expect(lines[2].x).toBe("0.41");
+    const po = (await w.pool.query(
+      "SELECT taxable_value::text AS t, tax_amount::text AS x, total_value::text AS v FROM purchase_orders WHERE id=$1",
+      [res.data.id])).rows[0];
+    expect(po).toEqual({ t: "5.08", x: "0.41", v: "5.49" });
+  });
+});
