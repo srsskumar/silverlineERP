@@ -146,14 +146,40 @@ export interface CatalogueWorld {
   itemId: string;
   vendorId: string;
 
-  /** Entities living in `otherOrgId`, for cross-tenant negatives. */
+  /**
+   * Entities living in `otherOrgId`, for cross-tenant negatives.
+   *
+   * A real row per major resource family (2026-09-24 R6 depth pass), not
+   * only a nonexistent-but-syntactically-valid uuid -- so the cross-org 404
+   * check proves a *specific* org-B row is invisible to org-A, not just that
+   * a made-up id is. Deliberately not exhaustive: GRNs and vendor invoices
+   * both gate through the same `inOrg(db, 'purchase_orders'|'invoices', ...)`
+   * / `inOrg(db, 'goods_receipt_notes', ...)` helper the purchase order
+   * below already proves, and reaching one needs an approval policy this
+   * fixture does not seed; survey villages need the programme-pairing and
+   * stage-pipeline machinery, out of this pass's budget. See
+   * findings-contract.md.
+   */
   other: {
     orgId: string;
     adminId: string;
     admin: Headers;
     district: string;
+    mandalId: string;
+    villageId: string;
     site: string;
     employee: string;
+    leaveRequestId: string;
+    payrollRunId: string;
+    workspaceId: string;
+    projectId: string;
+    taskId: string;
+    purchaseOrderId: string;
+    paymentRunId: string;
+    expenseClaimId: string;
+    assetId: string;
+    documentId: string;
+    reportId: string;
   };
 }
 
@@ -495,7 +521,137 @@ async function buildOtherOrg(
     village_id: village,
     site_id: site,
   });
-  return { orgId: otherOrgId, adminId, admin: headers, district, site, employee };
+
+  // --- cross-org depth (2026-09-24 R6): a real row per major resource
+  // family, not only a nonexistent uuid. See the interface doc comment for
+  // what is deliberately left out and why.
+
+  // Reference data seedDatabase() would normally carry: this org was made by
+  // hand (above), not through seedDatabase, so nothing but the org row and
+  // its payroll policy exists yet. leave_types and document_types have no
+  // create endpoint (the product "deliberately exposes no endpoint" case the
+  // fixture's own file doc comment calls out) -- inserted directly, in the
+  // same shape database/seed.ts uses. Everything else below goes through the
+  // real HTTP surface.
+  const leaveTypeId = (
+    await pool.query(
+      `INSERT INTO leave_types (org_id, code, name, is_paid, annual_entitlement, requires_balance, active)
+       VALUES ($1, 'CL', 'Casual Leave', true, 12, true, true) RETURNING id`,
+      [otherOrgId],
+    )
+  ).rows[0].id as string;
+  const documentTypeCode = "OTHER_DOC";
+  await pool.query(
+    `INSERT INTO document_types (org_id, code, label, category, owners, notice_days,
+       expiry_required, blocks_operations, retention_years, confidential)
+     VALUES ($1,$2,'Other document','GENERAL',$3,30,false,false,3,false)`,
+    [otherOrgId, documentTypeCode, ["organization"]],
+  );
+
+  await grantLeaveBalance(app, headers, employee, leaveTypeId);
+  const leaveFrom = workDate(new Date(NOW.getTime() + 60 * 86_400_000));
+  const leaveRequestId = await post(app, headers, "/api/v1/leave/requests", {
+    leave_type_id: leaveTypeId,
+    employee_id: employee,
+    from_date: leaveFrom,
+    to_date: leaveFrom,
+    reason: "Cross-org fixture: other org leave request",
+  });
+
+  const payrollRunId = await post(app, headers, "/api/v1/payroll/runs", {
+    period_start: monthStart(),
+    period_end: monthEnd(),
+  });
+
+  const workspaceId = await post(app, headers, "/api/v1/workspaces", {
+    name: `Other org workspace ${uniq()}`,
+  });
+  const projectTypeId = await post(app, headers, "/api/v1/project-types", {
+    code: `OPT${uniq().toUpperCase().slice(-5)}`,
+    name: "Other org project type",
+  });
+  const projectId = await post(app, headers, "/api/v1/projects", {
+    workspace_id: workspaceId,
+    project_type_id: projectTypeId,
+    code: `OPRJ${uniq().toUpperCase().slice(-5)}`,
+    name: "Other org project",
+  });
+  const taskId = await post(app, headers, "/api/v1/tasks", {
+    project_id: projectId,
+    title: "Other org task",
+  });
+
+  const vendorId = await post(app, headers, "/api/v1/vendors", {
+    code: `OV${uniq().toUpperCase().slice(-6)}`,
+    name: "Other org vendor",
+  });
+  // Not carried further to GRN/invoice: both need an APPROVED+SENT order,
+  // which needs an approval policy this fixture does not seed. Both gate
+  // through the same `inOrg()` allow-listed lookup this DRAFT order already
+  // proves is org-scoped (common/domain.ts).
+  const poRes = await app.inject({
+    method: "POST", url: "/api/v1/purchase-orders", headers: { ...headers, ...idem() },
+    payload: {
+      po_number: `OPO${uniq().toUpperCase().slice(-6)}`,
+      vendor_id: vendorId,
+      po_date: workDate(),
+      lines: [{ description: "Cross-org fixture line", unit: "NOS", quantity: 1, unit_rate: 100, gst_rate_pct: 18 }],
+    },
+  });
+  if (poRes.statusCode >= 400) throw new Error(`other-org PO failed: ${poRes.statusCode} ${poRes.body}`);
+  const purchaseOrderId = (poRes.json() as { data: { id: string } }).data.id;
+
+  const paymentRunRes = await app.inject({
+    method: "POST", url: "/api/v1/payment-runs", headers: { ...headers, ...idem() },
+    payload: { run_no: `OPR${uniq().toUpperCase().slice(-6)}`, run_date: workDate(), due_through: workDate() },
+  });
+  if (paymentRunRes.statusCode >= 400) throw new Error(`other-org payment run failed: ${paymentRunRes.statusCode} ${paymentRunRes.body}`);
+  const paymentRunId = (paymentRunRes.json() as { data: { id: string } }).data.id;
+
+  const expenseRes = await app.inject({
+    method: "POST", url: "/api/v1/expense-claims", headers: { ...headers, ...idem() },
+    payload: {
+      claim_no: `OEC${uniq().toUpperCase().slice(-6)}`,
+      employee_id: employee,
+      claim_date: workDate(),
+      purpose: "Cross-org fixture claim",
+      lines: [{ category: "OTHER", expense_date: workDate(), description: "Cross-org fixture line", amount: 100 }],
+    },
+  });
+  if (expenseRes.statusCode >= 400) throw new Error(`other-org expense claim failed: ${expenseRes.statusCode} ${expenseRes.body}`);
+  const expenseClaimId = (expenseRes.json() as { data: { id: string } }).data.id;
+
+  const assetCategoryRes = await app.inject({
+    method: "POST", url: "/api/v1/asset-categories", headers: { ...headers, ...idem() },
+    payload: { code: "ELECTRONIC", label: "Electronics" },
+  });
+  if (assetCategoryRes.statusCode >= 400) throw new Error(`other-org asset category failed: ${assetCategoryRes.statusCode} ${assetCategoryRes.body}`);
+  const assetId = await post(app, headers, "/api/v1/assets", {
+    asset_code: `OAS${uniq().toUpperCase().slice(-6)}`,
+    name: "Other org asset",
+    category: "ELECTRONIC",
+    condition: "GOOD",
+  });
+
+  const documentRes = await app.inject({
+    method: "POST", url: "/api/v1/documents", headers: { ...headers, ...idem() },
+    payload: { type_code: documentTypeCode, owner_type: "organization", title: "Cross-org fixture document" },
+  });
+  if (documentRes.statusCode >= 400) throw new Error(`other-org document failed: ${documentRes.statusCode} ${documentRes.body}`);
+  const documentId = (documentRes.json() as { data: { id: string } }).data.id;
+
+  const reportRes = await app.inject({
+    method: "POST", url: "/api/v1/reports", headers: { ...headers, ...idem() },
+    payload: { type: "employees", format: "csv" },
+  });
+  if (reportRes.statusCode >= 400) throw new Error(`other-org report failed: ${reportRes.statusCode} ${reportRes.body}`);
+  const reportId = (reportRes.json() as { id: string }).id;
+
+  return {
+    orgId: otherOrgId, adminId, admin: headers, district, mandalId: mandal, villageId: village, site, employee,
+    leaveRequestId, payrollRunId, workspaceId, projectId, taskId, purchaseOrderId, paymentRunId,
+    expenseClaimId, assetId, documentId, reportId,
+  };
 }
 
 // ---------------------------------------------------------------------------

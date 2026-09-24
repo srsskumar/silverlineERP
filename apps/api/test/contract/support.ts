@@ -10,6 +10,9 @@
  * and how to fill in a path param that isn't an id.
  */
 import { randomUUID } from "node:crypto";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import jwt from "jsonwebtoken";
 import type { CatalogueWorld, Headers } from "../catalogue/fixture.js";
 import { JWT_SECRET } from "../catalogue/fixture.js";
@@ -246,6 +249,141 @@ export async function buildRolePermissionIndex(w: CatalogueWorld): Promise<RoleP
   }
   return { byRole };
 }
+
+// --- idempotency-key coverage classification --------------------------------
+
+/**
+ * The two commit wrappers that give a write route automatic Idempotency-Key
+ * replay: `mutate()` (common/domain.ts, stores in `v2_operations`, rejects a
+ * body mismatch with `IDEMPOTENCY_CONFLICT`/409) and `mutationRoute()`
+ * (common/mutationRoute.ts, stores in `idempotency_keys`, rejects a mismatch
+ * with `IDEMPOTENCY_MISMATCH`/409 -- a different, non-shared code for the
+ * same failure mode; see the idempotency-replay-contract findings).
+ *
+ * Neither wrapper is visible on `app.routeRegistry` (it only carries the
+ * preHandler chain), so this -- like `ROUTE_OVERRIDES` above -- is the
+ * mechanical-but-static half of the classification: it reads the actual
+ * route source once, at module load, rather than being hand-maintained, so a
+ * newly added write route is picked up automatically instead of silently
+ * defaulting to "covered".
+ */
+export type IdempotencyMode = "mutate" | "mutationRoute" | "none";
+
+export interface IdempotencyClassification {
+  mode: IdempotencyMode;
+}
+
+let idempotencyIndexCache: Map<string, IdempotencyMode> | undefined;
+
+function buildIdempotencyIndex(): Map<string, IdempotencyMode> {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const modulesDir = join(here, "..", "..", "src", "modules");
+  const index = new Map<string, IdempotencyMode>();
+  const registrationRe = /app\.(get|post|put|patch|delete)\(\s*(['"`])([^'"`]+)\2/gi;
+  for (const mod of readdirSync(modulesDir, { withFileTypes: true })) {
+    if (!mod.isDirectory()) continue;
+    const moduleDir = join(modulesDir, mod.name);
+    // Not only routes.ts -- some modules split bulk-import routes into their
+    // own file (inventory/import.ts, org/import.ts, survey/import.ts), which
+    // scanning only routes.ts silently missed on the first pass of this
+    // scanner (caught by the "every write route accounted for" test below).
+    for (const entry of readdirSync(moduleDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts")) continue;
+      const file = join(moduleDir, entry.name);
+      const src = readFileSync(file, "utf8");
+      const matches = [...src.matchAll(registrationRe)];
+      for (let i = 0; i < matches.length; i++) {
+        const m = matches[i]!;
+        const method = m[1]!.toUpperCase();
+        if (method === "GET") continue;
+        const url = m[3]!;
+        const start = m.index!;
+        const end = i + 1 < matches.length ? matches[i + 1]!.index! : src.length;
+        const block = src.slice(start, end);
+        const mode: IdempotencyMode = /\bmutationRoute\s*\(/.test(block)
+          ? "mutationRoute"
+          : /\bmutate\s*\(/.test(block)
+            ? "mutate"
+            : "none";
+        index.set(key(method, url), mode);
+      }
+    }
+  }
+  // inventory/routes.ts registers several routes through a
+  // `for (const [path, table, ...] of [...])` loop with a template-literal
+  // URL (`` `/api/v1/${path}` ``) -- the regex scan above sees the literal
+  // text "/api/v1/${path}", not the expanded route, so these are injected
+  // by hand after reading the loop body once (it is one shared handler per
+  // loop -- vendors/inventory-items/assets create+update, and
+  // asset-types/asset-categories create -- and every one of them calls
+  // `mutate(...)`, confirmed by inspection).
+  for (const url of [
+    "/api/v1/vendors", "/api/v1/inventory/items", "/api/v1/assets",
+  ]) {
+    index.set(key("POST", url), "mutate");
+    index.set(key("PATCH", `${url}/:id`), "mutate");
+  }
+  for (const url of ["/api/v1/asset-types", "/api/v1/asset-categories"]) {
+    index.set(key("POST", url), "mutate");
+  }
+  return index;
+}
+
+export function idempotencyModeOf(method: string, url: string): IdempotencyMode {
+  idempotencyIndexCache ??= buildIdempotencyIndex();
+  return idempotencyIndexCache.get(key(method, url)) ?? "none";
+}
+
+/**
+ * Write routes confirmed (by reading the handler, not only the scan above)
+ * to need no Idempotency-Key coverage -- pre-session auth, self-service
+ * account actions, or a route that is a pure read/dry-run and writes
+ * nothing. A route landing here for a reason *other* than "verified safe"
+ * belongs in the findings ledger instead, per the brief.
+ */
+export const IDEMPOTENCY_EXEMPT = new Set<string>([
+  "POST /api/v1/auth/login",
+  "POST /api/v1/auth/refresh",
+  "POST /api/v1/auth/logout",
+  "POST /api/v1/auth/mfa/setup",
+  "POST /api/v1/auth/mfa/verify",
+  "POST /api/v1/auth/mfa/disable",
+  "POST /api/v1/auth/password",
+  "POST /api/v1/auth/password-reset-request",
+  "POST /api/v1/auth/impersonate",
+  "POST /api/v1/auth/impersonate/stop",
+  "POST /api/v1/devices/register",
+  // Shared-secret (CRON_SECRET), not a user session -- there is no `u.id` to
+  // scope an idempotency key to. Excluded from every other JWT-auth
+  // dimension the same way (route-matrix.test.ts, C-004).
+  "POST /api/v1/jobs/run",
+  // A read-only dry run: computes and returns a result, persists nothing.
+  "POST /api/v1/expense-claims/evaluate",
+  // Fans out to per-item sub-requests, each already idempotency-keyed with a
+  // key derived from the outer key (or requestId) plus the item id -- see
+  // planning/routes.ts:173.
+  "POST /api/v1/tasks/bulk",
+  // A PUT (full replace of the column list) is naturally idempotent by HTTP
+  // semantics without needing the key-replay machinery.
+  "PUT /api/v1/boards/:id/columns",
+  // Version-fenced instead: every decision requires If-Match on the leave
+  // request's current version, so a retry of an already-decided request
+  // 409s on the stale version rather than needing key replay.
+  "POST /api/v1/leave/requests/:id/decision",
+  // Upsert-on-code: a retry with the same code returns the existing row
+  // (200), never a duplicate (employees/routes.ts:2040).
+  "POST /api/v1/designations",
+  // A "set these fields on these rows" bulk PATCH is naturally idempotent --
+  // applying the same change twice leaves the same end state.
+  "PATCH /api/v1/employees/bulk",
+  // ON CONFLICT (task_id, user_id) DO NOTHING -- adding the same
+  // collaborator twice is reported back as `{already: true}`, not a second
+  // effect (work/routes.ts:2007).
+  "POST /api/v1/tasks/:id/collaborators",
+  // DELETE is naturally idempotent (a second call 404s on an already-gone
+  // row, which is a fine, safe outcome for a retry).
+  "DELETE /api/v1/tasks/:id/collaborators/:userId",
+]);
 
 /** A role (with a seeded headers entry in `world.role`) that holds none of
  *  the given permissions -- SUPER_ADMIN/ADMIN excluded, since they hold
