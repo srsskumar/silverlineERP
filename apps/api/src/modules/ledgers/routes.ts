@@ -8,7 +8,7 @@ import {
   businessDay, dateStringSchema, ApiError,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
-import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
+import { actor, parse, page, inOrg, mutate, version, fail, guardPeriod } from '../../common/domain.js';
 
 /**
  * Accounts payable and receivable (§58).
@@ -607,19 +607,37 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
             `This run no longer matches the ledger: ${problems.map(p => p.reason).join('; ')}. Cancel it and build a new one.`,
             409);
         }
+        // Same rule the manual payment path enforces (finance/routes.ts's
+        // POST /payments): a closed month means closed, whichever route the
+        // money goes through (fix round 1, B-002 review).
+        await guardPeriod(db, req, input.paid_on);
 
         const lines = (await db.query(
           'SELECT * FROM payment_run_lines WHERE run_id = $1 ORDER BY id', [id])).rows;
-        let seq = 0;
         for (const line of lines) {
-          seq += 1;
-          const paymentNo = `PR-${String(run.id).slice(0, 8)}-${seq}`;
-          const payment = (await db.query(
-            `INSERT INTO payments(org_id, created_by, payment_no, direction, paid_on, amount, mode,
-               reference, party_type, party_id, bank_account, notes)
-             VALUES($1,$2,$3,'PAYABLE',$4,$5,'NEFT',$6,'VENDOR',$7,$8,$9) RETURNING id`,
-            [u.orgId, u.id, paymentNo, input.paid_on, line.amount, input.bank_reference,
-             line.party_id, run.bank_account ?? null, input.note ?? null])).rows[0];
+          // One line's own id, not the run's id plus a sequence number
+          // (fix round 1, minor 4): payment_run_lines.id is a UUID assigned
+          // once, at build time, so this can never collide with a payment
+          // number this or any other execution has ever generated. A stable
+          // 409 is kept as well, for whatever a generated number cannot rule
+          // out — a manually-created payment that happens to carry this
+          // exact string, say.
+          const paymentNo = `PR-${String(line.id)}`;
+          let payment: { id: string };
+          try {
+            payment = (await db.query(
+              `INSERT INTO payments(org_id, created_by, payment_no, direction, paid_on, amount, mode,
+                 reference, party_type, party_id, bank_account, notes)
+               VALUES($1,$2,$3,'PAYABLE',$4,$5,'NEFT',$6,'VENDOR',$7,$8,$9) RETURNING id`,
+              [u.orgId, u.id, paymentNo, input.paid_on, line.amount, input.bank_reference,
+               line.party_id, run.bank_account ?? null, input.note ?? null])).rows[0];
+          } catch (e) {
+            if ((e as { code?: string }).code === '23505') {
+              fail('PAYMENT_NUMBER_COLLISION',
+                `A payment numbered ${paymentNo} already exists. Retry the execution.`, 409);
+            }
+            throw e;
+          }
           await db.query(
             `INSERT INTO payment_allocations(org_id, created_by, payment_id, document_type, document_id, amount)
              VALUES($1,$2,$3,$4,$5,$6)`,

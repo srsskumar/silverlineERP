@@ -356,14 +356,18 @@ describe("execute a payment run (B-002)", () => {
       method: "POST", url: `/api/v1/payment-runs/${built.run.id}/execute`, headers, payload,
     });
     expect(res2.statusCode, res2.body).toBe(200);
-    const lines = await w.pool.query(
-      "SELECT payment_id FROM payment_run_lines WHERE run_id = $1", [built.run.id]);
-    const paymentIds = new Set(lines.rows.map((r) => String(r.payment_id)));
+    const lineIds = (await w.pool.query(
+      "SELECT id FROM payment_run_lines WHERE run_id = $1", [built.run.id])).rows.map((r) => String(r.id));
+    // Counted against the payment numbers execution actually generates
+    // (PR-<line id>, fix round 1's minor 4), not against
+    // payment_run_lines.payment_id (fix round 1, minor 5): that column is
+    // self-consistent by construction — whatever it points at necessarily
+    // exists as a payment row — so it cannot tell an idempotent replay from
+    // a second, orphaned insert the numbers themselves would catch.
     const count = await w.pool.query(
-      "SELECT count(*)::int AS n FROM payments WHERE id = ANY($1::uuid[])", [[...paymentIds]]);
-    // Exactly one payment per line was ever created — the replay returned
-    // the cached response rather than running the loop again.
-    expect(count.rows[0].n).toBe(paymentIds.size);
+      "SELECT count(*)::int AS n FROM payments WHERE payment_no LIKE ANY($1::text[])",
+      [lineIds.map((lineId) => `PR-${lineId}%`)]);
+    expect(count.rows[0].n).toBe(lineIds.length);
   });
 
   it("refuses an invoice that was already paid elsewhere, leaving no partial effect", async () => {
@@ -386,6 +390,79 @@ describe("execute a payment run (B-002)", () => {
     expect(res.body.code).toBe("RUN_OUT_OF_DATE");
 
     // No line settled — not even the ones on the run ahead of the stale one.
+    const after = await w.pool.query(
+      "SELECT count(*)::int AS n FROM payments WHERE org_id = $1", [w.orgId]);
+    expect(after.rows[0].n).toBe(before.rows[0].n);
+    const run = await get(w.admin, `/api/v1/payment-runs/${built.run.id}`);
+    expect(run.data.status).toBe("APPROVED");
+  });
+
+  it("returns a stable 409 rather than a 500 on a payment_no collision (fix round 1, minor 4)", async () => {
+    const inv = await invoice({ total: 4000, due_date: "2026-01-01" });
+    const built = await buildRun(w.role.PAYROLL_OFFICER);
+    expect(built.ids).toContain(inv.id);
+    const approve = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/decision`, { action: "APPROVE" });
+    expect(approve.status, JSON.stringify(approve.body)).toBe(200);
+
+    const lineRow = await w.pool.query(
+      "SELECT id FROM payment_run_lines WHERE run_id = $1 AND document_id = $2",
+      [built.run.id, inv.id]);
+    const collidingNo = `PR-${String(lineRow.rows[0].id)}`;
+    // Occupies, ahead of time, the exact number execution will try to use
+    // for this line.
+    const collide = await post(w.admin, "/api/v1/payments", {
+      direction: "PAYABLE", payment_no: collidingNo, paid_on: "2026-09-16", amount: 1, mode: "NEFT",
+    });
+    expect(collide.status, JSON.stringify(collide.body)).toBe(201);
+
+    const before = await w.pool.query(
+      "SELECT count(*)::int AS n FROM payments WHERE org_id = $1", [w.orgId]);
+    const res = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/execute`,
+      { paid_on: "2026-09-16", bank_reference: "UTR-COLLIDE" });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("PAYMENT_NUMBER_COLLISION");
+
+    // No partial effect: only the pre-existing manual payment survives.
+    const after = await w.pool.query(
+      "SELECT count(*)::int AS n FROM payments WHERE org_id = $1", [w.orgId]);
+    expect(after.rows[0].n).toBe(before.rows[0].n);
+    const run = await get(w.admin, `/api/v1/payment-runs/${built.run.id}`);
+    expect(run.data.status).toBe("APPROVED");
+  });
+
+  it("refuses to execute into a closed accounting period, with no effect (fix round 1)", async () => {
+    // The manual payment path (finance/routes.ts) already calls guardPeriod;
+    // execute() bypassed it entirely, so a closed month could be posted into
+    // by running a payment through instead of recording it directly.
+    const period = await post(w.admin, "/api/v1/financial-periods", {
+      code: uniq("P"), starts_on: "2031-06-01", ends_on: "2031-06-30",
+    });
+    expect(period.status, JSON.stringify(period.body)).toBe(201);
+    const closed = await post(
+      { ...w.admin, ...(await ver("financial_periods", period.data.id)) },
+      `/api/v1/financial-periods/${period.data.id}/closure`, { action: "CLOSE" });
+    expect(closed.status, JSON.stringify(closed.body)).toBe(200);
+
+    const inv = await invoice({ total: 9000, due_date: "2026-01-01" });
+    const built = await buildRun(w.role.PAYROLL_OFFICER);
+    expect(built.ids).toContain(inv.id);
+    // ADMIN, not SUPER_ADMIN: holds paymentrun.approve but, unlike w.admin,
+    // not the period.override §4.1 reserves for the top role, so the block
+    // is actually exercised rather than waved through.
+    const approve = await post({ ...w.role.ADMIN, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/decision`, { action: "APPROVE" });
+    expect(approve.status, JSON.stringify(approve.body)).toBe(200);
+
+    const before = await w.pool.query(
+      "SELECT count(*)::int AS n FROM payments WHERE org_id = $1", [w.orgId]);
+    const res = await post({ ...w.role.ADMIN, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/execute`,
+      { paid_on: "2031-06-15", bank_reference: "UTR-CLOSED-PERIOD" });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("PERIOD_CLOSED");
+
     const after = await w.pool.query(
       "SELECT count(*)::int AS n FROM payments WHERE org_id = $1", [w.orgId]);
     expect(after.rows[0].n).toBe(before.rows[0].n);
