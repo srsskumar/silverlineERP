@@ -691,7 +691,8 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
     { preHandler: guard('rabill.read') }, async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const q = req.query as { period_to?: string };
-      const periodTo = q.period_to ?? new Date().toISOString().slice(0, 10);
+      // The org's day, not UTC's: before 05:30 IST that was yesterday (D-013).
+      const periodTo = q.period_to ?? businessDay();
       if (!dateStringSchema.safeParse(periodTo).success) {
         fail('VALIDATION_ERROR',
           'Give the date to measure up to as YYYY-MM-DD, and make it a real date.', 422);

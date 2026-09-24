@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import { orgTodaySql, orgZoneSql } from '../../common/orgTime.js';
 
 /**
  * Survey alerts (§27).
@@ -60,13 +61,13 @@ export async function runSurveyAlerts(
     `SELECT sv.org_id, sv.id AS village_id, sv.survey_project_id AS project_id,
             'survey.overdue:' || sv.id || ':' || sv.expected_completion_on AS event_key,
             ou.name AS village_name, sv.expected_completion_on AS due,
-            (CURRENT_DATE - sv.expected_completion_on) AS days_over
+            (${orgTodaySql('sv.org_id')} - sv.expected_completion_on) AS days_over
      FROM survey_villages sv
      JOIN survey_projects p ON p.id = sv.survey_project_id
      JOIN org_units ou ON ou.id = sv.village_id
      WHERE p.status = 'ACTIVE'
        AND sv.expected_completion_on IS NOT NULL
-       AND sv.expected_completion_on < CURRENT_DATE
+       AND sv.expected_completion_on < ${orgTodaySql('sv.org_id')}
        AND COALESCE(sv.status_override, '') <> 'ON_HOLD'
        -- Not already finished: every stage that counts is complete.
        AND EXISTS (
@@ -92,7 +93,7 @@ export async function runSurveyAlerts(
     `SELECT sv.org_id, sv.id AS village_id, sv.survey_project_id AS project_id,
             'survey.stalled:' || sv.id || ':' || s.code || ':' || vs.started_on AS event_key,
             ou.name AS village_name, s.label AS stage_label,
-            (CURRENT_DATE - vs.started_on) AS days_in_stage, p.stage_sla_days
+            (${orgTodaySql('sv.org_id')} - vs.started_on) AS days_in_stage, p.stage_sla_days
      FROM survey_village_stages vs
      JOIN survey_villages sv ON sv.id = vs.survey_village_id
      JOIN survey_projects p ON p.id = sv.survey_project_id
@@ -101,7 +102,7 @@ export async function runSurveyAlerts(
      WHERE p.status = 'ACTIVE' AND vs.state = 'IN_PROGRESS'
        AND vs.started_on IS NOT NULL
        AND COALESCE(sv.status_override, '') <> 'ON_HOLD'
-       AND (CURRENT_DATE - vs.started_on) > p.stage_sla_days
+       AND (${orgTodaySql('sv.org_id')} - vs.started_on) > p.stage_sla_days
      ORDER BY vs.started_on LIMIT 100`)).rows.map(r => ({
     org_id: r.org_id, village_id: r.village_id, project_id: r.project_id,
     event_key: r.event_key, kind: 'STAGE_OVERDUE',
@@ -127,7 +128,7 @@ export async function runSurveyAlerts(
   // are more of them than one pass can carry.
   findings.push(...(await pool.query(
     `SELECT sv.org_id, sv.id AS village_id, sv.survey_project_id AS project_id,
-            'survey.silent:' || sv.id || ':' || CURRENT_DATE AS event_key,
+            'survey.silent:' || sv.id || ':' || ${orgTodaySql('sv.org_id')} AS event_key,
             ou.name AS village_name,
             (SELECT max(e.entry_date) FROM survey_entries e
              WHERE e.survey_village_id = sv.id) AS last_entry
@@ -141,7 +142,7 @@ export async function runSurveyAlerts(
        AND COALESCE(
              (SELECT max(e.entry_date) FROM survey_entries e
               WHERE e.survey_village_id = sv.id),
-             CURRENT_DATE - ($1::int + 1)) < CURRENT_DATE - $1::int
+             ${orgTodaySql('sv.org_id')} - ($1::int + 1)) < ${orgTodaySql('sv.org_id')} - $1::int
      ORDER BY (SELECT max(e.entry_date) FROM survey_entries e
                 WHERE e.survey_village_id = sv.id) ASC NULLS FIRST
      LIMIT 100`, [SILENT_DAYS])).rows.map(r => ({
@@ -171,7 +172,7 @@ export async function runSurveyAlerts(
      WHERE p.status = 'ACTIVE' AND r.status = 'IDLE'
        AND e.entry_date = (SELECT max(e2.entry_date) FROM survey_entries e2
                            WHERE e2.survey_village_id = sv.id)
-       AND e.entry_date >= CURRENT_DATE - 7
+       AND e.entry_date >= ${orgTodaySql('sv.org_id')} - 7
      GROUP BY sv.org_id, sv.id, sv.survey_project_id, ou.name, e.entry_date
      ORDER BY e.entry_date ASC
      LIMIT 100`)).rows.map(r => ({
@@ -199,7 +200,7 @@ export async function runSurveyAlerts(
     `SELECT sv.org_id, sv.id AS village_id, sv.survey_project_id AS project_id,
             'survey.gt_unexplained:' || sv.id || ':' || vs.expected_end_on AS event_key,
             ou.name AS village_name, vs.expected_end_on,
-            (CURRENT_DATE - vs.expected_end_on)::int AS days_over
+            (${orgTodaySql('sv.org_id')} - vs.expected_end_on)::int AS days_over
      FROM survey_village_stages vs
      JOIN survey_stages s ON s.id = vs.stage_id AND s.code = 'GROUND_TRUTHING'
      JOIN survey_villages sv ON sv.id = vs.survey_village_id
@@ -208,7 +209,7 @@ export async function runSurveyAlerts(
      WHERE p.status = 'ACTIVE'
        AND vs.state IN ('IN_PROGRESS', 'ON_HOLD')
        AND vs.expected_end_on IS NOT NULL
-       AND vs.expected_end_on < CURRENT_DATE
+       AND vs.expected_end_on < ${orgTodaySql('sv.org_id')}
        AND vs.variance_reason IS NULL
      ORDER BY vs.expected_end_on LIMIT 100`)).rows.map(r => ({
     org_id: r.org_id, village_id: r.village_id, project_id: r.project_id,
@@ -237,7 +238,7 @@ export async function runSurveyAlerts(
             q.survey_project_id AS project_id,
             'survey.query_raised:' || q.id AS event_key,
             q.kind, q.subject, ou.name AS village_name,
-            (CURRENT_DATE - q.raised_at::date)::int AS days_open
+            (${orgTodaySql('q.org_id')} - (q.raised_at AT TIME ZONE ${orgZoneSql('q.org_id')})::date)::int AS days_open
      FROM survey_queries q
      JOIN survey_projects p ON p.id = q.survey_project_id AND p.status = 'ACTIVE'
      LEFT JOIN survey_villages sv ON sv.id = q.survey_village_id
@@ -312,7 +313,7 @@ export async function runSurveyAlerts(
        */
       const subscribers = (await db.query(
         `SELECT id, kinds FROM survey_alert_subscriptions
-          WHERE org_id = $1 AND active AND active_until >= CURRENT_DATE
+          WHERE org_id = $1 AND active AND active_until >= ${orgTodaySql('$1')}
             AND (survey_project_id IS NULL OR survey_project_id = $2)
             -- Empty means every kind, so nobody goes quiet when a new one is
             -- added after they signed up.

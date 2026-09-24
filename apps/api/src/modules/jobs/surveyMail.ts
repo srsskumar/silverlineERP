@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import { orgTodaySql } from '../../common/orgTime.js';
 
 /**
  * Sending the alerts that were queued (§073).
@@ -71,7 +72,7 @@ export async function drainSurveyAlertMail(pool: Pool): Promise<MailResult> {
     `SELECT a.id, a.subject, a.body, s.email, s.label
        FROM survey_alert_sent a
        JOIN survey_alert_subscriptions s ON s.id = a.subscription_id
-      WHERE a.status = 'QUEUED' AND s.active AND s.active_until >= CURRENT_DATE
+      WHERE a.status = 'QUEUED' AND s.active AND s.active_until >= ${orgTodaySql('s.org_id')}
       ORDER BY a.created_at
       LIMIT $1`, [BATCH])).rows;
 
