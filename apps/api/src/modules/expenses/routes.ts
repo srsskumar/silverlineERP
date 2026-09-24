@@ -162,7 +162,11 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
         // One revision at a time per project (D-003): two read the same
         // highest revision, and the second died on the live-row index as a
         // bare "duplicate record" instead of becoming the next revision.
-        await inOrg(db, 'projects', id, u.orgId, true);
+        // NO KEY UPDATE: serialises revisions without blocking the tasks,
+        // cost entries and other rows that reference the project.
+        const locked = await db.query(
+          'SELECT id FROM projects WHERE id = $1 AND org_id = $2 FOR NO KEY UPDATE', [id, u.orgId]);
+        if (!locked.rowCount) fail('NOT_FOUND', 'Project not found', 404);
         const heads = new Set(input.lines.map(l => l.cost_head_id));
         if (heads.size !== input.lines.length) {
           fail('DUPLICATE_COST_HEAD', 'The same cost head appears twice in one budget');

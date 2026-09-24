@@ -636,10 +636,12 @@ export async function registerLeaveRoutes(
      * Locked (D-002): the overlap and balance rules below read, then insert.
      * Two requests for the same days filed at the same moment each saw the
      * other as not there yet, and both stood. Holding the employee row makes
-     * the second wait, then find the first.
+     * the second wait, then find the first. NO KEY UPDATE, not UPDATE: it
+     * still serialises two filings, but does not block the attendance and
+     * other rows whose foreign keys point at this employee.
      */
     const employment = (
-      await db.query("SELECT status FROM employees WHERE id = $1::uuid AND org_id = $2 FOR UPDATE", [employeeId, user.orgId])
+      await db.query("SELECT status FROM employees WHERE id = $1::uuid AND org_id = $2 FOR NO KEY UPDATE", [employeeId, user.orgId])
     ).rows[0] as { status: string } | undefined;
     if (employment && employment.status !== "ACTIVE") {
       return sendRuleError(reply, req.requestId, {
