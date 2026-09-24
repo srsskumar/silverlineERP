@@ -260,3 +260,23 @@ describe('a destination declares what it loads', () => {
     expect(canOpen(permissionsFor('ADMIN'), '/tenders/new')).toBe(true);
   });
 });
+
+describe('the department observer reaches its dashboard (SG-011, §59.11.4)', () => {
+  it('gives a GOVT_OBSERVER a way to the survey dashboard, the one screen it holds', () => {
+    // It holds survey.dashboard and nothing else. The nav item asked for
+    // survey.read, so the observer had no link to the survey at all and
+    // signing in sent it to /security.
+    const perms = permissionsFor('GOVT_OBSERVER');
+    // It lands on its inbox (notification.read, migration 098); the point is
+    // that the dashboard is one click away rather than unreachable.
+    expect(landingRoute(perms)).not.toBe('/security');
+    expect(canOpen(perms, '/survey')).toBe(true);
+    const visible = NAV_GROUPS.flatMap(g => g.items).filter(i => navItemVisible(perms, i)).map(i => i.href);
+    expect(visible).toContain('/survey');
+  });
+
+  it('does not open the survey entry or setup screens to it', () => {
+    const perms = permissionsFor('GOVT_OBSERVER');
+    expect(canOpen(perms, '/survey/entry')).toBe(false);
+  });
+});

@@ -142,7 +142,9 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/documents', label: 'Documents', permission: 'document.read', icon: FileCheck },
       // The land survey programme (§59). Under Operations because it is field
       // work, and the people who record it are the people on site.
-      { href: '/survey', label: 'Land survey', permission: 'survey.read', icon: Compass },
+      // survey.dashboard too (SG-011): the department's observer holds that and
+      // nothing else, and without it had no way to the one screen it is given.
+      { href: '/survey', label: 'Land survey', permission: 'survey.read', anyOf: ['survey.dashboard'], icon: Compass },
       { href: '/inventory', label: 'Inventory', permission: 'inventory.read', icon: Package },
       { href: '/assets', label: 'Assets', permission: 'asset.read', icon: Boxes },
       // Kept apart from the audit trail on purpose: that answers "which row
