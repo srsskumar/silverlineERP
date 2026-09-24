@@ -455,12 +455,18 @@ describe("delegation", () => {
 
   it("lets a delegate act on a role-based step, not only one naming them by user id (owner decision 2026-09-24)", async () => {
     // ladderPolicy()'s level 2 is "any PROJECT_MANAGER", not a named user.
-    // TEAM_LEAD holds no such role directly -- only through the PM's own
+    // HR_MANAGER holds no such role directly -- only through the PM's own
     // delegation, the same cover a PM on leave would set up for level 1's
-    // named case above.
+    // named case above. A different physical person from whoever clears
+    // level 1 (fix round 1, I3's segregation of duties otherwise refuses
+    // the same person a second level of the same instance), and a role not
+    // otherwise paired with PROJECT_MANAGER or ADMIN elsewhere in this file
+    // (the delegation created here is never revoked, so it outlives the
+    // test -- pairing it with either would collide with the cycle checks
+    // further down).
     const today = workDate();
     const delegation = await post(w.role.PROJECT_MANAGER, "/api/v1/approval-delegations", {
-      to_user_id: w.roleUserId.TEAM_LEAD, valid_from: today, valid_to: today, reason: "Covering for the PM",
+      to_user_id: w.roleUserId.HR_MANAGER, valid_from: today, valid_to: today, reason: "Covering for the PM",
     });
     expect(delegation.status, JSON.stringify(delegation.body)).toBe(201);
 
@@ -469,7 +475,7 @@ describe("delegation", () => {
       `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
     expect(level1.status, JSON.stringify(level1.body)).toBe(200);
 
-    const level2 = await post({ ...w.role.TEAM_LEAD, ...(await instanceVersion(res.data.id)) },
+    const level2 = await post({ ...w.role.HR_MANAGER, ...(await instanceVersion(res.data.id)) },
       `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
     expect(level2.status, JSON.stringify(level2.body)).toBe(200);
     expect(level2.data.status).toBe("APPROVED");
@@ -477,8 +483,8 @@ describe("delegation", () => {
     const steps = await w.pool.query(
       "SELECT sequence, acted_by, acted_on_behalf_of FROM approval_steps WHERE instance_id=$1 ORDER BY sequence",
       [res.data.id]);
-    expect(steps.rows[1].acted_by).toBe(w.roleUserId.TEAM_LEAD);
-    // The audit shows whose role-based authority TEAM_LEAD acted under.
+    expect(steps.rows[1].acted_by).toBe(w.roleUserId.HR_MANAGER);
+    // The audit shows whose role-based authority HR_MANAGER acted under.
     expect(steps.rows[1].acted_on_behalf_of).toBe(w.roleUserId.PROJECT_MANAGER);
   });
 
@@ -557,6 +563,66 @@ describe("delegation", () => {
       `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
     expect(decision.status).toBe(422);
     expect(decision.body.code).toBe("NOT_THE_APPROVER");
+  });
+});
+
+describe("segregation of duties (fix round 1, I3)", () => {
+  it("a PM at L1 who is also an ADMIN delegate can't approve L2", async () => {
+    const policy = await post(w.admin, "/api/v1/approval-policies", {
+      document_type: "ADVANCE", name: `PM then ADMIN ${uniq()}`,
+      levels: [
+        { sequence: 1, min_amount: 0, max_amount: 500_000, approver_role: "PROJECT_MANAGER" },
+        { sequence: 2, min_amount: 500_000, max_amount: null, approver_role: "ADMIN" },
+      ],
+    });
+    expect(policy.status, JSON.stringify(policy.body)).toBe(201);
+
+    const today = workDate();
+    const delegation = await post(w.role.ADMIN, "/api/v1/approval-delegations", {
+      to_user_id: w.roleUserId.PROJECT_MANAGER, valid_from: today, valid_to: today, reason: "Covering for admin",
+    });
+    expect(delegation.status, JSON.stringify(delegation.body)).toBe(201);
+
+    const res = await submit(600_000, "ADVANCE", w.role.EMPLOYEE);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+
+    const level1 = await post({ ...w.role.PROJECT_MANAGER, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(level1.status, JSON.stringify(level1.body)).toBe(200);
+
+    // Same physical person, now reaching for L2 only through the ADMIN
+    // delegation -- must still be refused.
+    const level2 = await post({ ...w.role.PROJECT_MANAGER, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(level2.status, JSON.stringify(level2.body)).toBe(422);
+    expect(level2.body.code).toBe("SEGREGATION_OF_DUTIES");
+  });
+
+  it("still lets the real ADMIN, or another of its delegates, decide L2", async () => {
+    const policy = await post(w.admin, "/api/v1/approval-policies", {
+      document_type: "ADVANCE", name: `PM then ADMIN ${uniq()}`,
+      levels: [
+        { sequence: 1, min_amount: 0, max_amount: 500_000, approver_role: "PROJECT_MANAGER" },
+        { sequence: 2, min_amount: 500_000, max_amount: null, approver_role: "ADMIN" },
+      ],
+    });
+    expect(policy.status, JSON.stringify(policy.body)).toBe(201);
+
+    const res = await submit(600_000, "ADVANCE", w.role.EMPLOYEE);
+    const level1 = await post({ ...w.role.PROJECT_MANAGER, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(level1.status, JSON.stringify(level1.body)).toBe(200);
+
+    const level2 = await post({ ...w.role.ADMIN, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(level2.status, JSON.stringify(level2.body)).toBe(200);
+
+    const steps = await w.pool.query(
+      "SELECT sequence, acted_by, acted_on_behalf_of FROM approval_steps WHERE instance_id=$1 ORDER BY sequence",
+      [res.data.id]);
+    expect(steps.rows[0].acted_by).toBe(w.roleUserId.PROJECT_MANAGER);
+    expect(steps.rows[1].acted_by).toBe(w.roleUserId.ADMIN);
+    expect(steps.rows[1].acted_on_behalf_of).toBeNull();
   });
 });
 

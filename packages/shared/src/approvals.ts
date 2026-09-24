@@ -224,6 +224,8 @@ export interface ApprovalStep {
   approverRole: string | null;
   approverUserId: string | null;
   actedByUserId?: string | null;
+  /** Set when actedByUserId acted on delegated authority -- whose. */
+  actedOnBehalfOf?: string | null;
 }
 
 /**
@@ -262,48 +264,28 @@ function principalCanReachProject(
   return scope.global || scope.projects.includes(projectId);
 }
 
-/**
- * Whether this actor may act on this step right now.
- *
- * Maker-checker is the first gate and the one §4.1 names explicitly: an
- * approver cannot approve their own request unless an emergency override is
- * explicitly granted and audited. The override is deliberately awkward to
- * reach — it is a permission, not a flag on the request.
- */
-export function canAct(args: {
-  step: ApprovalStep | null;
-  steps: ApprovalStep[];
+/** Who has already decided an earlier level of this instance. */
+function priorDeciderIdentities(steps: ApprovalStep[], beforeSequence: number): Set<string> {
+  const ids = new Set<string>();
+  for (const s of steps) {
+    if (s.sequence >= beforeSequence) continue;
+    if (s.status !== 'APPROVED' && s.status !== 'REJECTED') continue; // a skipped step decided nothing
+    if (s.actedByUserId) ids.add(s.actedByUserId);
+    if (s.actedOnBehalfOf) ids.add(s.actedOnBehalfOf);
+  }
+  return ids;
+}
+
+function resolveEligibility(args: {
+  step: ApprovalStep;
   actorUserId: string;
   actorRoles: string[];
-  requesterUserId: string;
   delegations?: Delegation[];
   documentType: ApprovalDocumentType;
-  today?: string;
-  hasSelfApproveOverride?: boolean;
-  /** The document's project, for I2's principal-scope check on a role-based delegation. */
+  today: string;
   projectId?: string | null;
 }): ApprovalDecision {
-  const { step, steps, actorUserId, actorRoles, requesterUserId, documentType, projectId } = args;
-  if (!step) return { allowed: false, code: 'NOTHING_PENDING', reason: 'There is no step waiting for a decision' };
-
-  const actionable = nextActionableStep(steps);
-  if (!actionable || actionable.sequence !== step.sequence) {
-    return {
-      allowed: false, code: 'OUT_OF_SEQUENCE',
-      reason: actionable
-        ? `Level ${actionable.sequence} must decide before level ${step.sequence}`
-        : 'This request has already been decided',
-    };
-  }
-
-  if (actorUserId === requesterUserId && !args.hasSelfApproveOverride) {
-    return {
-      allowed: false, code: 'SELF_APPROVAL',
-      reason: 'You raised this request, so you cannot approve it. Route it to another approver.',
-    };
-  }
-
-  const today = args.today ?? new Date().toISOString().slice(0, 10);
+  const { step, actorUserId, actorRoles, documentType, today, projectId } = args;
   if (step.approverUserId) {
     const permitted = effectiveApprovers(step.approverUserId, args.delegations ?? [], documentType, today);
     const match = permitted.find(p => p.userId === actorUserId);
@@ -338,6 +320,76 @@ export function canAct(args: {
   }
 
   return { allowed: false, code: 'NO_APPROVER', reason: 'This step names no approver' };
+}
+
+/**
+ * Whether this actor may act on this step right now.
+ *
+ * Maker-checker is the first gate and the one §4.1 names explicitly: an
+ * approver cannot approve their own request unless an emergency override is
+ * explicitly granted and audited. The override is deliberately awkward to
+ * reach — it is a permission, not a flag on the request.
+ *
+ * Segregation of duties (fix round 1, I3) is the last gate, applied to
+ * whatever eligibility resolves to: one person may decide at most one level
+ * of a given instance, whether they acted as themselves or as someone
+ * else's delegate. Checked against both identities an earlier step could
+ * carry -- who physically decided it, and whose authority they borrowed to
+ * do it -- against both identities behind the current attempt, so neither a
+ * PM who cleared their own level and then reaches for a delegated ADMIN
+ * role, nor the ADMIN's other delegate finishing what the PM started, gets
+ * two levels of the same instance between them.
+ */
+export function canAct(args: {
+  step: ApprovalStep | null;
+  steps: ApprovalStep[];
+  actorUserId: string;
+  actorRoles: string[];
+  requesterUserId: string;
+  delegations?: Delegation[];
+  documentType: ApprovalDocumentType;
+  today?: string;
+  hasSelfApproveOverride?: boolean;
+  /** The document's project, for I2's principal-scope check on a role-based delegation. */
+  projectId?: string | null;
+}): ApprovalDecision {
+  const { step, steps, actorUserId, requesterUserId } = args;
+  if (!step) return { allowed: false, code: 'NOTHING_PENDING', reason: 'There is no step waiting for a decision' };
+
+  const actionable = nextActionableStep(steps);
+  if (!actionable || actionable.sequence !== step.sequence) {
+    return {
+      allowed: false, code: 'OUT_OF_SEQUENCE',
+      reason: actionable
+        ? `Level ${actionable.sequence} must decide before level ${step.sequence}`
+        : 'This request has already been decided',
+    };
+  }
+
+  if (actorUserId === requesterUserId && !args.hasSelfApproveOverride) {
+    return {
+      allowed: false, code: 'SELF_APPROVAL',
+      reason: 'You raised this request, so you cannot approve it. Route it to another approver.',
+    };
+  }
+
+  const today = args.today ?? new Date().toISOString().slice(0, 10);
+  const result = resolveEligibility({
+    step, actorUserId, actorRoles: args.actorRoles, delegations: args.delegations,
+    documentType: args.documentType, today, projectId: args.projectId,
+  });
+  if (!result.allowed) return result;
+
+  const priorIdentities = priorDeciderIdentities(steps, step.sequence);
+  const currentIdentities = [actorUserId, ...(result.viaDelegation && result.onBehalfOf ? [result.onBehalfOf] : [])];
+  if (currentIdentities.some(id => priorIdentities.has(id))) {
+    return {
+      allowed: false, code: 'SEGREGATION_OF_DUTIES',
+      reason: 'The same person has already decided an earlier level of this request, directly or as a delegate',
+    };
+  }
+
+  return result;
 }
 
 /**

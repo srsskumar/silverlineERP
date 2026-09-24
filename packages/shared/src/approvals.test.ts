@@ -409,6 +409,75 @@ describe('delegation', () => {
   });
 });
 
+describe('segregation of duties (fix round 1, I3)', () => {
+  // One person may decide at most one level of a given instance, whether
+  // acting as themselves or as someone else's delegate -- checked against
+  // both identities an earlier step can carry: who physically decided it
+  // (actedByUserId), and whose authority they borrowed to do it
+  // (actedOnBehalfOf).
+  const adminStep = (over: Partial<ApprovalStep> = {}): ApprovalStep =>
+    step({ sequence: 2, approverRole: 'ADMIN', approverUserId: null, ...over });
+
+  it('blocks a PM who cleared level 1 from reaching level 2 through a borrowed ADMIN delegation', () => {
+    const level1 = step({ sequence: 1, approverRole: 'TEAM_LEAD', status: 'APPROVED', actedByUserId: 'pm1' });
+    const level2 = adminStep({ status: 'PENDING' });
+    const decision = canAct({
+      step: level2, steps: [level1, level2],
+      actorUserId: 'pm1', actorRoles: [], requesterUserId: 'someone-else',
+      delegations: [{
+        fromUserId: 'admin1', toUserId: 'pm1', validFrom: '2026-09-01', validTo: '2026-09-30',
+        fromUserRoles: ['ADMIN'],
+      }],
+      documentType: 'PURCHASE_ORDER', today: '2026-09-15',
+    });
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.code).toBe('SEGREGATION_OF_DUTIES');
+  });
+
+  it('blocks a second delegate of the same principal who already decided a level', () => {
+    // deputy1 decided level 1 on admin1's behalf; deputy2, a different
+    // physical person but delegate of the same admin1, must not get level 2.
+    const level1 = step({
+      sequence: 1, approverRole: 'ADMIN', status: 'APPROVED',
+      actedByUserId: 'deputy1', actedOnBehalfOf: 'admin1',
+    });
+    const level2 = adminStep({ status: 'PENDING' });
+    const decision = canAct({
+      step: level2, steps: [level1, level2],
+      actorUserId: 'deputy2', actorRoles: [], requesterUserId: 'someone-else',
+      delegations: [{
+        fromUserId: 'admin1', toUserId: 'deputy2', validFrom: '2026-09-01', validTo: '2026-09-30',
+        fromUserRoles: ['ADMIN'],
+      }],
+      documentType: 'PURCHASE_ORDER', today: '2026-09-15',
+    });
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.code).toBe('SEGREGATION_OF_DUTIES');
+  });
+
+  it('still lets an unrelated person decide the next level', () => {
+    const level1 = step({ sequence: 1, approverRole: 'TEAM_LEAD', status: 'APPROVED', actedByUserId: 'tl1' });
+    const level2 = adminStep({ status: 'PENDING' });
+    const decision = canAct({
+      step: level2, steps: [level1, level2],
+      actorUserId: 'admin2', actorRoles: ['ADMIN'], requesterUserId: 'someone-else',
+      documentType: 'PURCHASE_ORDER', today: '2026-09-15',
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it('does not count a skipped step -- nobody decided it', () => {
+    const level1 = step({ sequence: 1, approverRole: 'TEAM_LEAD', status: 'SKIPPED', actedByUserId: null });
+    const level2 = adminStep({ status: 'PENDING' });
+    const decision = canAct({
+      step: level2, steps: [level1, level2],
+      actorUserId: 'admin1', actorRoles: ['ADMIN'], requesterUserId: 'someone-else',
+      documentType: 'PURCHASE_ORDER', today: '2026-09-15',
+    });
+    expect(decision.allowed).toBe(true);
+  });
+});
+
 describe('re-approval on amount change', () => {
   it('tears up approvals when the amount rises', () => {
     // The classic hole: approved at 4 lakh, edited to 6 lakh, ships on the

@@ -169,6 +169,7 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
       approverRole: r.approver_role,
       approverUserId: r.approver_user_id,
       actedByUserId: r.acted_by,
+      actedOnBehalfOf: r.acted_on_behalf_of ? String(r.acted_on_behalf_of) : null,
       slaHours: r.sla_hours === null ? null : Number(r.sla_hours),
       pendingSince: r.pending_since ? String(r.pending_since) : null,
     }));
