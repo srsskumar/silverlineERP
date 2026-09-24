@@ -68,6 +68,15 @@
           "color": "#1a56db"
         }
       ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Choose a photo of a receipt to attach to your expense claim.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ],
+      "expo-document-picker",
       "expo-splash-screen",
       "expo-background-task",
       "expo-sharing",
