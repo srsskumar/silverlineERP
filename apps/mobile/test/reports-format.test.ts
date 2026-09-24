@@ -14,7 +14,7 @@ const META = [
 
 describe("availableReportTypes", () => {
   it("keeps only the types the permission list allows", () => {
-    const rows = availableReportTypes(["project.read", "task.read"], META);
+    const rows = availableReportTypes(["report.generate", "project.read", "task.read"], META);
     assert.deepEqual(rows.map((r) => r.type), ["projects", "tasks"]);
   });
 
@@ -49,5 +49,22 @@ describe("reportCanDownload", () => {
     assert.equal(reportCanDownload({ status: "PENDING", format: "pdf" }), false);
     assert.equal(reportCanDownload({ status: "READY", format: "csv" }), false);
     assert.equal(reportCanDownload({ status: "READY", format: "xlsx" }), false);
+  });
+});
+
+describe("availableReportTypes needs report.generate (MA-004)", () => {
+  it("offers nothing without report.generate, whatever domain reads are held", () => {
+    assert.deepEqual(availableReportTypes(["task.read", "project.read"], META), []);
+    assert.deepEqual(
+      availableReportTypes(["report.generate", "task.read"], META).map((r) => r.type),
+      ["tasks"],
+    );
+  });
+});
+
+describe("REPORT_TYPE_META (MA-004)", () => {
+  it("gates the employees report on employee.read, as the API REPORT_DOMAIN_READ does", async () => {
+    const { REPORT_TYPE_META } = await import("../src/reportsFormat");
+    assert.equal(REPORT_TYPE_META.find((m) => m.type === "employees")?.permission, "employee.read");
   });
 });

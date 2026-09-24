@@ -49,6 +49,13 @@ describe('the asset vocabulary', () => {
     expect(assetConditionLabel('FAIR')).toBe('Fair');
     expect(assetConditionLabel(null)).toBe('—');
   });
+
+  it('title-cases a free-text value the register holds verbatim', () => {
+    // Mobile used to send condition as free text; "good" was stored as-is
+    // (findings-mobile-audit2 MA-002) and must not read as a lower-case code.
+    expect(assetConditionLabel('good')).toBe('Good');
+    expect(assetConditionLabel('needs_repair')).toBe('Needs repair');
+  });
 });
 
 describe('where an asset is', () => {

@@ -10,6 +10,7 @@ import type { ReactNode } from "react";
 import {
   ActivityIndicator,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -47,10 +48,13 @@ export function Screen({
   children,
   scroll = true,
   padded = true,
+  refresh,
 }: {
   children: ReactNode;
   scroll?: boolean;
   padded?: boolean;
+  /** Pull-to-refresh (src/ui/usePullRefresh.ts). Only for a scrolling screen. */
+  refresh?: { refreshing: boolean; onRefresh: () => void };
 }) {
   const t = useTheme();
   // Every screen here hides the native header, and on Android 15 the app is
@@ -74,6 +78,16 @@ export function Screen({
         paddingBottom: space.xxl * 2,
       }}
       keyboardShouldPersistTaps="handled"
+      refreshControl={
+        refresh ? (
+          <RefreshControl
+            refreshing={refresh.refreshing}
+            onRefresh={refresh.onRefresh}
+            tintColor={t.textMuted}
+            colors={[t.primary]}
+          />
+        ) : undefined
+      }
     >
       {children}
     </ScrollView>

@@ -18,10 +18,14 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { View } from "react-native";
 import { day } from "@silverline/shared";
+import { codeLabel } from "../src/labels";
 import { useAuth } from "../src/auth/AuthContext";
 import { getCycles, getProjects, type Cycle } from "../src/api/endpoints";
 import { cycleMetricsSummary, cycleStatusTone, groupCycles } from "../src/planningFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -57,8 +61,11 @@ function PlanningScreen() {
 
   const selectedProject = projects.data?.find((p) => p.id === projectId);
 
+  const pull = usePullRefresh(canRead && !projectId && projects, canRead && Boolean(projectId) && cycles);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader title="Planning" onBack={() => router.back()} />
       <Muted style={{ marginBottom: space.lg }}>Cycles for a project — what's active, what's next.</Muted>
 
@@ -78,8 +85,10 @@ function PlanningScreen() {
           />
           <SectionLabel>Choose a project</SectionLabel>
           <Card>
-            {projects.isLoading ? (
+            {listState(projects, (projects.data ?? []).length) === "loading" ? (
               <Loading />
+            ) : listState(projects, (projects.data ?? []).length) === "error" ? (
+              <LoadError query={projects} what="projects" />
             ) : (projects.data ?? []).length === 0 ? (
               <EmptyState icon="folder-outline" title="No projects found" />
             ) : (
@@ -87,7 +96,7 @@ function PlanningScreen() {
                 <ListRow
                   key={p.id}
                   title={`${p.code ?? ""} · ${p.name}`}
-                  subtitle={p.status ? String(p.status) : undefined}
+                  subtitle={p.status ? codeLabel(String(p.status)) : undefined}
                   onPress={() => setProjectId(p.id)}
                   last={i === arr.length - 1}
                 />
@@ -101,8 +110,10 @@ function PlanningScreen() {
             <Muted style={{ flex: 1 }}>{selectedProject ? `${selectedProject.code ?? ""} · ${selectedProject.name}` : "Project"}</Muted>
             <Button title="Change project" variant="secondary" onPress={() => setProjectId(null)} />
           </Row>
-          {cycles.isLoading ? (
+          {listState(cycles, (cycles.data ?? []).length) === "loading" ? (
             <Loading />
+          ) : listState(cycles, (cycles.data ?? []).length) === "error" ? (
+            <LoadError query={cycles} what="cycles" />
           ) : (
             <CycleGroups cycles={cycles.data ?? []} />
           )}
@@ -166,7 +177,7 @@ function CycleRow({ cycle, last }: { cycle: Cycle; last: boolean }) {
           .filter(Boolean)
           .join(" · ")
       }
-      right={<Badge text={cycle.status} tone={cycleStatusTone(cycle.status)} />}
+      right={<Badge text={codeLabel(cycle.status)} tone={cycleStatusTone(cycle.status)} />}
       last={last}
     />
   );

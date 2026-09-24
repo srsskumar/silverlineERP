@@ -33,6 +33,15 @@ import {
   Title,
 } from "../../src/ui/primitives";
 import { space, useTheme } from "../../src/theme";
+import { assetConditionLabel } from "@silverline/shared";
+import {
+  ASSIGNABLE_CONDITIONS,
+  filterEligibleEmployees,
+  eligibleEmployeeLabel,
+  validateAssetCondition,
+  type EligibleEmployee,
+} from "../../src/assetsFormat";
+import { codeLabel } from "../../src/labels";
 
 type Asset = {
   id: string;
@@ -43,7 +52,6 @@ type Asset = {
   condition: string;
   version: number;
 };
-type Employee = { id: string; name: string };
 
 /** Allowed status transitions, mirroring the server's asset state machine. */
 const EDGES: Record<string, string[]> = {
@@ -61,6 +69,26 @@ function statusTone(status: string): "success" | "warning" | "danger" | "info" |
   if (status === "DAMAGED" || status === "RETURNED") return "warning";
   if (status === "LOST" || status === "WRITTEN_OFF") return "danger";
   return "neutral";
+}
+
+/**
+ * MA-002: the condition is picked from the shared vocabulary, same list as
+ * web's dropdown. It was a free-text box, and the API stores whatever it is
+ * sent ("good" was accepted live and written to the register as-is).
+ */
+function ConditionPicker({ value, onChange }: { value: string; onChange: (code: string) => void }) {
+  return (
+    <Row gap={space.sm} style={{ flexWrap: "wrap", marginTop: space.xs, marginBottom: space.md }}>
+      {ASSIGNABLE_CONDITIONS.map((c) => (
+        <Button
+          key={c.code}
+          title={c.label}
+          variant={value === c.code ? "primary" : "secondary"}
+          onPress={() => onChange(c.code)}
+        />
+      ))}
+    </Row>
+  );
 }
 
 function Assets() {
@@ -95,7 +123,7 @@ function Assets() {
     queryKey: ["asset-employees"],
     queryFn: () =>
       cachedRead("asset-employees", async () =>
-        asList<Employee>((await apiFetch("/api/v1/assets/eligible-employees")).data),
+        asList<EligibleEmployee>((await apiFetch("/api/v1/assets/eligible-employees")).data),
       ),
     enabled: canDo("asset.manage"),
   });
@@ -107,7 +135,8 @@ function Assets() {
 
   const pick = (a: Asset) => {
     setSelected(a);
-    setCondition(a.condition);
+    // MA-002: a legacy code (WORN, FAIR…) is not offered again; make them pick.
+    setCondition(validateAssetCondition(a.condition) ? "" : a.condition);
     setMessage("");
   };
 
@@ -123,7 +152,8 @@ function Assets() {
         );
         asset = (await apiFetch<Asset>(`/api/v1/assets/${data.id}`)).data;
       }
-      if (audit) setScans((old) => ({ ...old, [asset!.id]: condition }));
+      if (audit && validateAssetCondition(condition)) setMessage(validateAssetCondition(condition)!);
+      else if (audit) setScans((old) => ({ ...old, [asset!.id]: condition }));
       else pick(asset);
     } catch (e) {
       setMessage(
@@ -234,12 +264,8 @@ function Assets() {
       {audit ? (
         <Card title="Physical audit">
           <Input label="Audit name" placeholder="e.g. Warehouse A — March" value={auditName} onChangeText={setAuditName} />
-          <Input
-            label="Observed condition for next scan"
-            placeholder="GOOD"
-            value={condition}
-            onChangeText={setCondition}
-          />
+          <Subtle>Observed condition for next scan</Subtle>
+          <ConditionPicker value={condition} onChange={setCondition} />
           <Muted>
             Tick the assets you expect to find, then scan the ones actually present. Expected
             assets with no scan are reported missing.
@@ -252,7 +278,7 @@ function Assets() {
                 <ListRow
                   key={id}
                   title={assets.data?.find((a) => a.id === id)?.asset_code ?? id}
-                  subtitle={c}
+                  subtitle={assetConditionLabel(c)}
                   right={<Ionicons name="close-circle-outline" size={18} color={t.danger} />}
                   onPress={() =>
                     setScans((old) => {
@@ -302,7 +328,7 @@ function Assets() {
             <ListRow
               key={a.id}
               title={a.name}
-              subtitle={`${a.asset_code} · ${a.condition}`}
+              subtitle={`${a.asset_code} · ${assetConditionLabel(a.condition)}`}
               icon={
                 audit
                   ? expected.includes(a.id)
@@ -310,7 +336,7 @@ function Assets() {
                     : "square-outline"
                   : undefined
               }
-              right={<Badge text={a.status} tone={statusTone(a.status)} />}
+              right={<Badge text={codeLabel(a.status)} tone={statusTone(a.status)} />}
               onPress={() =>
                 audit
                   ? setExpected((ids) =>
@@ -325,11 +351,12 @@ function Assets() {
       </Card>
 
       {selected && !audit ? (
-        <Card title={selected.name} right={<Badge text={selected.status} tone={statusTone(selected.status)} />}>
+        <Card title={selected.name} right={<Badge text={codeLabel(selected.status)} tone={statusTone(selected.status)} />}>
           <Muted style={{ marginBottom: space.md }}>{selected.asset_code}</Muted>
           {canDo("asset.manage") ? (
             <>
-              <Input accessibilityLabel="Condition" label="Condition" value={condition} onChangeText={setCondition} />
+              <Subtle>Condition</Subtle>
+              <ConditionPicker value={condition} onChange={setCondition} />
               <Input
                 accessibilityLabel="Reason"
                 label="Reason"
@@ -347,13 +374,11 @@ function Assets() {
                     value={employeeSearch}
                     onChangeText={setEmployeeSearch}
                   />
-                  {employees.data
-                    ?.filter((e) => e.name.toLowerCase().includes(employeeSearch.toLowerCase()))
-                    .slice(0, 10)
+                  {filterEligibleEmployees(employees.data ?? [], employeeSearch)
                     .map((e, i, arr) => (
                       <ListRow
                         key={e.id}
-                        title={e.name}
+                        title={eligibleEmployeeLabel(e)}
                         icon={employee === e.id ? "radio-button-on" : "radio-button-off"}
                         onPress={() => setEmployee(e.id)}
                         last={i === arr.length - 1}
@@ -363,7 +388,7 @@ function Assets() {
                     title="Assign to employee"
                     icon="person-add-outline"
                     loading={busy}
-                    disabled={busy || !employee || !reason.trim()}
+                    disabled={busy || !employee || !reason.trim() || validateAssetCondition(condition) !== null}
                     onPress={() =>
                       void queue("asset_assignment", {
                         asset_id: selected.id,
@@ -384,10 +409,10 @@ function Assets() {
                     {(EDGES[selected.status] ?? []).map((status) => (
                       <Button
                         key={status}
-                        title={status.replaceAll("_", " ")}
+                        title={codeLabel(status)}
                         variant="secondary"
                         tone={statusTone(status) === "danger" ? "danger" : undefined}
-                        disabled={busy || !reason.trim()}
+                        disabled={busy || !reason.trim() || validateAssetCondition(condition) !== null}
                         onPress={() =>
                           void queue("asset_transition", {
                             asset_id: selected.id,
@@ -401,6 +426,9 @@ function Assets() {
                   </View>
                   {!reason.trim() ? (
                     <Subtle style={{ marginTop: space.sm }}>A reason is required.</Subtle>
+                  ) : null}
+                  {validateAssetCondition(condition) ? (
+                    <Subtle style={{ marginTop: space.sm }}>{validateAssetCondition(condition)}</Subtle>
                   ) : null}
                 </>
               ) : null}

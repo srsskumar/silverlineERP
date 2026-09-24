@@ -23,9 +23,18 @@ import {
   postDocumentRenew,
   type DocumentRow,
 } from "../src/api/endpoints";
-import { documentStateTone, validateDocumentRenew } from "../src/documentsFormat";
+import { day } from "@silverline/shared";
+import {
+  documentOwnerLabel,
+  documentStateLabel,
+  documentStateTone,
+  validateDocumentRenew,
+} from "../src/documentsFormat";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import { describeApiError } from "../src/errorFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
 import {
   BackHeader,
   Badge,
@@ -72,8 +81,11 @@ function DocumentsScreen() {
   const rows = tab === "renewals" ? (renewals.data?.items ?? []) : (register.data?.items ?? []);
   const active = tab === "renewals" ? renewals : register;
 
+  const pull = usePullRefresh(canRead && tab === "renewals" && renewals, canRead && tab === "register" && register);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader title="Documents" onBack={() => router.back()} />
       <Muted style={{ marginBottom: space.lg }}>
         Licences, policies, certificates and agreements — and when each one runs out.
@@ -120,8 +132,10 @@ function DocumentsScreen() {
           ) : null}
 
           <Card>
-            {active.isLoading ? (
+            {listState(active, rows.length) === "loading" ? (
               <Loading />
+            ) : listState(active, rows.length) === "error" ? (
+              <LoadError query={active} what="the register" />
             ) : rows.length === 0 ? (
               <EmptyState
                 icon="document-text-outline"
@@ -134,10 +148,10 @@ function DocumentsScreen() {
                   title={d.title}
                   subtitle={
                     d.expires_on
-                      ? `${d.type_label} · expires ${d.expires_on}`
+                      ? `${d.type_label} · expires ${day(d.expires_on)}`
                       : d.type_label
                   }
-                  right={<Badge text={d.state} tone={documentStateTone(d.state)} />}
+                  right={<Badge text={documentStateLabel(d.state)} tone={documentStateTone(d.state)} />}
                   onPress={() => setSelectedId(d.id)}
                   last={i === arr.length - 1}
                 />
@@ -196,7 +210,7 @@ function DocumentDetail({
       <Card>
         <Row style={{ justifyContent: "space-between" }}>
           <Muted style={{ color: t.text, fontWeight: "700", flex: 1 }}>{doc.title}</Muted>
-          <Badge text={doc.state} tone={documentStateTone(doc.state)} />
+          <Badge text={documentStateLabel(doc.state)} tone={documentStateTone(doc.state)} />
         </Row>
         <Subtle style={{ marginTop: space.xs }}>{doc.type_label}</Subtle>
 
@@ -213,12 +227,12 @@ function DocumentDetail({
         ) : null}
 
         <Divider />
-        <Field label="Owner" value={`${doc.owner_type}${doc.owner_id ? ` · ${doc.owner_id.slice(0, 8)}` : ""}`} />
+        <Field label="Owner" value={documentOwnerLabel(doc.owner_type)} />
         <Field label="Reference number" value={doc.reference_number ?? "—"} />
         <Field label="Issuing authority" value={doc.issuing_authority ?? "—"} />
-        <Field label="Issued on" value={doc.issued_on ?? "—"} />
-        <Field label="Valid from" value={doc.valid_from ?? "—"} />
-        <Field label="Expires on" value={doc.expires_on ?? "Does not expire"} />
+        <Field label="Issued on" value={day(doc.issued_on)} />
+        <Field label="Valid from" value={day(doc.valid_from)} />
+        <Field label="Expires on" value={doc.expires_on ? day(doc.expires_on) : "Does not expire"} />
         {doc.days_remaining !== null ? (
           <Field
             label="Days remaining"
@@ -247,7 +261,7 @@ function DocumentDetail({
           <SectionLabel>Previous revision</SectionLabel>
           <Card>
             <Muted style={{ color: t.text, fontWeight: "600" }}>{doc.supersedes.title}</Muted>
-            <Subtle>Expired {doc.supersedes.expires_on ?? "—"}</Subtle>
+            <Subtle>Expired {day(doc.supersedes.expires_on)}</Subtle>
           </Card>
         </>
       ) : null}

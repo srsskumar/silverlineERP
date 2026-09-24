@@ -85,8 +85,8 @@ export function assetConditionLabel(code: string | null | undefined): string {
   const known = ASSET_CONDITIONS.find(c => c.code === code);
   if (known) return known.label;
   if (!code) return '—';
-  // A legacy value reads as itself rather than as a code.
-  return code.charAt(0) + code.slice(1).toLowerCase().replace(/_/g, ' ');
+  // A legacy or free-text value reads as words, title-cased ("good" -> "Good").
+  return code.charAt(0).toUpperCase() + code.slice(1).toLowerCase().replace(/_/g, ' ');
 }
 
 /** "Other" with nothing written is the same as saying nothing. */

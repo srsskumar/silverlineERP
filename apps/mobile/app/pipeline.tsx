@@ -9,7 +9,8 @@ import { router } from "expo-router";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Modal, ScrollView, View } from "react-native";
-import { LEAD_STAGES } from "@silverline/shared";
+import { LEAD_STAGES, day, dayTime } from "@silverline/shared";
+import { codeLabel } from "../src/labels";
 import { ApiError } from "../src/api/client";
 import { describeApiError } from "../src/errorFormat";
 import { useAuth } from "../src/auth/AuthContext";
@@ -25,6 +26,9 @@ import {
 } from "../src/leadsFormat";
 import { canGoNewer, canGoOlder, newerOffset, olderOffset } from "../src/paging";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -80,8 +84,11 @@ function PipelineScreen() {
     void qc.invalidateQueries({ queryKey: ["leads"] });
   };
 
+  const pull = usePullRefresh(canRead && leads);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader
         title="Pipeline"
         onBack={() => router.back()}
@@ -148,8 +155,10 @@ function PipelineScreen() {
           </ScrollView>
 
           <Card>
-            {leads.isLoading && offset === 0 ? (
+            {listState(leads, rows.length) === "loading" ? (
               <Loading />
+            ) : listState(leads, rows.length) === "error" ? (
+              <LoadError query={leads} what="leads" />
             ) : rows.length === 0 ? (
               <EmptyState icon="trending-up-outline" title="No leads found" />
             ) : (
@@ -239,6 +248,7 @@ function NewLeadForm({ onCreated }: { onCreated: () => void }) {
       organization_name: orgName,
       lead_type: leadType,
       source,
+      estimated_value: estimatedValue,
     });
     if (!v.ok) {
       setError(v.errors.map((e) => e.message).join("\n"));
@@ -360,14 +370,14 @@ function LeadDetailView({
         </Row>
         <Subtle style={{ marginTop: space.xs }}>{lead.lead_no}</Subtle>
         <Divider />
-        <Field label="Type" value={lead.lead_type} />
-        <Field label="Source" value={lead.source} />
+        <Field label="Type" value={codeLabel(lead.lead_type)} />
+        <Field label="Source" value={formatLeadSource(lead.source)} />
         {lead.owner_username ? <Field label="Owner" value={lead.owner_username} /> : null}
         {money(lead.estimated_value) ? (
           <Field label="Estimated value" value={money(lead.estimated_value)!} />
         ) : null}
         {lead.next_follow_up_date ? (
-          <Field label="Next follow-up" value={lead.next_follow_up_date} />
+          <Field label="Next follow-up" value={day(lead.next_follow_up_date)} />
         ) : null}
         {lead.notes ? <Field label="Notes" value={lead.notes} /> : null}
       </Card>
@@ -421,7 +431,7 @@ function LeadDetailView({
                 key={entry.id}
                 title={entry.summary}
                 subtitle={
-                  [entry.interaction_type, entry.logged_by_username ?? undefined]
+                  [codeLabel(entry.interaction_type), entry.logged_by_username ?? undefined, entry.occurred_at ? dayTime(entry.occurred_at) : undefined]
                     .filter(Boolean)
                     .join(" · ")
                 }

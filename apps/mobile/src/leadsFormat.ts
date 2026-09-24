@@ -78,6 +78,8 @@ export interface LeadCreateInput {
   organization_name: string;
   lead_type: string;
   source: string;
+  /** MA-008: optional; the raw text box value, checked before it is sent as a number. */
+  estimated_value?: string;
 }
 
 /**
@@ -105,6 +107,10 @@ export function validateLeadCreate(
   }
   if (!(LEAD_SOURCES as readonly string[]).includes(input.source)) {
     errors.push({ field: "source", message: "Select how this lead came in" });
+  }
+  const ev = input.estimated_value?.trim() ?? "";
+  if (ev && !/^\d+(\.\d{1,2})?$/.test(ev)) {
+    errors.push({ field: "estimated_value", message: "Estimated value must be an amount in rupees, like 150000 or 1500.50" });
   }
   return { ok: errors.length === 0, errors };
 }

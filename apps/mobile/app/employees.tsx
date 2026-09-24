@@ -15,7 +15,11 @@ import { Modal, View } from "react-native";
 import { useAuth } from "../src/auth/AuthContext";
 import { getEmployee, getEmployeeDirectory, type DirectoryEmployee } from "../src/api/endpoints";
 import { employeeStatusTone, formatEmployeeName } from "../src/employeesFormat";
+import { day } from "@silverline/shared";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -51,8 +55,11 @@ function EmployeesScreen() {
 
   const rows = directory.data?.items ?? [];
 
+  const pull = usePullRefresh(canRead && directory);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader title="Directory" onBack={() => router.back()} />
       <Muted style={{ marginBottom: space.lg }}>Everyone in the organisation, by name.</Muted>
 
@@ -71,8 +78,10 @@ function EmployeesScreen() {
             autoCapitalize="none"
           />
           <Card>
-            {directory.isLoading ? (
+            {listState(directory, rows.length) === "loading" ? (
               <Loading />
+            ) : listState(directory, rows.length) === "error" ? (
+              <LoadError query={directory} what="the directory" />
             ) : rows.length === 0 ? (
               <EmptyState icon="people-outline" title="No one found" />
             ) : (
@@ -141,7 +150,7 @@ function EmployeeDetail({ employee }: { employee: DirectoryEmployee }) {
         <Field label="Phone" value={employee.phone} />
         {employee.phone_secondary ? <Field label="Alternate phone" value={employee.phone_secondary} /> : null}
         {employee.email ? <Field label="Email" value={employee.email} /> : null}
-        {employee.date_of_joining ? <Field label="Date of joining" value={employee.date_of_joining} /> : null}
+        {employee.date_of_joining ? <Field label="Date of joining" value={day(employee.date_of_joining)} /> : null}
         {employee.aadhaar_last4 ? <Field label="Aadhaar" value={`•••• ${employee.aadhaar_last4}`} /> : null}
         {employee.pan_last4 ? <Field label="PAN" value={`•••• ${employee.pan_last4}`} /> : null}
         {employee.bank_account_last4 ? (

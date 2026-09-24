@@ -24,6 +24,9 @@ import {
 } from "../src/api/endpoints";
 import { actionLabel, executionStatusTone, triggerLabel } from "../src/automationFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -41,7 +44,8 @@ import {
   Subtle,
 } from "../src/ui/primitives";
 import { radius, space, useTheme } from "../src/theme";
-import { day } from "@silverline/shared";
+import { day, dayTime } from "@silverline/shared";
+import { codeLabel } from "../src/labels";
 
 function AutomationScreen() {
   const { canDo } = useAuth();
@@ -66,8 +70,11 @@ function AutomationScreen() {
 
   const rows = rules.data ?? [];
 
+  const pull = usePullRefresh(canRead && projects, canRead && Boolean(projectId) && rules);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader title="Automation" onBack={() => router.back()} />
       <Muted style={{ marginBottom: space.lg }}>
         What rules fire on a project, and what each one does.
@@ -113,8 +120,10 @@ function AutomationScreen() {
             <>
               <SectionLabel>Rules</SectionLabel>
               <Card>
-                {rules.isLoading ? (
+                {listState(rules, rows.length) === "loading" ? (
                   <Loading />
+                ) : listState(rules, rows.length) === "error" ? (
+                  <LoadError query={rules} what="the rules" />
                 ) : rows.length === 0 ? (
                   <EmptyState icon="git-branch-outline" title="No rules on this project" />
                 ) : (
@@ -126,7 +135,7 @@ function AutomationScreen() {
                         `${triggerLabel(r.trigger)}` +
                         (r.last_run_at ? ` · last ran ${day(r.last_run_at)}` : " · never ran")
                       }
-                      right={<Badge text={r.active ? "ACTIVE" : "OFF"} tone={r.active ? "success" : "neutral"} />}
+                      right={<Badge text={r.active ? "Active" : "Off"} tone={r.active ? "success" : "neutral"} />}
                       onPress={() => setSelected(r)}
                       last={i === arr.length - 1}
                     />
@@ -163,7 +172,7 @@ function RuleDetail({ rule, onClose }: { rule: AutomationRule; onClose: () => vo
       <Card>
         <Row style={{ justifyContent: "space-between" }}>
           <Muted style={{ color: t.text, fontWeight: "700" }}>{triggerLabel(rule.trigger)}</Muted>
-          <Badge text={rule.active ? "ACTIVE" : "OFF"} tone={rule.active ? "success" : "neutral"} />
+          <Badge text={rule.active ? "Active" : "Off"} tone={rule.active ? "success" : "neutral"} />
         </Row>
         <Subtle style={{ marginTop: space.xs }}>
           {rule.last_run_at ? `Last ran ${day(rule.last_run_at)}` : "Never run"}
@@ -195,17 +204,19 @@ function RuleDetail({ rule, onClose }: { rule: AutomationRule; onClose: () => vo
 
       <SectionLabel>Recent runs</SectionLabel>
       <Card>
-        {executions.isLoading ? (
+        {listState(executions, (executions.data ?? []).length) === "loading" ? (
           <Loading />
+        ) : listState(executions, (executions.data ?? []).length) === "error" ? (
+          <LoadError query={executions} what="recent runs" />
         ) : (executions.data ?? []).length === 0 ? (
           <EmptyState icon="time-outline" title="No runs recorded yet" />
         ) : (
           (executions.data ?? []).map((e, i, arr) => (
             <ListRow
               key={e.id}
-              title={day(e.created_at)}
+              title={dayTime(e.created_at)}
               subtitle={`${e.results.length} action${e.results.length === 1 ? "" : "s"}`}
-              right={<Badge text={e.status} tone={executionStatusTone(e.status)} />}
+              right={<Badge text={codeLabel(e.status)} tone={executionStatusTone(e.status)} />}
               last={i === arr.length - 1}
             />
           ))

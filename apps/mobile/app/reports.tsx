@@ -23,11 +23,15 @@ import { File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { randomUUID } from "expo-crypto";
 import { dayTime } from "@silverline/shared";
+import { codeLabel } from "../src/labels";
 import { describeApiError } from "../src/errorFormat";
 import { useAuth } from "../src/auth/AuthContext";
 import { REPORT_TYPE_META, getReportPdf, getReports, postReport, type ReportJob } from "../src/api/endpoints";
 import { availableReportTypes, reportCanDownload, reportStatusTone } from "../src/reportsFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -101,8 +105,11 @@ function ReportsScreen() {
     }
   };
 
+  const pull = usePullRefresh(list);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader title="Reports" onBack={() => router.back()} />
       <Muted style={{ marginBottom: space.lg }}>
         Generate a one-off report. Recurring schedules and csv/xlsx exports stay on the web.
@@ -142,8 +149,10 @@ function ReportsScreen() {
 
           <SectionLabel>Your reports</SectionLabel>
           <Card>
-            {list.isLoading ? (
+            {listState(list, (list.data?.items ?? []).length) === "loading" ? (
               <Loading />
+            ) : listState(list, (list.data?.items ?? []).length) === "error" ? (
+              <LoadError query={list} what="your reports" />
             ) : (list.data?.items ?? []).length === 0 ? (
               <EmptyState icon="document-outline" title="No reports yet" />
             ) : (
@@ -155,7 +164,7 @@ function ReportsScreen() {
                     title={REPORT_TYPE_META.find((m) => m.type === r.type)?.label ?? r.type}
                     subtitle={
                       [
-                        `${r.format} · ${r.rows} rows`,
+                        `${String(r.format ?? "").toUpperCase()} · ${r.rows} rows`,
                         r.created_at ? dayTime(r.created_at) : undefined,
                         r.error ?? undefined,
                         !canDownload && r.status === "READY" ? "View on desktop (not a pdf)" : undefined,
@@ -163,7 +172,7 @@ function ReportsScreen() {
                         .filter(Boolean)
                         .join(" · ")
                     }
-                    right={<Badge text={r.status} tone={reportStatusTone(r.status)} />}
+                    right={<Badge text={codeLabel(r.status)} tone={reportStatusTone(r.status)} />}
                     onPress={canDownload ? () => void save(r) : undefined}
                     last={i === arr.length - 1}
                   />

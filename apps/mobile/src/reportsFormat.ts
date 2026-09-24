@@ -23,11 +23,35 @@ export interface ReportTypeMetaLike {
 }
 
 /** Report types the caller's permission list is actually allowed to generate. */
+/**
+ * Report type -> the domain read the API also demands (packages/shared
+ * s6.ts REPORT_DOMAIN_READ, apps/web/lib/reports.ts). MA-004: employees was
+ * "employees.read", a legacy code the API does not check, so a team lead
+ * holding employee.read never saw the Employees report here though web
+ * offers it.
+ */
+export const REPORT_TYPE_META: ReadonlyArray<{ type: string; label: string; permission: string }> = [
+  { type: "projects", label: "Project progress", permission: "project.read" },
+  { type: "cycles", label: "Cycle velocity", permission: "cycle.read" },
+  { type: "audit", label: "Audit trail", permission: "audit.read" },
+  { type: "inventory", label: "Inventory", permission: "inventory.read" },
+  { type: "assets", label: "Assets", permission: "asset.manage" },
+  { type: "invoices", label: "Invoices", permission: "inventory.read" },
+  { type: "payroll", label: "Payroll", permission: "payroll.read" },
+  { type: "employees", label: "Employees", permission: "employee.read" },
+  { type: "attendance", label: "Attendance", permission: "attendance.read" },
+  { type: "tasks", label: "Tasks", permission: "task.read" },
+  { type: "leave", label: "Leave", permission: "leave.read" },
+];
+
+/** The API refuses every report without this one, whatever domain read is held. */
+export const REPORT_GENERATE = "report.generate";
+
 export function availableReportTypes(
   permissions: readonly string[] | null | undefined,
   meta: readonly ReportTypeMetaLike[],
 ): ReportTypeMetaLike[] {
-  if (!Array.isArray(permissions)) return [];
+  if (!Array.isArray(permissions) || !permissions.includes(REPORT_GENERATE)) return [];
   return meta.filter((m) => permissions.includes(m.permission));
 }
 

@@ -13,6 +13,9 @@ import { useAuth } from "../src/auth/AuthContext";
 import { getHolidays } from "../src/api/endpoints";
 import { holidayScopeLabel } from "../src/holidaysFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import { BackHeader, Button, Card, EmptyState, ListRow, Loading, Muted, Row, Screen } from "../src/ui/primitives";
 import { space } from "../src/theme";
 import { day } from "@silverline/shared";
@@ -30,8 +33,11 @@ function OrgHolidaysScreen() {
 
   const rows = holidays.data?.items ?? [];
 
+  const pull = usePullRefresh(canRead && holidays);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader title="Holidays" onBack={() => router.back()} />
       <Muted style={{ marginBottom: space.lg }}>The year's holiday calendar, org-wide and by location.</Muted>
 
@@ -50,8 +56,10 @@ function OrgHolidaysScreen() {
           </Row>
 
           <Card>
-            {holidays.isLoading ? (
+            {listState(holidays, rows.length) === "loading" ? (
               <Loading />
+            ) : listState(holidays, rows.length) === "error" ? (
+              <LoadError query={holidays} what="holidays" />
             ) : rows.length === 0 ? (
               <EmptyState icon="calendar-outline" title={`No holidays in ${year}`} />
             ) : (

@@ -37,3 +37,31 @@ export function validateDocumentRenew(input: {
   }
   return { ok: errors.length === 0, errors };
 }
+
+/** MA-007: same words as web's STATE_LABELS (apps/web/lib/document-register.ts). */
+const STATE_LABELS: Record<string, string> = {
+  VALID: "In force",
+  EXPIRING: "Expiring",
+  EXPIRED: "Expired",
+  SUPERSEDED: "Superseded",
+  NO_EXPIRY: "No expiry",
+};
+
+export function documentStateLabel(state: string): string {
+  return STATE_LABELS[state] ?? state;
+}
+
+/** MA-007: same words as web's OWNER_LABELS. */
+const OWNER_LABELS: Record<string, string> = {
+  employee: "Employee",
+  project: "Project",
+  client: "Client",
+  vendor: "Supplier",
+  asset: "Asset",
+  tender: "Tender",
+  organization: "The company",
+};
+
+export function documentOwnerLabel(ownerType: string): string {
+  return OWNER_LABELS[ownerType] ?? ownerType;
+}
