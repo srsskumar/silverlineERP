@@ -22,6 +22,7 @@ import { RequireDestination } from '@/components/RequirePermission';
 import { NewRaBill } from '@/components/billing/NewRaBillForm';
 import { NewAdvance } from '@/components/billing/NewAdvanceForm';
 import { AdvancesList } from '@/components/billing/AdvancesList';
+import { BudgetEditForm } from '@/components/finance/BudgetEditForm';
 
 type Row = Record<string, any>;
 type Tab = 'bills' | 'boq' | 'measured' | 'retention' | 'cost';
@@ -587,6 +588,11 @@ function Retention({ projectId }: { projectId: string }) {
  * over, and a bar showing 80% would say the opposite.
  */
 function CostPosition({ projectId }: { projectId: string }) {
+  const { session } = useAuth();
+  const canManageBudget = hasPermission({ permissions: session?.permissions }, 'budget.manage');
+  const [budgetFormOpen, setBudgetFormOpen] = React.useState(false);
+  const queryClient = useQueryClient();
+
   const position = useQuery({
     queryKey: ['cost-position', projectId],
     queryFn: async () => (await apiRequest<Row>(`/api/v1/projects/${projectId}/cost-position`)).data,
@@ -610,6 +616,13 @@ function CostPosition({ projectId }: { projectId: string }) {
 
   return (
     <>
+      {canManageBudget ? (
+        <div className="mb-3 flex justify-end">
+          <Button variant="secondary" size="sm" onClick={() => setBudgetFormOpen(true)}>
+            {heads.length > 0 ? 'Revise budget' : 'Set budget'}
+          </Button>
+        </div>
+      ) : null}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Budget" value={moneyIndian(totals.budgeted)} hint={money(totals.budgeted)} />
         <Stat label="Actual" value={moneyIndian(totals.actual)} hint={money(totals.actual)} />
@@ -739,6 +752,21 @@ function CostPosition({ projectId }: { projectId: string }) {
             </Table>
           </TableWrap>
         </Card>
+      ) : null}
+
+      {budgetFormOpen ? (
+        <BudgetEditForm
+          projectId={projectId}
+          isRevision={heads.length > 0}
+          existing={heads.filter((h) => Number(h.budgeted) > 0).map((h) => ({
+            cost_head_id: String(h.costHeadId), budgeted_amount: Number(h.budgeted),
+          }))}
+          onClose={() => setBudgetFormOpen(false)}
+          onSaved={() => {
+            setBudgetFormOpen(false);
+            void queryClient.invalidateQueries({ queryKey: ['cost-position', projectId] });
+          }}
+        />
       ) : null}
     </>
   );

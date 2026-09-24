@@ -22,6 +22,7 @@ import {
   CATEGORY_LABELS, OWNER_LABELS, STATE_LABELS, consequence, deadlineLabel,
   registerHeadline, retentionNote, stateTone, type DocumentState,
 } from '@/lib/document-register';
+import { DeleteDocumentButton } from '@/components/documents/DeleteDocumentButton';
 
 type Row = Record<string, any>;
 
@@ -40,6 +41,7 @@ export default function DocumentsPage() {
   const canManage = hasPermission(perms, 'document.manage');
   const canHold = hasPermission(perms, 'document.legalhold');
   const canRelease = hasPermission(perms, 'document.legalhold.release');
+  const canDelete = hasPermission(perms, 'document.delete');
 
   const [tab, setTab] = React.useState<'renewals' | 'register'>('renewals');
   const [within, setWithin] = React.useState(60);
@@ -128,6 +130,7 @@ export default function DocumentsPage() {
           <Register
             query={register} filters={filters} setFilters={setFilters} summary={summary}
             canHold={canHold} canRelease={canRelease}
+            canDelete={canDelete} onDeleted={() => register.refetch()}
           />
         )}
       </PageBody>
@@ -333,7 +336,7 @@ function RenewDialog({
 /* --------------------------------------------------------------- register */
 
 function Register({
-  query, filters, setFilters, summary, canHold, canRelease,
+  query, filters, setFilters, summary, canHold, canRelease, canDelete, onDeleted,
 }: {
   query: any;
   filters: { category: string; owner_type: string; state: string };
@@ -341,6 +344,8 @@ function Register({
   summary: Row | undefined;
   canHold: boolean;
   canRelease: boolean;
+  canDelete: boolean;
+  onDeleted: () => void;
 }) {
   const qc = useQueryClient();
   const [holdAction, setHoldAction] = React.useState<{ document: Row; mode: 'hold' | 'release' } | null>(null);
@@ -351,6 +356,7 @@ function Register({
   const items: Row[] = query.data?.data ?? [];
   const select = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
   const showHoldColumn = canHold || canRelease;
+  const showActionsColumn = showHoldColumn || canDelete;
 
   return (
     <div className="space-y-4">
@@ -402,7 +408,7 @@ function Register({
                 <TH>Reference</TH>
                 <TH>Expires</TH>
                 <TH>State</TH>
-                {showHoldColumn ? <TH /> : null}
+                {showActionsColumn ? <TH /> : null}
               </TR>
             </THead>
             <TBody>
@@ -438,8 +444,8 @@ function Register({
                     </Badge>
                     {d.legal_hold ? <Badge tone="warning">Legal hold</Badge> : null}
                   </TD>
-                  {showHoldColumn ? (
-                    <TD className="text-right">
+                  {showActionsColumn ? (
+                    <TD align="right" className="space-x-1">
                       {!d.legal_hold && canHold ? (
                         <Button type="button" variant="secondary"
                           onClick={() => setHoldAction({ document: d, mode: 'hold' })}>
@@ -451,6 +457,12 @@ function Register({
                           onClick={() => setHoldAction({ document: d, mode: 'release' })}>
                           Release hold
                         </Button>
+                      ) : null}
+                      {canDelete ? (
+                        <DeleteDocumentButton
+                          id={String(d.id)} title={String(d.title)} version={Number(d.version)}
+                          retention={d.retention} onDeleted={onDeleted}
+                        />
                       ) : null}
                     </TD>
                   ) : null}

@@ -47,8 +47,30 @@ export const PERMISSIONS = {
   EMPLOYEE_IMPORT: 'employee.import',
   DOCUMENT_READ: 'document.read',
   DOCUMENT_UPLOAD: 'document.upload',
+  DOCUMENT_DELETE: 'document.delete',
   HOLIDAY_READ: 'holiday.read',
   HOLIDAY_MANAGE: 'holiday.manage',
+  // §41 Delegation of Authority (approval-policies admin screen, Task 5f).
+  APPROVAL_READ: 'approval.read',
+  APPROVAL_CONFIGURE: 'approval.configure',
+  // §45 Financial control: payments, bank reconciliation, financial periods
+  // (Task 5f — API existed, no web UI).
+  PAYMENT_READ: 'payment.read',
+  PAYMENT_MANAGE: 'payment.manage',
+  PAYMENT_ALLOCATE: 'payment.allocate',
+  BANK_READ: 'bank.read',
+  BANK_RECONCILE: 'bank.reconcile',
+  PERIOD_READ: 'period.read',
+  PERIOD_MANAGE: 'period.manage',
+  // §15.6/§16 cost control: cost-head masters and per-project budgets
+  // (Task 5f — API existed, no web UI).
+  COSTHEAD_READ: 'costhead.read',
+  COSTHEAD_MANAGE: 'costhead.manage',
+  BUDGET_READ: 'budget.read',
+  BUDGET_MANAGE: 'budget.manage',
+  // §47 workforce allocation: shift definitions (Task 5f — API existed, no web UI).
+  ROSTER_READ: 'roster.read',
+  ROSTER_MANAGE: 'roster.manage',
   // S2 frozen contract codes (dot-style; backend enforces these).
   ATTENDANCE_PUNCH: 'attendance.punch',
   ATTENDANCE_READ: 'attendance.read',

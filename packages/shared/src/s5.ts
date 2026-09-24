@@ -67,13 +67,16 @@ export const S5_ROLE_GRANTS: Record<RoleCode, string[]> = {
   INVENTORY_MANAGER: [S5_PERMISSIONS.NOTIFICATION_READ],
   // Every other role above holds notification.read -- the Inbox nav item is
   // shown to everyone, not gated per module, so a role missing it still sees
-  // the tab and 403s the moment it opens. GOVT_OBSERVER was the one role
-  // left with nothing at all (not even this ambient one), found live during
-  // the round-2 deep walk's govt crawl. SALES_BD_EXECUTIVE and
-  // BID_TENDER_MANAGER are the same shape but unverified live this round;
-  // see findings-post.md.
+  // the tab and 403s the moment it opens. GOVT_OBSERVER, SALES_BD_EXECUTIVE
+  // and BID_TENDER_MANAGER were the roles left with nothing at all (not even
+  // this ambient one): GOVT_OBSERVER found live during the round-2 deep
+  // walk's govt crawl (098, fd4a046); SALES_BD_EXECUTIVE and
+  // BID_TENDER_MANAGER were the same bug shape, created by
+  // 031_commercial_permissions.sql and never revisited (Task 5f, migration
+  // 100 carries the same grant to an already-seeded database).
   GOVT_OBSERVER: [S5_PERMISSIONS.NOTIFICATION_READ],
- SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[],
+  SALES_BD_EXECUTIVE: [S5_PERMISSIONS.NOTIFICATION_READ],
+  BID_TENDER_MANAGER: [S5_PERMISSIONS.NOTIFICATION_READ],
 };
 
 // ---------------------------------------------------------------------------

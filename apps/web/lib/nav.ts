@@ -15,7 +15,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   FileCheck,
-  Compass, ScrollText, ArrowLeftRight } from 'lucide-react';
+  Compass, ScrollText, ArrowLeftRight, Banknote, Landmark, CalendarClock } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { PERMISSIONS } from './permissions';
 
@@ -99,8 +99,16 @@ export const NAV_GROUPS: NavGroup[] = [
     title: 'Finance',
     items: [
       { href: '/approvals', label: 'Approvals', permission: 'approval.read', icon: CheckSquare },
+      // The DoA ladders behind Approvals — who a document routes to, and at
+      // what amount. Separate from Approvals itself: that screen decides
+      // requests, this one configures who gets to decide them.
+      { href: '/approvals/policies', label: 'Approval policies', permission: 'approval.configure', icon: Settings },
       { href: '/procurement', label: 'Procurement', permission: 'requisition.read', icon: ShoppingCart },
       { href: '/expenses', label: 'Expenses', permission: 'expense.read', icon: Receipt },
+      // The fixed labour/material/subcontract/... categories a project
+      // budget (the "Budget vs actual" tab under Project finance) is built
+      // from — a masters screen, not tied to any one project.
+      { href: '/cost-heads', label: 'Cost heads', permission: 'costhead.read', icon: ClipboardList },
       // The bills hang off a project, chosen first.
       { href: '/billing', label: 'Project finance', permission: 'rabill.read', requires: [PERMISSIONS.PROJECT_READ], icon: IndianRupee },
       // The two ledgers (section 58). Separate entries rather than tabs under
@@ -108,6 +116,11 @@ export const NAV_GROUPS: NavGroup[] = [
       // jobs, and neither is scoped to one project.
       { href: '/receivables', label: 'Receivables', permission: 'ar.read', icon: ArrowDownToLine },
       { href: '/payables', label: 'Payables', permission: 'ap.read', icon: ArrowUpFromLine },
+      // §45 financial control: money that actually moved, the bank's own
+      // record of it, and the monthly calendar that locks both once closed.
+      { href: '/payments', label: 'Payments', permission: 'payment.read', icon: Banknote },
+      { href: '/bank-reconciliation', label: 'Bank reconciliation', permission: 'bank.read', icon: Landmark },
+      { href: '/financial-periods', label: 'Financial periods', permission: 'period.read', icon: CalendarClock },
     ],
   },
   {
@@ -116,6 +129,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/employees', label: 'Directory', permission: PERMISSIONS.EMPLOYEE_READ, icon: Users },
       { href: '/attendance', label: 'Attendance', permission: PERMISSIONS.ATTENDANCE_READ, anyOf: [PERMISSIONS.ATTENDANCE_PUNCH], icon: Clock },
       { href: '/attendance/exceptions', label: 'Exceptions', permission: PERMISSIONS.ATTENDANCE_READ, icon: Activity },
+      // §47: the shift windows a roster entry books an employee into.
+      { href: '/shifts', label: 'Shifts', permission: 'roster.read', icon: CalendarClock },
       { href: '/leave', label: 'Leave', permission: PERMISSIONS.LEAVE_REQUEST, icon: PlaneTakeoff },
       { href: '/payroll', label: 'Payroll', permission: PERMISSIONS.PAYROLL_READ, icon: Wallet },
       { href: '/my-payslip', label: 'My payslip', permission: PERMISSIONS.PAYSLIP_READ, icon: Wallet },

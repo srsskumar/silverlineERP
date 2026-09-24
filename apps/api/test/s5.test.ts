@@ -1080,6 +1080,18 @@ describe("notifications inbox", () => {
     expect(res).toEqual(expect.objectContaining({ data: expect.any(Array) }));
   });
 
+  it("lets SALES_BD_EXECUTIVE and BID_TENDER_MANAGER open their own inbox, like every other role (Task 5f)", async () => {
+    // S5_ROLE_GRANTS gave every system role notification.read except these
+    // two (empty grants generally, from before S5 existed) — the Inbox nav
+    // item is shown to every signed-in user regardless of role, so either
+    // role opening the tab every other role has got a 403. Same bug shape
+    // GOVT_OBSERVER had (098, fd4a046).
+    const bd = await mkUser(["SALES_BD_EXECUTIVE"], "bd");
+    const tender = await mkUser(["BID_TENDER_MANAGER"], "tender");
+    expect(await inbox(bd.headers)).toEqual(expect.objectContaining({ data: expect.any(Array) }));
+    expect(await inbox(tender.headers)).toEqual(expect.objectContaining({ data: expect.any(Array) }));
+  });
+
   it("stores no PII beyond visible names in any notification", async () => {
     const rows = await pool.query("SELECT title, body FROM notifications");
     expect(rows.rowCount).toBeGreaterThanOrEqual(0);

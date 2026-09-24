@@ -12,7 +12,7 @@ import {
 
 let w: CatalogueWorld;
 
-async function send(method: "POST" | "GET", headers: Headers, url: string, payload?: unknown) {
+async function send(method: "POST" | "GET" | "PATCH", headers: Headers, url: string, payload?: unknown) {
   const res = await w.app.inject({
     method, url,
     headers: { ...headers, ...(method === "GET" ? {} : idem()) },
@@ -24,6 +24,7 @@ async function send(method: "POST" | "GET", headers: Headers, url: string, paylo
 }
 const post = (h: Headers, u: string, p?: unknown) => send("POST", h, u, p);
 const get = (h: Headers, u: string) => send("GET", h, u);
+const patch = (h: Headers, u: string, p?: unknown) => send("PATCH", h, u, p);
 
 async function ver(table: string, id: string): Promise<Headers> {
   const r = await w.pool.query(`SELECT version FROM ${table} WHERE id = $1`, [id]);
@@ -169,6 +170,32 @@ describe("shifts", () => {
       break_minutes: 60, effective_from: "2026-09-01",
     });
     expect(res.status).toBe(422);
+  });
+
+  it("edits a shift's window and name (Task 5f), refusing a stale version and a break that swallows the new window", async () => {
+    const created = await post(w.role.HR_MANAGER, "/api/v1/shifts", {
+      code: uniq("E"), name: "Day", starts_at: "09:00", ends_at: "18:00",
+      break_minutes: 60, effective_from: "2026-09-01",
+    });
+    expect(created.status).toBe(201);
+    const id = created.data.id;
+
+    const stale = await patch(
+      { ...w.role.HR_MANAGER, "if-match": String(Number(created.data.version) + 1) },
+      `/api/v1/shifts/${id}`, { name: "Day shift" });
+    expect(stale.status).toBe(409);
+
+    const res = await patch(
+      { ...w.role.HR_MANAGER, "if-match": String(created.data.version) },
+      `/api/v1/shifts/${id}`, { name: "Day shift", ends_at: "17:00" });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.data.name).toBe("Day shift");
+    expect(String(res.data.ends_at)).toContain("17:00");
+
+    const broken = await patch(
+      { ...w.role.HR_MANAGER, "if-match": String(res.data.version) },
+      `/api/v1/shifts/${id}`, { starts_at: "09:00", ends_at: "09:30" });
+    expect(broken.status).toBe(422);
   });
 });
 

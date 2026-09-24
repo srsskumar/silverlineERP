@@ -8,6 +8,7 @@ import { NAV_GROUPS, QUICK_CREATE } from '../lib/nav';
 import {
   APPROVAL_PERMISSIONS, BILLING_PERMISSIONS, EXPENSE_PERMISSIONS,
   LEDGER_PERMISSIONS, PROCUREMENT_PERMISSIONS,
+  COST_CONTROL_PERMISSIONS, FINANCE_PERMISSIONS,
 } from '@silverline/shared';
 
 describe('money', () => {
@@ -216,6 +217,9 @@ describe('finance navigation', () => {
     const issued = new Set<string>([
       ...APPROVAL_PERMISSIONS, ...PROCUREMENT_PERMISSIONS, ...EXPENSE_PERMISSIONS,
       ...BILLING_PERMISSIONS, ...LEDGER_PERMISSIONS,
+      // §15.6 cost heads/budgets and §45 financial control (Task 5f): both
+      // had complete APIs and now have nav destinations too.
+      ...COST_CONTROL_PERMISSIONS, ...FINANCE_PERMISSIONS,
     ]);
     for (const item of financeGroup.items) {
       expect(issued.has(item.permission!), `${item.href} gates on ${item.permission}, which the server never issues`)

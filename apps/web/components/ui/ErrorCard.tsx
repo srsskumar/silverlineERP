@@ -1,10 +1,13 @@
 'use client';
 
+import Link from 'next/link';
 import { AlertTriangle } from 'lucide-react';
 import { ApiClientError } from '@/lib/apiClient';
 import { Button } from './Button';
 import { cn } from '@/lib/cn';
 import { fieldLabel } from '@silverline/shared';
+import { useAuth } from '@/components/AuthProvider';
+import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 
 /**
  * What went wrong, and what to do about it.
@@ -52,6 +55,8 @@ function nextStep(error: unknown): string | null {
         + 'version, then make your change again on top of it.';
     case 'RATE_LIMITED':
       return 'Too many requests in a short time. Wait a moment and try again.';
+    case 'NO_APPROVAL_POLICY':
+      return null; // The message already names the document type and where to fix it.
     default:
       if (error.status >= 500) {
         return 'This is a fault on our side, not something you did wrong. Try again in a '
@@ -72,10 +77,16 @@ export function ErrorCard({
   onRetry?: () => void;
   className?: string;
 }) {
+  const { session } = useAuth();
   const message = error instanceof Error ? error.message : 'Something unexpected happened.';
   const requestId = requestIdOf(error);
   const fields = error instanceof ApiClientError ? error.fieldErrors : [];
   const advice = nextStep(error);
+  // §41: nobody can submit without a policy, and only the people who can
+  // fix that (approval.configure) get a way there from the failure itself.
+  const noPolicy = error instanceof ApiClientError && error.code === 'NO_APPROVAL_POLICY';
+  const canConfigurePolicies = noPolicy
+    && hasPermission({ permissions: session?.permissions }, PERMISSIONS.APPROVAL_CONFIGURE);
   /*
    * The request id is for reporting a fault, not for reading.
    *
@@ -115,6 +126,12 @@ export function ErrorCard({
         )}
 
         {advice && <p className="mt-1.5 text-xs text-text">{advice}</p>}
+
+        {canConfigurePolicies && (
+          <Link href="/approvals/policies" className="mt-1.5 inline-block text-xs font-medium text-primary underline">
+            Add an approval policy
+          </Link>
+        )}
 
         {requestId && worthReporting && (
           <p className="mt-1 font-mono text-2xs text-text-subtle">Request ID: {requestId}</p>

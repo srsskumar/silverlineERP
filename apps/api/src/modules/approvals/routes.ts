@@ -205,6 +205,30 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     return reply.code(201).send({ data: row });
   });
 
+  /**
+   * Turn a policy off without replacing it.
+   *
+   * POST .../:id already retires the previous policy for a document type
+   * when a new one is created, so "edit" already works by superseding. What
+   * that route cannot do is switch a policy off with nothing standing in for
+   * it, which the web admin screen needs for "stop routing this document
+   * type until further notice." Same If-Match discipline as every other
+   * single-row mutation here.
+   */
+  app.post('/api/v1/approval-policies/:id/deactivate', { preHandler: guard('approval.configure') }, async req => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    return {
+      data: await mutate(pool, req, 'approval.policy.deactivate', 'approval_policy', async db => {
+        const policy = await inOrg(db, 'approval_policies', id, u.orgId, true);
+        version(req, policy as { version: number }, 'approval policy');
+        if (!policy.active) fail('NOT_ACTIVE', 'This policy is already inactive');
+        return (await db.query(
+          `UPDATE approval_policies SET active = FALSE, version = version + 1, updated_at = now(), updated_by = $2
+           WHERE id = $1 RETURNING *`, [id, u.id])).rows[0];
+      }),
+    };
+  });
+
   /* ------------------------------------------------------------- instances */
 
   /**
@@ -224,8 +248,11 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     const row = await mutate(pool, req, 'approval.submit', 'approval_instance', async db => {
       const policy = await policyFor(db, u.orgId, body.document_type!, body.project_id);
       if (!policy) {
+        // Named so the web admin screen's error card can point straight at
+        // Approvals → Policies without parsing this sentence.
         fail('NO_APPROVAL_POLICY',
-          `No active approval policy covers ${body.document_type}. Configure the authority slabs before submitting.`);
+          `No approval route is set up for ${String(body.document_type).replaceAll('_', ' ').toLowerCase()}`
+          + `${body.project_id ? ' in this project' : ''}. Ask an administrator to add one under Approvals → Policies.`);
       }
       const levels = await levelsFor(db, policy.id);
       const ladder = resolveLadder(levels, Number(body.amount), policy.mode as LadderMode);

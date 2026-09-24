@@ -1,5 +1,13 @@
 import { z } from 'zod';
 import { PAYMENT_MODES, businessToday } from '@/lib/finance';
+import {
+  APPROVAL_DOCUMENT_TYPES,
+  validateSlabs,
+  PAYMENT_DIRECTIONS,
+  PAYMENT_MODES as SHARED_PAYMENT_MODES,
+  COST_HEAD_KINDS,
+  WEEKDAYS,
+} from '@silverline/shared';
 
 export const loginSchema = z.object({
   // A username or a mobile number (§34). Still called `username` because
@@ -1123,3 +1131,243 @@ export const invoiceLinesUpdateSchema = z.object({
   lines: z.array(invoiceLineSchema).min(1, 'Add at least one line'),
 });
 export type InvoiceLinesUpdateFormInput = z.infer<typeof invoiceLinesUpdateSchema>;
+
+// ---------------------------------------------------------------------------
+// Approval policies (Task 5f, §41). Mirrors approvalPolicySchema /
+// approvalLevelSchema in packages/shared/src/approvals.ts field-for-field —
+// the same gap/overlap check (validateSlabs) runs here too, so a bad ladder
+// is caught before the round trip rather than only after it — but the raw
+// text-input coercion (empty string -> undefined/null) is handled the way
+// every other form on this page handles it, since the shared schema assumes
+// values already came off JSON, not off an <input>.
+// ---------------------------------------------------------------------------
+
+export { APPROVAL_DOCUMENT_TYPES };
+
+/** An open (no upper bound) money field: '' becomes null, not undefined — the
+ *  API requires max_amount to be present, either a number or null. */
+const openEndedMoneyField = (message = 'Enter an amount of 0 or more, with at most 2 decimal places') =>
+  z
+    .string()
+    .trim()
+    .transform((v) => (v === '' ? null : v))
+    .pipe(z.union([z.null(), z.string().regex(MONEY_RE, message).transform((v) => Number(v))]));
+
+export const approvalPolicyLevelSchema = z
+  .object({
+    sequence: z.coerce.number().int().min(1).max(20),
+    min_amount: moneyField(),
+    max_amount: openEndedMoneyField(),
+    approver_role: optionalText(50),
+    approver_user_id: optionalUuid,
+    sla_hours: z.coerce
+      .string()
+      .trim()
+      .optional()
+      .or(z.literal('').transform(() => undefined))
+      .transform((v) => (v === '' ? undefined : v))
+      .pipe(z.coerce.number().int().min(1).max(8760).optional()),
+  })
+  .refine((v) => Boolean(v.approver_role) || Boolean(v.approver_user_id), {
+    message: 'Name an approver role or a specific approver',
+    path: ['approver_role'],
+  })
+  .refine((v) => v.max_amount === null || v.max_amount > v.min_amount, {
+    message: 'The upper bound must exceed the lower bound',
+    path: ['max_amount'],
+  });
+export type ApprovalPolicyLevelInput = z.infer<typeof approvalPolicyLevelSchema>;
+
+export const approvalPolicySchema = z
+  .object({
+    document_type: z.enum(APPROVAL_DOCUMENT_TYPES, { errorMap: () => ({ message: 'Pick a document type' }) }),
+    name: z.string().trim().min(1, 'Name is required').max(150),
+    mode: z.enum(['SINGLE', 'CUMULATIVE']),
+    project_id: optionalUuid,
+    tolerance_pct: z.coerce.number().min(0, 'Tolerance cannot be negative').max(25, 'Tolerance cannot exceed 25%'),
+    active: z.boolean(),
+    levels: z.array(approvalPolicyLevelSchema).min(1, 'Add at least one level').max(20),
+  })
+  .superRefine((value, ctx) => {
+    const check = validateSlabs(value.levels.map((l) => ({
+      sequence: l.sequence, minAmount: l.min_amount, maxAmount: l.max_amount,
+      approverRole: l.approver_role, approverUserId: l.approver_user_id,
+    })));
+    if (!check.valid) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: check.problem!, path: ['levels'] });
+    }
+  });
+export type ApprovalPolicyFormInput = z.infer<typeof approvalPolicySchema>;
+
+// ---------------------------------------------------------------------------
+// Financial control (Task 5f, §45): payments, bank reconciliation, financial
+// periods. Field lists mirror packages/shared/src/financial-control.ts's
+// paymentSchema / paymentAllocationSchema / financialPeriodSchema /
+// periodClosureSchema / bankTransactionSchema, the same way requisitionSchema
+// above mirrors the procurement module's.
+// ---------------------------------------------------------------------------
+
+// Re-exported under the plain PAYMENT_MODES name for the payments module's
+// consumers (e.g. PaymentForm.tsx); distinct from the unexported PAYMENT_MODES
+// import above (@/lib/finance) that paymentRunExecuteSchema uses.
+export { PAYMENT_DIRECTIONS, SHARED_PAYMENT_MODES as PAYMENT_MODES };
+
+export const paymentFormSchema = z.object({
+  direction: z.enum(PAYMENT_DIRECTIONS, { errorMap: () => ({ message: 'Pick a direction' }) }),
+  payment_no: z.string().trim().min(1, 'Payment number is required').max(50),
+  paid_on: dateString(),
+  amount: positiveMoneyField('A payment has to be for something'),
+  mode: z.enum(SHARED_PAYMENT_MODES, { errorMap: () => ({ message: 'Pick a mode' }) }),
+  reference: optionalText(100),
+  party_type: z.enum(['CLIENT', 'VENDOR', 'EMPLOYEE']).optional().or(z.literal('').transform(() => undefined)),
+  party_id: optionalUuid,
+  project_id: optionalUuid,
+  bank_account: optionalText(50),
+  notes: optionalText(1000),
+});
+export type PaymentFormInput = z.infer<typeof paymentFormSchema>;
+
+export const paymentAllocationFormSchema = z
+  .object({
+    document_type: z.enum(['RA_BILL', 'VENDOR_INVOICE', 'EXPENSE_CLAIM', 'ADVANCE'], {
+      errorMap: () => ({ message: 'Pick a document type' }),
+    }),
+    document_id: userUuid('Enter a valid document ID (UUID)'),
+    amount: moneyField(),
+    tds_amount: optionalMoneyField(),
+    retention_amount: optionalMoneyField(),
+    advance_adjusted: optionalMoneyField(),
+    other_deduction: optionalMoneyField(),
+    deduction_reason: optionalText(500),
+  })
+  .superRefine((v, ctx) => {
+    if (v.document_type === 'RA_BILL') {
+      for (const field of ['tds_amount', 'advance_adjusted'] as const) {
+        if ((v[field] ?? 0) > 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom, path: [field],
+            message: field === 'tds_amount'
+              ? "An RA bill's net payable is already after TDS. Allocate only the cash received."
+              : 'An RA bill already recovered the advance when it was certified. Allocate only the cash received.',
+          });
+        }
+      }
+    }
+    if ((v.other_deduction ?? 0) > 0 && !v.deduction_reason) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom, path: ['deduction_reason'],
+        message: 'Say why the amount was withheld',
+      });
+    }
+  });
+export type PaymentAllocationFormInput = z.infer<typeof paymentAllocationFormSchema>;
+
+export const financialPeriodFormSchema = z
+  .object({
+    code: z.string().trim().min(1, 'Code is required').max(30),
+    starts_on: dateString(),
+    ends_on: dateString(),
+  })
+  .refine((v) => v.ends_on >= v.starts_on, { message: 'A period cannot end before it starts', path: ['ends_on'] });
+export type FinancialPeriodFormInput = z.infer<typeof financialPeriodFormSchema>;
+
+export const periodClosureFormSchema = z
+  .object({
+    action: z.enum(['CLOSE', 'REOPEN']),
+    reason: optionalText(1000),
+  })
+  .superRefine((v, ctx) => {
+    if (v.action === 'REOPEN' && !v.reason) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['reason'], message: 'Say why the period is being reopened' });
+    }
+  });
+export type PeriodClosureFormInput = z.infer<typeof periodClosureFormSchema>;
+
+/** One row of a parsed bank-statement CSV, before it is sent to the import route. */
+export const bankTransactionRowSchema = z.object({
+  statement_ref: z.string().trim().min(1, 'Statement reference is required').max(100),
+  value_date: dateString(),
+  amount: z.coerce.number().finite('Enter a number'),
+  narration: optionalText(500),
+  bank_account: optionalText(50),
+});
+export type BankTransactionRowInput = z.infer<typeof bankTransactionRowSchema>;
+
+// ---------------------------------------------------------------------------
+// Cost heads + project budgets (Task 5f, §15.6/§16). Mirrors
+// packages/shared/src/cost-control.ts's costHeadSchema / budgetSchema.
+// ---------------------------------------------------------------------------
+
+export { COST_HEAD_KINDS };
+
+export const costHeadFormSchema = z.object({
+  code: z.string().trim().min(1, 'Code is required').max(30).transform((s) => s.toUpperCase()),
+  name: z.string().trim().min(1, 'Name is required').max(120),
+  kind: z.enum(COST_HEAD_KINDS, { errorMap: () => ({ message: 'Pick a kind' }) }),
+  description: optionalText(500),
+  active: z.boolean(),
+});
+export type CostHeadFormInput = z.infer<typeof costHeadFormSchema>;
+
+export const budgetLineFormSchema = z.object({
+  cost_head_id: userUuid('Pick a cost head'),
+  budgeted_amount: moneyField(),
+  notes: optionalText(500),
+});
+export type BudgetLineFormInput = z.infer<typeof budgetLineFormSchema>;
+
+export const budgetFormSchema = z.object({
+  revision_reason: optionalText(500),
+  lines: z.array(budgetLineFormSchema).min(1, 'A budget needs at least one cost head'),
+});
+export type BudgetFormInput = z.infer<typeof budgetFormSchema>;
+
+// ---------------------------------------------------------------------------
+// Shifts (Task 5f, §47). Mirrors packages/shared/src/allocation.ts's
+// shiftSchema — the create route's own schema, which the PATCH route
+// (added this task) also draws its updatable fields from.
+// ---------------------------------------------------------------------------
+
+export { WEEKDAYS };
+
+const timeField = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use HH:MM');
+
+export const shiftFormSchema = z
+  .object({
+    code: z.string().trim().min(1, 'Code is required').max(30).transform((s) => s.toUpperCase()),
+    name: z.string().trim().min(1, 'Name is required').max(100),
+    starts_at: timeField,
+    ends_at: timeField,
+    break_minutes: z.coerce.number().int().min(0).max(480),
+    rest_days: z.array(z.enum(WEEKDAYS)).max(7),
+    daily_threshold_hours: moneyField('Enter a number of hours'),
+    overtime_multiplier: z.coerce.number().min(1).max(4),
+    effective_from: dateString(),
+    effective_to: optionalDate,
+    active: z.boolean(),
+  });
+export type ShiftFormInput = z.infer<typeof shiftFormSchema>;
+
+// ---------------------------------------------------------------------------
+// Tender instruments — EMD/BG (Task 5f, §8.4/§22.2). Mirrors
+// packages/shared/src/crm.ts's instrumentSchema / instrumentStatusSchema.
+// ---------------------------------------------------------------------------
+
+export const INSTRUMENT_TYPES = ['EMD', 'BID_SECURITY_BG', 'PERFORMANCE_BG', 'ADVANCE_BG', 'RETENTION_BG'] as const;
+export const INSTRUMENT_STATUSES = ['ACTIVE', 'RELEASED', 'CLAIMED', 'EXPIRED', 'RENEWED'] as const;
+
+export const instrumentFormSchema = z
+  .object({
+    instrument_type: z.enum(INSTRUMENT_TYPES, { errorMap: () => ({ message: 'Pick an instrument type' }) }),
+    issuing_bank: z.string().trim().min(1, 'Issuing bank is required'),
+    instrument_number: z.string().trim().min(1, 'Instrument number is required').max(100),
+    amount: moneyField(),
+    issue_date: dateString(),
+    expiry_date: dateString(),
+    tender_id: optionalUuid,
+    project_id: optionalUuid,
+    notes: optionalText(2000),
+  })
+  .refine((v) => v.expiry_date >= v.issue_date, { message: 'Expiry cannot precede the issue date', path: ['expiry_date'] })
+  .refine((v) => Boolean(v.tender_id) || Boolean(v.project_id), { message: 'Attach the instrument to a tender or a project', path: ['tender_id'] });
+export type InstrumentFormInput = z.infer<typeof instrumentFormSchema>;
