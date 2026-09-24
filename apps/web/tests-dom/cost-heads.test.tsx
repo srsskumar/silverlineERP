@@ -136,7 +136,10 @@ describe('BudgetEditForm', () => {
     const onSaved = vi.fn();
     mount(<BudgetEditForm projectId="proj-1" isRevision={false} onClose={vi.fn()} onSaved={onSaved} />);
 
-    const headSelect = await screen.findByDisplayValue('Pick a cost head');
+    // Wait for the cost-heads list to load before picking one — the select
+    // starts with only the placeholder option until the query resolves.
+    await screen.findByRole('option', { name: 'LAB — Labour' });
+    const headSelect = screen.getByDisplayValue('Pick a cost head');
     fireEvent.change(headSelect, { target: { value: '11111111-1111-1111-1111-111111111111' } });
     fireEvent.change(screen.getByPlaceholderText('Budgeted amount'), { target: { value: '500000' } });
 
@@ -156,7 +159,8 @@ describe('BudgetEditForm', () => {
 
     mount(<BudgetEditForm projectId="proj-1" isRevision onClose={vi.fn()} onSaved={vi.fn()} />);
 
-    const headSelect = await screen.findByDisplayValue('Pick a cost head');
+    await screen.findByRole('option', { name: 'LAB — Labour' });
+    const headSelect = screen.getByDisplayValue('Pick a cost head');
     fireEvent.change(headSelect, { target: { value: '11111111-1111-1111-1111-111111111111' } });
     fireEvent.change(screen.getByPlaceholderText('Budgeted amount'), { target: { value: '500000' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save budget' }));
