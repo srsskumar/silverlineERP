@@ -159,6 +159,10 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
     const input = parse(budgetSchema, req.body);
     return {
       data: await mutate(pool, req, 'budget.revise', 'project_budget', async db => {
+        // One revision at a time per project (D-003): two read the same
+        // highest revision, and the second died on the live-row index as a
+        // bare "duplicate record" instead of becoming the next revision.
+        await inOrg(db, 'projects', id, u.orgId, true);
         const heads = new Set(input.lines.map(l => l.cost_head_id));
         if (heads.size !== input.lines.length) {
           fail('DUPLICATE_COST_HEAD', 'The same cost head appears twice in one budget');
