@@ -1,5 +1,6 @@
 /**
- * The outbox executor for a queued survey return (survey_entry).
+ * The outbox executor for a queued survey return (survey_entry), and the
+ * rules for chaining several filings of one village-day.
  *
  * Kept apart from engine.ts, which pulls in React Native, so the queue tests
  * can drive it through the real createQueue/flushQueue with a fake server.
@@ -21,44 +22,75 @@ export interface SurveyEntryDeps {
   /** A non-retryable 409 the queue records as CONFLICT, carrying `message`. */
   conflict(message: string): Error;
   /**
-   * Write the op's payload back before a correction is sent (round 3), so a
-   * lost reply can be recognised on the retry. The outbox's rewriteOp.
+   * Write the op's payload back before each request goes (rounds 3 and 4),
+   * so what was actually sent under which key is on the row if the reply is
+   * lost. The outbox's rewriteOp.
    */
   remember?(clientUuid: string, payload: string): Promise<void>;
 }
 
 /*
- * What a superseded op remembers (rounds 2 and 3), carried in its payload and
- * stripped before anything is sent:
- *   _sent     the first body the pending op may already have delivered
- *   _sentKey  the key it was delivered under (the pending op's key; for a
- *             rewritten op that is this op's own key, for one queued behind a
- *             SENDING op it is the other op's)
- *   _amend    a correction already sent: its base, body and key, so a lost
- *             reply can be replayed rather than read as someone else's edit
+ * What this device may already have delivered for the village-day (round 4).
+ *
+ * Every request that went, or may have gone, under a key: the op's own POSTs
+ * and PATCHes, recorded as they are sent, and those of any op it was chained
+ * onto. Carried in the payload as `_prior` and stripped before sending.
+ *
+ * It replaces round 2/3's single `_sent`/`_sentKey`/`_amend`, which recorded
+ * only one body per chain. In a chain (A rewritten, then sent; a behind-op
+ * queued; a re-file folded in) that body was often not the one actually sent
+ * under the key, and the replay came back IDEMPOTENCY_CONFLICT.
  */
-const SENT = "_sent", SENT_KEY = "_sentKey", AMEND = "_amend";
+const PRIOR = "_prior";
 
-interface SentAmend { base: number; body: EntryAmendment; key: string }
+export type PriorRequest =
+  | { kind: "post"; key: string; body: Record<string, unknown> }
+  | { kind: "patch"; key: string; id: string; base: number; body: EntryAmendment };
+
+const sameRequest = (a: PriorRequest, b: PriorRequest) =>
+  a.kind === b.kind && a.key === b.key && JSON.stringify(a.body) === JSON.stringify(b.body);
+
+function withPrior(list: PriorRequest[], ...more: PriorRequest[]): PriorRequest[] {
+  const out = [...list];
+  for (const p of more) if (!out.some(q => sameRequest(q, p))) out.push(p);
+  return out;
+}
+
+function split(payload: Record<string, unknown>): { entry: Record<string, unknown>; prior: PriorRequest[] } {
+  const { [PRIOR]: prior, ...entry } = payload;
+  return { entry, prior: Array.isArray(prior) ? (prior as PriorRequest[]) : [] };
+}
 
 /**
- * Fold a second filing for the same village-day into the op still waiting,
- * so one op lands with the latest figures (round 2), and keep what is needed
- * to recover whatever the earlier body already did (round 3).
+ * Fold a new filing into an op already in the chain.
+ *
+ * The result carries the new figures and everything the older op may have
+ * delivered: its recorded requests, plus its current body under its key (it
+ * may have gone, or be on the wire now). Used both to rewrite the waiting op
+ * in place and to start an op queued behind one that is SENDING.
  */
 export function supersedeSurveyEntry(
   pending: Record<string, unknown>,
   next: Record<string, unknown>,
   ctx?: { idempotencyKey: string },
 ): Record<string, unknown> {
-  const { [SENT]: earlier, [SENT_KEY]: earlierKey, [AMEND]: amend, ...first } = pending;
-  return {
-    ...next,
-    [SENT]: earlier ?? first,
-    ...(earlierKey ?? ctx?.idempotencyKey ? { [SENT_KEY]: earlierKey ?? ctx?.idempotencyKey } : {}),
-    ...(amend ? { [AMEND]: amend } : {}),
-  };
+  const older = split(pending);
+  const newer = split(next);
+  const prior = withPrior(newer.prior, ...older.prior,
+    ...(ctx ? [{ kind: "post" as const, key: ctx.idempotencyKey, body: older.entry }] : []));
+  return { ...newer.entry, [PRIOR]: prior };
 }
+
+/**
+ * The chain rules the outbox applies to survey_entry (round 4): how to fold
+ * a new filing in, and how an op settling hands what it sent to the op
+ * behind it (the same fold, keeping the newer figures).
+ */
+export const surveyEntryChain = {
+  supersede: supersedeSurveyEntry,
+  handOver: (older: Record<string, unknown>, newer: Record<string, unknown>, ctx: { idempotencyKey: string }) =>
+    supersedeSurveyEntry(older, newer, ctx),
+};
 
 /** A short, stable fingerprint, so a changed correction gets a key of its own. */
 function fingerprint(value: unknown): string {
@@ -80,52 +112,54 @@ export async function runSurveyEntryOp(
   op: { client_uuid?: string; payload: string; idempotency_key: string; base_version: number | null },
   deps: SurveyEntryDeps,
 ): Promise<{ status: number; body: unknown }> {
-  const stored = JSON.parse(op.payload) as Record<string, any>;
-  const { [SENT]: sent, [SENT_KEY]: sentKey, [AMEND]: sentAmend, ...entry } = stored;
-  let base = op.base_version;
+  const { entry, prior: carried } = split(JSON.parse(op.payload) as Record<string, unknown>);
+  let prior = carried;
+  const record = async (p: PriorRequest) => {
+    prior = withPrior(prior, p);
+    if (deps.remember && op.client_uuid) {
+      await deps.remember(op.client_uuid, JSON.stringify({ ...entry, [PRIOR]: prior }));
+    }
+  };
+
+  const post: PriorRequest = { kind: "post", key: op.idempotency_key, body: entry };
+  await record(post);
   try {
     return { status: 201, body: await deps.post(entry, op.idempotency_key) };
   } catch (err) {
-    if (!isSecondFiling(err) && !(isKeyReused(err) && sent)) throw err;
-    if (sent) {
-      /*
-       * An earlier body may have created this day: this op's own first
-       * attempt (key reused), or the op this one was queued behind. Its
-       * reply is replayed under the key it went with, and the version it
-       * created is the base this filing corrects. Anything but a replayed
-       * reply (someone else's day, a key never used) leaves the base alone.
-       */
-      try {
-        const created = await deps.post(sent, sentKey ?? op.idempotency_key) as { version?: number } | null;
-        if (typeof created?.version === "number") base = created.version;
-      } catch { /* not ours: the base stays as it was */ }
-    }
-    const filed = await deps.getFiled(entry.survey_village_id, entry.entry_date);
+    if (!isSecondFiling(err) && !isKeyReused(err)) throw err;
+    const villageId = String(entry.survey_village_id), date = String(entry.entry_date);
+    let filed = await deps.getFiled(villageId, date);
     if (!filed) throw err;
-    const amendment = amendmentFor(filed, entry as never);
+    let amendment = amendmentFor(filed, entry as never);
     // Already reads as the form does: a retry after a lost response.
     if (isEmptyAmendment(amendment)) return { status: 200, body: filed };
+
     /*
-     * Amend only the day the crew was looking at (fix round 1).
+     * Amend only a day whose latest change is one the crew made (rounds 1-4).
      *
-     * The PATCH used to carry the version just fetched, so If-Match could
-     * never fire, and a stale replay overwrote a supervisor's web correction
-     * or another crew member's figures. Now a day changed since the form was
-     * opened, or never opened at all, is a CONFLICT the person reviews.
+     * Either the version the form was opened from, or one of this device's
+     * own earlier requests for the day. Those are replayed under their keys:
+     * a request that landed hands back its stored reply and the version it
+     * made; one that never landed is refused and ignored. If the day's
+     * version is ours after that, the day is corrected; otherwise somebody
+     * else changed it and the crew reviews it.
      */
-    /*
-     * A correction this op already sent, whose reply was lost (round 3).
-     * Replayed under its own key: if it landed, the server hands back the
-     * day it made, and that version, not somebody else's edit, is why the
-     * day has moved on.
-     */
-    const earlierAmend = sentAmend as SentAmend | undefined;
-    if (earlierAmend && base === earlierAmend.base && base !== filed.version) {
-      try {
-        const amended = await deps.patch(filed.id, earlierAmend.base, earlierAmend.body, earlierAmend.key) as
-          { version?: number } | null;
-        if (typeof amended?.version === "number") base = amended.version;
-      } catch { /* it never landed, or the day moved for another reason */ }
+    let base = op.base_version;
+    if (base !== filed.version) {
+      let ours: number | null = null;
+      for (const p of prior) {
+        if (sameRequest(p, post)) continue;
+        try {
+          const reply = (p.kind === "post"
+            ? await deps.post(p.body, p.key)
+            : await deps.patch(p.id, p.base, p.body, p.key)) as { version?: number } | null;
+          if (typeof reply?.version === "number") ours = Math.max(ours ?? 0, reply.version);
+        } catch { /* never landed, or not ours */ }
+      }
+      filed = (await deps.getFiled(villageId, date)) ?? filed;
+      if (ours !== null && ours === filed.version) base = filed.version;
+      amendment = amendmentFor(filed, entry as never);
+      if (isEmptyAmendment(amendment)) return { status: 200, body: filed };
     }
     if (base === null || base === undefined || base !== filed.version) {
       throw deps.conflict(DAY_CHANGED);
@@ -133,12 +167,7 @@ export async function runSurveyEntryOp(
     // Each distinct correction gets a key of its own, so a superseded one is
     // never sent under a key that already carried a different body.
     const key = `${op.idempotency_key}:amend:${fingerprint([base, amendment])}`;
-    if (deps.remember && op.client_uuid) {
-      await deps.remember(op.client_uuid, JSON.stringify({
-        ...stored, [AMEND]: { base, body: amendment, key } satisfies SentAmend,
-      }));
-    }
+    await record({ kind: "patch", key, id: filed.id, base, body: amendment });
     return { status: 200, body: await deps.patch(filed.id, base, amendment, key) };
   }
 }
-

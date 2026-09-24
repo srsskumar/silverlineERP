@@ -11,7 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { createQueue, type QueueDatabase } from "../../src/sync/queueCore";
 import { SCHEMA_SQL } from "../../src/sync/schema";
-import type { SurveyEntryDeps } from "../../src/sync/surveyEntryOp";
+import { surveyEntryChain, type SurveyEntryDeps } from "../../src/sync/surveyEntryOp";
 import type { FiledEntry } from "../../src/survey/fieldCrew";
 
 export class FakeApiError extends Error {
@@ -95,6 +95,7 @@ export function outbox() {
     isApiError: (e): e is Error & { status: number; retryable: boolean; code: string } =>
       e instanceof FakeApiError,
     seal: async (_id, v) => v, unseal: async (_id, v) => v,
+    chains: { survey_entry: surveyEntryChain },
   });
   const rows = () => db.prepare(
     "SELECT client_uuid, entity, state, decision, error FROM pending_ops ORDER BY seq").all() as
