@@ -12,9 +12,11 @@ import {
   gtReasonRequired,
   reasonNeedsRemarks,
 } from "@silverline/shared";
-import type { SurveyEntryInput, SurveyMeasure, VillageRover } from "../api/endpoints";
-import { emptyDraft, type ReturnDraft } from "./returnForm";
-import { parseDecimal, type PointDraft } from "./controlPoint";
+import type {
+  GcpInput, MyVillage, SurveyEntryInput, SurveyMeasure, VillageRover,
+} from "../api/endpoints";
+import { buildEntry, emptyDraft, type ReturnDraft } from "./returnForm";
+import { buildPoint, parseDecimal, type PointDraft } from "./controlPoint";
 
 /* ------------------------------------------------------------ SG-001 */
 
@@ -288,4 +290,134 @@ export function isSecondFiling(err: unknown): boolean {
 export function isEmptyAmendment(a: EntryAmendment): boolean {
   return Object.keys(a.values).length === 0
     && Object.keys(a).every(k => k === "values" || k === "amendment_reason");
+}
+
+
+/* -------------------------------------- what each form puts in the outbox */
+
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The work date must reach a form as data (SG-014).
+ *
+ * a2ee8a1 handed the forms the display date ("24-Sep-2026"), and every
+ * return and control point from 21 Sep was refused on the device. Refused
+ * here in plain words instead, so the same slip can never queue a day.
+ */
+function workDateProblem(workDate: string): string | null {
+  return ISO_DAY.test(workDate)
+    ? null
+    : `The work date reached this form as "${workDate.slice(0, 20)}", not YYYY-MM-DD. `
+      + "Close the form and open it again.";
+}
+
+export interface QueuedSurveyOp<P> {
+  entity: "survey_entry" | "survey_gcp" | "survey_stage";
+  op: string;
+  payload: P;
+  /** The version a correction was made from; absent for a new day. */
+  baseVersion?: number;
+}
+
+type ReturnVillage = Pick<MyVillage, "id" | "low_progress_threshold_ac" | "gt_state"
+  | "gt_expected_end_on" | "gt_completed_on" | "gt_variance_reason">;
+
+/**
+ * The day's return as it goes into the outbox.
+ *
+ * Only the person's own rovers go with it (SG-001), whatever the draft holds.
+ * A correction carries the version it was made from, so the outbox can tell
+ * a correction of what the crew saw from an overwrite of what someone else
+ * changed since (fix round 1). A 0 typed on a correction is kept: it is how
+ * a figure is taken off the day.
+ */
+export function returnSubmission(args: {
+  village: ReturnVillage;
+  workDate: string;
+  measures: SurveyMeasure[];
+  draft: ReturnDraft;
+  kit: VillageRover[];
+  filed?: FiledEntry | null;
+}):
+  | { ok: true; op: QueuedSurveyOp<SurveyEntryInput>; warnings: string[] }
+  | { ok: false; problems: string[] } {
+  const dateProblem = workDateProblem(args.workDate);
+  if (dateProblem) return { ok: false, problems: [dateProblem] };
+  const mine = new Set(partitionKit(args.kit).mine.map(r => r.asset_id));
+  const draft: ReturnDraft = {
+    ...args.draft,
+    rovers: Object.fromEntries(Object.entries(args.draft.rovers).filter(([id]) => mine.has(id))),
+  };
+  const built = buildEntry({
+    villageId: args.village.id,
+    entryDate: args.workDate,
+    measures: args.measures,
+    draft,
+    lowProgressThresholdAc: args.village.low_progress_threshold_ac,
+    groundTruthing: {
+      state: args.village.gt_state,
+      expectedEndOn: args.village.gt_expected_end_on,
+      completedOn: args.village.gt_completed_on,
+      varianceReason: args.village.gt_variance_reason,
+    },
+    today: args.workDate,
+    keepZeros: Boolean(args.filed),
+  });
+  if (!built.ok) return { ok: false, problems: built.problems };
+  return {
+    ok: true,
+    warnings: built.warnings,
+    op: {
+      entity: "survey_entry",
+      // One return per village per day is the server's rule, so it is also
+      // the dedupe key: a double tap cannot queue two.
+      op: `${args.village.id}:${args.workDate}`,
+      payload: built.entry,
+      ...(args.filed ? { baseVersion: args.filed.version } : {}),
+    },
+  };
+}
+
+/** A control point as it goes into the outbox. */
+export function pointSubmission(villageId: string, draft: PointDraft):
+  | { ok: true; op: QueuedSurveyOp<GcpInput & { survey_village_id: string }>; warnings: string[] }
+  | { ok: false; problems: string[] } {
+  if (draft.establishedOn) {
+    const dateProblem = workDateProblem(draft.establishedOn);
+    if (dateProblem) return { ok: false, problems: [dateProblem] };
+  }
+  const built = buildPoint(draft);
+  if (!built.ok) return built;
+  return {
+    ok: true,
+    warnings: built.warnings,
+    op: {
+      entity: "survey_gcp",
+      op: `${villageId}:${draft.pointCode.trim()}`,
+      payload: { survey_village_id: villageId, ...built.input },
+    },
+  };
+}
+
+/** A stage completion as it goes into the outbox. */
+export function stageSubmission(
+  village: CrewStage,
+  workDate: string,
+  reason: string | null,
+  remarks: string,
+):
+  | { ok: true; op: QueuedSurveyOp<Record<string, unknown>> }
+  | { ok: false; problem: string } {
+  const dateProblem = workDateProblem(workDate);
+  if (dateProblem) return { ok: false, problem: dateProblem };
+  const built = buildStageCompletion(village, workDate, reason, remarks);
+  if (!built.ok) return built;
+  return {
+    ok: true,
+    op: {
+      entity: "survey_stage",
+      op: `${village.id}:${village.stage_code}:COMPLETED`,
+      payload: { survey_village_id: village.id, ...built.body },
+    },
+  };
 }

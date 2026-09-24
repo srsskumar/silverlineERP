@@ -26,8 +26,8 @@ import {
   Title,
 } from "../ui/primitives";
 import { space } from "../theme";
-import { buildPoint, emptyPoint, fromDeviceFix, type PointDraft } from "./controlPoint";
-import { pointConfirmations, type DeviceFix } from "./fieldCrew";
+import { emptyPoint, fromDeviceFix, type PointDraft } from "./controlPoint";
+import { pointConfirmations, pointSubmission, type DeviceFix } from "./fieldCrew";
 
 export function ControlPointForm({
   village,
@@ -74,7 +74,7 @@ export function ControlPointForm({
   const record = async () => {
     setProblems([]);
     setWarnings([]);
-    const built = buildPoint(draft);
+    const built = pointSubmission(village.id, draft);
     if (!built.ok) {
       setProblems(built.problems);
       return;
@@ -94,12 +94,9 @@ export function ControlPointForm({
     setBusy(true);
     try {
       const message = await submitQueued({
-        entity: "survey_gcp",
-        op: `${village.id}:${draft.pointCode.trim()}`,
-        payload: {
-          survey_village_id: village.id,
-          ...built.input,
-        } as unknown as Record<string, unknown>,
+        entity: built.op.entity,
+        op: built.op.op,
+        payload: built.op.payload as unknown as Record<string, unknown>,
       });
       onRecorded(built.warnings.length ? `${message} Recorded with a warning: check it on the web.` : message);
       setDraft(emptyPoint(workDate));

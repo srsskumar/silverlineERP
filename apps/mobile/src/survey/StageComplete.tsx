@@ -14,7 +14,7 @@ import type { MyVillage } from "../api/endpoints";
 import { submitQueued } from "../sync/engine";
 import { Banner, Button, Card, Input, Muted, SectionLabel, Title } from "../ui/primitives";
 import { space } from "../theme";
-import { buildStageCompletion } from "./fieldCrew";
+import { stageSubmission } from "./fieldCrew";
 
 export function StageComplete({
   village,
@@ -38,14 +38,12 @@ export function StageComplete({
 
   const complete = async () => {
     setProblem(null);
-    const built = buildStageCompletion(village, workDate, reason, remarks);
+    const built = stageSubmission(village, workDate, reason, remarks);
     if (!built.ok) { setProblem(built.problem); return; }
     setBusy(true);
     try {
       const message = await submitQueued({
-        entity: "survey_stage",
-        op: `${village.id}:${village.stage_code}:COMPLETED`,
-        payload: { survey_village_id: village.id, ...built.body },
+        entity: built.op.entity, op: built.op.op, payload: built.op.payload,
       });
       onDone(message);
     } catch (e) {

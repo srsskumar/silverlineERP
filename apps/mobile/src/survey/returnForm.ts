@@ -137,6 +137,11 @@ export function buildEntry(args: {
   } | null;
   /** The village's business day, for measuring lateness against. */
   today?: string;
+  /**
+   * Correcting a filed day: a typed 0 is an entry ("take this figure off"),
+   * not a blank, so it is sent.
+   */
+  keepZeros?: boolean;
 }): BuildResult {
   const { draft, measures } = args;
   const problems: string[] = [];
@@ -149,7 +154,7 @@ export function buildEntry(args: {
     // A zero is not sent. The absence of a measure means nothing was done
     // against it, which is what a typed 0 means, and sending both makes two
     // spellings of one fact.
-    else if (value !== null && value > 0) values[m.code] = value;
+    else if (value !== null && (value > 0 || (args.keepZeros && value === 0))) values[m.code] = value;
   }
 
   const rovers: RoverDayInput[] = Object.entries(draft.rovers).map(([assetId, r]) => ({

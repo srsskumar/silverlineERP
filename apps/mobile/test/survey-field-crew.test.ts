@@ -17,7 +17,11 @@ import {
   isSecondFiling,
   partitionKit,
   pointConfirmations,
+  pointSubmission,
+  returnSubmission,
+  stageSubmission,
 } from "../src/survey/fieldCrew.js";
+import { day } from "@silverline/shared";
 import { buildEntry, emptyDraft } from "../src/survey/returnForm.js";
 import { emptyPoint, fromDeviceFix } from "../src/survey/controlPoint.js";
 
@@ -263,5 +267,89 @@ describe("marking a stage complete from the village (SG-013)", () => {
     const late = { ...village, stage_expected_end_on: "2026-09-20" };
     assert.equal(buildStageCompletion(late, TODAY, "OTHER", " ").ok, false);
     assert.equal(buildStageCompletion(late, TODAY, "OTHER", "tahsildar on leave").ok, true);
+  });
+});
+
+describe("every survey payload carries the ISO work date (SG-014, behavioural)", () => {
+  const village = {
+    id: VILLAGE, village_name: "V", stage_code: "GROUND_TRUTHING", stage_label: "Ground truthing",
+    stage_state: "IN_PROGRESS", stage_started_on: "2026-09-10",
+    stage_expected_end_on: "2026-10-01", stage_variance_reason: null,
+    low_progress_threshold_ac: null, gt_state: "IN_PROGRESS", gt_expected_end_on: "2026-10-01",
+    gt_completed_on: null, gt_variance_reason: null,
+  };
+  const draft = { ...emptyDraft(), quantities: { PVT_EXTENT: "3" } };
+
+  it("puts it in the return's entry_date and op key", () => {
+    const r = returnSubmission({ village, workDate: TODAY, measures: MEASURES, draft, kit: [] });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(r.op.payload.entry_date, TODAY);
+    assert.equal(r.op.op, `${VILLAGE}:${TODAY}`);
+    assert.equal(r.op.entity, "survey_entry");
+  });
+
+  it("puts it in the control point's established_on and the stage's completed_on", () => {
+    const p = pointSubmission(VILLAGE, { ...emptyPoint(TODAY), pointCode: "GCP-9",
+      latitude: "16.512345", longitude: "80.612345" });
+    assert.equal(p.ok, true);
+    if (!p.ok) return;
+    assert.equal(p.op.payload.established_on, TODAY);
+    assert.equal(p.op.payload.survey_village_id, VILLAGE);
+    const st = stageSubmission(village, TODAY, null, "");
+    assert.equal(st.ok, true);
+    if (!st.ok) return;
+    assert.equal(st.op.payload.completed_on, TODAY);
+  });
+
+  it("refuses a display date anywhere, rather than queueing a day the server rejects", () => {
+    const shown = day(TODAY);
+    assert.equal(returnSubmission({ village, workDate: shown, measures: MEASURES, draft, kit: [] }).ok, false);
+    assert.equal(pointSubmission(VILLAGE, { ...emptyPoint(shown), pointCode: "G",
+      latitude: "16.512345", longitude: "80.612345" }).ok, false);
+    assert.equal(stageSubmission(village, shown, null, "").ok, false);
+  });
+});
+
+describe("the return sends only the instruments this person may file for (SG-001 usage)", () => {
+  const village = {
+    id: VILLAGE, low_progress_threshold_ac: null, gt_state: null, gt_expected_end_on: null,
+    gt_completed_on: null, gt_variance_reason: null,
+  };
+  const MINE = "123e4567-e89b-12d3-a456-4266141740a1";
+  const THEIRS = "123e4567-e89b-12d3-a456-4266141740a2";
+  const rovers = [
+    kit({ asset_id: MINE, asset_code: "R-1" }),
+    kit({ asset_id: THEIRS, asset_code: "R-2", issued_to_me: false, holder_name: "Ravi" }),
+  ];
+
+  it("drops a rover somebody else carries even if it is on the draft", () => {
+    const draft = { ...emptyDraft(), quantities: { PVT_EXTENT: "3" }, rovers: {
+      [MINE]: { status: "UTILIZED" as const, idleReason: null, remarks: "" },
+      [THEIRS]: { status: "UTILIZED" as const, idleReason: null, remarks: "" },
+    } };
+    const r = returnSubmission({ village, workDate: TODAY, measures: MEASURES, draft, kit: rovers });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.deepEqual((r.op.payload.rovers ?? []).map((x: { asset_id: string }) => x.asset_id), [MINE]);
+  });
+
+  it("carries the version it was corrected from, and a typed 0 as an entry", () => {
+    const filed = { id: "e1", version: 4, entry_date: TODAY, values: { PVT_EXTENT: 3, VB_POINTS: 9 } };
+    const draft = { ...emptyDraft(), quantities: { PVT_EXTENT: "3", VB_POINTS: "0" } };
+    const r = returnSubmission({ village, workDate: TODAY, measures: MEASURES, draft, kit: [], filed });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(r.op.baseVersion, 4);
+    assert.deepEqual(r.op.payload.values, { PVT_EXTENT: 3, VB_POINTS: 0 });
+  });
+
+  it("files a new day with no base version and no zeros", () => {
+    const draft = { ...emptyDraft(), quantities: { PVT_EXTENT: "3", VB_POINTS: "0" } };
+    const r = returnSubmission({ village, workDate: TODAY, measures: MEASURES, draft, kit: [] });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(r.op.baseVersion, undefined);
+    assert.deepEqual(r.op.payload.values, { PVT_EXTENT: 3 });
   });
 });

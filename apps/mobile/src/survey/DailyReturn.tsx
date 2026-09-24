@@ -32,8 +32,8 @@ import {
   Title,
 } from "../ui/primitives";
 import { space, useTheme } from "../theme";
-import { buildEntry, emptyDraft, type ReturnDraft } from "./returnForm";
-import { draftFromEntry, partitionKit } from "./fieldCrew";
+import { emptyDraft, type ReturnDraft } from "./returnForm";
+import { draftFromEntry, partitionKit, returnSubmission } from "./fieldCrew";
 
 function ReasonPicker({
   value,
@@ -139,19 +139,8 @@ export function DailyReturn({
 
   const file = async () => {
     setProblems([]);
-    const built = buildEntry({
-      villageId: village.id,
-      entryDate: workDate,
-      measures,
-      draft,
-      lowProgressThresholdAc: village.low_progress_threshold_ac,
-      groundTruthing: {
-        state: village.gt_state,
-        expectedEndOn: village.gt_expected_end_on,
-        completedOn: village.gt_completed_on,
-        varianceReason: village.gt_variance_reason,
-      },
-      today: workDate,
+    const built = returnSubmission({
+      village, workDate, measures, draft, kit: kit.data ?? [], filed: filed.data ?? null,
     });
     if (!built.ok) {
       setProblems(built.problems);
@@ -160,11 +149,10 @@ export function DailyReturn({
     setBusy(true);
     try {
       const message = await submitQueued({
-        entity: "survey_entry",
-        // One return per village per day is the rule the server enforces, so
-        // it is also the dedupe key: a double tap cannot queue two.
-        op: `${village.id}:${workDate}`,
-        payload: built.entry as unknown as Record<string, unknown>,
+        entity: built.op.entity,
+        op: built.op.op,
+        payload: built.op.payload as unknown as Record<string, unknown>,
+        ...(built.op.baseVersion !== undefined ? { baseVersion: built.op.baseVersion } : {}),
       });
       onFiled(message);
     } catch (e) {
@@ -201,7 +189,7 @@ export function DailyReturn({
           icon="create-outline"
           title="Today's return is already filed"
           message={filed.data
-            ? "These are the figures you sent. Change what is wrong and save — the day is corrected, not filed twice."
+            ? "These are the figures you sent. Change what is wrong and save; type 0 to take a figure off. A blank field is left as it is."
             : "Could not load what was sent. Enter the whole day as it should read; saving corrects the day already filed."}
         />
       ) : null}
