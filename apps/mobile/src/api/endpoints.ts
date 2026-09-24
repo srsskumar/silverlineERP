@@ -648,6 +648,10 @@ export interface AppNotification {
   type?: string;
   entity_type?: string;
   entity_id?: string;
+  /** Where clicking it should lead, resolved server-side. Null when the
+   * referenced thing was deleted or the type has nowhere sensible to go
+   * (apps/api/src/modules/s5/routes.ts's NOTIF_COLS). See src/deepLinks.ts. */
+  href?: string | null;
   read_at?: string | null;
   created_at?: string;
   [k: string]: unknown;
@@ -813,6 +817,32 @@ export async function getDocument(
 ): Promise<DocumentRow & { supersedes: DocumentRow | null }> {
   const { data } = await cachedRead(`document:${id}`, () => apiFetch(`/api/v1/documents/${id}`));
   return asItem(data, "data");
+}
+
+/**
+ * POST /api/v1/documents/:id/renew (`document.manage`, §46.3.4) — B-009. Not
+ * an edit of the expiry date: the server inserts a new row that supersedes
+ * this one, so an inspector can still ask for last year's certificate. No
+ * If-Match: a renewal never modifies the old row (apps/api/src/modules/
+ * documents/routes.ts's own comment on the route). `expires_on` is required
+ * only by document types that expire (the server 422s as EXPIRY_REQUIRED
+ * otherwise); mirrors the web RenewDialog, which requires it client-side too
+ * rather than asking the type catalogue which documents need it.
+ */
+export async function postDocumentRenew(
+  id: string,
+  input: {
+    expires_on: string;
+    issued_on?: string;
+    reference_number?: string;
+    notes?: string;
+  },
+): Promise<DocumentRow> {
+  const { data } = await apiFetch(`/api/v1/documents/${id}/renew`, {
+    method: "POST",
+    body: input,
+  });
+  return asItem<DocumentRow>(data, "data");
 }
 
 // --- Approvals (§41) ---------------------------------------------------------
@@ -1153,8 +1183,9 @@ export async function getClients(params?: {
   search?: string;
   client_type?: string;
   status?: string;
+  offset?: number;
 }): Promise<{ items: ClientRow[]; hasMore: boolean }> {
-  const q = new URLSearchParams({ limit: "50" });
+  const q = new URLSearchParams({ limit: "50", offset: String(params?.offset ?? 0) });
   if (params?.search) q.set("search", params.search);
   if (params?.client_type) q.set("client_type", params.client_type);
   if (params?.status) q.set("status", params.status);
@@ -1167,6 +1198,21 @@ export async function getClients(params?: {
 export async function getClient(id: string): Promise<ClientRow & { contacts: ClientContact[] }> {
   const { data } = await cachedRead(`client:${id}`, () => apiFetch(`/api/v1/clients/${id}`));
   return asItem(data, "data");
+}
+
+/**
+ * POST /api/v1/clients (`client.manage`) — the required subset of
+ * packages/shared/src/crm.ts's clientBaseSchema (name, client_type); `code`
+ * is left out on purpose, same as the desktop form's own default (derived
+ * from the name server-side). Everything else the schema accepts (GSTIN/PAN,
+ * address, credit terms…) stays a desktop-only field.
+ */
+export async function postClient(input: {
+  name: string;
+  client_type: string;
+}): Promise<ClientRow> {
+  const { data } = await apiFetch("/api/v1/clients", { method: "POST", body: input });
+  return asItem<ClientRow>(data, "data");
 }
 
 /** One state's GST registration for a client (§6.5) — a client holds one per state. */
@@ -1221,8 +1267,9 @@ export interface LeadDetail extends LeadRow {
 export async function getLeads(params?: {
   stage?: string;
   search?: string;
+  offset?: number;
 }): Promise<{ items: LeadRow[]; hasMore: boolean }> {
-  const q = new URLSearchParams({ limit: "50" });
+  const q = new URLSearchParams({ limit: "50", offset: String(params?.offset ?? 0) });
   if (params?.stage) q.set("stage", params.stage);
   if (params?.search) q.set("search", params.search);
   const { data } = await cachedRead(`getLeads:${q.toString()}`, () =>
@@ -1246,6 +1293,26 @@ export async function getLeadsPipeline(): Promise<
 export async function getLead(id: string): Promise<LeadDetail> {
   const { data } = await cachedRead(`lead:${id}`, () => apiFetch(`/api/v1/leads/${id}`));
   return asItem<LeadDetail>(data, "data");
+}
+
+/**
+ * POST /api/v1/leads (§7.1, `lead.manage`) — the required subset of
+ * packages/shared/src/crm.ts's leadSchema (lead_no, organization_name,
+ * lead_type, source); everything else the schema allows (client_id,
+ * contact_id, project_type_id/category_id, owner_id, next_follow_up_date)
+ * stays a desktop-only field for now, same reasoning as this screen's other
+ * write actions (see this file's header comment).
+ */
+export async function postLead(input: {
+  lead_no: string;
+  organization_name: string;
+  lead_type: string;
+  source: string;
+  estimated_value?: number;
+  notes?: string;
+}): Promise<LeadRow> {
+  const { data } = await apiFetch("/api/v1/leads", { method: "POST", body: input });
+  return asItem<LeadRow>(data, "data");
 }
 
 /**
@@ -1290,6 +1357,23 @@ export interface TenderRow {
   [k: string]: unknown;
 }
 
+/**
+ * POST /api/v1/tenders (`tender.manage`) — the required subset of
+ * packages/shared/src/crm.ts's tenderBaseSchema (tender_no, tender_type);
+ * everything conditionally required by its refine()s (bid_type/cover_system/
+ * emd_exempt/jv_flag) only applies when that field is set, and each defaults
+ * to the schema's own safe default when left out, so a bare tender_no +
+ * tender_type validates cleanly. The rest of the checklist-heavy workflow
+ * (EMD, eligibility, JV partners…) stays on the desktop form.
+ */
+export async function postTender(input: {
+  tender_no: string;
+  tender_type: string;
+}): Promise<TenderRow> {
+  const { data } = await apiFetch("/api/v1/tenders", { method: "POST", body: input });
+  return asItem<TenderRow>(data, "data");
+}
+
 export interface TenderDetail extends TenderRow {
   eligibility: Array<{
     id: string;
@@ -1308,8 +1392,9 @@ export interface TenderDetail extends TenderRow {
 export async function getTenders(params?: {
   status?: string;
   search?: string;
+  offset?: number;
 }): Promise<{ items: TenderRow[]; hasMore: boolean }> {
-  const q = new URLSearchParams({ limit: "50", sort: "closing" });
+  const q = new URLSearchParams({ limit: "50", sort: "closing", offset: String(params?.offset ?? 0) });
   if (params?.status) q.set("status", params.status);
   if (params?.search) q.set("search", params.search);
   const { data } = await cachedRead(`getTenders:${q.toString()}`, () =>
@@ -1681,8 +1766,9 @@ export interface Requisition {
 export async function getRequisitions(params?: {
   status?: string;
   project_id?: string;
+  offset?: number;
 }): Promise<{ items: Requisition[]; hasMore: boolean }> {
-  const q = new URLSearchParams({ limit: "50" });
+  const q = new URLSearchParams({ limit: "50", offset: String(params?.offset ?? 0) });
   if (params?.status) q.set("status", params.status);
   if (params?.project_id) q.set("project_id", params.project_id);
   const { data } = await cachedRead(`getRequisitions:${q.toString()}`, () =>
@@ -1743,8 +1829,9 @@ export interface PurchaseOrder {
 export async function getPurchaseOrders(params?: {
   status?: string;
   vendor_id?: string;
+  offset?: number;
 }): Promise<{ items: PurchaseOrder[]; hasMore: boolean }> {
-  const q = new URLSearchParams({ limit: "50" });
+  const q = new URLSearchParams({ limit: "50", offset: String(params?.offset ?? 0) });
   if (params?.status) q.set("status", params.status);
   if (params?.vendor_id) q.set("vendor_id", params.vendor_id);
   const { data } = await cachedRead(`getPurchaseOrders:${q.toString()}`, () =>

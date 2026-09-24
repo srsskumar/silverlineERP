@@ -5,22 +5,26 @@
  * apps/api/src/modules/documents is an INDEX, not a file store: the bytes,
  * where a document has any, live wherever the owning module already keeps
  * them (task evidence, employee documents, …), and this module has no
- * download route. So this screen is read-only: what needs renewing, and the
- * full register, with a detail sheet for one entry. There is nothing to
- * open or save on a phone here — see the mobile brief's report for why.
+ * download route or upload route reachable from mobile (no Expo file-picker
+ * module is already in package.json — see the task 5d report for why that
+ * stays out of scope). Task 5d (B-009) adds the one write worth carrying:
+ * renewing a document that is due, gated like web (document.manage) — the
+ * rest of the register stays read-only, with a detail sheet for one entry.
  */
 import { router } from "expo-router";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Modal, View } from "react-native";
 import { useAuth } from "../src/auth/AuthContext";
 import {
   getDocument,
   getDocumentRenewals,
   getDocuments,
+  postDocumentRenew,
   type DocumentRow,
 } from "../src/api/endpoints";
-import { documentStateTone } from "../src/documentsFormat";
+import { documentStateTone, validateDocumentRenew } from "../src/documentsFormat";
+import { describeApiError } from "../src/errorFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
 import {
   BackHeader,
@@ -30,6 +34,7 @@ import {
   Card,
   Divider,
   EmptyState,
+  Input,
   ListRow,
   Loading,
   Muted,
@@ -43,6 +48,8 @@ import { space, useTheme } from "../src/theme";
 function DocumentsScreen() {
   const { canDo } = useAuth();
   const canRead = canDo("document.read");
+  const canManage = canDo("document.manage");
+  const qc = useQueryClient();
   const [tab, setTab] = useState<"renewals" | "register">("renewals");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -153,7 +160,15 @@ function DocumentsScreen() {
           ) : !detail.data ? (
             <EmptyState icon="alert-circle-outline" title="Could not load this document" />
           ) : (
-            <DocumentDetail doc={detail.data} />
+            <DocumentDetail
+              doc={detail.data}
+              canManage={canManage}
+              onRenewed={() => {
+                setSelectedId(null);
+                void qc.invalidateQueries({ queryKey: ["documents"] });
+                void qc.invalidateQueries({ queryKey: ["document"] });
+              }}
+            />
           )}
         </Screen>
       </Modal>
@@ -161,8 +176,21 @@ function DocumentsScreen() {
   );
 }
 
-function DocumentDetail({ doc }: { doc: DocumentRow & { supersedes: DocumentRow | null } }) {
+function DocumentDetail({
+  doc,
+  canManage,
+  onRenewed,
+}: {
+  doc: DocumentRow & { supersedes: DocumentRow | null };
+  canManage: boolean;
+  onRenewed: () => void;
+}) {
   const t = useTheme();
+  const [showRenew, setShowRenew] = useState(false);
+  // A document that already has a successor (409 ALREADY_RENEWED server-
+  // side) has nothing to renew again — proactively hide the action instead
+  // of letting the tap round-trip to learn that.
+  const canRenew = canManage && doc.state !== "SUPERSEDED";
   return (
     <View>
       <Card>
@@ -200,6 +228,20 @@ function DocumentDetail({ doc }: { doc: DocumentRow & { supersedes: DocumentRow 
         {doc.notes ? <Field label="Notes" value={doc.notes} /> : null}
       </Card>
 
+      {canRenew ? (
+        showRenew ? (
+          <RenewForm doc={doc} onCancel={() => setShowRenew(false)} onRenewed={onRenewed} />
+        ) : (
+          <Button
+            title="Renew"
+            icon="refresh-outline"
+            variant="secondary"
+            style={{ marginTop: space.md }}
+            onPress={() => setShowRenew(true)}
+          />
+        )
+      ) : null}
+
       {doc.supersedes ? (
         <>
           <SectionLabel>Previous revision</SectionLabel>
@@ -210,6 +252,91 @@ function DocumentDetail({ doc }: { doc: DocumentRow & { supersedes: DocumentRow 
         </>
       ) : null}
     </View>
+  );
+}
+
+/**
+ * B-009: records a new document that supersedes this one — not an edit of
+ * the expiry date. The old certificate stays on the register and readable;
+ * an inspector may ask for it (mirrors web's RenewDialog copy exactly).
+ */
+function RenewForm({
+  doc,
+  onCancel,
+  onRenewed,
+}: {
+  doc: DocumentRow;
+  onCancel: () => void;
+  onRenewed: () => void;
+}) {
+  const [expiresOn, setExpiresOn] = useState("");
+  const [issuedOn, setIssuedOn] = useState("");
+  const [referenceNumber, setReferenceNumber] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setError(null);
+    const v = validateDocumentRenew({ expires_on: expiresOn, issued_on: issuedOn || undefined });
+    if (!v.ok) {
+      setError(v.errors.map((e) => e.message).join("\n"));
+      return;
+    }
+    setBusy(true);
+    try {
+      await postDocumentRenew(doc.id, {
+        expires_on: expiresOn.trim(),
+        ...(issuedOn.trim() ? { issued_on: issuedOn.trim() } : {}),
+        ...(referenceNumber.trim() ? { reference_number: referenceNumber.trim() } : {}),
+      });
+      onRenewed();
+    } catch (e) {
+      setError(describeApiError(e, "Could not record this renewal"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card title={`Renew ${doc.title}`}>
+      <Muted style={{ marginBottom: space.md }}>
+        This records a new document that supersedes the current one. The old certificate stays on
+        the register and stays readable — an inspector may ask for it.
+      </Muted>
+      {error ? <Banner tone="danger" icon="alert-circle-outline" title={error} /> : null}
+      <Input
+        label="New expiry date"
+        placeholder="YYYY-MM-DD"
+        keyboardType="numeric"
+        autoCapitalize="none"
+        value={expiresOn}
+        onChangeText={setExpiresOn}
+      />
+      <Input
+        label="Issued on (optional)"
+        placeholder="YYYY-MM-DD"
+        keyboardType="numeric"
+        autoCapitalize="none"
+        value={issuedOn}
+        onChangeText={setIssuedOn}
+      />
+      <Input
+        label="New reference (optional)"
+        placeholder={doc.reference_number ?? "Unchanged"}
+        value={referenceNumber}
+        onChangeText={setReferenceNumber}
+      />
+      <Row gap={space.sm}>
+        <Button
+          title="Record the renewal"
+          loading={busy}
+          disabled={busy || !expiresOn.trim()}
+          onPress={() => void submit()}
+          style={{ flex: 1 }}
+        />
+        <Button title="Cancel" variant="secondary" onPress={onCancel} style={{ flex: 1 }} />
+      </Row>
+    </Card>
   );
 }
 

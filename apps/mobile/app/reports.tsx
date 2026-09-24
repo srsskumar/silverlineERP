@@ -23,7 +23,7 @@ import { File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { randomUUID } from "expo-crypto";
 import { dayTime } from "@silverline/shared";
-import { ApiError } from "../src/api/client";
+import { describeApiError } from "../src/errorFormat";
 import { useAuth } from "../src/auth/AuthContext";
 import { REPORT_TYPE_META, getReportPdf, getReports, postReport, type ReportJob } from "../src/api/endpoints";
 import { availableReportTypes, reportCanDownload, reportStatusTone } from "../src/reportsFormat";
@@ -70,7 +70,7 @@ function ReportsScreen() {
       );
       void qc.invalidateQueries({ queryKey: ["reports"] });
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Could not generate this report.");
+      setError(describeApiError(e, "Could not generate this report."));
     } finally {
       setGenerating(false);
     }
@@ -94,7 +94,7 @@ function ReportsScreen() {
         UTI: "com.adobe.pdf",
       });
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Could not save this report.");
+      setError(describeApiError(e, "Could not save this report."));
     } finally {
       if (file?.exists) file.delete();
       setSavingId(null);

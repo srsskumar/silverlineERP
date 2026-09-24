@@ -5,8 +5,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  formatLeadSource,
   formatLeadStage,
   leadStageTone,
+  validateLeadCreate,
   validateLeadStageChange,
 } from "../src/leadsFormat";
 
@@ -40,5 +42,57 @@ describe("validateLeadStageChange", () => {
     assert.equal(validateLeadStageChange("LOST", "Budget cut").ok, true);
     assert.equal(validateLeadStageChange("QUALIFIED", "").ok, true);
     assert.equal(validateLeadStageChange("CONTACTED", "").ok, true);
+  });
+});
+
+describe("formatLeadSource", () => {
+  it("labels every source and falls back for anything unrecognised", () => {
+    assert.equal(formatLeadSource("PORTAL_WATCH"), "Portal watch");
+    assert.equal(formatLeadSource("SOMETHING_NEW"), "SOMETHING_NEW");
+  });
+});
+
+describe("validateLeadCreate (B-011)", () => {
+  const valid = {
+    lead_no: "LD-0001",
+    organization_name: "Acme Infra",
+    lead_type: "PRIVATE",
+    source: "REFERRAL",
+  };
+
+  it("accepts a lead with every required field set", () => {
+    assert.equal(validateLeadCreate(valid).ok, true);
+  });
+
+  it("rejects a blank lead number, and one over 50 characters", () => {
+    assert.deepEqual(validateLeadCreate({ ...valid, lead_no: "  " }).errors, [
+      { field: "lead_no", message: "A lead number is required" },
+    ]);
+    assert.equal(validateLeadCreate({ ...valid, lead_no: "L".repeat(51) }).ok, false);
+  });
+
+  it("rejects a blank organisation name", () => {
+    assert.deepEqual(validateLeadCreate({ ...valid, organization_name: " " }).errors, [
+      { field: "organization_name", message: "Organisation name is required" },
+    ]);
+  });
+
+  it("rejects a lead_type outside CLIENT_TYPES (GOVERNMENT/PRIVATE)", () => {
+    assert.equal(validateLeadCreate({ ...valid, lead_type: "NGO" }).ok, false);
+  });
+
+  it("rejects a source outside the server's enum", () => {
+    assert.equal(validateLeadCreate({ ...valid, source: "CARRIER_PIGEON" }).ok, false);
+  });
+
+  it("reports every failing field at once, not just the first", () => {
+    const { ok, errors } = validateLeadCreate({
+      lead_no: "",
+      organization_name: "",
+      lead_type: "",
+      source: "",
+    });
+    assert.equal(ok, false);
+    assert.equal(errors.length, 4);
   });
 });

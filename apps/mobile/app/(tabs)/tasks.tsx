@@ -13,6 +13,8 @@ import { useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../src/auth/AuthContext";
 import { EvidenceCapture } from "../../src/device/EvidenceCapture";
+import { isUuid } from "../../src/deepLinks";
+import { quickAddAssigneeId } from "../../src/tasksFormat";
 import { submitQueued } from "../../src/sync/engine";
 import {
   getProjects,
@@ -51,12 +53,22 @@ function statusTone(status: string): "success" | "warning" | "info" | "neutral" 
 
 function TasksScreen() {
   const params = useLocalSearchParams<{ taskId?: string }>();
+  /*
+   * A-001: taskId arrives from a push notification / inbox deep link, so it
+   * is untrusted input the same way a URL param would be on web. A malformed
+   * value (truncated, tampered with, or a stale/foreign-org id) must not be
+   * handed straight to getTask() — that would be calling the API with
+   * garbage. It is validated as a UUID up front; an invalid one renders a
+   * not-found banner instead of opening the sheet or crashing.
+   */
+  const rawTaskId = typeof params.taskId === "string" ? params.taskId : null;
+  const invalidTaskId = rawTaskId !== null && !isUuid(rawTaskId);
   const [search, setSearch] = useState("");
   const [onlyMine, setOnlyMine] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(
-    typeof params.taskId === "string" ? params.taskId : null,
+    rawTaskId && isUuid(rawTaskId) ? rawTaskId : null,
   );
-  const { canDo } = useAuth();
+  const { canDo, user } = useAuth();
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => getProjects() });
   const [quickProject, setQuickProject] = useState("");
   const [quickTitle, setQuickTitle] = useState("");
@@ -92,7 +104,15 @@ function TasksScreen() {
         await submitQueued({
           entity: "task_create",
           op: `quickadd:${Date.now()}`,
-          payload: { project_id: quickProject, title: quickTitle.trim() },
+          payload: {
+            project_id: quickProject,
+            title: quickTitle.trim(),
+            // See src/tasksFormat.ts's quickAddAssigneeId doc comment.
+            ...(() => {
+              const assigneeId = quickAddAssigneeId(canDo("task.assign"), user?.id);
+              return assigneeId ? { assignee_id: assigneeId } : {};
+            })(),
+          },
         }),
       );
       setQuickTitle("");
@@ -121,6 +141,14 @@ function TasksScreen() {
           />
         ) : null}
       </Row>
+      {invalidTaskId ? (
+        <Banner
+          tone="danger"
+          icon="alert-circle-outline"
+          title="Task not found"
+          message="That link did not point at a valid task."
+        />
+      ) : null}
       <Muted style={{ marginTop: 2, marginBottom: space.lg }}>
         {onlyMine ? "Assigned to you" : "Everything in your scope"}
       </Muted>
@@ -327,6 +355,13 @@ function TaskSheet({ taskId, onClose }: { taskId: string | null; onClose: () => 
           keyboardShouldPersistTaps="handled"
         >
           {detail.isLoading ? <Loading /> : null}
+          {!detail.isLoading && !task ? (
+            <EmptyState
+              icon="alert-circle-outline"
+              title="Task not found"
+              message="It may belong to a different project you cannot open, or no longer exists."
+            />
+          ) : null}
           {task ? (
             <>
               <Card>

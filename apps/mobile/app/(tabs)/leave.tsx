@@ -15,7 +15,7 @@ import {
   postLeaveDecision,
 } from "../../src/api/endpoints";
 import { useAuth } from "../../src/auth/AuthContext";
-import { LEAVE_APPROVER_PERMISSIONS, canAny } from "../../src/rbac";
+import { LEAVE_APPROVER_PERMISSIONS, TAB_PERMISSIONS, canAny } from "../../src/rbac";
 import { submitQueued } from "../../src/sync/engine";
 import { validateLeaveRequest } from "../../src/validators";
 import {
@@ -47,6 +47,14 @@ function statusTone(status: string): "success" | "warning" | "danger" | "neutral
 function LeaveScreen() {
   const t = useTheme();
   const { permissions } = useAuth();
+  /**
+   * M-005: unlike Attendance/Assets/Survey, this tab ran unconditionally --
+   * no gate anywhere in the file -- so a role with neither leave.request nor
+   * leave.read (src/rbac.ts's TAB_PERMISSIONS.leave) saw the full form and
+   * balance/request queries fire, which 403 for that role instead of a
+   * locked-state message like every other gated tab.
+   */
+  const canAccess = canAny(permissions, TAB_PERMISSIONS.leave);
   const isApprover = canAny(permissions, LEAVE_APPROVER_PERMISSIONS);
 
   const [typeId, setTypeId] = useState("");
@@ -57,13 +65,21 @@ function LeaveScreen() {
   const [msgTone, setMsgTone] = useState<"success" | "danger">("success");
   const [busy, setBusy] = useState(false);
 
-  const balances = useQuery({ queryKey: ["leave", "balances"], queryFn: getLeaveBalances });
-  const types = useQuery({ queryKey: ["leave", "types"], queryFn: getLeaveTypes });
-  const mine = useQuery({ queryKey: ["leave", "mine"], queryFn: () => getLeaveRequests() });
+  const balances = useQuery({
+    queryKey: ["leave", "balances"],
+    queryFn: getLeaveBalances,
+    enabled: canAccess,
+  });
+  const types = useQuery({ queryKey: ["leave", "types"], queryFn: getLeaveTypes, enabled: canAccess });
+  const mine = useQuery({
+    queryKey: ["leave", "mine"],
+    queryFn: () => getLeaveRequests(),
+    enabled: canAccess,
+  });
   const inbox = useQuery({
     queryKey: ["leave", "inbox"],
     queryFn: () => getLeaveRequests({ status: "PENDING" }),
-    enabled: isApprover,
+    enabled: canAccess && isApprover,
   });
 
   // The form previously asked the user to type a leave-type UUID. Selecting
@@ -128,6 +144,18 @@ function LeaveScreen() {
       setMsgTone("danger");
     }
   };
+
+  if (!canAccess) {
+    return (
+      <Screen>
+        <EmptyState
+          icon="lock-closed-outline"
+          title="No leave access"
+          message="Your role does not include leave permissions. Ask an administrator if you need them."
+        />
+      </Screen>
+    );
+  }
 
   return (
     <Screen>

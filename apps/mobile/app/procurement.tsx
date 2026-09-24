@@ -12,7 +12,7 @@ import { router } from "expo-router";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Modal, View } from "react-native";
-import { ApiError } from "../src/api/client";
+import { describeApiError } from "../src/errorFormat";
 import { useAuth } from "../src/auth/AuthContext";
 import {
   getPurchaseOrder,
@@ -24,6 +24,7 @@ import {
   type PurchaseOrder,
   type Requisition,
 } from "../src/api/endpoints";
+import { canGoNewer, canGoOlder, newerOffset, olderOffset } from "../src/paging";
 import { poStatusTone, requisitionCanSubmit, requisitionStatusTone } from "../src/procurementFormat";
 import { validateRequisitionCreate } from "../src/validators";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
@@ -63,6 +64,8 @@ function ProcurementScreen() {
   const [showForm, setShowForm] = useState(false);
   const [selectedReqId, setSelectedReqId] = useState<string | null>(null);
   const [selectedPoId, setSelectedPoId] = useState<string | null>(null);
+  const [reqOffset, setReqOffset] = useState(0);
+  const [poOffset, setPoOffset] = useState(0);
 
   const [reqNo, setReqNo] = useState(`PR-${Date.now().toString().slice(-8)}`);
   const [justification, setJustification] = useState("");
@@ -77,13 +80,13 @@ function ProcurementScreen() {
   const [busy, setBusy] = useState(false);
 
   const requisitions = useQuery({
-    queryKey: ["requisitions"],
-    queryFn: () => getRequisitions(),
+    queryKey: ["requisitions", reqOffset],
+    queryFn: () => getRequisitions({ offset: reqOffset }),
     enabled: canReadReq && tab === "requisitions",
   });
   const orders = useQuery({
-    queryKey: ["purchase-orders"],
-    queryFn: () => getPurchaseOrders(),
+    queryKey: ["purchase-orders", poOffset],
+    queryFn: () => getPurchaseOrders({ offset: poOffset }),
     enabled: canReadPo && tab === "orders",
   });
   const reqDetail = useQuery({
@@ -135,9 +138,10 @@ function ProcurementScreen() {
       });
       resetForm();
       setShowForm(false);
+      setReqOffset(0);
       void requisitions.refetch();
     } catch (e) {
-      setFormError(e instanceof ApiError ? e.message : "Could not raise this requisition");
+      setFormError(describeApiError(e, "Could not raise this requisition"));
     } finally {
       setSubmitting(false);
     }
@@ -152,7 +156,7 @@ function ProcurementScreen() {
       await reqDetail.refetch();
       void qc.invalidateQueries({ queryKey: ["requisitions"] });
     } catch (e) {
-      setActionError(e instanceof ApiError ? e.message : "Could not submit this requisition");
+      setActionError(describeApiError(e, "Could not submit this requisition"));
     } finally {
       setBusy(false);
     }
@@ -259,7 +263,7 @@ function ProcurementScreen() {
 
                 <SectionLabel>Requisitions</SectionLabel>
                 <Card>
-                  {requisitions.isLoading ? (
+                  {requisitions.isLoading && reqOffset === 0 ? (
                     <Loading />
                   ) : requisitionRows.length === 0 ? (
                     <EmptyState icon="clipboard-outline" title="No requisitions yet" />
@@ -276,6 +280,24 @@ function ProcurementScreen() {
                     ))
                   )}
                 </Card>
+                {requisitionRows.length > 0 || reqOffset > 0 ? (
+                  <Row gap={space.sm} style={{ marginTop: space.md }}>
+                    <Button
+                      title="Newer"
+                      variant="secondary"
+                      disabled={!canGoNewer(reqOffset)}
+                      onPress={() => setReqOffset(newerOffset(reqOffset))}
+                      style={{ flex: 1 }}
+                    />
+                    <Button
+                      title="Older"
+                      variant="secondary"
+                      disabled={!canGoOlder(requisitions.data?.hasMore)}
+                      onPress={() => setReqOffset(olderOffset(reqOffset))}
+                      style={{ flex: 1 }}
+                    />
+                  </Row>
+                ) : null}
               </>
             )
           ) : !canReadPo ? (
@@ -288,7 +310,7 @@ function ProcurementScreen() {
             <>
               <SectionLabel>Purchase orders</SectionLabel>
               <Card>
-                {orders.isLoading ? (
+                {orders.isLoading && poOffset === 0 ? (
                   <Loading />
                 ) : orderRows.length === 0 ? (
                   <EmptyState icon="cart-outline" title="No purchase orders yet" />
@@ -305,6 +327,24 @@ function ProcurementScreen() {
                   ))
                 )}
               </Card>
+              {orderRows.length > 0 || poOffset > 0 ? (
+                <Row gap={space.sm} style={{ marginTop: space.md }}>
+                  <Button
+                    title="Newer"
+                    variant="secondary"
+                    disabled={!canGoNewer(poOffset)}
+                    onPress={() => setPoOffset(newerOffset(poOffset))}
+                    style={{ flex: 1 }}
+                  />
+                  <Button
+                    title="Older"
+                    variant="secondary"
+                    disabled={!canGoOlder(orders.data?.hasMore)}
+                    onPress={() => setPoOffset(olderOffset(poOffset))}
+                    style={{ flex: 1 }}
+                  />
+                </Row>
+              ) : null}
             </>
           )}
         </>

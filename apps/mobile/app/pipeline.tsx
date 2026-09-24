@@ -11,9 +11,19 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Modal, ScrollView, View } from "react-native";
 import { LEAD_STAGES } from "@silverline/shared";
 import { ApiError } from "../src/api/client";
+import { describeApiError } from "../src/errorFormat";
 import { useAuth } from "../src/auth/AuthContext";
-import { getLead, getLeads, postLeadStage, type LeadDetail } from "../src/api/endpoints";
-import { formatLeadStage, leadStageTone, validateLeadStageChange } from "../src/leadsFormat";
+import { getLead, getLeads, postLead, postLeadStage, type LeadDetail } from "../src/api/endpoints";
+import {
+  LEAD_SOURCES,
+  LEAD_TYPES,
+  formatLeadSource,
+  formatLeadStage,
+  leadStageTone,
+  validateLeadCreate,
+  validateLeadStageChange,
+} from "../src/leadsFormat";
+import { canGoNewer, canGoOlder, newerOffset, olderOffset } from "../src/paging";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
 import {
   BackHeader,
@@ -46,12 +56,14 @@ function PipelineScreen() {
   const canManage = canDo("lead.manage");
   const [stage, setStage] = useState("");
   const [search, setSearch] = useState("");
+  const [offset, setOffset] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showNewLead, setShowNewLead] = useState(false);
   const qc = useQueryClient();
 
   const leads = useQuery({
-    queryKey: ["leads", stage, search],
-    queryFn: () => getLeads({ stage: stage || undefined, search: search.trim() || undefined }),
+    queryKey: ["leads", stage, search, offset],
+    queryFn: () => getLeads({ stage: stage || undefined, search: search.trim() || undefined, offset }),
     enabled: canRead,
   });
   const detail = useQuery({
@@ -67,10 +79,26 @@ function PipelineScreen() {
     void qc.invalidateQueries({ queryKey: ["leads"] });
     void qc.invalidateQueries({ queryKey: ["lead", selectedId] });
   };
+  const afterCreate = () => {
+    setOffset(0);
+    void qc.invalidateQueries({ queryKey: ["leads"] });
+  };
 
   return (
     <Screen>
-      <BackHeader title="Pipeline" onBack={() => router.back()} />
+      <BackHeader
+        title="Pipeline"
+        onBack={() => router.back()}
+        right={
+          canManage ? (
+            <Button
+              title={showNewLead ? "Cancel" : "New lead"}
+              variant={showNewLead ? "secondary" : "primary"}
+              onPress={() => setShowNewLead((v) => !v)}
+            />
+          ) : undefined
+        }
+      />
       <Muted style={{ marginBottom: space.lg }}>Leads, by stage.</Muted>
 
       {!canRead ? (
@@ -81,10 +109,22 @@ function PipelineScreen() {
         />
       ) : (
         <>
+          {showNewLead && canManage ? (
+            <NewLeadForm
+              onCreated={() => {
+                setShowNewLead(false);
+                afterCreate();
+              }}
+            />
+          ) : null}
+
           <Input
             placeholder="Search by organisation or lead number"
             value={search}
-            onChangeText={setSearch}
+            onChangeText={(v) => {
+              setSearch(v);
+              setOffset(0);
+            }}
             autoCapitalize="none"
           />
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: space.md }}>
@@ -92,21 +132,27 @@ function PipelineScreen() {
               <Button
                 title="All"
                 variant={stage === "" ? "primary" : "secondary"}
-                onPress={() => setStage("")}
+                onPress={() => {
+                  setStage("");
+                  setOffset(0);
+                }}
               />
               {LEAD_STAGES.map((s) => (
                 <Button
                   key={s}
                   title={formatLeadStage(s)}
                   variant={stage === s ? "primary" : "secondary"}
-                  onPress={() => setStage(s)}
+                  onPress={() => {
+                    setStage(s);
+                    setOffset(0);
+                  }}
                 />
               ))}
             </Row>
           </ScrollView>
 
           <Card>
-            {leads.isLoading ? (
+            {leads.isLoading && offset === 0 ? (
               <Loading />
             ) : rows.length === 0 ? (
               <EmptyState icon="trending-up-outline" title="No leads found" />
@@ -127,6 +173,24 @@ function PipelineScreen() {
               ))
             )}
           </Card>
+          {rows.length > 0 || offset > 0 ? (
+            <Row gap={space.sm} style={{ marginTop: space.md }}>
+              <Button
+                title="Newer"
+                variant="secondary"
+                disabled={!canGoNewer(offset)}
+                onPress={() => setOffset(newerOffset(offset))}
+                style={{ flex: 1 }}
+              />
+              <Button
+                title="Older"
+                variant="secondary"
+                disabled={!canGoOlder(leads.data?.hasMore)}
+                onPress={() => setOffset(olderOffset(offset))}
+                style={{ flex: 1 }}
+              />
+            </Row>
+          ) : null}
         </>
       )}
 
@@ -152,6 +216,101 @@ function PipelineScreen() {
         </Screen>
       </Modal>
     </Screen>
+  );
+}
+
+/**
+ * B-011: a lead create form gated by lead.manage — the same required fields
+ * as packages/shared/src/crm.ts's leadSchema (lead_no, organization_name,
+ * lead_type, source), sent with no extra or stripped fields. Everything else
+ * the schema allows (client_id, contact_id, project_type/category,
+ * owner_id, next_follow_up_date) is optional there and stays a desktop-only
+ * field, same reasoning as this screen's header comment.
+ */
+function NewLeadForm({ onCreated }: { onCreated: () => void }) {
+  const [leadNo, setLeadNo] = useState(`LD-${Date.now().toString().slice(-8)}`);
+  const [orgName, setOrgName] = useState("");
+  const [leadType, setLeadType] = useState<string>("");
+  const [source, setSource] = useState<string>("");
+  const [estimatedValue, setEstimatedValue] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setError(null);
+    const v = validateLeadCreate({
+      lead_no: leadNo,
+      organization_name: orgName,
+      lead_type: leadType,
+      source,
+    });
+    if (!v.ok) {
+      setError(v.errors.map((e) => e.message).join("\n"));
+      return;
+    }
+    setBusy(true);
+    try {
+      await postLead({
+        lead_no: leadNo.trim(),
+        organization_name: orgName.trim(),
+        lead_type: leadType,
+        source,
+        ...(estimatedValue.trim() ? { estimated_value: Number(estimatedValue) } : {}),
+      });
+      onCreated();
+    } catch (e) {
+      setError(describeApiError(e, "Could not create this lead"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card title="New lead">
+      {error ? <Banner tone="danger" icon="alert-circle-outline" title={error} /> : null}
+      <Input label="Lead number" value={leadNo} onChangeText={setLeadNo} maxLength={50} />
+      <Input label="Organisation" placeholder="Who is this for?" value={orgName} onChangeText={setOrgName} />
+
+      <Subtle style={{ marginBottom: space.xs }}>Type</Subtle>
+      <Row gap={space.sm} style={{ marginBottom: space.md }}>
+        {LEAD_TYPES.map((lt) => (
+          <Button
+            key={lt}
+            title={lt === "GOVERNMENT" ? "Government" : "Private"}
+            variant={leadType === lt ? "primary" : "secondary"}
+            onPress={() => setLeadType(lt)}
+            style={{ flex: 1 }}
+          />
+        ))}
+      </Row>
+
+      <Subtle style={{ marginBottom: space.xs }}>Source</Subtle>
+      <Row gap={space.sm} style={{ flexWrap: "wrap", marginBottom: space.md }}>
+        {LEAD_SOURCES.map((s) => (
+          <Button
+            key={s}
+            title={formatLeadSource(s)}
+            variant={source === s ? "primary" : "secondary"}
+            onPress={() => setSource(s)}
+          />
+        ))}
+      </Row>
+
+      <Input
+        label="Estimated value (optional)"
+        placeholder="0"
+        keyboardType="decimal-pad"
+        value={estimatedValue}
+        onChangeText={setEstimatedValue}
+      />
+      <Button
+        title="Save lead"
+        icon="add-circle-outline"
+        loading={busy}
+        disabled={busy}
+        onPress={() => void submit()}
+      />
+    </Card>
   );
 }
 
@@ -187,11 +346,9 @@ function LeadDetailView({
       onChanged();
     } catch (e) {
       setError(
-        e instanceof ApiError
-          ? e.status === 409
-            ? "This lead changed while you were looking at it. Reload and try again."
-            : e.message
-          : "Could not change the stage",
+        e instanceof ApiError && e.status === 409
+          ? "This lead changed while you were looking at it. Reload and try again."
+          : describeApiError(e, "Could not change the stage"),
       );
     } finally {
       setBusy(false);

@@ -12,7 +12,7 @@ import { router } from "expo-router";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Modal, View } from "react-native";
-import { ApiError } from "../src/api/client";
+import { describeApiError } from "../src/errorFormat";
 import { useAuth } from "../src/auth/AuthContext";
 import {
   getInventoryItems,
@@ -160,7 +160,7 @@ function ItemDetail({
       void txns.refetch();
       void qc.invalidateQueries({ queryKey: ["inventory", "items"] });
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Could not post this transaction");
+      setError(describeApiError(e, "Could not post this transaction"));
     } finally {
       setPosting(false);
     }
