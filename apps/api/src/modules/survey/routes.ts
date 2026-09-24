@@ -3300,7 +3300,12 @@ export async function registerSurveyRoutes(
       };
     });
 
-  app.delete('/api/v1/survey/gcps/:id', { preHandler: guard('survey.manage') },
+  /*
+   * Deleting a point: the same five people as recording one (owner decision,
+   * fix round 1), so survey.enter plus requireOwnCrew rather than
+   * survey.manage. This supersedes §59.9.4's "delete stays with manage".
+   */
+  app.delete('/api/v1/survey/gcps/:id', { preHandler: guard('survey.enter') },
     async req => ({
       data: await mutate(pool, req, 'survey.gcp.delete', 'survey_village_gcp', async db => {
         const u = actor(req), id = (req.params as { id: string }).id;

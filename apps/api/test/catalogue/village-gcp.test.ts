@@ -425,15 +425,15 @@ describe("who may record a control point", () => {
     expect(Number(r.data.latitude)).toBeCloseTo(17.512999, 6);
   });
 
-  it("does not let them delete one", async () => {
-    // An established point is what everything in the village was surveyed
-    // from. Removing it is a decision about the record, not an observation,
-    // and it stays with the desk.
+  it("lets them delete one of their village's points", async () => {
+    // Owner decision (fix round 1): deleting a point is for the same people
+    // as recording one -- the crew on the village among them -- which
+    // supersedes §59.9.4's "stays with the desk".
     const made = await post(w.directUser, `/api/v1/survey/villages/${villageB}/gcps`, {
       point_code: uniq("KEEP"), latitude: 17.51, longitude: 82.61,
     });
     const r = await send("DELETE", w.directUser, `/api/v1/survey/gcps/${made.data.id}`);
-    expect(r.status).toBe(403);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
   });
 
   it("does not let a read-only role record one", async () => {
