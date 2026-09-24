@@ -725,6 +725,59 @@ export async function registerWorkRoutes(
     return true;
   }
 
+  /**
+   * Project-manager rule, matching checkAssignee above: must be an in-org
+   * user with auth_status ACTIVE (the plain org-only check used to accept a
+   * locked/disabled account), and when that user has a linked employee, the
+   * employee must also be ACTIVE — an inactive or exited employee should
+   * not be made PM any more than they should be a task assignee.
+   */
+  async function checkProjectManager(
+    reply: FastifyReply,
+    requestId: string,
+    db: Pick<Pool, "query">,
+    orgId: string,
+    pmId: string,
+  ): Promise<boolean> {
+    const pm = await db.query(
+      "SELECT id, employee_id FROM users WHERE id = $1::uuid AND org_id = $2 AND auth_status = 'ACTIVE'",
+      [pmId, orgId],
+    );
+    const row = pm.rows[0] as
+      | { id: string; employee_id: string | null }
+      | undefined;
+    if (!row) {
+      sendError(reply, requestId, {
+        status: 404,
+        code: "NOT_FOUND",
+        message: "Project manager not found",
+      });
+      return false;
+    }
+    if (row.employee_id) {
+      const e = await db.query(
+        "SELECT status FROM employees WHERE id = $1::uuid",
+        [row.employee_id],
+      );
+      const emp = e.rows[0] as { status: string } | undefined;
+      if (!emp || emp.status !== "ACTIVE") {
+        sendRuleError(reply, requestId, {
+          status: 422,
+          code: "PROJECT_MANAGER_INACTIVE",
+          message: "Project manager's linked employee is not ACTIVE",
+          fieldErrors: [
+            {
+              field: "project_manager_id",
+              message: "Project manager must be an ACTIVE employee",
+            },
+          ],
+        });
+        return false;
+      }
+    }
+    return true;
+  }
+
   /** village_id must reference an in-org village unit (404/422 otherwise). */
   async function checkVillage(
     reply: FastifyReply,
@@ -1117,16 +1170,15 @@ export async function registerWorkRoutes(
       }
     }
     if (d.project_manager_id) {
-      const pm = await db.query(
-        "SELECT id FROM users WHERE id = $1::uuid AND org_id = $2",
-        [d.project_manager_id, user.orgId],
+      const ok = await checkProjectManager(
+        reply,
+        req.requestId,
+        db,
+        user.orgId,
+        d.project_manager_id,
       );
-      if ((pm.rowCount ?? 0) === 0) {
-        return sendError(reply, req.requestId, {
-          status: 404,
-          code: "NOT_FOUND",
-          message: "Project manager not found",
-        });
+      if (!ok) {
+        return;
       }
     }
     if (d.client_id) {
@@ -1423,6 +1475,31 @@ export async function registerWorkRoutes(
         });
       }
     }
+    if (d.project_type_id) {
+      const t = await db.query(
+        "SELECT id FROM project_types WHERE id = $1::uuid AND org_id = $2",
+        [d.project_type_id, user.orgId],
+      );
+      if ((t.rowCount ?? 0) === 0) {
+        return sendError(reply, req.requestId, {
+          status: 404,
+          code: "NOT_FOUND",
+          message: "Project type not found",
+        });
+      }
+    }
+    if (d.project_manager_id) {
+      const ok = await checkProjectManager(
+        reply,
+        req.requestId,
+        db,
+        user.orgId,
+        d.project_manager_id,
+      );
+      if (!ok) {
+        return;
+      }
+    }
     const upd = await db.query(
       `UPDATE projects SET
          name = COALESCE($3, name),
@@ -1438,6 +1515,8 @@ export async function registerWorkRoutes(
          contract_gst_included = COALESCE($13, contract_gst_included),
          contract_gst_rate = COALESCE($14, contract_gst_rate),
          work_order_number = COALESCE($15, work_order_number),
+         project_type_id = COALESCE($18::uuid, project_type_id),
+         project_manager_id = COALESCE($19::uuid, project_manager_id),
          updated_by = $16::uuid, updated_at = NOW(), version = version + 1
        WHERE id = $1::uuid AND org_id = $2 AND version = $17
        RETURNING ${PROJECT_COLS}`,
@@ -1459,6 +1538,8 @@ export async function registerWorkRoutes(
         d.work_order_number ?? null,
         user.id,
         expectedVersion,
+        d.project_type_id ?? null,
+        d.project_manager_id ?? null,
       ],
     );
     const row = upd.rows[0] as ProjectRow | undefined;

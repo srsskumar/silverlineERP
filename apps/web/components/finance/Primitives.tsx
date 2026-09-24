@@ -177,3 +177,9 @@ export function Notice({
     </div>
   );
 }
+
+/** Field-level error text under an input, from react-hook-form's `errors` object. */
+export function FieldError({ message }: { message?: string }) {
+  if (!message) return null;
+  return <p className="mt-1 text-2xs text-danger">{message}</p>;
+}

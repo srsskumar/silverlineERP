@@ -31,7 +31,7 @@ export const VOLATILE_TABLES = `
   documents, document_types, roster_entries, work_shifts, resource_allocations,
   stock_count_lines, stock_counts, stock_reservations, payment_run_lines, payment_runs,
   bank_transactions, payment_allocations, payments, financial_periods, project_categories,
-  expense_receipt_fingerprints, expense_reimbursements, expense_lines, expense_claims,
+  expense_receipts, expense_receipt_fingerprints, expense_reimbursements, expense_lines, expense_claims,
   expense_policies, project_cost_entries, project_budgets, cost_heads, vendor_return_lines,
   vendor_returns, vendor_quote_lines, vendor_quotes, rfq_vendors, rfq_lines, rfqs,
   invoice_match_results, grn_lines, goods_receipt_notes, po_amendments,

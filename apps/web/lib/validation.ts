@@ -69,6 +69,34 @@ const optionalEmail = z
 
 const optionalDate = dateString().optional().or(z.literal('').transform(() => undefined)).pipe(dateString().optional());
 
+/**
+ * Money: a non-negative amount with at most 2 decimal places, validated on the
+ * raw string before it is coerced to a number — `Number('12.345')` loses
+ * nothing on its own, so the decimal-place check has to run before that
+ * conversion, not after it.
+ */
+const MONEY_RE = /^\d+(\.\d{1,2})?$/;
+
+const moneyField = (message = 'Enter an amount of 0 or more, with at most 2 decimal places') =>
+  z.coerce
+    .string()
+    .trim()
+    .regex(MONEY_RE, message)
+    .transform((v) => Number(v));
+
+const optionalMoneyField = (message = 'Enter an amount of 0 or more, with at most 2 decimal places') =>
+  z.coerce
+    .string()
+    .trim()
+    .optional()
+    .or(z.literal('').transform(() => undefined))
+    .transform((v) => (v === '' ? undefined : v))
+    .pipe(z.string().regex(MONEY_RE, message).transform((v) => Number(v)).optional());
+
+/** Money that must be strictly positive (an advance, a fixed deduction). */
+const positiveMoneyField = (message = 'Enter an amount greater than 0, with at most 2 decimal places') =>
+  moneyField(message).refine((v) => v > 0, message);
+
 export const GENDERS = ['MALE', 'FEMALE', 'OTHER'] as const;
 export const EMPLOYEE_STATUSES = ['DRAFT', 'ACTIVE', 'ON_LEAVE', 'EXITED', 'TERMINATED'] as const;
 export const ORG_UNIT_TYPES = ['district', 'division', 'mandal', 'village', 'site'] as const;
@@ -780,3 +808,217 @@ export const reportSchema = z.object({
   type: z.enum(REPORT_TYPES, { errorMap: () => ({ message: 'Pick a report type' }) }),
 });
 export type ReportFormInput = z.infer<typeof reportSchema>;
+
+// ---------------------------------------------------------------------------
+// Procurement creation forms (Task 5a, B-005). Field lists are cross-checked
+// against apps/api/src/modules/procurement/routes.ts's zod schemas
+// (packages/shared/src/procurement.ts) so nothing typed here is silently
+// stripped server-side.
+// ---------------------------------------------------------------------------
+
+export const requisitionLineSchema = z.object({
+  item_id: optionalUuid,
+  description: z.string().trim().min(1, 'Description is required').max(255),
+  unit: z.string().trim().min(1, 'Unit is required').max(20),
+  quantity: z.coerce.number().positive('Quantity must be greater than 0'),
+  estimated_rate: optionalMoneyField(),
+  remarks: optionalText(500),
+});
+export type RequisitionLineInput = z.infer<typeof requisitionLineSchema>;
+
+export const requisitionSchema = z.object({
+  requisition_no: z.string().trim().min(1, 'Requisition number is required').max(50),
+  project_id: optionalUuid,
+  required_by: optionalDate,
+  justification: z.string().trim().min(1, 'Justification is required').max(2000),
+  lines: z.array(requisitionLineSchema).min(1, 'Add at least one line'),
+});
+export type RequisitionFormInput = z.infer<typeof requisitionSchema>;
+
+const HSN_RE = /^[0-9]{4,8}$/;
+const PLACE_OF_SUPPLY_RE = /^[0-9]{2}$/;
+
+const optionalHsn = z
+  .string()
+  .trim()
+  .optional()
+  .or(z.literal('').transform(() => undefined))
+  .transform((v) => (v === '' ? undefined : v))
+  .pipe(z.string().regex(HSN_RE, 'HSN/SAC is 4 to 8 digits').optional());
+
+const optionalPlaceOfSupply = z
+  .string()
+  .trim()
+  .optional()
+  .or(z.literal('').transform(() => undefined))
+  .transform((v) => (v === '' ? undefined : v))
+  .pipe(z.string().regex(PLACE_OF_SUPPLY_RE, 'Place of supply is a two-digit state code').optional());
+
+export const purchaseOrderLineSchema = z.object({
+  item_id: optionalUuid,
+  requisition_line_id: optionalUuid,
+  description: z.string().trim().min(1, 'Description is required').max(255),
+  hsn_sac: optionalHsn,
+  unit: z.string().trim().min(1, 'Unit is required').max(20),
+  quantity: z.coerce.number().positive('Quantity must be greater than 0'),
+  unit_rate: moneyField('Enter a rate of 0 or more, with at most 2 decimal places'),
+  gst_rate_pct: z.coerce
+    .number()
+    .min(0, 'GST % must be between 0 and 28')
+    .max(28, 'GST % must be between 0 and 28')
+    .default(0),
+  remarks: optionalText(500),
+});
+export type PurchaseOrderLineInput = z.infer<typeof purchaseOrderLineSchema>;
+
+export const purchaseOrderSchema = z.object({
+  po_number: z.string().trim().min(1, 'Order number is required').max(50),
+  vendor_id: z.string().trim().uuid('Choose a vendor'),
+  requisition_id: optionalUuid,
+  project_id: optionalUuid,
+  po_date: dateString('Order date must be YYYY-MM-DD'),
+  delivery_date: optionalDate,
+  payment_terms: optionalText(200),
+  delivery_address: optionalText(1000),
+  place_of_supply: optionalPlaceOfSupply,
+  scope_override_reason: optionalText(1000),
+  lines: z.array(purchaseOrderLineSchema).min(1, 'Add at least one line'),
+});
+export type PurchaseOrderFormInput = z.infer<typeof purchaseOrderSchema>;
+
+export const grnLineSchema = z
+  .object({
+    po_line_id: z.string().trim().uuid('Pick a line'),
+    received_quantity: z.coerce.number().min(0, 'Received quantity must be 0 or more'),
+    accepted_quantity: z.coerce.number().min(0, 'Accepted quantity must be 0 or more'),
+    rejection_reason: optionalText(500),
+    remarks: optionalText(500),
+  })
+  .superRefine((v, ctx) => {
+    if (v.accepted_quantity > v.received_quantity) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['accepted_quantity'],
+        message: 'More cannot be accepted than was received',
+      });
+    }
+    if (v.received_quantity > v.accepted_quantity && !v.rejection_reason) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['rejection_reason'],
+        message: 'Say why the balance was rejected',
+      });
+    }
+  });
+export type GrnLineInput = z.infer<typeof grnLineSchema>;
+
+/**
+ * `over_receipt_reason` is not part of the API's `grnSchema` — the route reads
+ * it straight off the raw request body (see procurement/routes.ts) — but it
+ * has to travel in the same JSON object, so it is validated here too.
+ */
+export const grnSchema = z.object({
+  grn_no: z.string().trim().min(1, 'Receipt number is required').max(50),
+  purchase_order_id: z.string().trim().uuid('Pick a purchase order'),
+  received_date: dateString('Received date must be YYYY-MM-DD'),
+  challan_no: optionalText(50),
+  vehicle_no: optionalText(20),
+  over_receipt_reason: optionalText(1000),
+  lines: z.array(grnLineSchema).min(1, 'Add at least one line'),
+});
+export type GrnFormInput = z.infer<typeof grnSchema>;
+
+export const rfqLineSchema = z.object({
+  item_id: optionalUuid,
+  description: z.string().trim().min(1, 'Description is required').max(255),
+  unit: z.string().trim().min(1, 'Unit is required').max(20),
+  quantity: z.coerce.number().positive('Quantity must be greater than 0'),
+});
+export type RfqLineInput = z.infer<typeof rfqLineSchema>;
+
+export const rfqSchema = z.object({
+  rfq_no: z.string().trim().min(1, 'RFQ number is required').max(50),
+  requisition_id: optionalUuid,
+  project_id: optionalUuid,
+  due_date: dateString('Due date must be YYYY-MM-DD'),
+  scope: optionalText(4000),
+  vendor_ids: z
+    .array(z.string().trim().uuid('Choose a vendor'))
+    .min(2, 'Invite at least two vendors')
+    .max(20, 'At most 20 vendors'),
+  lines: z.array(rfqLineSchema).min(1, 'Add at least one line'),
+});
+export type RfqFormInput = z.infer<typeof rfqSchema>;
+
+// ---------------------------------------------------------------------------
+// Billing creation forms (Task 5a, B-007). Field lists are cross-checked
+// against apps/api/src/modules/billing/routes.ts's zod schemas
+// (packages/shared/src/ra-billing.ts).
+// ---------------------------------------------------------------------------
+
+export const raBillLineSchema = z.object({
+  boq_item_id: z.string().trim().uuid('Pick a BOQ item'),
+  cumulative_quantity: z.coerce.number().min(0, 'Cumulative quantity must be 0 or more'),
+  remarks: optionalText(500),
+});
+export type RaBillLineInput = z.infer<typeof raBillLineSchema>;
+
+export const RA_BILL_DEDUCTION_HEADS = ['LIQUIDATED_DAMAGES', 'PENALTY', 'OTHER'] as const;
+
+export const raBillFixedDeductionSchema = z.object({
+  head: z.enum(RA_BILL_DEDUCTION_HEADS, { errorMap: () => ({ message: 'Pick a deduction head' }) }),
+  label: z.string().trim().min(1, 'Label is required').max(150),
+  amount: positiveMoneyField('Enter an amount greater than 0, with at most 2 decimal places'),
+  reason: z.string().trim().min(1, 'Reason is required').max(1000),
+});
+export type RaBillFixedDeductionInput = z.infer<typeof raBillFixedDeductionSchema>;
+
+export const raBillSchema = z
+  .object({
+    project_id: z.string().trim().uuid('Pick a project'),
+    bill_type: z.enum(['RA', 'FINAL']).default('RA'),
+    period_from: dateString('Period start must be YYYY-MM-DD'),
+    period_to: dateString('Period end must be YYYY-MM-DD'),
+    measurement_book_ref: optionalText(100),
+    remarks: optionalText(4000),
+    lines: z.array(raBillLineSchema).min(1, 'Add at least one measured item'),
+    fixed_deductions: z.array(raBillFixedDeductionSchema).max(20).default([]),
+  })
+  .superRefine((v, ctx) => {
+    if (v.period_from && v.period_to && v.period_to < v.period_from) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['period_to'],
+        message: 'The period cannot end before it starts',
+      });
+    }
+  });
+export type RaBillFormInput = z.infer<typeof raBillSchema>;
+
+export const ADVANCE_TYPES = ['MOBILISATION', 'MATERIAL', 'PLANT'] as const;
+
+export const advanceSchema = z.object({
+  project_id: z.string().trim().uuid('Pick a project'),
+  advance_type: z.enum(ADVANCE_TYPES, { errorMap: () => ({ message: 'Pick an advance type' }) }),
+  amount: positiveMoneyField('Enter an amount greater than 0, with at most 2 decimal places'),
+  paid_on: dateString('Paid-on date must be YYYY-MM-DD'),
+  recovery_pct: z.coerce
+    .number()
+    .min(0.01, 'Recovery % must be greater than 0')
+    .max(100, 'Recovery % must be at most 100'),
+  bank_guarantee_id: optionalUuid,
+  remarks: optionalText(1000),
+});
+export type AdvanceFormInput = z.infer<typeof advanceSchema>;
+
+/** POST /api/v1/payment-runs/:id/execute (B-002) — mirrors paymentRunExecuteSchema. */
+export const paymentRunExecuteSchema = z.object({
+  paid_on: dateString('Paid-on date must be YYYY-MM-DD'),
+  bank_reference: z
+    .string()
+    .trim()
+    .min(1, 'Enter the bank reference (UTR/cheque number)')
+    .max(100, 'Bank reference must be at most 100 characters'),
+  note: optionalText(1000),
+});
+export type PaymentRunExecuteFormInput = z.infer<typeof paymentRunExecuteSchema>;

@@ -3,7 +3,7 @@ import {inTransaction} from './transactionContext.js';
 import {parseIfMatch} from './ifMatch.js';
 import type { FastifyRequest } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
-import { ApiError, toFieldErrors, validationSummary, fieldLabel } from '@silverline/shared';
+import { ApiError, toFieldErrors, validationSummary, fieldLabel, periodAllows, type FinancialPeriod } from '@silverline/shared';
 import type { z } from 'zod';
 import { resolveScopes, taskScopeClause, employeeScopeClause } from './scopes.js';
 
@@ -55,13 +55,21 @@ export function parse<T>(schema:z.ZodType<T, z.ZodTypeDef, unknown>,body:unknown
 }
 export function fail(code:string,message:string,status=422):never {throw new ApiError({status,code,message});}
 export function actor(req:FastifyRequest) {if(!req.authUser) fail('UNAUTHENTICATED','Sign in first',401);return req.authUser;}
-export function version(req:FastifyRequest,row:{version:number}) {
+export function version(req:FastifyRequest,row:{version:number},label?:string) {
  // Shared with the other seven modules so every route reads the header the
- // same way, weak validators and all.
+ // same way, weak validators and all. `label` names whose version is wanted
+ // when that is not obvious from the URL alone -- an approval decision, for
+ // instance, wants the approval instance's version, not the document's, and
+ // a caller who already has the document's version in hand will reach for
+ // that one first unless told otherwise.
  let n:number;
  try { n=parseIfMatch(req as unknown as {headers:Record<string,unknown>}); }
- catch { fail('VERSION_REQUIRED','If-Match must contain the current version'); }
- if(n!==row.version) fail('VERSION_CONFLICT','This record changed. Reload before editing.',409);
+ catch { fail('VERSION_REQUIRED',label
+   ? `If-Match must contain the current version of the ${label}, not the document it is about.`
+   : 'If-Match must contain the current version'); }
+ if(n!==row.version) fail('VERSION_CONFLICT',label
+   ? `This ${label} changed — reload it (not the document it is about) before deciding again.`
+   : 'This record changed. Reload before editing.',409);
 }
 export function page(req:FastifyRequest) {
  const q=req.query as Record<string,string>;
@@ -172,4 +180,39 @@ export async function mutate<T>(pool:Pool,req:FastifyRequest,action:string,entit
   if(key)await db.query('INSERT INTO v2_operations(key,user_id,path,request_hash,response) VALUES($1,$2,$3,$4,$5)',[key,u.id,req.url,hash,JSON.stringify(value)]);
   await db.query('COMMIT');return value;
  }catch(e){await db.query('ROLLBACK');throw e;}finally{db.release();}
+}
+
+const periodDate=(v:unknown):string=>v instanceof Date?v.toISOString().slice(0,10):String(v).slice(0,10);
+
+/**
+ * This organisation's financial periods, in the shape the pure layer wants.
+ *
+ * Shared rather than left as a per-module closure (fix round 1, B-002 review):
+ * financial control's own module had it first, and the payment-run execute
+ * route needed the identical check but was a separate module reaching for
+ * its own connection, not a request finance/routes.ts's closure could see.
+ */
+export async function periodsFor(db:Pool|PoolClient,orgId:string):Promise<FinancialPeriod[]> {
+ return (await db.query(
+  'SELECT code, starts_on, ends_on, status FROM financial_periods WHERE org_id = $1',[orgId]))
+  .rows.map(r=>({
+   code:String(r.code),
+   startsOn:periodDate(r.starts_on),
+   endsOn:periodDate(r.ends_on),
+   status:r.status as 'OPEN'|'CLOSED',
+  }));
+}
+
+/**
+ * Refuse a document dated into a closed period unless the actor may override
+ * (§45.4). Every route that posts a payment against a date — a manual
+ * receipt, a payment-run execution, anything else added later — has to call
+ * this before it writes, or a closed period stops meaning anything.
+ */
+export async function guardPeriod(db:Pool|PoolClient,req:FastifyRequest,date:string):Promise<void> {
+ const u=actor(req);
+ const verdict=periodAllows(await periodsFor(db,u.orgId),date,{
+  hasOverride:u.permissions.includes('period.override'),
+ });
+ if(!verdict.allowed) fail(verdict.code,verdict.reason);
 }

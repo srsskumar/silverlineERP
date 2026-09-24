@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import {
@@ -8,9 +9,12 @@ import {
   type ExpenseClaimStatus, type ExpensePolicy, type ExpenseCategory, type ExpenseLineInput,
   businessDay,
   apportionRun, payrollCostPostSchema, payrollCostReverseSchema,
+  expenseReceiptUploadSchema, ALLOWED_RECEIPT_EXTENSIONS, MAX_RECEIPT_BYTES, MAX_RECEIPTS_PER_CLAIM,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail, projectAccess } from '../../common/domain.js';
+import { scanUpload } from '../../common/fileSafety.js';
+import { encodeBlob, readBlob } from '../../common/blobStore.js';
 import { submitForApproval } from '../../common/approvalRouting.js';
 
 /**
@@ -748,6 +752,133 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
     });
     reply.code(201);
     return { data: row };
+  });
+
+  /* ------------------------------------------------------------------ receipts */
+
+  const RECEIPT_MIME_BY_EXT: Record<string, string> = {
+    pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+  };
+
+  /** Same strict decoder every other local upload in this codebase uses. */
+  function decodeBase64Strict(input: string): Buffer {
+    const compact = input.replace(/\s+/g, '');
+    if (compact.length === 0 || compact.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(compact)) {
+      fail('VALIDATION_ERROR', 'Invalid base64 content', 422);
+    }
+    const buf = Buffer.from(compact, 'base64');
+    if (buf.length === 0 || buf.toString('base64') !== compact) {
+      fail('VALIDATION_ERROR', 'Invalid base64 content', 422);
+    }
+    return buf;
+  }
+
+  /** A claim only takes new receipts, or loses one, while it is still live (B-003). */
+  function requireEditableForReceipts(claim: Record<string, any>) {
+    if (claim.status !== 'DRAFT' && claim.status !== 'SUBMITTED') {
+      fail('CLAIM_NOT_EDITABLE',
+        `A ${String(claim.status).toLowerCase()} claim cannot take receipt changes.`, 409);
+    }
+  }
+
+  /** The claimant, whoever keyed the claim in, or a full read-all holder. */
+  function requireClaimOwnerOrReadAll(u: ReturnType<typeof actor>, claim: Record<string, any>) {
+    if (String(claim.requested_by) !== u.id && String(claim.claimant_user_id) !== u.id
+        && !u.permissions.includes('expense.read_all')) {
+      fail('FORBIDDEN', 'This claim belongs to someone else', 403);
+    }
+  }
+
+  app.get('/api/v1/expense-claims/:id/receipts', { preHandler: guard('expense.read') }, async req => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const claim = await inOrg(pool, 'expense_claims', id, u.orgId);
+    if (!u.permissions.includes('expense.read_all')
+        && String(claim.claimant_user_id) !== u.id && String(claim.requested_by) !== u.id) {
+      fail('FORBIDDEN', 'This claim belongs to someone else', 403);
+    }
+    const rows = (await pool.query(
+      `SELECT id, file_name, file_size, mime_type, checksum, created_at
+       FROM expense_receipts WHERE claim_id = $1 ORDER BY created_at DESC, id DESC`, [id])).rows;
+    return { data: rows };
+  });
+
+  app.post('/api/v1/expense-claims/:id/receipts', {
+    preHandler: guard('expense.manage'),
+    // The app-wide bodyLimit (createApp.ts) stays at 8 MiB for every other
+    // route; only this one decodes a base64 body that can legitimately run
+    // to ~13.3 MiB (MAX_RECEIPT_BYTES' 10 MiB), so only this one raises it
+    // (fix round 1, B-002 review).
+    bodyLimit: 15 * 1024 * 1024,
+  }, async (req, reply) => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const input = parse(expenseReceiptUploadSchema, req.body);
+    const row = await mutate(pool, req, 'expense.receipt.upload', 'expense_receipt', async db => {
+      const claim = await inOrg(db, 'expense_claims', id, u.orgId, true);
+      requireEditableForReceipts(claim);
+      requireClaimOwnerOrReadAll(u, claim);
+
+      const ext = input.file_name.split('.').pop()?.toLowerCase() ?? '';
+      if (!input.file_name.includes('.') || !(ALLOWED_RECEIPT_EXTENSIONS as readonly string[]).includes(ext)) {
+        fail('VALIDATION_ERROR', `Only ${ALLOWED_RECEIPT_EXTENSIONS.join(', ')} files are allowed`, 422);
+      }
+      const binary = decodeBase64Strict(input.content_base64);
+      if (binary.length > MAX_RECEIPT_BYTES) {
+        fail('VALIDATION_ERROR', 'File exceeds the 10MB limit', 422);
+      }
+      const count = (await db.query(
+        'SELECT count(*)::int AS n FROM expense_receipts WHERE claim_id = $1', [id])).rows[0].n;
+      if (count >= MAX_RECEIPTS_PER_CLAIM) {
+        fail('TOO_MANY_RECEIPTS', `A claim can carry at most ${MAX_RECEIPTS_PER_CLAIM} receipts`, 422);
+      }
+      await scanUpload(binary, ext, app.appConfig.nodeEnv === 'production');
+      const checksum = createHash('sha256').update(binary).digest('hex');
+      return (await db.query(
+        `INSERT INTO expense_receipts(org_id, claim_id, file_name, content_encrypted, file_size,
+           mime_type, checksum, created_by)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+         RETURNING id, file_name, file_size, mime_type, checksum, created_at`,
+        [u.orgId, id, input.file_name, encodeBlob(binary), binary.length,
+         RECEIPT_MIME_BY_EXT[ext] ?? 'application/octet-stream', checksum, u.id])).rows[0];
+    });
+    reply.code(201);
+    return { data: row };
+  });
+
+  app.get('/api/v1/expense-claims/:id/receipts/:receiptId/download',
+    { preHandler: guard('expense.read') }, async (req, reply) => {
+      const u = actor(req), { id, receiptId } = req.params as { id: string; receiptId: string };
+      const claim = await inOrg(pool, 'expense_claims', id, u.orgId);
+      if (!u.permissions.includes('expense.read_all')
+          && String(claim.claimant_user_id) !== u.id && String(claim.requested_by) !== u.id) {
+        fail('FORBIDDEN', 'This claim belongs to someone else', 403);
+      }
+      const row = (await pool.query(
+        'SELECT * FROM expense_receipts WHERE id = $1 AND claim_id = $2 AND org_id = $3',
+        [receiptId, id, u.orgId])).rows[0];
+      if (!row) fail('NOT_FOUND', 'Receipt not found', 404);
+      const content = await readBlob(row);
+      if (!content) fail('NOT_FOUND', 'Receipt content is no longer available', 404);
+      return reply
+        .header('Content-Type', row.mime_type ?? 'application/octet-stream')
+        .header('X-Content-Type-Options', 'nosniff')
+        .header('Content-Disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(row.file_name))
+        .send(content);
+    });
+
+  app.delete('/api/v1/expense-claims/:id/receipts/:receiptId', { preHandler: guard('expense.manage') }, async req => {
+    const u = actor(req), { id, receiptId } = req.params as { id: string; receiptId: string };
+    return {
+      data: await mutate(pool, req, 'expense.receipt.remove', 'expense_receipt', async db => {
+        const claim = await inOrg(db, 'expense_claims', id, u.orgId, true);
+        requireEditableForReceipts(claim);
+        requireClaimOwnerOrReadAll(u, claim);
+        const row = (await db.query(
+          'DELETE FROM expense_receipts WHERE id = $1 AND claim_id = $2 AND org_id = $3 RETURNING id',
+          [receiptId, id, u.orgId])).rows[0];
+        if (!row) fail('NOT_FOUND', 'Receipt not found', 404);
+        return { id: row.id, deleted: true };
+      }),
+    };
   });
 
   /* --------------------------------------------------------------- reporting */

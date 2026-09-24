@@ -18,6 +18,7 @@ import { Notice, Section, Stat } from '@/components/finance/Primitives';
 import { AgeingBar, AgeingBuckets, BucketCells, OutsideBuckets } from '@/components/finance/Ageing';
 import { day, money, businessToday } from '@/lib/finance';
 import { AGEING_BUCKETS, BUCKET_LABELS, msmeNote, type AgeingSummary } from '@/lib/ledgers';
+import { ExecutePaymentRunForm } from '@/components/payables/ExecutePaymentRunForm';
 
 type Row = Record<string, any>;
 
@@ -387,6 +388,7 @@ function PaymentRuns({ perms }: { perms: { permissions?: string[] } }) {
   const canApprove = hasPermission(perms, 'paymentrun.approve');
   const [open, setOpen] = React.useState<string | null>(null);
   const [creating, setCreating] = React.useState(false);
+  const [executing, setExecuting] = React.useState<Row | null>(null);
 
   const runs = useQuery({
     queryKey: ['payment-runs'],
@@ -449,11 +451,20 @@ function PaymentRuns({ perms }: { perms: { permissions?: string[] } }) {
                     <TD className="text-right tabular-nums">{r.line_count}</TD>
                     <TD className="text-right font-semibold tabular-nums">{money(r.total_amount)}</TD>
                     <TD>
-                      <Badge tone={r.status === 'APPROVED' ? 'success' : r.status === 'CANCELLED' ? 'neutral' : 'warning'}>
+                      <Badge tone={
+                        r.status === 'PAID' ? 'success'
+                          : r.status === 'APPROVED' ? 'success'
+                            : r.status === 'CANCELLED' ? 'neutral' : 'warning'
+                      }>
                         {String(r.status).toLowerCase()}
                       </Badge>
                       {r.approved_by_username ? (
                         <span className="ml-1 text-2xs text-text-subtle">by {r.approved_by_username}</span>
+                      ) : null}
+                      {r.status === 'PAID' ? (
+                        <div className="mt-0.5 text-2xs text-text-subtle">
+                          {day(r.paid_on)} &middot; ref {r.bank_reference}
+                        </div>
                       ) : null}
                     </TD>
                     <TD className="space-x-1 text-right">
@@ -472,6 +483,11 @@ function PaymentRuns({ perms }: { perms: { permissions?: string[] } }) {
                           onClick={() => decide.mutate({ id: String(r.id), version: r.version, action: 'APPROVE' })}
                         >
                           Release
+                        </Button>
+                      ) : null}
+                      {canApprove && r.status === 'APPROVED' ? (
+                        <Button type="button" variant="secondary" onClick={() => setExecuting(r)}>
+                          Execute payment
                         </Button>
                       ) : null}
                     </TD>
@@ -497,6 +513,15 @@ function PaymentRuns({ perms }: { perms: { permissions?: string[] } }) {
           Releasing needs <code>paymentrun.approve</code>, and in any case the person who built a
           run cannot release it. Somebody else has to look at the batch before the money leaves.
         </Notice>
+      ) : null}
+
+      {executing ? (
+        <ExecutePaymentRunForm
+          runId={String(executing.id)}
+          version={Number(executing.version)}
+          onClose={() => setExecuting(null)}
+          onDone={() => { setExecuting(null); void qc.invalidateQueries({ queryKey: ['payment-runs'] }); }}
+        />
       ) : null}
     </div>
   );

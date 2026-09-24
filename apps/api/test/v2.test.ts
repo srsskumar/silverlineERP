@@ -40,10 +40,52 @@ describe('inventory integrity',()=>{
  it('calculates invoice totals using decimal arithmetic',async()=>{
   const v=(await call('POST','vendors',{code:'V1',name:'Vendor'})).json();const r=await call('POST','invoices',{serial_number:'INV',vendor_id:v.id,hsn:'1234',gst_enabled:true,gst_rate:'18',subtotal:'0.10',payment_mode:'BANK',reference:'PO'});expect(r.statusCode).toBe(201);expect(r.json().total).toBe('0.1200');
  });
+ it('links an invoice to the purchase order it bills against — B-014',async()=>{
+  // invoiceSchema had no purchase_order_id field, so a vendor invoice could
+  // never be linked to its PO through the API and POST /invoices/:id/match
+  // always 422ed with NO_PURCHASE_ORDER, even for a real invoice on a real
+  // order.
+  const v=(await call('POST','vendors',{code:'V2',name:'Vendor Two'})).json();
+  const po=(await call('POST','purchase-orders',{po_number:'PO-LINK-1',vendor_id:v.id,po_date:'2026-09-15',lines:[{description:'Cement',unit:'bag',quantity:10,unit_rate:400}]})).json().data;
+  const inv=await call('POST','invoices',{serial_number:'INV-LINK-1',vendor_id:v.id,hsn:'1234',gst_enabled:false,gst_rate:'0',subtotal:'4000',payment_mode:'BANK',reference:'PO-LINK-1',purchase_order_id:po.id});
+  expect(inv.statusCode).toBe(201);
+  expect(inv.json().purchase_order_id).toBe(po.id);
+  const stored=await pool.query('SELECT purchase_order_id FROM invoices WHERE id=$1',[inv.json().id]);
+  expect(stored.rows[0].purchase_order_id).toBe(po.id);
+  const match=await call('POST',`invoices/${inv.json().id}/match`,{});
+  expect(match.json().code).not.toBe('NO_PURCHASE_ORDER');
+ });
+ it('refuses an invoice linked to another vendor\'s purchase order — B-021',async()=>{
+  // purchase_order_id was checked for org membership but never against the
+  // invoice's own vendor_id, so an invoice could link to a PO belonging to
+  // a different vendor entirely.
+  const vendorA=(await call('POST','vendors',{code:'VA',name:'Vendor A'})).json();
+  const vendorB=(await call('POST','vendors',{code:'VB',name:'Vendor B'})).json();
+  const po=(await call('POST','purchase-orders',{po_number:'PO-VMIS-1',vendor_id:vendorA.id,po_date:'2026-09-15',lines:[{description:'Cement',unit:'bag',quantity:10,unit_rate:400}]})).json().data;
+  const inv=await call('POST','invoices',{serial_number:'INV-VMIS-1',vendor_id:vendorB.id,hsn:'1234',gst_enabled:false,gst_rate:'0',subtotal:'4000',payment_mode:'BANK',reference:'PO-VMIS-1',purchase_order_id:po.id});
+  expect(inv.statusCode).toBe(422);
+  expect(inv.json().code).toBe('PO_VENDOR_MISMATCH');
+  const stored=await pool.query('SELECT count(*) FROM invoices WHERE serial_number=$1',['INV-VMIS-1']);
+  expect(Number(stored.rows[0].count)).toBe(0);
+ });
  it('rejects cross-organization references',async()=>{
   const other=(await pool.query("INSERT INTO organizations(name) VALUES('Other') RETURNING id")).rows[0].id;
   const v=(await pool.query("INSERT INTO vendors(org_id,code,name) VALUES($1,'X','Foreign') RETURNING id",[other])).rows[0].id;
   expect((await call('POST','inventory/items',{code:'X',name:'X',unit:'u',vendor_id:v})).statusCode).toBe(404);
+ });
+ it("does not silently reactivate an item on an unrelated PATCH — B-024",async()=>{
+  // The web edit form (apps/web/app/inventory/page.tsx's itemFields) never
+  // sends `status` -- it only has code/name/unit/low_stock_threshold/
+  // unit_cost/vendor_id. The generic PATCH route (inventory/routes.ts)
+  // parses PATCH bodies with the same schema used for POST create, which
+  // defaults status to ACTIVE, so any edit that omits status resets it.
+  const item=(await call('POST','inventory/items',{code:'REACT-1',name:'Reactivation bait',unit:'unit'})).json();
+  const deactivated=await call('PATCH',`inventory/items/${item.id}`,{code:item.code,name:item.name,unit:item.unit,low_stock_threshold:item.low_stock_threshold,unit_cost:item.unit_cost,status:'INACTIVE'},{'if-match':String(item.version)});
+  expect(deactivated.statusCode,JSON.stringify(deactivated.json())).toBe(200);
+  expect(deactivated.json().status).toBe('INACTIVE');
+  const edited=await call('PATCH',`inventory/items/${item.id}`,{code:item.code,name:item.name+' v2',unit:item.unit,low_stock_threshold:item.low_stock_threshold,unit_cost:item.unit_cost},{'if-match':String(deactivated.json().version)});
+  expect(edited.statusCode,JSON.stringify(edited.json())).toBe(200);
+  expect(edited.json().status).toBe('INACTIVE');
  });
 });
 describe('assets',()=>{

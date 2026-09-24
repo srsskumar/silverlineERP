@@ -192,6 +192,26 @@ describe("maker-checker and sequence", () => {
     expect(decision.status).toBe(422);
     expect(decision.body.code).toBe("NOT_THE_APPROVER");
   });
+
+  it("says whose version If-Match wants when it's missing or wrong — B-015", async () => {
+    // A caller deciding a document's approval naturally reaches for the
+    // document's own version (the one it already has in hand), but this
+    // route wants the approval instance's version instead. Task 2's seed
+    // script got this wrong on first try; the message should say so rather
+    // than a bare "If-Match must contain the current version".
+    const res = await submit(20_000);
+    const missing = await post(w.role.TEAM_LEAD,
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(missing.status).toBe(422);
+    expect(missing.body.code).toBe("VERSION_REQUIRED");
+    expect(missing.body.message).toContain("approval request");
+
+    const wrong = await post({ ...w.role.TEAM_LEAD, "if-match": "999" },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(wrong.status).toBe(409);
+    expect(wrong.body.code).toBe("VERSION_CONFLICT");
+    expect(wrong.body.message).toContain("approval request");
+  });
 });
 
 describe("re-routing when the amount moves", () => {
@@ -414,5 +434,19 @@ describe("role boundaries", () => {
 
   it("keeps the Client Viewer out entirely", async () => {
     expect((await get(w.role.CLIENT_VIEWER, "/api/v1/approval-policies")).status).toBe(403);
+  });
+});
+
+describe("empty body never 500s — B-020", () => {
+  it("answers an empty JSON body on POST /approvals with 4xx, never a 500", async () => {
+    // createApp.ts's content-type parser (B-016) maps an empty body sent
+    // with Content-Type: application/json to a value the route can read
+    // without throwing. Line 200-201 reads body.document_type/document_id/
+    // amount straight off req.body, which used to be `undefined` here and
+    // 500 instead of the intended "required" validation error.
+    const res = await post(
+      { ...w.role.EMPLOYEE, "content-type": "application/json" }, "/api/v1/approvals");
+    expect(res.status, JSON.stringify(res.body)).toBeLessThan(500);
+    expect(res.status).toBeGreaterThanOrEqual(400);
   });
 });

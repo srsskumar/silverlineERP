@@ -19,6 +19,8 @@ import { day, money, moneyIndian, percent, utilisationWidth } from '@/lib/financ
 import { useToast } from '@/components/ui/Toast';
 import { messageOf } from '@/lib/form-errors';
 import { RequireDestination } from '@/components/RequirePermission';
+import { NewRaBill } from '@/components/billing/NewRaBillForm';
+import { NewAdvance } from '@/components/billing/NewAdvanceForm';
 
 type Row = Record<string, any>;
 type Tab = 'bills' | 'boq' | 'measured' | 'retention' | 'cost';
@@ -50,6 +52,10 @@ export default function BillingPage() {
   const [projectId, setProjectId] = React.useState('');
   const [tab, setTab] = React.useState<Tab>('bills');
   const [selectedBill, setSelectedBill] = React.useState<string | null>(null);
+  const [creatingBill, setCreatingBill] = React.useState(false);
+  const [creatingAdvance, setCreatingAdvance] = React.useState(false);
+  const canManageBill = hasPermission(perms, 'rabill.manage');
+  const client = useQueryClient();
 
   const projects = useQuery({
     queryKey: ['projects', 'for-billing'],
@@ -81,6 +87,14 @@ export default function BillingPage() {
       <PageHeader
         title="Project finance"
         description="Billed, withheld, spent — and whether the job is still making anything."
+        actions={
+          canManageBill && projectId ? (
+            <>
+              <Button onClick={() => setCreatingBill(true)}>New RA bill</Button>
+              <Button variant="secondary" onClick={() => setCreatingAdvance(true)}>New advance</Button>
+            </>
+          ) : null
+        }
       />
 
       <PageBody>
@@ -131,6 +145,22 @@ export default function BillingPage() {
 
       {selectedBill ? (
         <BillDetail id={selectedBill} onClose={() => setSelectedBill(null)} />
+      ) : null}
+
+      {creatingBill && projectId ? (
+        <NewRaBill
+          projectId={projectId}
+          onClose={() => setCreatingBill(false)}
+          onCreated={(id) => {
+            setCreatingBill(false);
+            void client.invalidateQueries({ queryKey: ['ra-bills', projectId] });
+            setTab('bills');
+            setSelectedBill(id);
+          }}
+        />
+      ) : null}
+      {creatingAdvance && projectId ? (
+        <NewAdvance projectId={projectId} onClose={() => setCreatingAdvance(false)} />
       ) : null}
     </AppShell>
   );
@@ -1041,3 +1071,4 @@ function BoqLinks({
     </Section>
   );
 }
+

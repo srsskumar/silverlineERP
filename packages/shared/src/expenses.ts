@@ -573,3 +573,28 @@ export const reimbursementSchema = z.object({
   reference: z.string().trim().max(100).optional(),
   notes: z.string().trim().max(1000).optional(),
 });
+
+/* -------------------------------------------------------- receipt uploads */
+
+/**
+ * POST /api/v1/expense-claims/:id/receipts (B-003).
+ *
+ * Same base64-body shape as the S1 employee-document and S4 task-evidence
+ * uploads: a local runtime cannot hand the API a multipart stream and a
+ * signed URL both, so every upload in this codebase goes over JSON.
+ */
+export const expenseReceiptUploadSchema = z.object({
+  file_name: z.string().min(1, 'file_name is required').max(255),
+  content_base64: z.string().min(1, 'content_base64 is required'),
+});
+
+export type ExpenseReceiptUploadInput = z.infer<typeof expenseReceiptUploadSchema>;
+
+/** image/jpeg, image/png, application/pdf — matched on file extension. */
+export const ALLOWED_RECEIPT_EXTENSIONS = ['pdf', 'jpg', 'jpeg', 'png'] as const;
+
+/** A receipt caps at 10 MiB of decoded binary. */
+export const MAX_RECEIPT_BYTES = 10 * 1024 * 1024;
+
+/** At most five receipts on one claim. */
+export const MAX_RECEIPTS_PER_CLAIM = 5;

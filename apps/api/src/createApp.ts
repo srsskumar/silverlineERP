@@ -57,7 +57,11 @@ export async function buildApp(
   const pool = transactionPool(options.pool ?? createPool(config.databaseUrl));
 
   // 8 MiB: large enough for the S1 5 MiB document cap to be enforced by
-  // the route (422) instead of the framework (413).
+  // the route (422) instead of the framework (413). Left at 8 MiB globally
+  // (fix round 1, B-002 review) rather than raised for every route,
+  // authenticated or not, just to fit B-003's 10 MiB receipt cap — that
+  // route alone raises its own `bodyLimit` (see the receipts POST route in
+  // expenses/routes.ts).
   const logger = config.nodeEnv === "test"
     ? false
     : {
@@ -77,6 +81,40 @@ export async function buildApp(
     // Who may say where a request came from: see ApiConfig.trustProxy. Every
     // per-address limit and every audit row's actor_ip depends on it.
     trustProxy: config.trustProxy,
+  });
+  // Fastify's default JSON parser throws on an empty body sent with
+  // Content-Type: application/json, and the mobile client (unlike web) sets
+  // that header on every request whether or not it carries a body -- a
+  // bodyless DELETE from it hit that throw and came back as a generic 400
+  // "Bad request", before the route's own permission or business checks
+  // ever ran (B-016). Treat an empty JSON body as an empty object, not
+  // `undefined`: about fifteen handlers do `const body = req.body as
+  // {...}` and read a property straight off it with no null check (e.g.
+  // procurement's `/purchase-orders/:id/status`, approvals' `POST
+  // /approvals`) -- `undefined` made that a TypeError, which surfaced as a
+  // 500, worse than the 400 this was meant to fix (B-020). `{}` reads back
+  // as every optional field being absent, which every one of those
+  // handlers already handles as a validation failure, and zod's own
+  // `parse()` rejects a required field missing from `{}` exactly as it
+  // would from `undefined`. A real JSON payload still parses (and still
+  // fails loudly if it is malformed).
+  // Fastify's own default JSON parser already guards against prototype
+  // pollution (via the secure-json-parse dependency it ships with) -- the
+  // plain JSON.parse this used to call did not carry that check over, and a
+  // `"__proto__"`/`"constructor"` key in a body reached zod instead of being
+  // refused at the parser (fix round 1, B-027: a real regression, not the
+  // INFO it was first logged as). `getDefaultJsonParser('error','error')`
+  // is that same secure parser Fastify would have installed itself; only the
+  // empty-body case is still handled here, ahead of it, for B-016/B-020.
+  // Cast to its actual (synchronous, done-callback) shape: getDefaultJsonParser's
+  // declared return type is a union with an async no-done alternative Fastify's
+  // own implementation never returns, and TypeScript cannot call a union of
+  // differing call signatures without this.
+  const secureJsonParser = app.getDefaultJsonParser('error', 'error') as
+    (req: unknown, body: string, done: (err: Error | null, body?: unknown) => void) => void;
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+    if (body === '' || body === undefined) { done(null, {}); return; }
+    secureJsonParser(req, body as string, done);
   });
   await registerRequestId(app);
   await registerErrorHandler(app);

@@ -16,6 +16,10 @@ import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Field, Notice, RecordSheet, Section, StatusBadge, Stat } from '@/components/finance/Primitives';
 import { day, money, financialTone } from '@/lib/finance';
+import { NewRequisition } from '@/components/procurement/NewRequisitionForm';
+import { NewPurchaseOrder } from '@/components/procurement/NewPurchaseOrderForm';
+import { NewGrn } from '@/components/procurement/NewGrnForm';
+import { NewRfq } from '@/components/procurement/NewRfqForm';
 
 type Row = Record<string, any>;
 type Tab = 'requisitions' | 'orders' | 'rfqs' | 'returns';
@@ -34,7 +38,15 @@ export default function ProcurementPage() {
   const [tab, setTab] = React.useState<Tab>('requisitions');
   const [selected, setSelected] = React.useState<{ kind: Tab; id: string } | null>(null);
   const [status, setStatus] = React.useState('');
+  const [creatingRequisition, setCreatingRequisition] = React.useState(false);
+  const [orderPrefill, setOrderPrefill] = React.useState<{ requisitionId: string } | null>(null);
+  const [creatingOrder, setCreatingOrder] = React.useState(false);
+  const [creatingRfq, setCreatingRfq] = React.useState(false);
   const client = useQueryClient();
+
+  const canManageRequisition = hasPermission(perms, 'requisition.manage');
+  const canManagePo = hasPermission(perms, 'po.manage');
+  const canManageRfq = hasPermission(perms, 'rfq.manage');
 
   React.useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -78,6 +90,21 @@ export default function ProcurementPage() {
       <PageHeader
         title="Procurement"
         description="Requisition to order to receipt, and the bill checked against both."
+        actions={
+          <>
+            {canManageRequisition ? (
+              <Button onClick={() => setCreatingRequisition(true)}>New requisition</Button>
+            ) : null}
+            {canManagePo ? (
+              <Button variant="secondary" onClick={() => { setOrderPrefill(null); setCreatingOrder(true); }}>
+                New order
+              </Button>
+            ) : null}
+            {canManageRfq ? (
+              <Button variant="secondary" onClick={() => setCreatingRfq(true)}>New RFQ</Button>
+            ) : null}
+          </>
+        }
       />
 
       <PageBody>
@@ -234,13 +261,49 @@ export default function ProcurementPage() {
       </PageBody>
 
       {selected?.kind === 'requisitions' ? (
-        <RequisitionDetail id={selected.id} onClose={() => setSelected(null)} onChanged={refresh} />
+        <RequisitionDetail
+          id={selected.id}
+          onClose={() => setSelected(null)}
+          onChanged={refresh}
+          onCreateOrder={canManagePo ? (requisitionId) => {
+            setSelected(null);
+            setOrderPrefill({ requisitionId });
+            setCreatingOrder(true);
+          } : undefined}
+        />
       ) : null}
       {selected?.kind === 'orders' ? (
-        <OrderDetail id={selected.id} onClose={() => setSelected(null)} onChanged={refresh} />
+        <OrderDetail
+          id={selected.id}
+          onClose={() => setSelected(null)}
+          onChanged={refresh}
+        />
       ) : null}
       {selected?.kind === 'rfqs' ? (
         <RfqDetail id={selected.id} onClose={() => setSelected(null)} onChanged={refresh} />
+      ) : null}
+
+      {creatingRequisition ? (
+        <NewRequisition
+          onClose={() => setCreatingRequisition(false)}
+          onCreated={(id) => { refresh(); setCreatingRequisition(false); setSelected({ kind: 'requisitions', id }); }}
+        />
+      ) : null}
+      {creatingOrder ? (
+        <NewPurchaseOrder
+          prefillRequisitionId={orderPrefill?.requisitionId}
+          onClose={() => { setCreatingOrder(false); setOrderPrefill(null); }}
+          onCreated={(id) => {
+            refresh(); setCreatingOrder(false); setOrderPrefill(null);
+            setTab('orders'); setSelected({ kind: 'orders', id });
+          }}
+        />
+      ) : null}
+      {creatingRfq ? (
+        <NewRfq
+          onClose={() => setCreatingRfq(false)}
+          onCreated={(id) => { refresh(); setCreatingRfq(false); setTab('rfqs'); setSelected({ kind: 'rfqs', id }); }}
+        />
       ) : null}
     </AppShell>
   );
@@ -248,7 +311,11 @@ export default function ProcurementPage() {
 
 /* ----------------------------------------------------------- requisition */
 
-function RequisitionDetail({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
+function RequisitionDetail({
+  id, onClose, onChanged, onCreateOrder,
+}: {
+  id: string; onClose: () => void; onChanged: () => void; onCreateOrder?: (requisitionId: string) => void;
+}) {
   const [error, setError] = React.useState<unknown>(null);
   const detail = useQuery({
     queryKey: ['requisition', id],
@@ -361,6 +428,15 @@ function RequisitionDetail({ id, onClose, onChanged }: { id: string; onClose: ()
               </p>
             </Section>
           ) : null}
+
+          {onCreateOrder && r.status === 'APPROVED' ? (
+            <Section title="Actions">
+              <Button onClick={() => onCreateOrder(id)}>Create order from this requisition</Button>
+              <p className="mt-1.5 text-2xs text-text-subtle">
+                Its lines are carried over; an order that goes beyond them needs an override reason.
+              </p>
+            </Section>
+          ) : null}
         </>
       )}
     </RecordSheet>
@@ -372,7 +448,9 @@ function RequisitionDetail({ id, onClose, onChanged }: { id: string; onClose: ()
 function OrderDetail({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
   const { session } = useAuth();
   const canManage = hasPermission({ permissions: session?.permissions }, 'po.manage');
+  const canManageGrn = hasPermission({ permissions: session?.permissions }, 'grn.manage');
   const [error, setError] = React.useState<unknown>(null);
+  const [recordingGrn, setRecordingGrn] = React.useState(false);
 
   const detail = useQuery({
     queryKey: ['purchase-order', id],
@@ -540,6 +618,15 @@ function OrderDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
 
           {error ? <div className="mt-4"><ErrorCard error={error} /></div> : null}
 
+          {canManageGrn && ['APPROVED', 'SENT', 'PARTIALLY_RECEIVED'].includes(String(po.status)) ? (
+            <Section title="Receipt">
+              <Button variant="secondary" onClick={() => setRecordingGrn(true)}>Record goods receipt</Button>
+              <p className="mt-1.5 text-2xs text-text-subtle">
+                Received quantity is always summed from GRNs — nothing here keeps a running total on the line.
+              </p>
+            </Section>
+          ) : null}
+
           {canManage ? (
             <Section title="Move to">
               <div className="flex flex-wrap gap-2">
@@ -563,6 +650,16 @@ function OrderDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
           ) : null}
         </>
       )}
+
+      {recordingGrn && po ? (
+        <NewGrn
+          purchaseOrderId={id}
+          poNumber={po.po_number}
+          lines={lines}
+          onClose={() => setRecordingGrn(false)}
+          onCreated={() => { setRecordingGrn(false); after(); }}
+        />
+      ) : null}
     </RecordSheet>
   );
 }
@@ -753,3 +850,4 @@ function RfqDetail({ id, onClose, onChanged }: { id: string; onClose: () => void
     </RecordSheet>
   );
 }
+

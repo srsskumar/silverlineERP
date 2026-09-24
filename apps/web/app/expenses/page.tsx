@@ -16,9 +16,33 @@ import { Badge } from '@/components/ui/Badge';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Field, Notice, RecordSheet, Section, StatusBadge, Stat } from '@/components/finance/Primitives';
+import { DownloadButton } from '@/components/DownloadButton';
 import {
   categoryLabel, creditBlockLabel, day, money, percent, PAYMENT_MODES,
   EXPENSE_CATEGORY_LABELS, businessToday } from '@/lib/finance';
+
+/** image/jpeg, image/png, application/pdf — matches ALLOWED_RECEIPT_EXTENSIONS. */
+const RECEIPT_ACCEPT = 'image/jpeg,image/png,application/pdf';
+const MAX_RECEIPT_BYTES = 10 * 1024 * 1024;
+
+/** A File to the base64 body the upload route wants, stripped of its data: prefix. */
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read the file'));
+    reader.onload = () => {
+      const result = String(reader.result ?? '');
+      resolve(result.slice(result.indexOf(',') + 1));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 type Row = Record<string, any>;
 
@@ -227,6 +251,8 @@ function ClaimDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
   const [reason, setReason] = React.useState('');
   const [overrideReason, setOverrideReason] = React.useState('');
   const [payment, setPayment] = React.useState({ amount: '', paid_on: businessToday(), mode: 'NEFT', reference: '' });
+  const [receiptError, setReceiptError] = React.useState<unknown>(null);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const detail = useQuery({
     queryKey: ['expense-claim', id],
@@ -235,6 +261,30 @@ function ClaimDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
   const c = detail.data;
   const version = () => ({ 'If-Match': String(c!.version) });
   const after = () => { setError(null); setReason(''); setOverrideReason(''); void detail.refetch(); onChanged(); };
+
+  const receipts = useQuery({
+    queryKey: ['expense-claim-receipts', id],
+    queryFn: async () => (await apiRequest<Row[]>(`/api/v1/expense-claims/${id}/receipts`)).data,
+  });
+
+  const uploadReceipt = useMutation({
+    mutationFn: async (file: File) => {
+      if (file.size > MAX_RECEIPT_BYTES) throw new Error('File exceeds the 10MB limit');
+      const content_base64 = await readFileAsBase64(file);
+      return apiRequest(`/api/v1/expense-claims/${id}/receipts`, {
+        method: 'POST', body: { file_name: file.name, content_base64 },
+      });
+    },
+    onSuccess: () => { setReceiptError(null); void receipts.refetch(); },
+    onError: setReceiptError,
+  });
+
+  const removeReceipt = useMutation({
+    mutationFn: async (receiptId: string) =>
+      apiRequest(`/api/v1/expense-claims/${id}/receipts/${receiptId}`, { method: 'DELETE' }),
+    onSuccess: () => { setReceiptError(null); void receipts.refetch(); },
+    onError: setReceiptError,
+  });
 
   const submit = useMutation({
     mutationFn: async () =>
@@ -384,6 +434,61 @@ function ClaimDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
                 </TBody>
               </Table>
             </TableWrap>
+          </Section>
+
+          <Section title="Receipts">
+            {receipts.isLoading ? <Skeleton className="h-10 w-full" /> : null}
+            {receipts.data?.length ? (
+              <ul className="space-y-1.5 text-xs">
+                {receipts.data.map((r) => (
+                  <li key={String(r.id)} className="flex items-center justify-between gap-2">
+                    <span className="text-text-muted">
+                      {r.file_name}
+                      <span className="ml-1 text-2xs text-text-subtle">{formatBytes(Number(r.file_size))}</span>
+                    </span>
+                    <span className="flex items-center gap-2">
+                      <DownloadButton
+                        path={`/api/v1/expense-claims/${id}/receipts/${r.id}/download`}
+                        name={r.file_name}
+                        label="View"
+                      />
+                      {['DRAFT', 'SUBMITTED'].includes(String(c.status)) && isOwn ? (
+                        <Button
+                          variant="ghost"
+                          loading={removeReceipt.isPending}
+                          onClick={() => removeReceipt.mutate(String(r.id))}
+                        >
+                          Remove
+                        </Button>
+                      ) : null}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xs text-text-subtle">No receipts attached yet.</p>
+            )}
+
+            {['DRAFT', 'SUBMITTED'].includes(String(c.status)) && isOwn ? (
+              <div className="mt-3">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept={RECEIPT_ACCEPT}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) uploadReceipt.mutate(file);
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                  }}
+                />
+                <p className="mt-1 text-2xs text-text-subtle">
+                  JPEG, PNG or PDF, up to 10MB each, at most 5 receipts per claim.
+                </p>
+                {uploadReceipt.isPending ? <p className="text-2xs text-text-subtle">Uploading…</p> : null}
+              </div>
+            ) : null}
+
+            {receiptError ? <div className="mt-2"><ErrorCard error={receiptError} /></div> : null}
           </Section>
 
           {c.approval ? (

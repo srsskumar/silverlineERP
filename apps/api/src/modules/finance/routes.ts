@@ -3,13 +3,15 @@ import type { Pool, PoolClient } from 'pg';
 import {
   paymentSchema, paymentAllocationSchema, financialPeriodSchema, periodClosureSchema,
   bankImportSchema, invoiceStatusSchema, disputeSchema,
-  settlementPosition, unallocated, checkAllocation, periodAllows, findPeriodOverlap,
+  settlementPosition, unallocated, checkAllocation, findPeriodOverlap,
   reconcileImport, INVOICE_TRANSITIONS,
-  type FinancialPeriod, type AllocationLine, type InvoiceLifecycle,
+  type AllocationLine, type InvoiceLifecycle,
   businessDay,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
-import { actor, parse, page, inOrg, mutate, version, fail, projectAccess } from '../../common/domain.js';
+import {
+  actor, parse, page, inOrg, mutate, version, fail, projectAccess, periodsFor, guardPeriod,
+} from '../../common/domain.js';
 
 /**
  * Financial control (§45).
@@ -26,25 +28,10 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
   const iso = (v: unknown) =>
     v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10);
 
-  async function periodsFor(db: Pool | PoolClient, orgId: string): Promise<FinancialPeriod[]> {
-    return (await db.query(
-      'SELECT code, starts_on, ends_on, status FROM financial_periods WHERE org_id = $1', [orgId]))
-      .rows.map(r => ({
-        code: String(r.code),
-        startsOn: iso(r.starts_on),
-        endsOn: iso(r.ends_on),
-        status: r.status as 'OPEN' | 'CLOSED',
-      }));
-  }
-
-  /** Refuse a document dated into a closed period unless the actor may override. */
-  async function guardPeriod(db: Pool | PoolClient, req: Parameters<typeof actor>[0], date: string) {
-    const u = actor(req);
-    const verdict = periodAllows(await periodsFor(db, u.orgId), date, {
-      hasOverride: u.permissions.includes('period.override'),
-    });
-    if (!verdict.allowed) fail(verdict.code, verdict.reason);
-  }
+  // periodsFor/guardPeriod moved to common/domain.js (fix round 1, B-002
+  // review): the payment-run execute route needed the identical closed-
+  // period check and was a separate module, not something a closure here
+  // could reach.
 
   /** Live allocations against a document, in the shape the pure layer wants. */
   async function allocationsFor(

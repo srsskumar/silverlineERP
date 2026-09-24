@@ -313,7 +313,13 @@ export async function apiFetch<T>(
 
   const requestId =
     res.headers.get("x-request-id") ?? res.headers.get("x-requestId");
-  if(res.ok&&res.headers.get("content-type")?.includes("application/pdf")){return {data:new Uint8Array(await res.arrayBuffer()) as T,requestId,status:res.status};}
+  // Binary bodies: report PDFs (the original case) and, since B-003, an
+  // expense receipt's own bytes, which can just as well be a photographed
+  // JPEG or PNG as a scanned PDF.
+  const contentType = res.headers.get("content-type") ?? "";
+  if (res.ok && ["application/pdf", "image/jpeg", "image/png"].some((t) => contentType.includes(t))) {
+    return { data: new Uint8Array(await res.arrayBuffer()) as T, requestId, status: res.status };
+  }
   const json = (await res.json().catch(() => null)) as unknown;
 
   if (!res.ok) {

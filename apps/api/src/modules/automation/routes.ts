@@ -21,7 +21,10 @@ export async function registerAutomationRoutes(app:FastifyInstance,opts:{pool:Po
   for(const a of i.actions)if(!u.permissions.includes(permissions[a.type]))fail('FORBIDDEN',`Missing ${permissions[a.type]} for this action`,403);
   const row=await mutate(pool,req,'automation.create','automation_rule',async db=>(await db.query('INSERT INTO automation_rules(org_id,project_id,name,trigger,conditions,actions,active,created_by,acting_user_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$8) RETURNING *',[u.orgId,i.project_id??null,i.name,i.trigger,JSON.stringify(i.conditions),JSON.stringify(i.actions),i.active,u.id])).rows[0]);return reply.code(201).send(row);
  });
- app.get('/api/v1/automation-rules/:id',{preHandler:guard('automation.manage')},async req=>{
+ // Reading one rule is a read, matching the list and its executions --
+ // 'automation.manage' here (B-001) meant a plain viewer could see the rule
+ // in the list but got 403 opening it.
+ app.get('/api/v1/automation-rules/:id',{preHandler:guard('automation.read')},async req=>{
   const u=actor(req),row=await inOrg(pool,'automation_rules',(req.params as {id:string}).id,u.orgId);
   if(row.project_id)await projectAccess(pool,req,row.project_id);else if(!resolveScopes(u.scopes).global)fail('FORBIDDEN','Organization rule requires organization-wide permission',403);
   return row;

@@ -361,6 +361,8 @@ export const projectPatchSchema = z
     project_kind: projectKindSchema.optional(),
     client_id: z.string().uuid("client_id must be a UUID").optional(),
     project_category_id: z.string().uuid("project_category_id must be a UUID").optional(),
+    project_type_id: z.string().uuid("project_type_id must be a UUID").optional(),
+    project_manager_id: z.string().uuid("project_manager_id must be a UUID").optional(),
     contract_value: z.coerce.number().finite().min(0).optional(),
     contract_gst_included: z.boolean().optional(),
     contract_gst_rate: z.coerce.number().min(0).max(28).optional(),

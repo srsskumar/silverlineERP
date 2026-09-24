@@ -1563,6 +1563,32 @@ describe("E2E-24 automation tries invalid assignment or status transition", () =
   });
 });
 
+describe("automation rule detail read gate — B-019", () => {
+  it("lets a read-only holder open a rule's detail, same as the list and its executions", async () => {
+    // GET /automation-rules and GET /automation-rules/:id/executions both
+    // gate on automation.read; GET /automation-rules/:id gated on
+    // automation.manage instead, so a plain viewer could see a rule in the
+    // list but got 403 opening it -- seeded as B-001 in the QA sweep ledger.
+    const ruleId = await post(w.app, w.admin, "/api/v1/automation-rules", {
+      name: `Read gate ${uniq()}`,
+      trigger: "task.create",
+      conditions: [],
+      actions: [{ type: "status", value: "DONE" }],
+      active: true,
+    });
+
+    const list = await w.app.inject({
+      method: "GET", url: "/api/v1/automation-rules", headers: w.role.AUDITOR,
+    });
+    expect(list.statusCode, JSON.stringify(list.json())).toBe(200);
+
+    const detail = await w.app.inject({
+      method: "GET", url: `/api/v1/automation-rules/${ruleId}`, headers: w.role.AUDITOR,
+    });
+    expect(detail.statusCode, JSON.stringify(detail.json())).toBe(200);
+  });
+});
+
 describe("E2E-25 comment mentions user and SLA crosses threshold", () => {
   it("persists and deduplicates inbox items even when the external adapter fails", async () => {
     const projectId = await post(w.app, w.admin, "/api/v1/projects", {

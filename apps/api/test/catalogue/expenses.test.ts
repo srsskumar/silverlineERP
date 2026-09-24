@@ -9,11 +9,14 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createServer, type Server } from "node:net";
 import { buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
 
 let w: CatalogueWorld;
 
-async function send(method: "POST" | "GET" | "PUT" | "PATCH", headers: Headers, url: string, payload?: unknown) {
+async function send(
+  method: "POST" | "GET" | "PUT" | "PATCH" | "DELETE", headers: Headers, url: string, payload?: unknown,
+) {
   const res = await w.app.inject({
     method, url,
     headers: { ...headers, ...(method === "GET" ? {} : idem()) },
@@ -26,6 +29,7 @@ async function send(method: "POST" | "GET" | "PUT" | "PATCH", headers: Headers, 
 const post = (h: Headers, u: string, p?: unknown) => send("POST", h, u, p);
 const get = (h: Headers, u: string) => send("GET", h, u);
 const put = (h: Headers, u: string, p?: unknown) => send("PUT", h, u, p);
+const del = (h: Headers, u: string) => send("DELETE", h, u);
 
 async function ver(table: string, id: string): Promise<Headers> {
   const r = await w.pool.query(`SELECT version FROM ${table} WHERE id = $1`, [id]);
@@ -649,5 +653,199 @@ describe("tenant isolation", () => {
   it("will not read another organisation's cost position", async () => {
     const res = await get(w.other.admin, `/api/v1/projects/${w.activeProject}/cost-position`);
     expect(res.status).toBe(404);
+  });
+});
+
+describe("expense receipts (B-003)", () => {
+  const PNG = Buffer.from("89504e470d0a1a0a", "hex");
+  const png = (extra = "payload") => Buffer.concat([PNG, Buffer.from(extra)]).toString("base64");
+
+  async function draftClaim() {
+    return makeClaim(
+      [{ category: "TRAVEL", expense_date: "2026-05-01", description: "Taxi", amount: 300 }],
+    );
+  }
+
+  it("attaches a receipt while the claim is a draft, lists it and downloads it back", async () => {
+    const claim = await draftClaim();
+    const upload = await post(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
+      file_name: "taxi-bill.png", content_base64: png(),
+    });
+    expect(upload.status, JSON.stringify(upload.body)).toBe(201);
+    expect(upload.data.file_name).toBe("taxi-bill.png");
+    expect(upload.data.mime_type).toBe("image/png");
+
+    const list = await get(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`);
+    expect(list.status, JSON.stringify(list.body)).toBe(200);
+    expect(list.data).toHaveLength(1);
+    expect(list.data[0].id).toBe(upload.data.id);
+
+    const download = await w.app.inject({
+      method: "GET", url: `/api/v1/expense-claims/${claim.id}/receipts/${upload.data.id}/download`,
+      headers: w.directUser,
+    });
+    expect(download.statusCode).toBe(200);
+    expect(download.headers["content-type"]).toBe("image/png");
+    expect(download.rawPayload.equals(Buffer.concat([PNG, Buffer.from("payload")]))).toBe(true);
+  });
+
+  it("still takes a receipt once the claim has been submitted", async () => {
+    const claim = await draftClaim();
+    await post({ ...w.directUser, ...(await ver("expense_claims", claim.id)) },
+      `/api/v1/expense-claims/${claim.id}/submit`, {});
+    const upload = await post(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
+      file_name: "late.pdf", content_base64: Buffer.concat([Buffer.from("%PDF-1.4")]).toString("base64"),
+    });
+    expect(upload.status, JSON.stringify(upload.body)).toBe(201);
+  });
+
+  it("refuses a receipt once the claim has been decided", async () => {
+    const claim = await draftClaim();
+    await clearLadder(claim.id);
+    // Clearing the ladder only settles the approval instance; the claim
+    // itself is decided separately (see "will not let an ordinary employee
+    // record the outcome" above), so that step is repeated here too.
+    const approved = await post(
+      { ...w.role.PROJECT_MANAGER, ...(await ver("expense_claims", claim.id)) },
+      `/api/v1/expense-claims/${claim.id}/decision`, { status: "APPROVED" });
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+
+    const upload = await post(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
+      file_name: "toolate.png", content_base64: png(),
+    });
+    expect(upload.status).toBe(409);
+    expect(upload.body.code).toBe("CLAIM_NOT_EDITABLE");
+  });
+
+  it("refuses a file type outside the allow-list", async () => {
+    const claim = await draftClaim();
+    const upload = await post(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
+      file_name: "receipt.gif", content_base64: Buffer.from("GIF89a").toString("base64"),
+    });
+    expect(upload.status).toBe(422);
+    expect(upload.body.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("refuses content that does not match its claimed extension", async () => {
+    const claim = await draftClaim();
+    const upload = await post(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
+      file_name: "lying.png", content_base64: Buffer.from("not really a png").toString("base64"),
+    });
+    expect(upload.status).toBe(422);
+    expect(upload.body.code).toBe("FILE_TYPE_MISMATCH");
+  });
+
+  it("refuses a file over the 10MB limit", async () => {
+    const claim = await draftClaim();
+    const big = Buffer.concat([PNG, Buffer.alloc(11 * 1024 * 1024)]);
+    const upload = await post(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
+      file_name: "huge.png", content_base64: big.toString("base64"),
+    });
+    expect(upload.status).toBe(422);
+    const stored = await w.pool.query(
+      "SELECT count(*)::int AS n FROM expense_receipts WHERE claim_id = $1", [claim.id]);
+    expect(stored.rows[0].n).toBe(0);
+  });
+
+  it("refuses a sixth receipt on the same claim", async () => {
+    const claim = await draftClaim();
+    for (let i = 0; i < 5; i += 1) {
+      const upload = await post(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
+        file_name: `bill-${i}.png`, content_base64: png(`payload-${i}`),
+      });
+      expect(upload.status, JSON.stringify(upload.body)).toBe(201);
+    }
+    const sixth = await post(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
+      file_name: "bill-6.png", content_base64: png("payload-6"),
+    });
+    expect(sixth.status).toBe(422);
+    expect(sixth.body.code).toBe("TOO_MANY_RECEIPTS");
+  });
+
+  it("refuses a non-claimant", async () => {
+    const claim = await draftClaim();
+    const upload = await post(w.siteUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
+      file_name: "not-mine.png", content_base64: png(),
+    });
+    expect(upload.status).toBe(403);
+  });
+
+  it("refuses an infected file", async () => {
+    let server: Server | undefined;
+    process.env["MALWARE_SCANNER_HOST"] = "127.0.0.1";
+    try {
+      let received = Buffer.alloc(0);
+      server = createServer((socket) => socket.on("data", (chunk) => {
+        received = Buffer.concat([received, chunk]);
+        if (received.length >= 10 && received.subarray(0, 10).toString() === "zINSTREAM\0") {
+          socket.end("stream: Test.Signature FOUND\0");
+        }
+      }));
+      await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+      process.env["MALWARE_SCANNER_PORT"] = String((server.address() as { port: number }).port);
+
+      const claim = await draftClaim();
+      const upload = await post(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
+        file_name: "infected.png", content_base64: png(),
+      });
+      expect(upload.status).toBe(422);
+      expect(upload.body.code).toBe("UNSAFE_FILE");
+      const stored = await w.pool.query(
+        "SELECT count(*)::int AS n FROM expense_receipts WHERE claim_id = $1", [claim.id]);
+      expect(stored.rows[0].n).toBe(0);
+    } finally {
+      delete process.env["MALWARE_SCANNER_HOST"];
+      delete process.env["MALWARE_SCANNER_PORT"];
+      if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
+    }
+  });
+
+  it("removes a receipt while the claim is still editable", async () => {
+    const claim = await draftClaim();
+    const upload = await post(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
+      file_name: "remove-me.png", content_base64: png(),
+    });
+    expect(upload.status, JSON.stringify(upload.body)).toBe(201);
+    const removed = await del(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts/${upload.data.id}`);
+    expect(removed.status, JSON.stringify(removed.body)).toBe(200);
+    const list = await get(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`);
+    expect(list.data).toHaveLength(0);
+  });
+
+  it("will not read, attach to, or list another organisation's claim", async () => {
+    const claim = await draftClaim();
+    const upload = await post(w.other.admin, `/api/v1/expense-claims/${claim.id}/receipts`, {
+      file_name: "cross-org.png", content_base64: png(),
+    });
+    expect(upload.status).toBe(404);
+    const list = await get(w.other.admin, `/api/v1/expense-claims/${claim.id}/receipts`);
+    expect(list.status).toBe(404);
+  });
+
+  it("still accepts a receipt well past the app-wide 8MB body limit (fix round 1)", async () => {
+    // The route's own 15MB bodyLimit override (expenses/routes.ts) has to
+    // actually take effect, not just exist unused — 9MB of decoded bytes
+    // base64-expands to about 12MB, comfortably over the reverted 8MB
+    // global default and comfortably under both this route's 15MB and
+    // MAX_RECEIPT_BYTES' 10MB.
+    const claim = await draftClaim();
+    const big = png("x".repeat(9 * 1024 * 1024));
+    const upload = await post(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
+      file_name: "nine-mb.png", content_base64: big,
+    });
+    expect(upload.status, JSON.stringify(upload.body)).toBe(201);
+  });
+});
+
+describe("app-wide body limit (fix round 1, B-002 review)", () => {
+  it("refuses an oversized body with 413 on an ordinary route, not just the receipts one", async () => {
+    // The receipts route alone raises its own bodyLimit; every other route
+    // — this one included — has to stay at the app-wide 8MB default, or the
+    // global raise this fix round undid is effectively still in force.
+    const res = await post(w.admin, "/api/v1/cost-heads", {
+      code: uniq("BIG"), name: "x", kind: "OTHER",
+      junk: "a".repeat(9 * 1024 * 1024),
+    });
+    expect(res.status).toBe(413);
   });
 });
