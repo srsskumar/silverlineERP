@@ -172,6 +172,13 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
         fail('VENDOR_BLACKLISTED',
           `${vendor.name} is blacklisted: ${vendor.blacklist_reason ?? 'no reason recorded'}`);
       }
+      // Deactivating a vendor is how a supplier is retired (D-005); a new
+      // order to one is the thing the flag exists to stop. Orders already
+      // placed carry on — only new ones are refused.
+      if (String(vendor.status ?? 'ACTIVE') !== 'ACTIVE') {
+        fail('VENDOR_INACTIVE',
+          `${vendor.name} has been deactivated. Reactivate the vendor, or order from another one.`);
+      }
       if (input.project_id) await inOrg(db, 'projects', input.project_id, u.orgId);
 
       // §6.6: an order may not exceed the requisition that authorised it.

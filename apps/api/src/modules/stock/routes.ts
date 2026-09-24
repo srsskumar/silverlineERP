@@ -247,6 +247,14 @@ export async function registerStockRoutes(app: FastifyInstance, opts: { pool: Po
       const item = await inOrg(db, 'inventory_items', input.item_id, u.orgId, true);
       if (input.from_location_id) await inOrg(db, 'stock_locations', input.from_location_id, u.orgId);
       if (input.to_location_id) await inOrg(db, 'stock_locations', input.to_location_id, u.orgId);
+      // A retired item takes no new stock (D-005), the same rule the older
+      // /inventory/transactions route applies. What is already on the shelf
+      // can still be issued, returned, counted or written off, so that the
+      // balance a deactivated item leaves behind can be cleared.
+      if (String(item.status ?? 'ACTIVE') !== 'ACTIVE'
+          && (input.transaction_type === 'PURCHASE_RECEIPT' || input.transaction_type === 'OPENING_BALANCE')) {
+        fail('ITEM_INACTIVE', `${item.name} has been deactivated and cannot take new stock. Reactivate it first.`);
+      }
 
       if (item.batch_tracked && !input.batch_no) {
         fail('BATCH_REQUIRED', `${item.name} is batch tracked — name the batch`);
