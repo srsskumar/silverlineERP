@@ -3103,8 +3103,12 @@ export async function registerSurveyRoutes(
         async db => {
           await villageOr404(db, u.orgId, id, u);
           await requireOwnCrew(db, u, id);
+          // Case-blind (SG-006): "gcp-1" beside "GCP-1" is one pillar written
+          // twice, and the control list the department receives would carry it
+          // as two.
           const clash = await db.query(
-            'SELECT 1 FROM survey_village_gcps WHERE survey_village_id = $1 AND point_code = $2',
+            `SELECT 1 FROM survey_village_gcps
+              WHERE survey_village_id = $1 AND lower(point_code) = lower($2)`,
             [id, input.point_code]);
           if (clash.rowCount) {
             fail('POINT_ALREADY_RECORDED',
@@ -3149,6 +3153,21 @@ export async function registerSurveyRoutes(
           await villageOr404(db, u.orgId, String(row.survey_village_id), u);
           await requireOwnCrew(db, u, String(row.survey_village_id));
           version(req, row as { version: number });
+
+          // Renaming onto another point's name, in any case, is the duplicate
+          // the create path refuses (SG-006). The point keeping its own name
+          // in a different case is not a clash.
+          if (input.point_code !== undefined) {
+            const clash = await db.query(
+              `SELECT 1 FROM survey_village_gcps
+                WHERE survey_village_id = $1 AND id <> $2 AND lower(point_code) = lower($3)`,
+              [row.survey_village_id, id, input.point_code]);
+            if (clash.rowCount) {
+              fail('POINT_ALREADY_RECORDED',
+                `This village already has a point called ${input.point_code}. `
+                + 'Give this point another name.', 409);
+            }
+          }
 
           /*
            * A grid reference needs a zone, counting the one already on the row.

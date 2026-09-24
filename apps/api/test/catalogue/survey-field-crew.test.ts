@@ -119,3 +119,31 @@ describe("the instruments a crew member may account for (SG-001)", () => {
     expect(r.data.find((x: any) => x.asset_id === nobodys).holder_name).toBeNull();
   });
 });
+
+describe("a control point's name is one name, whatever the case (SG-006)", () => {
+  it("refuses gcp-1 beside GCP-1", async () => {
+    const a = await post(w.admin, `/api/v1/survey/villages/${village}/gcps`,
+      { point_code: "GCP-1", latitude: 17.512345, longitude: 82.612345 });
+    expect(a.status, JSON.stringify(a.body)).toBe(201);
+    const b = await post(w.admin, `/api/v1/survey/villages/${village}/gcps`,
+      { point_code: "gcp-1", latitude: 17.512346, longitude: 82.612346 });
+    expect(b.status, JSON.stringify(b.body)).toBe(409);
+    expect(b.body.code).toBe("POINT_ALREADY_RECORDED");
+  });
+
+  it("refuses renaming another point onto it in a different case", async () => {
+    const c = await post(w.admin, `/api/v1/survey/villages/${village}/gcps`,
+      { point_code: "GCP-2", latitude: 17.513345, longitude: 82.613345 });
+    const r = await patch({ ...w.admin, "if-match": String(c.data.version) },
+      `/api/v1/survey/gcps/${c.data.id}`, { point_code: "Gcp-1" });
+    expect(r.status, JSON.stringify(r.body)).toBe(409);
+  });
+
+  it("still lets a point keep its own name when other fields change", async () => {
+    const list = await get(w.admin, `/api/v1/survey/villages/${village}/gcps`);
+    const g = list.data.find((x: any) => x.point_code === "GCP-1");
+    const r = await patch({ ...w.admin, "if-match": String(g.version) },
+      `/api/v1/survey/gcps/${g.id}`, { point_code: "gcp-1", remarks: "renamed own case" });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+  });
+});
