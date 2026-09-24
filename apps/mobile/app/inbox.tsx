@@ -18,6 +18,8 @@ import {
 import { mobileDeepLink } from "../src/deepLinks";
 import { distinctTypes, formatNotificationType, isUnread } from "../src/inboxFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -137,8 +139,10 @@ function InboxScreen() {
       {webOnlyNote ? <Banner tone="info" icon="open-outline" title={webOnlyNote} /> : null}
 
       <Card>
-        {list.isLoading ? (
+        {listState(list, rows.length) === "loading" ? (
           <Loading />
+        ) : listState(list, rows.length) === "error" ? (
+          <LoadError error={list.error} what="the inbox" />
         ) : rows.length === 0 ? (
           <EmptyState
             icon="mail-open-outline"

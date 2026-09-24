@@ -37,6 +37,7 @@ import {
 } from "../src/ui/primitives";
 import { radius, space } from "../src/theme";
 import { day } from "@silverline/shared";
+import { codeLabel } from "../src/labels";
 
 function AnalyticsScreen() {
   const { canDo } = useAuth();
@@ -142,7 +143,7 @@ function AnalyticsScreen() {
                     {data.flow.map((f, i, arr) => (
                       <ListRow
                         key={f.status}
-                        title={f.status.replaceAll("_", " ")}
+                        title={codeLabel(f.status)}
                         subtitle={f.average_age_days !== null ? `Average age: ${f.average_age_days} days` : undefined}
                         right={<Badge text={String(f.count)} tone="neutral" />}
                         last={i === arr.length - 1}

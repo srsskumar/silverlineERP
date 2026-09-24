@@ -96,3 +96,15 @@ describe("validateLeadCreate (B-011)", () => {
     assert.equal(errors.length, 4);
   });
 });
+
+describe("validateLeadCreate estimated value (MA-008)", () => {
+  const valid = { lead_no: "LD-1", organization_name: "Acme", lead_type: "PRIVATE", source: "OTHER" };
+  it("refuses a value that is not a non-negative number (the API only says Invalid input)", () => {
+    assert.equal(validateLeadCreate({ ...valid, estimated_value: "abc" }).ok, false);
+    assert.equal(validateLeadCreate({ ...valid, estimated_value: "-5" }).ok, false);
+  });
+  it("accepts a blank or numeric value", () => {
+    assert.equal(validateLeadCreate({ ...valid, estimated_value: "" }).ok, true);
+    assert.equal(validateLeadCreate({ ...valid, estimated_value: "1500.50" }).ok, true);
+  });
+});

@@ -15,13 +15,16 @@ import { router } from "expo-router";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Modal, ScrollView, View } from "react-native";
-import { TENDER_STATUSES } from "@silverline/shared";
+import { TENDER_STATUSES, day } from "@silverline/shared";
+import { codeLabel } from "../src/labels";
 import { useAuth } from "../src/auth/AuthContext";
 import { getTender, getTenders, postTender, type TenderDetail } from "../src/api/endpoints";
 import { describeApiError } from "../src/errorFormat";
 import { canGoNewer, canGoOlder, newerOffset, olderOffset } from "../src/paging";
 import { TENDER_TYPES, tenderStatusTone, validateTenderCreate } from "../src/tendersFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -125,7 +128,7 @@ function TendersScreen() {
               {TENDER_STATUSES.map((s) => (
                 <Button
                   key={s}
-                  title={s.replaceAll("_", " ")}
+                  title={codeLabel(s)}
                   variant={status === s ? "primary" : "secondary"}
                   onPress={() => {
                     setStatus(s);
@@ -137,8 +140,10 @@ function TendersScreen() {
           </ScrollView>
 
           <Card>
-            {tenders.isLoading && offset === 0 ? (
+            {listState(tenders, rows.length) === "loading" ? (
               <Loading />
+            ) : listState(tenders, rows.length) === "error" ? (
+              <LoadError error={tenders.error} what="tenders" />
             ) : rows.length === 0 ? (
               <EmptyState icon="document-lock-outline" title="No tenders found" />
             ) : (
@@ -147,11 +152,11 @@ function TendersScreen() {
                   key={t.id}
                   title={t.tender_no}
                   subtitle={
-                    [t.client_name ?? t.department ?? undefined, t.closing_date ? `Closes ${t.closing_date}` : undefined]
+                    [t.client_name ?? t.department ?? undefined, t.closing_date ? `Closes ${day(t.closing_date)}` : undefined]
                       .filter(Boolean)
                       .join(" · ")
                   }
-                  right={<Badge text={t.status.replaceAll("_", " ")} tone={tenderStatusTone(t.status)} />}
+                  right={<Badge text={codeLabel(t.status)} tone={tenderStatusTone(t.status)} />}
                   onPress={() => setSelectedId(t.id)}
                   last={i === arr.length - 1}
                 />
@@ -233,7 +238,7 @@ function NewTenderForm({ onCreated }: { onCreated: () => void }) {
         {TENDER_TYPES.map((tt) => (
           <Button
             key={tt}
-            title={tt.replaceAll("_", " ")}
+            title={codeLabel(tt)}
             variant={tenderType === tt ? "primary" : "secondary"}
             onPress={() => setTenderType(tt)}
           />
@@ -257,10 +262,11 @@ function TenderDetailView({ tender }: { tender: TenderDetail }) {
       <Card>
         <Row style={{ justifyContent: "space-between" }}>
           <Muted style={{ color: t.text, fontWeight: "700", flex: 1 }}>{tender.tender_no}</Muted>
-          <Badge text={tender.status.replaceAll("_", " ")} tone={tenderStatusTone(tender.status)} />
+          <Badge text={codeLabel(tender.status)} tone={tenderStatusTone(tender.status)} />
         </Row>
         {tender.client_name ? <Subtle style={{ marginTop: space.xs }}>{tender.client_name}</Subtle> : null}
         <Divider />
+        <Field label="Type" value={codeLabel(tender.tender_type)} />
         {tender.department ? <Field label="Department" value={tender.department} /> : null}
         {tender.authority ? <Field label="Authority" value={tender.authority} /> : null}
         {tender.reference_number ? <Field label="Reference" value={tender.reference_number} /> : null}
@@ -268,9 +274,9 @@ function TenderDetailView({ tender }: { tender: TenderDetail }) {
           <Field label="Estimated value" value={money(tender.estimated_value)!} />
         ) : null}
         {money(tender.bid_value) ? <Field label="Bid value" value={money(tender.bid_value)!} /> : null}
-        {tender.opening_date ? <Field label="Opening date" value={tender.opening_date} /> : null}
-        {tender.closing_date ? <Field label="Closing date" value={tender.closing_date} /> : null}
-        {tender.submission_date ? <Field label="Submission date" value={tender.submission_date} /> : null}
+        {tender.opening_date ? <Field label="Opening date" value={day(tender.opening_date)} /> : null}
+        {tender.closing_date ? <Field label="Closing date" value={day(tender.closing_date)} /> : null}
+        {tender.submission_date ? <Field label="Submission date" value={day(tender.submission_date)} /> : null}
       </Card>
 
       {tender.outstanding_required > 0 ? (
@@ -286,7 +292,7 @@ function TenderDetailView({ tender }: { tender: TenderDetail }) {
         <>
           <SectionLabel>Converted project</SectionLabel>
           <Card>
-            <ListRow title={tender.project.name} subtitle={tender.project.code} right={<Badge text={tender.project.status} />} last />
+            <ListRow title={tender.project.name} subtitle={tender.project.code} right={<Badge text={codeLabel(tender.project.status)} />} last />
           </Card>
         </>
       ) : null}
@@ -302,7 +308,7 @@ function TenderDetailView({ tender }: { tender: TenderDetail }) {
                 subtitle={item.is_required ? "Required" : "Optional"}
                 right={
                   <Badge
-                    text={item.item_status.replaceAll("_", " ")}
+                    text={codeLabel(item.item_status)}
                     tone={["READY", "SUBMITTED"].includes(item.item_status) ? "success" : "warning"}
                   />
                 }

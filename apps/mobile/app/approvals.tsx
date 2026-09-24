@@ -24,6 +24,8 @@ import {
 } from "../src/api/endpoints";
 import { approvalStatusTone, formatDocumentType, validateApprovalDecision } from "../src/approvalsFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -43,6 +45,8 @@ import {
 } from "../src/ui/primitives";
 import { space, useTheme } from "../src/theme";
 import { formatMoney as money } from "../src/money";
+import { day } from "@silverline/shared";
+import { codeLabel } from "../src/labels";
 
 
 function ApprovalsScreen() {
@@ -161,8 +165,10 @@ function ApprovalsScreen() {
           </Row>
 
           <Card>
-            {active.isLoading ? (
+            {listState(active, rows.length) === "loading" ? (
               <Loading />
+            ) : listState(active, rows.length) === "error" ? (
+              <LoadError error={active.error} what="approvals" />
             ) : rows.length === 0 ? (
               <EmptyState
                 icon="checkmark-done-outline"
@@ -176,11 +182,11 @@ function ApprovalsScreen() {
                   subtitle={
                     tab === "inbox"
                       ? r.pending_since
-                        ? `Waiting since ${new Date(r.pending_since).toLocaleDateString()}`
+                        ? `Waiting since ${day(r.pending_since)}`
                         : "Waiting"
                       : (r.requested_by_username ?? undefined)
                   }
-                  right={tab === "mine" ? <Badge text={r.status} tone={approvalStatusTone(r.status)} /> : undefined}
+                  right={tab === "mine" ? <Badge text={codeLabel(r.status)} tone={approvalStatusTone(r.status)} /> : undefined}
                   onPress={() => setSelectedId(r.id)}
                   last={i === arr.length - 1}
                 />
@@ -252,7 +258,7 @@ function ApprovalDetail({
           <Muted style={{ color: t.text, fontWeight: "700" }}>
             {formatDocumentType(instance.document_type)}
           </Muted>
-          <Badge text={instance.status} tone={approvalStatusTone(instance.status)} />
+          <Badge text={codeLabel(instance.status)} tone={approvalStatusTone(instance.status)} />
         </Row>
         <Muted style={{ color: t.text, fontSize: 22, fontWeight: "700", marginTop: space.xs }}>
           {money(instance.amount)}
@@ -271,13 +277,13 @@ function ApprovalDetail({
         {instance.steps.map((s, i, arr) => (
           <ListRow
             key={s.id}
-            title={`Level ${s.sequence}${s.approver_role ? ` · ${s.approver_role}` : ""}`}
+            title={`Level ${s.sequence} · ${s.approver_role ? codeLabel(s.approver_role) : "Named approver"}`}
             subtitle={
               s.acted_by_username
-                ? `${s.status === "APPROVED" ? "Approved" : s.status === "REJECTED" ? "Rejected" : s.status} by ${s.acted_by_username}`
-                : s.status
+                ? `${s.status === "APPROVED" ? "Approved" : s.status === "REJECTED" ? "Rejected" : codeLabel(s.status)} by ${s.acted_by_username}${s.acted_at ? ` · ${day(s.acted_at)}` : ""}`
+                : codeLabel(s.status)
             }
-            right={<Badge text={s.status} tone={approvalStatusTone(s.status)} />}
+            right={<Badge text={codeLabel(s.status)} tone={approvalStatusTone(s.status)} />}
             last={i === arr.length - 1}
           />
         ))}

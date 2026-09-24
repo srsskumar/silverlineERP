@@ -16,7 +16,10 @@ import { Modal, View } from "react-native";
 import { useAuth } from "../src/auth/AuthContext";
 import { getPayrollRun, getPayrollRunPayslips, getPayrollRuns, type PayrollRun } from "../src/api/endpoints";
 import { payrollPeriodLabel, payrollRunStatusTone } from "../src/payrollFormat";
+import { day } from "@silverline/shared";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -71,8 +74,10 @@ function PayrollScreen() {
         <>
           <SectionLabel>Runs</SectionLabel>
           <Card>
-            {runs.isLoading ? (
+            {listState(runs, rows.length) === "loading" ? (
               <Loading />
+            ) : listState(runs, rows.length) === "error" ? (
+              <LoadError error={runs.error} what="payroll runs" />
             ) : rows.length === 0 ? (
               <EmptyState icon="wallet-outline" title="No payroll runs yet" />
             ) : (
@@ -132,8 +137,8 @@ function RunDetail({ run }: { run: PayrollRun }) {
           {money(run.total_net)}
         </Muted>
         <Subtle style={{ marginTop: space.xs }}>{run.employee_count} employees in this run</Subtle>
-        {run.locked_at ? <Subtle>Locked {run.locked_at.slice(0, 10)}</Subtle> : null}
-        {run.approved_at ? <Subtle>Approved {run.approved_at.slice(0, 10)}</Subtle> : null}
+        {run.locked_at ? <Subtle>Locked {day(run.locked_at)}</Subtle> : null}
+        {run.approved_at ? <Subtle>Approved {day(run.approved_at)}</Subtle> : null}
       </Card>
 
       <SectionLabel>Totals</SectionLabel>
@@ -157,8 +162,10 @@ function RunDetail({ run }: { run: PayrollRun }) {
 
       <SectionLabel>Payslips</SectionLabel>
       <Card>
-        {payslips.isLoading ? (
+        {listState(payslips, (payslips.data?.items ?? []).length) === "loading" ? (
           <Loading />
+        ) : listState(payslips, (payslips.data?.items ?? []).length) === "error" ? (
+          <LoadError error={payslips.error} what="payslips" />
         ) : (payslips.data?.items ?? []).length === 0 ? (
           <EmptyState icon="document-text-outline" title="No payslips in this run" />
         ) : (

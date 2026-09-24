@@ -18,6 +18,8 @@ import { useAuth } from "../src/auth/AuthContext";
 import { getAssetMovements, type AssetMovement } from "../src/api/endpoints";
 import { conditionLabel, movementLabel, movementTone } from "../src/assetMovementsFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -34,7 +36,7 @@ import {
   Subtle,
 } from "../src/ui/primitives";
 import { space, useTheme } from "../src/theme";
-import { day as when } from "@silverline/shared";
+import { day, dayTime as when } from "@silverline/shared";
 
 function AssetMovementsScreen() {
   const { canDo } = useAuth();
@@ -63,8 +65,10 @@ function AssetMovementsScreen() {
           title="No access to asset movements"
           message="This screen needs the asset.read permission."
         />
-      ) : moves.isLoading && offset === 0 ? (
+      ) : listState(moves, rows.length) === "loading" ? (
         <Loading />
+      ) : listState(moves, rows.length) === "error" ? (
+        <LoadError error={moves.error} what="asset movements" />
       ) : rows.length === 0 ? (
         <EmptyState icon="swap-horizontal-outline" title="No movements found" />
       ) : (
@@ -151,7 +155,7 @@ function MovementDetail({ move, onClose }: { move: AssetMovement; onClose: () =>
         {move.due_date ? (
           <Row style={{ justifyContent: "space-between", marginTop: space.xs }}>
             <Subtle>Due back</Subtle>
-            <Subtle>{when(move.due_date)}</Subtle>
+            <Subtle>{day(move.due_date)}</Subtle>
           </Row>
         ) : null}
         {move.project_name ? (

@@ -40,3 +40,19 @@ describe("validateDocumentRenew (B-009)", () => {
     );
   });
 });
+
+describe("document labels (MA-007)", () => {
+  it("uses the web STATE_LABELS wording", async () => {
+    const { documentStateLabel } = await import("../src/documentsFormat");
+    assert.equal(documentStateLabel("VALID"), "In force");
+    assert.equal(documentStateLabel("NO_EXPIRY"), "No expiry");
+    assert.equal(documentStateLabel("EXPIRING"), "Expiring");
+    assert.equal(documentStateLabel("WEIRD"), "WEIRD");
+  });
+  it("uses the web OWNER_LABELS wording", async () => {
+    const { documentOwnerLabel } = await import("../src/documentsFormat");
+    assert.equal(documentOwnerLabel("vendor"), "Supplier");
+    assert.equal(documentOwnerLabel("organization"), "The company");
+    assert.equal(documentOwnerLabel("employee"), "Employee");
+  });
+});

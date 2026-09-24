@@ -22,6 +22,8 @@ import { CLIENT_TYPES, validateClientCreate } from "../src/clientsFormat";
 import { describeApiError } from "../src/errorFormat";
 import { canGoNewer, canGoOlder, newerOffset, olderOffset } from "../src/paging";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -41,6 +43,7 @@ import {
 } from "../src/ui/primitives";
 import { space, useTheme } from "../src/theme";
 import { formatMoneyOrNull as money } from "../src/money";
+import { codeLabel } from "../src/labels";
 
 
 function ClientsScreen() {
@@ -116,8 +119,10 @@ function ClientsScreen() {
             autoCapitalize="none"
           />
           <Card>
-            {clients.isLoading && offset === 0 ? (
+            {listState(clients, rows.length) === "loading" ? (
               <Loading />
+            ) : listState(clients, rows.length) === "error" ? (
+              <LoadError error={clients.error} what="clients" />
             ) : rows.length === 0 ? (
               <EmptyState icon="business-outline" title="No clients found" />
             ) : (
@@ -126,7 +131,7 @@ function ClientsScreen() {
                   key={c.id}
                   title={c.name}
                   subtitle={[c.code, c.district ?? c.state ?? undefined].filter(Boolean).join(" · ")}
-                  right={<Badge text={c.client_type} tone={c.client_type === "GOVERNMENT" ? "info" : "neutral"} />}
+                  right={<Badge text={codeLabel(c.client_type)} tone={c.client_type === "GOVERNMENT" ? "info" : "neutral"} />}
                   onPress={() => setSelectedId(c.id)}
                   last={i === arr.length - 1}
                 />
@@ -244,12 +249,12 @@ function ClientDetail({
       <Card>
         <Row style={{ justifyContent: "space-between" }}>
           <Muted style={{ color: t.text, fontWeight: "700", flex: 1 }}>{client.name}</Muted>
-          <Badge text={client.status ?? "ACTIVE"} tone={client.status === "INACTIVE" ? "neutral" : "success"} />
+          <Badge text={codeLabel(client.status ?? "ACTIVE")} tone={client.status === "INACTIVE" ? "neutral" : "success"} />
         </Row>
         <Subtle style={{ marginTop: space.xs }}>{client.code}</Subtle>
         <Divider />
-        <Field label="Type" value={client.client_type} />
-        {client.category ? <Field label="Category" value={client.category} /> : null}
+        <Field label="Type" value={codeLabel(client.client_type)} />
+        {client.category ? <Field label="Category" value={codeLabel(client.category)} /> : null}
         {location ? <Field label="Location" value={location} /> : null}
         {client.address_line ? <Field label="Address" value={client.address_line} /> : null}
         {client.pincode ? <Field label="PIN code" value={client.pincode} /> : null}
@@ -287,7 +292,7 @@ function ClientDetail({
                 key={c.id}
                 title={c.name}
                 subtitle={[c.designation ?? undefined, c.phone ?? c.email ?? undefined].filter(Boolean).join(" · ")}
-                right={c.contact_type === "PRIMARY" ? <Badge text="PRIMARY" tone="info" /> : undefined}
+                right={c.contact_type === "PRIMARY" ? <Badge text="Primary" tone="info" /> : undefined}
                 last={i === arr.length - 1}
               />
             ))}
