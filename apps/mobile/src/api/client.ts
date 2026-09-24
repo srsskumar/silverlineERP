@@ -324,6 +324,20 @@ export async function apiFetch<T>(
 
   if (!res.ok) {
     if (isDeviceRevoked(json)) await revokeDevice();
+    // A 413 (over nginx's client_max_body_size, or the app's own bodyLimit)
+    // never carries the {code,message} envelope: nginx's is its own HTML
+    // error page, and Fastify's own is a generic "Bad request". Named
+    // specifically here rather than falling through to "Request failed
+    // (413)" — the one case worth calling out is a receipt too large to
+    // upload.
+    if (res.status === 413) {
+      throw new ApiError({
+        status: 413,
+        code: "PAYLOAD_TOO_LARGE",
+        message: "That file is too large to upload. Try a smaller file.",
+        requestId: requestId ?? null,
+      });
+    }
     const env =
       (typeof json === "object" && json !== null ? json : {}) as Record<
         string,

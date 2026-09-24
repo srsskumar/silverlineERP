@@ -149,6 +149,25 @@ describe('apiClient', () => {
     expect((err as ApiClientError).fieldErrors).toEqual([{ field: 'username', message: 'required' }]);
   });
 
+  it('reports a 413 (receipt too large) as a file-size error, even with a non-JSON body', async () => {
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    // nginx's own 413 page is HTML, not the {code,message} envelope, so
+    // res.json() fails and the client must not fall back to a generic message.
+    fetchMock.mockResolvedValueOnce(new Response('<html>413 Request Entity Too Large</html>', {
+      status: 413,
+      headers: { 'Content-Type': 'text/html' },
+    }));
+
+    const err = await apiRequest('/api/v1/expense-claims/c1/receipts', {
+      method: 'POST', body: { file_name: 'r.jpg', content_base64: 'x' },
+    }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiClientError);
+    expect((err as ApiClientError).status).toBe(413);
+    expect((err as ApiClientError).code).toBe('PAYLOAD_TOO_LARGE');
+    expect((err as ApiClientError).message).toMatch(/too large/i);
+  });
+
   it('logs out (clears tokens) and throws when refresh fails after a 401', async () => {
     setTokens('expired-access', 'bad-refresh');
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;

@@ -520,6 +520,18 @@ export async function apiRequestRaw(
   const json: unknown = await res.json().catch(() => null);
 
   if (!res.ok) {
+    // A 413 (over nginx's client_max_body_size, or the app's own bodyLimit)
+    // never carries the {code,message} envelope: nginx's is its own HTML
+    // error page, and Fastify's own is a generic "Bad request". Either way
+    // toEnvelope(json, ...) would fall back to "Request failed" — the one
+    // case worth naming specifically is a receipt too large to upload.
+    if (res.status === 413) {
+      throw new ApiClientError(413, {
+        code: 'PAYLOAD_TOO_LARGE',
+        message: 'That file is too large to upload. Try a smaller file.',
+        request_id: headerRequestId ?? undefined,
+      });
+    }
     throw new ApiClientError(res.status, toEnvelope(json, headerRequestId));
   }
   return { body: json, requestId: headerRequestId ?? undefined, status: res.status };
