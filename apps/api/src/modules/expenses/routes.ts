@@ -832,13 +832,20 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
       }
       await scanUpload(binary, ext, app.appConfig.nodeEnv === 'production');
       const checksum = createHash('sha256').update(binary).digest('hex');
-      return (await db.query(
+      const receipt = (await db.query(
         `INSERT INTO expense_receipts(org_id, claim_id, file_name, content_encrypted, file_size,
            mime_type, checksum, created_by)
          VALUES($1,$2,$3,$4,$5,$6,$7,$8)
          RETURNING id, file_name, file_size, mime_type, checksum, created_at`,
         [u.orgId, id, input.file_name, encodeBlob(binary), binary.length,
          RECEIPT_MIME_BY_EXT[ext] ?? 'application/octet-stream', checksum, u.id])).rows[0];
+      // A SUBMITTED claim can still take receipts, but an approver already
+      // has it open by then: a receipt appearing under them mid-decision
+      // must not be silent, so the claim's own version moves and a decision
+      // made against the version they loaded gets the normal 409 conflict.
+      await db.query(
+        'UPDATE expense_claims SET version = version + 1, updated_at = now() WHERE id = $1', [id]);
+      return receipt;
     });
     reply.code(201);
     return { data: row };
@@ -876,6 +883,10 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
           'DELETE FROM expense_receipts WHERE id = $1 AND claim_id = $2 AND org_id = $3 RETURNING id',
           [receiptId, id, u.orgId])).rows[0];
         if (!row) fail('NOT_FOUND', 'Receipt not found', 404);
+        // Same reasoning as the upload path: a receipt vanishing under an
+        // approver mid-decision must not be silent.
+        await db.query(
+          'UPDATE expense_claims SET version = version + 1, updated_at = now() WHERE id = $1', [id]);
         return { id: row.id, deleted: true };
       }),
     };

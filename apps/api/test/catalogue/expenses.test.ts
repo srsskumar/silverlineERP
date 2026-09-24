@@ -699,6 +699,78 @@ describe("expense receipts (B-003)", () => {
     expect(upload.status, JSON.stringify(upload.body)).toBe(201);
   });
 
+  /**
+   * Item 4 (final QA fix wave): a receipt attached to, or removed from, a
+   * SUBMITTED claim used to leave the claim's own version untouched. An
+   * approver who had the claim open before that happened could still decide
+   * it with the version they loaded — silently deciding on a claim whose
+   * evidence had just changed underneath them. Bumping the version on both
+   * a receipt add and a receipt remove makes that the normal, already-tested
+   * 409 VERSION_CONFLICT every other stale write gets.
+   */
+  it("bumps the claim's version when a receipt is added to a SUBMITTED claim", async () => {
+    const claim = await draftClaim();
+    const submitted = await post({ ...w.directUser, ...(await ver("expense_claims", claim.id)) },
+      `/api/v1/expense-claims/${claim.id}/submit`, {});
+    expect(submitted.status, JSON.stringify(submitted.body)).toBe(200);
+    const approvalId = submitted.data.approval_id;
+    const staleHeaders = await ver("expense_claims", claim.id);
+
+    const upload = await post(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
+      file_name: "late.pdf", content_base64: Buffer.from("%PDF-1.4").toString("base64"),
+    });
+    expect(upload.status, JSON.stringify(upload.body)).toBe(201);
+
+    const freshHeaders = await ver("expense_claims", claim.id);
+    expect(Number(freshHeaders["if-match"])).toBe(Number(staleHeaders["if-match"]) + 1);
+
+    const cleared = await post(
+      { ...w.role.PROJECT_MANAGER, ...(await ver("approval_instances", approvalId)) },
+      `/api/v1/approvals/${approvalId}/decision`, { decision: "APPROVE" });
+    expect(cleared.status, JSON.stringify(cleared.body)).toBe(200);
+
+    const staleDecision = await post(
+      { ...w.role.PROJECT_MANAGER, ...staleHeaders },
+      `/api/v1/expense-claims/${claim.id}/decision`, { status: "APPROVED" });
+    expect(staleDecision.status).toBe(409);
+    expect(staleDecision.body.code).toBe("VERSION_CONFLICT");
+
+    const decision = await post(
+      { ...w.role.PROJECT_MANAGER, ...freshHeaders },
+      `/api/v1/expense-claims/${claim.id}/decision`, { status: "APPROVED" });
+    expect(decision.status, JSON.stringify(decision.body)).toBe(200);
+  });
+
+  it("bumps the claim's version when a receipt is removed from a SUBMITTED claim", async () => {
+    const claim = await draftClaim();
+    const upload = await post(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
+      file_name: "remove-me.png", content_base64: png(),
+    });
+    expect(upload.status, JSON.stringify(upload.body)).toBe(201);
+    const submitted = await post({ ...w.directUser, ...(await ver("expense_claims", claim.id)) },
+      `/api/v1/expense-claims/${claim.id}/submit`, {});
+    expect(submitted.status, JSON.stringify(submitted.body)).toBe(200);
+    const approvalId = submitted.data.approval_id;
+    const staleHeaders = await ver("expense_claims", claim.id);
+
+    const removed = await del(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts/${upload.data.id}`);
+    expect(removed.status, JSON.stringify(removed.body)).toBe(200);
+
+    const freshHeaders = await ver("expense_claims", claim.id);
+    expect(Number(freshHeaders["if-match"])).toBe(Number(staleHeaders["if-match"]) + 1);
+
+    const cleared = await post(
+      { ...w.role.PROJECT_MANAGER, ...(await ver("approval_instances", approvalId)) },
+      `/api/v1/approvals/${approvalId}/decision`, { decision: "APPROVE" });
+    expect(cleared.status, JSON.stringify(cleared.body)).toBe(200);
+
+    const staleDecision = await post(
+      { ...w.role.PROJECT_MANAGER, ...staleHeaders },
+      `/api/v1/expense-claims/${claim.id}/decision`, { status: "APPROVED" });
+    expect(staleDecision.status).toBe(409);
+    expect(staleDecision.body.code).toBe("VERSION_CONFLICT");
+  });
+
   it("refuses a receipt once the claim has been decided", async () => {
     const claim = await draftClaim();
     await clearLadder(claim.id);
