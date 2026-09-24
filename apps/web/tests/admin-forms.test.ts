@@ -37,20 +37,23 @@ describe('organisation settings', () => {
     });
     expect(body).toEqual({
       name: 'Silverline',
-      // Touching one tolerance field sends the whole triple -- see A-013
-      // below -- with the two untouched ones explicitly null.
+      // The tolerance triple always goes over together -- see A-013 below --
+      // with the untouched ones explicitly null.
       settings: {
         timezone: 'Asia/Kolkata', gst_state_code: '37', session_timeout_minutes: 720,
         match_tolerance: { quantity_pct: null, rate_pct: 2.5, value_absolute: null },
       },
     });
     // Zero is a value: an organisation may refuse any forward skew at all.
-    expect(settingsBody({ attendance_future_tolerance_minutes: '0' }).settings).toEqual({ attendance_future_tolerance_minutes: 0 });
-    // Nothing filled: an empty merge rather than a row of blanks the API would refuse.
-    expect(settingsBody({ name: '', timezone: '' })).toEqual({ settings: {} });
-    // Touching no tolerance field at all leaves match_tolerance out entirely,
-    // not sent as an empty/all-null object the API would have to no-op.
-    expect(settingsBody({ name: 'X' }).settings).toEqual({});
+    expect(settingsBody({ attendance_future_tolerance_minutes: '0' }).settings).toEqual({
+      attendance_future_tolerance_minutes: 0,
+      match_tolerance: { quantity_pct: null, rate_pct: null, value_absolute: null },
+    });
+    // Nothing filled: no name, and the tolerance triple all-null -- a no-op
+    // merge the API accepts rather than a row of blanks it would refuse.
+    expect(settingsBody({ name: '', timezone: '' })).toEqual({
+      settings: { match_tolerance: { quantity_pct: null, rate_pct: null, value_absolute: null } },
+    });
   });
 
   it('A-013: clearing one tolerance sub-field while changing another keeps the untouched one, not blank', () => {
@@ -62,6 +65,27 @@ describe('organisation settings', () => {
     });
     expect(body.settings.match_tolerance).toEqual({
       quantity_pct: 6, rate_pct: null, value_absolute: 100,
+    });
+  });
+
+  /**
+   * Item 5 (final QA fix wave): with only-when-touched gating, blanking all
+   * three at once left every one of them false in "was any field touched",
+   * so match_tolerance was left out of the PATCH entirely and the stored
+   * tolerance survived the save untouched. Sending the triple unconditionally
+   * -- whether a field is blank because it was never set or because it was
+   * just cleared -- fixes it without needing to tell those two cases apart:
+   * null on an already-unset sub-field is a no-op on the server either way
+   * (admin/routes.ts's field-by-field merge).
+   */
+  it('clearing all three tolerance fields sends an explicit clear, not nothing', () => {
+    // Simulates the organisation already having all three set, and the
+    // operator blanking every one of them (MutationForm strips a blanked
+    // field from the PATCH body entirely, the same shape as never having
+    // filled it in — see Workbench.tsx's onSubmit).
+    const body = settingsBody({ name: 'Silverline' });
+    expect(body.settings.match_tolerance).toEqual({
+      quantity_pct: null, rate_pct: null, value_absolute: null,
     });
   });
 });

@@ -56,7 +56,8 @@ export function settingsInitial(row: OrgSettingsRow | null | undefined): FormVal
  *
  * Only what was filled in goes over: the API merges `settings` into what is
  * stored, so sending a blank would not clear a value, it would fail
- * validation. A number field holds a string until here.
+ * validation. A number field holds a string until here. The three-way match
+ * tolerance is the one exception -- see the comment on match_tolerance below.
  */
 export function settingsBody(values: FormValues): { name?: string; settings: Record<string, unknown> } {
   const str = (k: string) => { const v = values[k]; return v === undefined || v === null || String(v).trim() === '' ? undefined : String(v).trim(); };
@@ -69,29 +70,32 @@ export function settingsBody(values: FormValues): { name?: string; settings: Rec
   put('session_timeout_minutes', num('session_timeout_minutes'));
   put('attendance_future_tolerance_minutes', num('attendance_future_tolerance_minutes'));
   put('retention_days', num('retention_days'));
-  // A-013: if any one of the three is set, all three go over, with an
-  // explicit `null` for whichever is blank. The API merges match_tolerance
-  // sub-field by sub-field, so `null` deliberately clears one; but sending
-  // only the two survivors -- the old behaviour -- could not be told apart
-  // from never having touched the third, and the API's old shallow merge
-  // dropped it silently either way. Sent as a whole triple whenever any one
-  // is touched, so a value already showing on screen is never lost by
-  // omission, whether the field was left blank from the start or cleared
-  // just now.
-  const TOLERANCE_FIELDS = [
+  // A-013: all three always go over together, with an explicit `null` for
+  // whichever is blank. The API merges match_tolerance sub-field by
+  // sub-field (admin/routes.ts), where null deliberately clears one and
+  // omitting the whole object leaves it untouched.
+  //
+  // This used to go over only when at least one of the three held a value,
+  // which is exactly wrong for clearing: a field that had a value, showing
+  // on screen from settingsInitial, and was then blanked out by hand ends up
+  // indistinguishable from a field that was never set -- both read as blank
+  // here. Gating on "any one non-blank" meant clearing all three sent
+  // nothing at all, and the stored tolerance silently survived the save.
+  // Sending the triple unconditionally has no other effect: a field the form
+  // never touched still carries its pre-loaded value from settingsInitial
+  // (not blank), so it goes over unchanged either way; only a field that is
+  // genuinely blank -- never set, or just cleared -- resolves to null, and
+  // null on an already-unset sub-field is a no-op on the server.
+  const tolerance: Record<string, number | null> = {};
+  for (const [field, key] of [
     ['match_quantity_pct', 'quantity_pct'],
     ['match_rate_pct', 'rate_pct'],
     ['match_value_absolute', 'value_absolute'],
-  ] as const;
-  const toleranceTouched = TOLERANCE_FIELDS.some(([field]) => str(field) !== undefined);
-  if (toleranceTouched) {
-    const tolerance: Record<string, number | null> = {};
-    for (const [field, key] of TOLERANCE_FIELDS) {
-      const v = num(field);
-      tolerance[key] = v === undefined ? null : v;
-    }
-    settings.match_tolerance = tolerance;
+  ] as const) {
+    const v = num(field);
+    tolerance[key] = v === undefined ? null : v;
   }
+  settings.match_tolerance = tolerance;
   const name = str('name');
   return { ...(name !== undefined ? { name } : {}), settings };
 }

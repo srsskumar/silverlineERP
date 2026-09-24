@@ -386,6 +386,36 @@ describe("the settings the split depends on", () => {
     }
   });
 
+  /**
+   * Item 5 (final QA fix wave): the web form's fix sends all three
+   * sub-fields explicitly null to mean "clear the tolerance entirely" —
+   * this is the server half, proving that payload actually empties it out
+   * rather than leaving whatever a sibling test's finally-block last set.
+   */
+  it("clears the three-way-match tolerance entirely when every sub-field is sent null", async () => {
+    const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
+    try {
+      const full = await app.inject({
+        method: "PATCH", url: "/api/v1/admin/settings", headers: admin,
+        payload: { settings: { match_tolerance: { quantity_pct: 5, rate_pct: 3, value_absolute: 100 } } },
+      });
+      expect(full.statusCode, JSON.stringify(full.json())).toBe(200);
+
+      const clearedAll = await app.inject({
+        method: "PATCH", url: "/api/v1/admin/settings", headers: admin,
+        payload: { settings: { match_tolerance: { quantity_pct: null, rate_pct: null, value_absolute: null } } },
+      });
+      expect(clearedAll.statusCode, JSON.stringify(clearedAll.json())).toBe(200);
+
+      const stored = await pool.query(
+        "SELECT settings->'match_tolerance' AS mt FROM organizations WHERE id=$1", [orgId]);
+      expect(stored.rows[0].mt).toEqual({});
+    } finally {
+      await pool.query(
+        "UPDATE organizations SET settings = settings - 'match_tolerance' WHERE id = $1", [orgId]);
+    }
+  });
+
   it("closes the loop: set the state, and the schedule names the tax heads", async () => {
     const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
     /*
