@@ -79,7 +79,7 @@ export async function registerAllocationRoutes(app: FastifyInstance, opts: { poo
        FROM resource_allocations a
        JOIN projects p ON p.id = a.project_id
        JOIN employees e ON e.id = a.employee_id
-       WHERE ${where} ORDER BY a.starts_on DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY a.starts_on DESC, a.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 

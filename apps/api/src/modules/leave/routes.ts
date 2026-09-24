@@ -62,6 +62,25 @@ function inclusiveDays(from: string, to: string): number {
   return Math.round(ms / 86_400_000) + 1;
 }
 
+/**
+ * The days of a leave, per leave year (D-011).
+ *
+ * A balance belongs to a calendar year. Leave from 30 Dec to 2 Jan is two
+ * days of one year's balance and two of the next; charging all four to the
+ * first year (as the balance check and the debit both did) overdrew it and
+ * never touched the second.
+ */
+function daysByYear(from: string, to: string): Array<{ year: number; days: number }> {
+  const out: Array<{ year: number; days: number }> = [];
+  const first = Number(from.slice(0, 4)), last = Number(to.slice(0, 4));
+  for (let y = first; y <= last; y++) {
+    const start = y === first ? from : `${y}-01-01`;
+    const end = y === last ? to : `${y}-12-31`;
+    out.push({ year: y, days: inclusiveDays(start, end) });
+  }
+  return out;
+}
+
 const uuidCheck = z.string().uuid();
 
 function isUuid(value: unknown): value is string {
@@ -632,9 +651,16 @@ export async function registerLeaveRoutes(
      * request filed on behalf of somebody who had left was answered with
      * "insufficient balance", which sent HR to top up a balance for a person
      * who no longer had one to keep.
+     *
+     * Locked (D-002): the overlap and balance rules below read, then insert.
+     * Two requests for the same days filed at the same moment each saw the
+     * other as not there yet, and both stood. Holding the employee row makes
+     * the second wait, then find the first. NO KEY UPDATE, not UPDATE: it
+     * still serialises two filings, but does not block the attendance and
+     * other rows whose foreign keys point at this employee.
      */
     const employment = (
-      await db.query("SELECT status FROM employees WHERE id = $1::uuid AND org_id = $2", [employeeId, user.orgId])
+      await db.query("SELECT status FROM employees WHERE id = $1::uuid AND org_id = $2 FOR NO KEY UPDATE", [employeeId, user.orgId])
     ).rows[0] as { status: string } | undefined;
     if (employment && employment.status !== "ACTIVE") {
       return sendRuleError(reply, req.requestId, {
@@ -679,10 +705,11 @@ export async function registerLeaveRoutes(
       });
     }
     const totalDays = inclusiveDays(d.from_date, d.to_date);
-    const periodYear = Number(d.from_date.slice(0, 4));
-
-    // Rule 3: balance check for paid types that require a balance.
-    if (type.requires_balance) {
+    // Rule 3: balance check for paid types that require a balance, once per
+    // leave year the request touches, for that year's days only (D-011).
+    const years = daysByYear(d.from_date, d.to_date);
+    if (type.requires_balance) for (const { year: periodYear, days } of years) {
+      const inYear = years.length > 1 ? ` in ${periodYear}` : "";
       await db.query(
         `INSERT INTO leave_balances (employee_id, leave_type_id, period_year)
          VALUES ($1::uuid, $2::uuid, $3)
@@ -698,18 +725,18 @@ export async function registerLeaveRoutes(
       const available = Number(
         (balRes.rows[0] as { available: string | number }).available,
       );
-      if (totalDays > available) {
+      if (days > available) {
         return sendRuleError(reply, req.requestId, {
           status: 422,
           code: "INSUFFICIENT_BALANCE",
-          message: `Insufficient leave balance (available: ${available}, requested: ${totalDays})`,
+          message: `Insufficient leave balance${inYear} (available: ${available}, requested: ${days})`,
           fieldErrors: [
             {
               field: "to_date",
-              message: `Requested ${totalDays} days but only ${available} available`,
+              message: `Requested ${days} days${inYear} but only ${available} available`,
             },
           ],
-          extra: { available },
+          extra: { available, period_year: periodYear },
         });
       }
     }
@@ -1032,22 +1059,24 @@ export async function registerLeaveRoutes(
       ])
     ).rows[0] as { requires_balance: boolean } | undefined;
     if (!type?.requires_balance) return null;
-    const year = Number(from.slice(0, 4));
-    const bal = await client.query(
-      `SELECT (opening_balance + credits - consumed + adjustments) AS available
-         FROM leave_balances
-        WHERE employee_id = $1::uuid AND leave_type_id = $2::uuid AND period_year = $3
-        FOR UPDATE`,
-      [cur.employee_id, cur.leave_type_id, year],
-    );
-    const available = Number((bal.rows[0] as { available: string | number } | undefined)?.available ?? 0);
-    if (Number(cur.total_days) > available) {
-      return {
-        status: 422,
-        code: "INSUFFICIENT_BALANCE",
-        message: `Insufficient leave balance to approve (available: ${available}, requested: ${cur.total_days}). Another request has used the balance since this one was filed.`,
-        extra: { available },
-      };
+    // Each leave year the request touches is checked for its own days (D-011).
+    for (const { year, days } of daysByYear(from, to)) {
+      const bal = await client.query(
+        `SELECT (opening_balance + credits - consumed + adjustments) AS available
+           FROM leave_balances
+          WHERE employee_id = $1::uuid AND leave_type_id = $2::uuid AND period_year = $3
+          FOR UPDATE`,
+        [cur.employee_id, cur.leave_type_id, year],
+      );
+      const available = Number((bal.rows[0] as { available: string | number } | undefined)?.available ?? 0);
+      if (days > available) {
+        return {
+          status: 422,
+          code: "INSUFFICIENT_BALANCE",
+          message: `Insufficient ${year} leave balance to approve (available: ${available}, requested: ${days}). Another request has used the balance since this one was filed.`,
+          extra: { available, period_year: year },
+        };
+      }
     }
     return null;
   }
@@ -1180,13 +1209,8 @@ export async function registerLeaveRoutes(
               | { is_paid: boolean; requires_balance: boolean }
               | undefined;
             if (t?.requires_balance) {
-              const year = Number(dateOnly(cur.from_date).slice(0, 4));
-              const debited = await client.query(
-                `UPDATE leave_balances SET consumed = consumed + $4, updated_at = NOW()
-                 WHERE employee_id = $1::uuid AND leave_type_id = $2::uuid AND period_year = $3`,
-                [cur.employee_id, cur.leave_type_id, year, cur.total_days],
-              );
-              if ((debited.rowCount ?? 0) === 0) {
+              // Each leave year is debited for its own days (D-011).
+              for (const { year, days } of daysByYear(dateOnly(cur.from_date), dateOnly(cur.to_date))) {
                 await client.query(
                   `INSERT INTO leave_balances
                      (employee_id, leave_type_id, period_year, consumed)
@@ -1194,7 +1218,7 @@ export async function registerLeaveRoutes(
                    ON CONFLICT (employee_id, leave_type_id, period_year)
                    DO UPDATE SET consumed = leave_balances.consumed + EXCLUDED.consumed,
                                  updated_at = NOW()`,
-                  [cur.employee_id, cur.leave_type_id, year, cur.total_days],
+                  [cur.employee_id, cur.leave_type_id, year, days],
                 );
               }
             }

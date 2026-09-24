@@ -1,4 +1,5 @@
 import { randomUUID } from "expo-crypto";
+import { submissionKey } from "./submissionKeys";
 /**
  * fetch wrapper for the single Silverline API (same backend as web).
  *
@@ -220,7 +221,27 @@ async function tryRefresh(): Promise<boolean> {
 
 function newIdempotencyKey(): string { return randomUUID(); }
 
+/**
+ * A write with no key of its own is keyed per submission (D-015): a double
+ * tap sends the same key twice, and the server does the work once.
+ */
 export async function apiFetch<T>(
+  path: string,
+  opts: RequestOptions = {},
+): Promise<{ data: T; requestId: string | null; status: number }> {
+  const method = (opts.method ?? "GET").toUpperCase();
+  const keyed = (method === "POST" || method === "PATCH" || method === "PUT")
+    && !opts.idempotencyKey && !opts.headers?.["Idempotency-Key"];
+  if (!keyed) return apiFetchOnce<T>(path, opts);
+  const submission = submissionKey(`${method} ${path} ${JSON.stringify(opts.body ?? null)}`, newIdempotencyKey);
+  try {
+    return await apiFetchOnce<T>(path, { ...opts, idempotencyKey: submission.key });
+  } finally {
+    submission.done();
+  }
+}
+
+async function apiFetchOnce<T>(
   path: string,
   opts: RequestOptions = {},
 ): Promise<{ data: T; requestId: string | null; status: number }> {

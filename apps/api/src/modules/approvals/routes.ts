@@ -291,7 +291,7 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
        LEFT JOIN users u ON u.id = i.requested_by
        LEFT JOIN projects p ON p.id = i.project_id
        LEFT JOIN approval_policies pol ON pol.id = i.policy_id
-       WHERE ${where} ORDER BY i.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY i.created_at DESC, i.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 

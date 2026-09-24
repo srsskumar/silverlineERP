@@ -12,7 +12,7 @@ export async function registerAutomationRoutes(app:FastifyInstance,opts:{pool:Po
  const {pool}=opts,auth=buildAuthenticate(opts),guard=(p:string)=>requirePermission(auth,p);
  app.get('/api/v1/automation-rules',{preHandler:guard('automation.read')},async req=>{
   const u=actor(req),{limit,offset,q}=page(req);if(q.project_id)await projectAccess(pool,req,q.project_id);else if(!resolveScopes(u.scopes).global)fail('PROJECT_REQUIRED','Choose a project in your scope');
-  return {data:(await pool.query('SELECT * FROM automation_rules WHERE org_id=$1 AND ($2::uuid IS NULL OR project_id=$2) ORDER BY created_at DESC LIMIT $3 OFFSET $4',[u.orgId,q.project_id??null,limit,offset])).rows};
+  return {data:(await pool.query('SELECT * FROM automation_rules WHERE org_id=$1 AND ($2::uuid IS NULL OR project_id=$2) ORDER BY created_at DESC, id DESC LIMIT $3 OFFSET $4',[u.orgId,q.project_id??null,limit,offset])).rows};
  });
  app.post('/api/v1/automation-rules',{preHandler:guard('automation.manage')},async(req,reply)=>{
   const i=parse(automationSchema,req.body),u=actor(req);

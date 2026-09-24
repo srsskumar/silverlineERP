@@ -224,7 +224,7 @@ export async function registerStockRoutes(app: FastifyInstance, opts: { pool: Po
        LEFT JOIN stock_locations f ON f.id = t.from_location_id
        LEFT JOIN stock_locations tl ON tl.id = t.to_location_id
        LEFT JOIN users u ON u.id = t.created_by
-       WHERE ${where} ORDER BY t.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY t.created_at DESC, t.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 
@@ -247,6 +247,14 @@ export async function registerStockRoutes(app: FastifyInstance, opts: { pool: Po
       const item = await inOrg(db, 'inventory_items', input.item_id, u.orgId, true);
       if (input.from_location_id) await inOrg(db, 'stock_locations', input.from_location_id, u.orgId);
       if (input.to_location_id) await inOrg(db, 'stock_locations', input.to_location_id, u.orgId);
+      // A retired item takes no new stock (D-005), the same rule the older
+      // /inventory/transactions route applies. What is already on the shelf
+      // can still be issued, returned, counted or written off, so that the
+      // balance a deactivated item leaves behind can be cleared.
+      if (String(item.status ?? 'ACTIVE') !== 'ACTIVE'
+          && (input.transaction_type === 'PURCHASE_RECEIPT' || input.transaction_type === 'OPENING_BALANCE')) {
+        fail('ITEM_INACTIVE', `${item.name} has been deactivated and cannot take new stock. Reactivate it first.`);
+      }
 
       if (item.batch_tracked && !input.batch_no) {
         fail('BATCH_REQUIRED', `${item.name} is batch tracked — name the batch`);
@@ -326,7 +334,9 @@ export async function registerStockRoutes(app: FastifyInstance, opts: { pool: Po
   app.post('/api/v1/stock-reservations', { preHandler: guard('reservation.manage') }, async (req, reply) => {
     const u = actor(req), input = parse(reservationSchema, req.body);
     const row = await mutate(pool, req, 'reservation.create', 'stock_reservation', async db => {
-      const item = await inOrg(db, 'inventory_items', input.item_id, u.orgId);
+      // Locked, like every issue: two reservations read the same free
+      // quantity otherwise, and both promise it (D-001).
+      const item = await inOrg(db, 'inventory_items', input.item_id, u.orgId, true);
       await inOrg(db, 'stock_locations', input.location_id, u.orgId);
       const position = await positionAt(db, item, input.location_id);
       // Reserving stock that is not free would promise the same bags twice.
@@ -377,7 +387,7 @@ export async function registerStockRoutes(app: FastifyInstance, opts: { pool: Po
        FROM stock_counts c
        JOIN stock_locations l ON l.id = c.location_id
        LEFT JOIN users a ON a.id = c.approved_by
-       WHERE ${where} ORDER BY c.counted_on DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY c.counted_on DESC, c.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 

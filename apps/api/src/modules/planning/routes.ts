@@ -1,4 +1,5 @@
 import {scopedReads} from '../../common/scopedReads.js';
+import { likeContains } from "../../common/like.js";
 import {effectiveCustomFields,validateCustomFields} from "../../common/customFields.js";
 import type { FastifyInstance,FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
@@ -83,7 +84,7 @@ export async function registerPlanningRoutes(app:FastifyInstance,opts:{pool:Pool
  app.get('/api/v1/projects/:id/people',{preHandler:guard('task.read')},async req=>{
   const id=(req.params as {id:string}).id,u=actor(req),{limit,offset,q}=page(req);await projectAccess(pool,req,id);
   const values:unknown[]=[u.orgId],scope=resolveScopes(u.scopes),clause=scope.global?'TRUE':await employeeScopeClause(pool,u.orgId,scope,values);
-  const textIndex=values.push(`%${q.q??''}%`),limitIndex=values.push(limit+1),offsetIndex=values.push(offset);
+  const textIndex=values.push(likeContains(q.q??'')),limitIndex=values.push(limit+1),offsetIndex=values.push(offset);
   // The name from the employee record, so an assignee picker, a board avatar
   // and a "reviewer" custom field print who somebody is rather than the
   // login handle they happen to sign in with -- two people can share a
@@ -91,7 +92,7 @@ export async function registerPlanningRoutes(app:FastifyInstance,opts:{pool:Pool
   const rows=(await pool.query(`SELECT u.id,u.username,
       NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)),'') AS name, e.emp_no
     FROM users u LEFT JOIN employees e ON e.id=u.employee_id AND e.org_id=u.org_id
-    WHERE u.org_id=$1 AND u.auth_status='ACTIVE' AND (u.employee_id IS NULL OR u.employee_id IN(SELECT id FROM employees WHERE status='ACTIVE' AND ${clause})) AND u.username ILIKE $${textIndex} ORDER BY u.username,u.id LIMIT $${limitIndex} OFFSET $${offsetIndex}`,values)).rows;
+    WHERE u.org_id=$1 AND u.auth_status='ACTIVE' AND (u.employee_id IS NULL OR u.employee_id IN(SELECT id FROM employees WHERE status='ACTIVE' AND ${clause})) AND u.username ILIKE $${textIndex} ESCAPE '!' ORDER BY u.username,u.id LIMIT $${limitIndex} OFFSET $${offsetIndex}`,values)).rows;
   return {data:rows.slice(0,limit),has_more:rows.length>limit};
  });
  app.get('/api/v1/projects/:id/dependencies',{preHandler:guard('task.read')},async req=>{const id=(req.params as {id:string}).id;await projectAccess(pool,req,id);return {data:(await scopedReads(pool,pool,actor(req)).query('SELECT d.predecessor_id,d.successor_id FROM task_dependencies d JOIN tasks t ON t.id=d.successor_id JOIN tasks predecessor ON predecessor.id=d.predecessor_id WHERE t.org_id=$1 AND t.project_id=$2 ORDER BY d.predecessor_id,d.successor_id LIMIT 1000',[actor(req).orgId,id])).rows};});
@@ -162,7 +163,7 @@ export async function registerPlanningRoutes(app:FastifyInstance,opts:{pool:Pool
   // The id is matched against a uuid column and a text payload field, so it
   // is passed twice with a type each: one parameter cannot be both, and
   // asking Postgres to compare text with uuid was a 500 on every project.
-  return {data:(await pool.query("SELECT id,type,entity_type,entity_id,actor_id,created_at FROM domain_events WHERE org_id=$1 AND (entity_id=$2::uuid OR payload->>'project_id'=$3::text) ORDER BY created_at DESC LIMIT $4 OFFSET $5",[actor(req).orgId,id,id,limit,offset])).rows};
+  return {data:(await pool.query("SELECT id,type,entity_type,entity_id,actor_id,created_at FROM domain_events WHERE org_id=$1 AND (entity_id=$2::uuid OR payload->>'project_id'=$3::text) ORDER BY created_at DESC, id DESC LIMIT $4 OFFSET $5",[actor(req).orgId,id,id,limit,offset])).rows};
  });
  app.get('/api/v1/tasks/:id/activity',{preHandler:guard('task.read')},async req=>{const id=(req.params as {id:string}).id;await taskAccess(req,id);return {data:(await pool.query('SELECT id,type,actor_id,created_at FROM domain_events WHERE org_id=$1 AND entity_id=$2 ORDER BY created_at DESC LIMIT 100',[actor(req).orgId,id])).rows};});
  // Bulk actions reuse the same authenticated mutation routes and return each outcome.

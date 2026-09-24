@@ -159,6 +159,14 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
     const input = parse(budgetSchema, req.body);
     return {
       data: await mutate(pool, req, 'budget.revise', 'project_budget', async db => {
+        // One revision at a time per project (D-003): two read the same
+        // highest revision, and the second died on the live-row index as a
+        // bare "duplicate record" instead of becoming the next revision.
+        // NO KEY UPDATE: serialises revisions without blocking the tasks,
+        // cost entries and other rows that reference the project.
+        const locked = await db.query(
+          'SELECT id FROM projects WHERE id = $1 AND org_id = $2 FOR NO KEY UPDATE', [id, u.orgId]);
+        if (!locked.rowCount) fail('NOT_FOUND', 'Project not found', 404);
         const heads = new Set(input.lines.map(l => l.cost_head_id));
         if (heads.size !== input.lines.length) {
           fail('DUPLICATE_COST_HEAD', 'The same cost head appears twice in one budget');
@@ -245,7 +253,7 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
     const rows = (await pool.query(
       `SELECT e.*, h.code AS cost_head_code, h.name AS cost_head_name
        FROM project_cost_entries e JOIN cost_heads h ON h.id = e.cost_head_id
-       WHERE ${where} ORDER BY e.entry_date DESC, e.created_at DESC LIMIT $3 OFFSET $4`, values)).rows;
+       WHERE ${where} ORDER BY e.entry_date DESC, e.created_at DESC, e.id DESC LIMIT $3 OFFSET $4`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 
@@ -341,7 +349,7 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
        FROM expense_claims c
        LEFT JOIN users u ON u.id = c.claimant_user_id
        LEFT JOIN projects p ON p.id = c.project_id
-       WHERE ${where} ORDER BY c.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY c.created_at DESC, c.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 
@@ -725,8 +733,16 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
           `A ${String(claim.status).toLowerCase()} claim cannot be paid. Only an approved claim is a payable.`);
       }
       const approved = Number(claim.approved_amount ?? claim.total_allowed);
+      // Paid is both paths (D-008): reimbursements recorded here, and any
+      // payment allocated to the claim through finance, which cannot see
+      // this table's rows unless told. Either alone let the claim be paid
+      // in full twice.
       const paid = (await db.query(
-        'SELECT COALESCE(sum(amount),0) AS paid FROM expense_reimbursements WHERE claim_id = $1', [id])).rows[0];
+        `SELECT (SELECT COALESCE(sum(amount),0) FROM expense_reimbursements WHERE claim_id = $1)
+              + (SELECT COALESCE(sum(a.amount + a.tds_amount + a.advance_adjusted),0)
+                   FROM payment_allocations a JOIN payments p ON p.id = a.payment_id
+                  WHERE a.document_type = 'EXPENSE_CLAIM' AND a.document_id = $1
+                    AND a.reversed_at IS NULL AND p.reversed_at IS NULL) AS paid`, [id])).rows[0];
       const position = reimbursementPosition(approved, [{ amount: Number(paid.paid) }]);
       if (input.amount > position.outstanding) {
         fail('OVERPAYMENT',

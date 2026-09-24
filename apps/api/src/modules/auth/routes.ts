@@ -658,12 +658,13 @@ export async function registerAuthRoutes(
            LEFT JOIN role_permissions rp ON rp.role_id = ur.role_id
            LEFT JOIN employees e ON e.id = u.employee_id
           WHERE u.org_id = $1 AND u.id <> $2 AND u.auth_status = 'ACTIVE'
-            AND ($3 = '' OR u.username ILIKE '%' || $3 || '%'
-                 OR CONCAT_WS(' ', e.first_name, e.last_name) ILIKE '%' || $3 || '%')
+            AND ($3 = '' OR u.username ILIKE '%' || $3 || '%' ESCAPE '!'
+                 OR CONCAT_WS(' ', e.first_name, e.last_name) ILIKE '%' || $3 || '%' ESCAPE '!')
           GROUP BY u.id, u.username, u.email, u.auth_status, e.first_name, e.last_name, e.designation
           ORDER BY COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name, e.last_name)), ''), u.username)
           LIMIT 200`,
-        [me.orgId, me.id, q],
+        // Taken literally: % and _ are not wildcards to whoever typed them (D-007).
+        [me.orgId, me.id, q.replace(/[!%_]/g, (c) => "!" + c)],
       );
       /*
        * Every candidate is returned, allowed or not, each carrying the

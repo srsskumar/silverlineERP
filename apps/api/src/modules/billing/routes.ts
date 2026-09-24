@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { lineAmount } from "@silverline/shared";
 import type { Pool, PoolClient } from 'pg';
 import {
   boqItemSchema, raBillSchema, deductionPolicySchema, advanceSchema,
@@ -83,7 +84,7 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
     await projectAccess(pool, req, id);
     const row = await mutate(pool, req, 'boq.create', 'boq_item', async db => {
       await inOrg(db, 'projects', id, u.orgId);
-      const amount = Math.round(input.quantity * input.rate * 100) / 100;
+      const amount = lineAmount(input.quantity, input.rate);
       return (await db.query(
         `INSERT INTO boq_items(org_id, created_by, project_id, item_code, section, description,
            unit, quantity, rate, amount, sort_order)
@@ -166,7 +167,7 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
     const rows = (await pool.query(
       `SELECT a.*, p.code AS project_code, p.name AS project_name
        FROM project_advances a JOIN projects p ON p.id = a.project_id
-       WHERE ${where} ORDER BY a.paid_on DESC, a.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY a.paid_on DESC, a.created_at DESC, a.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 
@@ -690,7 +691,8 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
     { preHandler: guard('rabill.read') }, async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const q = req.query as { period_to?: string };
-      const periodTo = q.period_to ?? new Date().toISOString().slice(0, 10);
+      // The org's day, not UTC's: before 05:30 IST that was yesterday (D-013).
+      const periodTo = q.period_to ?? businessDay();
       if (!dateStringSchema.safeParse(periodTo).success) {
         fail('VALIDATION_ERROR',
           'Give the date to measure up to as YYYY-MM-DD, and make it a real date.', 422);

@@ -35,6 +35,7 @@ import {
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { z } from 'zod';
 import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
+import { orgTodaySql } from '../../common/orgTime.js';
 
 /**
  * Land survey progress (§59).
@@ -4962,7 +4963,7 @@ export async function registerSurveyRoutes(
                     -- work still open. Null before it starts, because a stage
                     -- nobody has begun has not taken any days.
                     'days', CASE WHEN vst.started_on IS NULL THEN NULL
-                                 ELSE COALESCE(vst.completed_on, CURRENT_DATE)
+                                 ELSE COALESCE(vst.completed_on, ${orgTodaySql('sv.org_id')})
                                       - vst.started_on END)
                   ) FILTER (WHERE st.code IS NOT NULL), '[]'::json) AS stage_plan
          FROM survey_villages sv
@@ -5889,7 +5890,7 @@ export async function registerSurveyRoutes(
       }
       const rows = (await pool.query(
         `SELECT s.*, p.name AS project_name,
-                (s.active AND s.active_until >= CURRENT_DATE) AS live,
+                (s.active AND s.active_until >= ${orgTodaySql('s.org_id')}) AS live,
                 (SELECT count(*)::int FROM survey_alert_sent a
                   WHERE a.subscription_id = s.id AND a.status = 'QUEUED') AS queued,
                 (SELECT count(*)::int FROM survey_alert_sent a

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { addMoney, lineAmount } from './money-exact.js';
 import type { RoleCode } from './rbac.js';
 import { PAYMENT_MODES } from './financial-control.js';
 
@@ -214,7 +215,8 @@ export interface LineEvaluation {
   credit: Creditability;
 }
 
-const round2 = (n: number): number => Math.round(n * 100) / 100;
+// To the paisa in integers (D-010): no float drift, and no ceiling on size.
+const round2 = (n: number): number => addMoney(n);
 
 /**
  * An entitlement's value: units × the rate the policy sets.
@@ -223,7 +225,8 @@ const round2 = (n: number): number => Math.round(n * 100) / 100;
  * the distinction the specification collapses.
  */
 export function entitlementAmount(units: number, unitRate: number): number {
-  return round2(Math.max(0, units) * Math.max(0, unitRate));
+  // 12.5 km x 4.35 is 54.37499... as a float; exact, it is 54.375 -> 54.38.
+  return lineAmount(Math.max(0, units), Math.max(0, unitRate));
 }
 
 export function evaluateLine(

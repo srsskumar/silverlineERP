@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { addMoney, lineAmount, percentOf } from "@silverline/shared";
 import type { Pool, PoolClient } from 'pg';
 import {
   requisitionSchema, purchaseOrderSchema, grnSchema,
@@ -12,6 +13,7 @@ import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail, projectAccess } from '../../common/domain.js';
 import { levelsForPolicy, submitForApproval } from '../../common/approvalRouting.js';
 import { itemOnHand, lockItem, notifyLowStockCrossing } from '../../common/stockLedger.js';
+
 
 /**
  * Procurement (§6.6, §13.2, §43).
@@ -57,7 +59,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
        FROM purchase_requisitions r
        LEFT JOIN users u ON u.id = r.requested_by
        LEFT JOIN projects p ON p.id = r.project_id
-       WHERE ${where} ORDER BY r.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY r.created_at DESC, r.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 
@@ -132,7 +134,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
     const rows = (await pool.query(
       `SELECT o.*, v.name AS vendor_name FROM purchase_orders o
        JOIN vendors v ON v.id = o.vendor_id
-       WHERE ${where} ORDER BY o.po_date DESC, o.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY o.po_date DESC, o.created_at DESC, o.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 
@@ -172,6 +174,13 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
         fail('VENDOR_BLACKLISTED',
           `${vendor.name} is blacklisted: ${vendor.blacklist_reason ?? 'no reason recorded'}`);
       }
+      // Deactivating a vendor is how a supplier is retired (D-005); a new
+      // order to one is the thing the flag exists to stop. Orders already
+      // placed carry on — only new ones are refused.
+      if (String(vendor.status ?? 'ACTIVE') !== 'ACTIVE') {
+        fail('VENDOR_INACTIVE',
+          `${vendor.name} has been deactivated. Reactivate the vendor, or order from another one.`);
+      }
       if (input.project_id) await inOrg(db, 'projects', input.project_id, u.orgId);
 
       // §6.6: an order may not exceed the requisition that authorised it.
@@ -204,12 +213,12 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
       }
 
       const lines = input.lines.map(l => {
-        const taxable = Math.round(l.quantity * l.unit_rate * 100) / 100;
-        const tax = Math.round(taxable * l.gst_rate_pct) / 100;
-        return { ...l, taxable, tax, total: Math.round((taxable + tax) * 100) / 100 };
+        const taxable = lineAmount(l.quantity, l.unit_rate);
+        const tax = percentOf(taxable, l.gst_rate_pct);
+        return { ...l, taxable, tax, total: addMoney(taxable, tax) };
       });
-      const taxableValue = lines.reduce((t, l) => t + l.taxable, 0);
-      const taxAmount = lines.reduce((t, l) => t + l.tax, 0);
+      const taxableValue = addMoney(...lines.map(l => l.taxable));
+      const taxAmount = addMoney(...lines.map(l => l.tax));
 
       const po = (await db.query(
         `INSERT INTO purchase_orders(org_id, created_by, po_number, vendor_id, requisition_id,
@@ -220,7 +229,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
         [u.orgId, u.id, input.po_number, input.vendor_id, input.requisition_id ?? null,
          input.project_id ?? null, input.po_date, input.delivery_date ?? null,
          input.payment_terms ?? null, input.delivery_address ?? null, input.place_of_supply ?? null,
-         taxableValue.toFixed(2), taxAmount.toFixed(2), (taxableValue + taxAmount).toFixed(2),
+         taxableValue.toFixed(2), taxAmount.toFixed(2), addMoney(taxableValue, taxAmount).toFixed(2),
          override ? u.id : null, override?.reason ?? null, override ? new Date() : null])).rows[0];
 
       let lineNo = 0;
@@ -245,7 +254,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
            VALUES($1,'PURCHASE_ORDER',$2,'PAYMENT',$3,$4,$5)
            ON CONFLICT DO NOTHING`,
           [u.orgId, input.requisition_id, po.id,
-           JSON.stringify({ total_value: (taxableValue + taxAmount).toFixed(2) }), u.id]);
+           JSON.stringify({ total_value: addMoney(taxableValue, taxAmount).toFixed(2) }), u.id]);
       }
       return { ...po, lines };
     });
@@ -508,7 +517,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
               (SELECT count(*)::int FROM rfq_vendors iv WHERE iv.rfq_id = r.id) AS invited_count,
               (SELECT count(*)::int FROM vendor_quotes vq WHERE vq.rfq_id = r.id) AS quote_count
        FROM rfqs r LEFT JOIN vendors v ON v.id = r.selected_vendor_id
-       WHERE ${where} ORDER BY r.due_date DESC, r.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY r.due_date DESC, r.created_at DESC, r.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 
@@ -747,12 +756,12 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
         if (!change) continue;
         const quantity = change.quantity ?? Number(l.quantity);
         const rate = change.unit_rate ?? Number(l.unit_rate);
-        const taxable = Math.round(quantity * rate * 100) / 100;
-        const tax = Math.round(taxable * Number(l.gst_rate_pct)) / 100;
+        const taxable = lineAmount(quantity, rate);
+        const tax = percentOf(taxable, Number(l.gst_rate_pct));
         await db.query(
           `UPDATE purchase_order_lines SET quantity=$2, unit_rate=$3, taxable_value=$4,
              tax_amount=$5, line_total=$6 WHERE id=$1`,
-          [l.id, quantity, rate, taxable.toFixed(2), tax.toFixed(2), (taxable + tax).toFixed(2)]);
+          [l.id, quantity, rate, taxable.toFixed(2), tax.toFixed(2), addMoney(taxable, tax).toFixed(2)]);
       }
 
       const totals = (await db.query(
@@ -936,7 +945,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
     const rows = (await pool.query(
       `SELECT r.*, g.grn_no FROM vendor_returns r
        JOIN goods_receipt_notes g ON g.id = r.grn_id
-       WHERE ${where} ORDER BY r.return_date DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY r.return_date DESC, r.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 }

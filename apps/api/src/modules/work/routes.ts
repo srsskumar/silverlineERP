@@ -1,4 +1,5 @@
 import {dateStringSchema, businessDay} from "@silverline/shared";
+import { likeContains } from "../../common/like.js";
 import {validateCustomFields} from "../../common/customFields.js";
 import {encodeBlob, readBlob} from "../../common/blobStore.js";
 import {scanUpload} from "../../common/fileSafety.js";
@@ -1010,7 +1011,7 @@ export async function registerWorkRoutes(
        FROM users u
        LEFT JOIN employees e ON e.id = u.employee_id AND e.org_id = u.org_id
        WHERE u.org_id = $1 AND u.auth_status = 'ACTIVE'
-       ORDER BY COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), u.username)
+       ORDER BY COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), u.username), u.id
        LIMIT $2 OFFSET $3`,
       [user.orgId, limit + 1, offset],
     )).rows;
@@ -1306,9 +1307,9 @@ export async function registerWorkRoutes(
       clauses.push(`workspace_id = $${values.length}::uuid`);
     }
     if (q) {
-      values.push(`%${q}%`);
+      values.push(likeContains(q));
       clauses.push(
-        `(code ILIKE $${values.length} OR name ILIKE $${values.length})`,
+        `(code ILIKE $${values.length} ESCAPE '!' OR name ILIKE $${values.length} ESCAPE '!')`,
       );
     }
     if (cursor) {
@@ -1803,9 +1804,9 @@ export async function registerWorkRoutes(
       clauses.push(slaFilterClause(sla));
     }
     if (q) {
-      values.push(`%${q}%`);
+      values.push(likeContains(q));
       clauses.push(
-        `(title ILIKE $${values.length} OR description ILIKE $${values.length})`,
+        `(title ILIKE $${values.length} ESCAPE '!' OR description ILIKE $${values.length} ESCAPE '!')`,
       );
     }
     if (label_ids) {

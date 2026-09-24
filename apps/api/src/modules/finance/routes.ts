@@ -61,13 +61,20 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
    */
   async function documentValue(
     db: Pool | PoolClient, orgId: string, type: string, id: string, lock = false,
-  ): Promise<{ invoiced: number; dueDate: string | null }> {
+  ): Promise<{ invoiced: number; dueDate: string | null; notPayable?: string }> {
     const forUpdate = lock ? ' FOR UPDATE' : '';
     if (type === 'RA_BILL') {
       const row = (await db.query(
-        `SELECT certified_amount, gross_value FROM ra_bills WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
+        `SELECT certified_amount, gross_value, status FROM ra_bills WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
       if (!row) fail('NOT_FOUND', 'RA bill not found', 404);
-      return { invoiced: Number(row.certified_amount ?? row.gross_value), dueDate: null };
+      // Only a certified bill is a receivable (D-008). A draft one is still a
+      // measurement: receipting it at its gross leaves money allocated to a
+      // figure the client may certify lower, or cancel.
+      return {
+        invoiced: Number(row.certified_amount ?? row.gross_value), dueDate: null,
+        notPayable: ['CERTIFIED', 'PAID'].includes(String(row.status)) ? undefined
+          : `This RA bill is ${String(row.status).toLowerCase()}. Only a certified bill can take a receipt.`,
+      };
     }
     if (type === 'VENDOR_INVOICE') {
       const row = (await db.query(
@@ -76,10 +83,33 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
       return { invoiced: Number(row.total), dueDate: row.due_date ? iso(row.due_date) : null };
     }
     if (type === 'EXPENSE_CLAIM') {
+      /*
+       * A claim is also paid through POST /expense-claims/:id/reimburse,
+       * which writes expense_reimbursements rather than an allocation (D-008).
+       * What that path has paid is taken off here, and that path counts the
+       * allocations in turn, so the two cannot each pay the claim in full.
+       * Both lock the claim row, so they also serialise against each other.
+       *
+       * The lock and the read are two statements on purpose. Under READ
+       * COMMITTED a statement that waits for a row lock keeps the snapshot it
+       * started with, so a sum taken in the same statement missed a
+       * reimbursement committed while it waited (a part payment does not
+       * touch the claim row, so nothing forces a re-read) and paid twice.
+       * The second statement starts after the lock is held and sees it.
+       */
       const row = (await db.query(
-        `SELECT approved_amount, total_allowed FROM expense_claims WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
+        `SELECT approved_amount, total_allowed, status
+           FROM expense_claims WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
       if (!row) fail('NOT_FOUND', 'Expense claim not found', 404);
-      return { invoiced: Number(row.approved_amount ?? row.total_allowed), dueDate: null };
+      const reimbursedPaise = Number((await db.query(
+        `SELECT COALESCE(round(sum(amount) * 100), 0)::bigint AS p
+           FROM expense_reimbursements WHERE claim_id = $1`, [id])).rows[0].p);
+      const approvedPaise = Math.round(Number(row.approved_amount ?? row.total_allowed) * 100);
+      return {
+        invoiced: (approvedPaise - reimbursedPaise) / 100, dueDate: null,
+        notPayable: ['APPROVED', 'REIMBURSED'].includes(String(row.status)) ? undefined
+          : `This claim is ${String(row.status).toLowerCase()}. Only an approved claim can be paid.`,
+      };
     }
     const row = (await db.query(
       `SELECT amount FROM project_advances WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
@@ -169,7 +199,7 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
                         WHERE a.payment_id = p.id AND a.reversed_at IS NULL), 0) AS allocated
        FROM payments p
        LEFT JOIN projects pr ON pr.id = p.project_id
-       WHERE ${where} ORDER BY p.paid_on DESC, p.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY p.paid_on DESC, p.created_at DESC, p.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return {
       data: rows.slice(0, limit).map(r => ({
         ...r,
@@ -266,6 +296,7 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
         }));
 
       const doc = await documentValue(db, u.orgId, input.document_type, input.document_id, true);
+      if (doc.notPayable) fail('DOCUMENT_NOT_PAYABLE', doc.notPayable);
       const position = settlementPosition({
         invoiced: doc.invoiced,
         allocations: await allocationsFor(db, input.document_type, input.document_id),
@@ -333,7 +364,7 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
     if (q.bank_account) { values.push(q.bank_account); where += ` AND bank_account = $${values.length}`; }
     const rows = (await pool.query(
       `SELECT * FROM bank_transactions WHERE ${where}
-       ORDER BY value_date DESC, created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+       ORDER BY value_date DESC, created_at DESC, id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 

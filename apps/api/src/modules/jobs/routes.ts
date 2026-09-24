@@ -9,7 +9,7 @@ import {runJobs} from '../automation/worker.js';
 import {timingSafeEqual} from 'node:crypto';
 export async function registerJobRoutes(app:FastifyInstance,opts:{pool:Pool;jwtSecret:string}){
  const auth=buildAuthenticate(opts),guard=requirePermission(auth,'report.generate'),{pool}=opts;
- app.get('/api/v1/report-schedules',{preHandler:guard},async req=>{const {limit,offset}=page(req),u=actor(req);const rows=(await pool.query('SELECT * FROM report_schedules WHERE org_id=$1 AND created_by=$2 ORDER BY created_at DESC LIMIT $3 OFFSET $4',[u.orgId,u.id,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
+ app.get('/api/v1/report-schedules',{preHandler:guard},async req=>{const {limit,offset}=page(req),u=actor(req);const rows=(await pool.query('SELECT * FROM report_schedules WHERE org_id=$1 AND created_by=$2 ORDER BY created_at DESC, id DESC LIMIT $3 OFFSET $4',[u.orgId,u.id,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
  app.post('/api/v1/report-schedules',{preHandler:guard},async(req,reply)=>{
   const i=parse(reportCreateSchema.extend({name:z.string().trim().min(1).max(200),frequency:z.enum(['DAILY','WEEKLY','MONTHLY'])}),req.body),u=actor(req);
   if(!u.permissions.includes(REPORT_DOMAIN_READ[i.type]))fail('FORBIDDEN','This report type is unavailable',403);
@@ -19,7 +19,7 @@ export async function registerJobRoutes(app:FastifyInstance,opts:{pool:Pool;jwtS
   const id=(req.params as {id:string}).id,u=actor(req),i=parse(z.object({active:z.boolean()}),req.body);
   return mutate(pool,req,'report.schedule_update','report_schedule',async db=>{const old=(await db.query('SELECT * FROM report_schedules WHERE id=$1 AND org_id=$2 AND created_by=$3 FOR UPDATE',[id,u.orgId,u.id])).rows[0];if(!old)fail('NOT_FOUND','Schedule not found',404);version(req,old);return (await db.query('UPDATE report_schedules SET active=$2,failures=0,error=NULL,version=version+1 WHERE id=$1 RETURNING *',[id,i.active])).rows[0];});
  });
- app.get('/api/v1/reports',{preHandler:guard},async req=>{const {limit,offset}=page(req),u=actor(req),rows=(await pool.query("SELECT id,entry->>'type' AS type,entry->>'format' AS format,entry->>'status' AS status,entry->>'error' AS error,entry->>'rows' AS rows,entry->>'downloadUrl' AS download_url,created_at FROM report_registry WHERE org_id=$1 AND created_by=$2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",[u.orgId,u.id,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
+ app.get('/api/v1/reports',{preHandler:guard},async req=>{const {limit,offset}=page(req),u=actor(req),rows=(await pool.query("SELECT id,entry->>'type' AS type,entry->>'format' AS format,entry->>'status' AS status,entry->>'error' AS error,entry->>'rows' AS rows,entry->>'downloadUrl' AS download_url,created_at FROM report_registry WHERE org_id=$1 AND created_by=$2 ORDER BY created_at DESC, id DESC LIMIT $3 OFFSET $4",[u.orgId,u.id,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
  app.post('/api/v1/client-errors',{preHandler:[auth,createRateLimiter({max:10,windowMs:60000})]},async req=>{
   const i=parse(z.object({fingerprint:z.string().regex(/^[a-f0-9]{64}$/),category:z.enum(['FATAL_JS','RENDER_JS']),platform:z.enum(['android','ios','web']),app_version:z.string().regex(/^[0-9.]{1,30}$/)}).strict(),req.body);
   return mutate(pool,req,'client.error','client_error',async()=>({...i,accepted:true}));

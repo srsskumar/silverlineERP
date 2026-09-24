@@ -1,4 +1,5 @@
 import {scanUpload} from "../../common/fileSafety.js";
+import { likeContains } from "../../common/like.js";
 import {encodeBlob, readBlob} from "../../common/blobStore.js";
 import {mutationRoute} from "../../common/mutationRoute.js";
 import { createHash } from "node:crypto";
@@ -50,6 +51,7 @@ import {
   storeIdempotentResponse,
 } from "../../common/idempotency.js";
 import { parseIfMatch } from '../../common/ifMatch.js';
+import { orgTodaySql } from "../../common/orgTime.js";
 
 export interface EmployeeRoutesOptions {
   pool: Pool;
@@ -545,9 +547,9 @@ export async function registerEmployeeRoutes(
       clauses.push(`district_id = $${values.length}::uuid`);
     }
     if (q) {
-      values.push(`%${q}%`);
+      values.push(likeContains(q));
       clauses.push(
-        `(emp_no ILIKE $${values.length} OR first_name ILIKE $${values.length} OR last_name ILIKE $${values.length} OR phone ILIKE $${values.length})`,
+        `(emp_no ILIKE $${values.length} ESCAPE '!' OR first_name ILIKE $${values.length} ESCAPE '!' OR last_name ILIKE $${values.length} ESCAPE '!' OR phone ILIKE $${values.length} ESCAPE '!')`,
       );
     }
     if (cursor) {
@@ -2410,7 +2412,7 @@ export async function registerEmployeeRoutes(
             await db.query(
               `INSERT INTO survey_project_employees(org_id, survey_project_id, employee_id,
                  project_role, assigned_on, created_by)
-               VALUES($1,$2,$3,$4,CURRENT_DATE,$5)
+               VALUES($1,$2,$3,$4,${orgTodaySql("$1")},$5)
                ON CONFLICT (survey_project_id, employee_id)
                DO UPDATE SET project_role = EXCLUDED.project_role, released_on = NULL`,
               [user.orgId, p.survey_project_id, id, p.project_role, user.id]);
@@ -2422,7 +2424,7 @@ export async function registerEmployeeRoutes(
            */
           const keep = input.programmes.map((p) => p.survey_project_id);
           await db.query(
-            `UPDATE survey_project_employees SET released_on = CURRENT_DATE
+            `UPDATE survey_project_employees SET released_on = ${orgTodaySql("$2")}
               WHERE employee_id = $1 AND org_id = $2 AND released_on IS NULL
                 AND NOT (survey_project_id = ANY($3::uuid[]))`,
             [id, user.orgId, keep]);

@@ -33,11 +33,8 @@ import {
   Subtle,
 } from "../src/ui/primitives";
 import { space, useTheme } from "../src/theme";
+import { formatMoney as money } from "../src/money";
 
-function money(v: number | string | undefined | null): string {
-  const n = Number(v ?? 0);
-  return `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
-}
 
 function PayrollScreen() {
   const { canDo } = useAuth();

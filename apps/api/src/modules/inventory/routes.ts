@@ -1,4 +1,5 @@
 import {resolveScopes,employeeScopeClause} from '../../common/scopes.js';
+import { likeContains } from "../../common/like.js";
 import {scopedReads} from "../../common/scopedReads.js";
 import type { FastifyInstance,FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
@@ -65,7 +66,7 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
   app.get(`/api/v1/${path}`,{preHandler:guard(`${permission}.read`)},async req=>{
    const u=actor(req),{limit,offset,q}=page(req),values:unknown[]=[u.orgId,limit+1,offset];
    let where='a.org_id=$1';
-   if(q.search){values.push(`%${q.search}%`);where+=` AND (a.name ILIKE $${values.length} OR ${table==='assets'?'a.asset_code':'a.code'} ILIKE $${values.length})`;}
+   if(q.search){values.push(likeContains(q.search));where+=` AND (a.name ILIKE $${values.length} ESCAPE '!' OR ${table==='assets'?'a.asset_code':'a.code'} ILIKE $${values.length} ESCAPE '!')`;}
    if(table==='assets')where+=` AND ${await assetClause(req,values,'a.id')}`;
    const extra=table==='inventory_items'
     // A transfer moves stock between locations and leaves the item's total alone.
@@ -716,7 +717,7 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
  // Reading past audits is a read. The list already narrows to the reader's
  // own audits unless their scope is global, so asset.read is the right gate;
  // asset.manage locked the auditor out of the one register they exist to check.
- app.get('/api/v1/asset-audits',{preHandler:guard('asset.read')},async req=>{const {limit,offset}=page(req),u=actor(req),global=resolveScopes(u.scopes).global,rows=(await pool.query('SELECT * FROM asset_audits WHERE org_id=$1 AND ($4 OR created_by=$5) ORDER BY created_at DESC LIMIT $2 OFFSET $3',[u.orgId,limit+1,offset,global,u.id])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
+ app.get('/api/v1/asset-audits',{preHandler:guard('asset.read')},async req=>{const {limit,offset}=page(req),u=actor(req),global=resolveScopes(u.scopes).global,rows=(await pool.query('SELECT * FROM asset_audits WHERE org_id=$1 AND ($4 OR created_by=$5) ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3',[u.orgId,limit+1,offset,global,u.id])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
  app.post('/api/v1/asset-audits',{preHandler:guard('asset.manage')},async(req,reply)=>{
   const i=parse(assetAuditSchema,req.body),u=actor(req);
   const result=await mutate(pool,req,'asset.audit','asset_audit',async db=>{

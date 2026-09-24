@@ -40,12 +40,8 @@ import {
   Subtle,
 } from "../src/ui/primitives";
 import { space, useTheme } from "../src/theme";
+import { formatMoneyOrNull as money } from "../src/money";
 
-function money(v: number | string | undefined | null): string | null {
-  const n = Number(v ?? 0);
-  if (!n) return null;
-  return `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
-}
 
 function ClientsScreen() {
   const { canDo } = useAuth();
