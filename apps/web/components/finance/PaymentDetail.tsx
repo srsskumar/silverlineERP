@@ -130,7 +130,7 @@ export function PaymentDetail({ id }: { id: string }) {
                           <TD className="text-right tabular-nums">{money(a.amount)}</TD>
                           <TD className="text-right tabular-nums">{money(a.tds_amount)}</TD>
                           <TD className="text-right tabular-nums">{money(a.retention_amount)}</TD>
-                          <TD>{a.reversed_at ? <Badge tone="neutral" size="sm">Reversed</Badge> : <Badge tone="success" size="sm">Live</Badge>}</TD>
+                          <TD>{a.reversed_at ? (<Badge tone="neutral" size="sm">Reversed</Badge>) : (<Badge tone="success" size="sm">Live</Badge>)}</TD>
                         </TR>
                       ))}
                     </TBody>

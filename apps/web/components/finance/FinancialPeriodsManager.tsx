@@ -134,7 +134,7 @@ export function FinancialPeriodsManager() {
                     <TD>
                       <Badge tone={p.status === 'CLOSED' ? 'neutral' : 'success'} size="sm">{p.status}</Badge>
                     </TD>
-                    <TD tone="subtle" className="text-2xs">
+                    <TD tone="subtle">
                       {p.status === 'CLOSED' && p.closed_at
                         ? `Closed ${day(p.closed_at)}${p.closed_by_username ? ` by ${p.closed_by_username}` : ''}`
                         : p.reopened_at

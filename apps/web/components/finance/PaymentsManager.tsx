@@ -84,7 +84,7 @@ export function PaymentsManager() {
                     </TD>
                     <TD tone="muted">{p.mode}</TD>
                     <TD>
-                      {p.reversed_at ? <Badge tone="danger" size="sm">Reversed</Badge> : <Badge tone="success" size="sm">Live</Badge>}
+                      {p.reversed_at ? (<Badge tone="danger" size="sm">Reversed</Badge>) : (<Badge tone="success" size="sm">Live</Badge>)}
                     </TD>
                     <TD align="right">
                       <Link href={`/payments/${p.id}`} className="text-xs font-medium text-primary underline">

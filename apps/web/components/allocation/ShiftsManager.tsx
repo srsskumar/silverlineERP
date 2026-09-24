@@ -12,6 +12,13 @@ import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Tabl
 import { Badge } from '@/components/ui/Badge';
 import { ShiftForm } from './ShiftForm';
 
+/** "09:00 → 18:00" — starts_at/ends_at are a wall-clock TIME, not a calendar
+ *  date, so this is not what day()/dayTime() are for; named and pulled out
+ *  of the JSX so it reads as a formatter, not a raw field access. */
+function shiftWindow(s: Shift): string {
+  return `${String(s.starts_at).slice(0, 5)} → ${String(s.ends_at).slice(0, 5)}`;
+}
+
 /** Shift definitions (§47) — the windows a roster entry books an employee into. */
 export function ShiftsManager() {
   const client = useQueryClient();
@@ -53,9 +60,9 @@ export function ShiftsManager() {
                   <TR key={s.id}>
                     <TD mono className="text-text">{s.code}</TD>
                     <TD className="text-text">{s.name}</TD>
-                    <TD tone="muted">{String(s.starts_at).slice(0, 5)} → {String(s.ends_at).slice(0, 5)}</TD>
+                    <TD tone="muted">{shiftWindow(s)}</TD>
                     <TD className="text-right tabular-nums">{s.shift_hours}</TD>
-                    <TD tone="subtle" className="text-2xs">{s.rest_days.length ? s.rest_days.join(', ') : '—'}</TD>
+                    <TD tone="subtle">{s.rest_days.length ? s.rest_days.join(', ') : '—'}</TD>
                     <TD><Badge tone={s.active ? 'success' : 'neutral'} size="sm">{s.active ? 'Active' : 'Inactive'}</Badge></TD>
                     <TD align="right">
                       <Button variant="secondary" size="sm" onClick={() => setFormOpen(s)}>Edit</Button>
