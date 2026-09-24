@@ -23,11 +23,7 @@ import {
 import { buildAuthenticate, requirePermission, scopesForPermission } from "../../common/auth.js";
 import { writeAudit } from "../../common/audit.js";
 import { sendError } from "../../common/httpErrors.js";
-import {
-  idempotencyKeyOf,
-  replayIfSeen,
-  storeIdempotentResponse,
-} from "../../common/idempotency.js";
+import { idempotencyKeyOf } from "../../common/idempotency.js";
 import { redactPiiForAudit } from "../../common/crypto.js";
 import { parseIfMatch } from '../../common/ifMatch.js';
 import { projectRestriction } from '../../common/scopedReads.js';
@@ -418,10 +414,18 @@ export async function registerS5Routes(
   }
 
   // ------------------------------------------------ POST /boards
-  app.post("/api/v1/boards", { preHandler: canManageBoard }, async (req, reply) => {
-    if (await replayIfSeen(opts.pool, req, reply)) {
-      return;
-    }
+  //
+  // C-009 (2026-09-24 R6 contract sweep): this used to call replayIfSeen()/
+  // storeIdempotentResponse() directly, its own bare pair rather than the
+  // mutationRoute() wrapper every sibling route in this file uses.
+  // replayIfSeen() only matches on key+method+path -- it never checks the
+  // new request's body against what was stored -- so a reused key with a
+  // genuinely different body silently replayed the *first* board's response
+  // instead of 409ing, and no second board was ever created. mutationRoute()
+  // does the same replay, but with the body-hash check every other create
+  // route already gets (IDEMPOTENCY_MISMATCH/409 on a mismatch). Moving this
+  // route onto it closes that gap instead of special-casing it.
+  app.post("/api/v1/boards", { preHandler: canManageBoard }, async (req, reply) => {return mutationRoute(opts.pool,req,reply,async(db,reply)=>{
     const parsed = boardCreateSchema.safeParse(req.body);
     if (!parsed.success) {
       return sendError(reply, req.requestId, {
@@ -440,7 +444,7 @@ export async function registerS5Routes(
       });
     }
     const d = parsed.data;
-    const projRes = await opts.pool.query(
+    const projRes = await db.query(
       "SELECT id, project_type_id FROM projects WHERE id = $1::uuid AND org_id = $2",
       [d.project_id, user.orgId],
     );
@@ -468,47 +472,32 @@ export async function registerS5Routes(
     if (!columns) {
       return;
     }
-    const client = await opts.pool.connect();
-    let board: BoardRow;
-    try {
-      await client.query("BEGIN");
-      const ins = await client.query(
-        `INSERT INTO boards
-           (org_id, project_id, name, view_type, filter_config, created_by, updated_by)
-         VALUES ($1, $2::uuid, $3, $4, $5, $6::uuid, $6::uuid)
-         RETURNING ${BOARD_COLS}`,
-        [
-          user.orgId,
-          project.id,
-          d.name,
-          d.view_type,
-          JSON.stringify(d.filter_config ?? {}),
-          user.id,
-        ],
+    const ins = await db.query(
+      `INSERT INTO boards
+         (org_id, project_id, name, view_type, filter_config, created_by, updated_by)
+       VALUES ($1, $2::uuid, $3, $4, $5, $6::uuid, $6::uuid)
+       RETURNING ${BOARD_COLS}`,
+      [
+        user.orgId,
+        project.id,
+        d.name,
+        d.view_type,
+        JSON.stringify(d.filter_config ?? {}),
+        user.id,
+      ],
+    );
+    const board = ins.rows[0] as BoardRow;
+    for (const c of columns) {
+      await db.query(
+        `INSERT INTO board_columns
+           (board_id, status_code, name, position, wip_limit, color)
+         VALUES ($1::uuid, $2, $3, $4, $5, $6)`,
+        [board.id, c.status_code, c.name, c.position, c.wip_limit, c.color],
       );
-      board = ins.rows[0] as BoardRow;
-      for (const c of columns) {
-        await client.query(
-          `INSERT INTO board_columns
-             (board_id, status_code, name, position, wip_limit, color)
-           VALUES ($1::uuid, $2, $3, $4, $5, $6)`,
-          [board.id, c.status_code, c.name, c.position, c.wip_limit, c.color],
-        );
-      }
-      await client.query("COMMIT");
-    } catch (err) {
-      try {
-        await client.query("ROLLBACK");
-      } catch {
-        // ignore rollback failure
-      }
-      client.release();
-      throw err;
     }
-    client.release();
     const body = toBoardShape(board);
     const meta = metaOf(req);
-    await writeAudit(opts.pool, {
+    await writeAudit(db, {
       orgId: user.orgId,
       actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
       actorIp: meta.ip,
@@ -520,9 +509,9 @@ export async function registerS5Routes(
       requestId: req.requestId,
       idempotencyKey: idempotencyKeyOf(req),
     });
-    await storeIdempotentResponse(opts.pool, req, user.id, 201, body);
     return reply.status(201).send(body);
-  });
+
+});});
 
   // ------------------------------------------------ GET /boards
   app.get("/api/v1/boards", { preHandler: canReadBoard }, async (req, reply) => {

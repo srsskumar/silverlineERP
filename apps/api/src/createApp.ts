@@ -50,6 +50,20 @@ export interface BuildAppOptions extends ApiConfigOverrides {
   pool?: Pool;
 }
 
+/** One registered route, as the contract suite's registry records it. */
+export interface RouteRegistryEntry {
+  method: string;
+  url: string;
+  /** Permission codes required by the route's tagged preHandler guard(s); empty when the route only runs bare `authenticate` or checks a permission inline in its handler body. */
+  permissions: string[];
+}
+
+declare module "fastify" {
+  interface FastifyInstance {
+    routeRegistry: RouteRegistryEntry[];
+  }
+}
+
 export async function buildApp(
   options: BuildAppOptions = {},
 ): Promise<FastifyInstance> {
@@ -215,6 +229,41 @@ export async function buildApp(
       return reply.status(503).send({ status: "degraded" });
     }
   });
+
+  /*
+   * Route registry for the contract test suite (apps/api/test/contract):
+   * every route's method/url/required-permissions, built mechanically from
+   * the actual preHandler chain (via the `requiredPermissions` metadata
+   * `requireAllPermissions` tags its guard with — see common/auth.ts) rather
+   * than by grepping route files. A route with no permission-tagged
+   * preHandler (bare `authenticate`, or a permission checked inline in the
+   * handler body) reports an empty `permissions` array; the contract suite
+   * treats those as needing an explicit, documented expectation.
+   */
+  const routeRegistry: RouteRegistryEntry[] = [];
+  app.addHook("onRoute", (routeOptions) => {
+    const methods = Array.isArray(routeOptions.method)
+      ? routeOptions.method
+      : [routeOptions.method];
+    const handlers = ([] as unknown[]).concat(
+      (routeOptions.preHandler as unknown) ?? [],
+    );
+    const permissions = new Set<string>();
+    for (const h of handlers) {
+      const tagged = (h as { requiredPermissions?: readonly string[] })
+        .requiredPermissions;
+      tagged?.forEach((p) => permissions.add(p));
+    }
+    for (const method of methods) {
+      if (method === "HEAD" || method === "OPTIONS") continue;
+      routeRegistry.push({
+        method: method as string,
+        url: routeOptions.url,
+        permissions: [...permissions],
+      });
+    }
+  });
+  app.decorate("routeRegistry", routeRegistry);
 
   await registerAuthRoutes(app, {
     pool,

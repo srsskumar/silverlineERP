@@ -497,11 +497,15 @@ describe("boards", () => {
       payload: { project_id: p.id, name: "First", view_type: "LIST" },
     });
     expect(first.statusCode).toBe(201);
+    // A replay is the *same* request repeated, not a second, different one --
+    // see the next test for what a genuinely different body now gets
+    // (C-009: this route used to replay the first response regardless of the
+    // second body, silently dropping the write it claimed to have made).
     const second = await app.inject({
       method: "POST",
       url: "/api/v1/boards",
       headers: { ...h, "Idempotency-Key": key },
-      payload: { project_id: p.id, name: "Second", view_type: "LIST" },
+      payload: { project_id: p.id, name: "First", view_type: "LIST" },
     });
     expect(second.statusCode).toBe(201);
     expect((second.json() as { id: string }).id).toBe(
@@ -512,6 +516,39 @@ describe("boards", () => {
       url: `/api/v1/boards?project_id=${p.id}`,
       headers: h,
     });
+    expect(((list.json() as { data: unknown[] }).data).length).toBe(3);
+  });
+
+  it("rejects an Idempotency-Key reused with a different body (C-009)", async () => {
+    const h = await adminHeaders();
+    const p = await mkProject(h);
+    const key = `board-${randomUUID()}`;
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/v1/boards",
+      headers: { ...h, "Idempotency-Key": key },
+      payload: { project_id: p.id, name: "First", view_type: "LIST" },
+    });
+    expect(first.statusCode).toBe(201);
+    // Same key, genuinely different body: must be refused, not silently
+    // replayed as though it were the first request -- the same contract
+    // every other Idempotency-Key-covered create route already has.
+    const second = await app.inject({
+      method: "POST",
+      url: "/api/v1/boards",
+      headers: { ...h, "Idempotency-Key": key },
+      payload: { project_id: p.id, name: "Second", view_type: "LIST" },
+    });
+    expect(second.statusCode).toBe(409);
+    expect((second.json() as { code: string }).code).toBe(
+      "IDEMPOTENCY_MISMATCH",
+    );
+    const list = await app.inject({
+      method: "GET",
+      url: `/api/v1/boards?project_id=${p.id}`,
+      headers: h,
+    });
+    // Only "First" exists -- the rejected retry created nothing.
     expect(((list.json() as { data: unknown[] }).data).length).toBe(3);
   });
 
