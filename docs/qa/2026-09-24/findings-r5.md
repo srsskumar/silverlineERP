@@ -665,3 +665,125 @@ Migrations this round: **102** (`leave_requests.debited_days`), **111**
 (`leave_year_open_runs`) — 101 and 103–110 reserved for concurrently developed work per the
 coordinator's instructions. Both confirmed to apply cleanly to an empty database
 (`fresh-database.test.ts`).
+
+## 8. Fix round 2 (2026-09-25)
+
+Three items, both follow-ups to fix round 1's two owner decisions plus a nit. TDD throughout, RED
+shown per item, no new migrations. API-only this round (no web files touched — web `tsc` skipped
+per instructions).
+
+### Item 1 (important) — decision (a) follow-up: a stale step-2 approver stuck a request forever
+
+**Bug, exactly as reported.** `current_approver_id` is resolved once, at filing/step-advance time.
+If that user later exits, is disabled, or loses the HR_MANAGER/ADMIN/SUPER_ADMIN role, the request
+just sits — nobody eligible can see or decide it, and nothing re-resolves the assignment.
+
+**Fix.** New `apps/api/src/modules/leave/approverResolution.ts`:
+- `step1Approver`/`step2Approver` extracted from `routes.ts` unchanged (now reusable).
+- `isEligibleStep2Approver(db, orgId, userId, applicantUserId)` — ACTIVE + one of the three roles
+  + not the applicant.
+- `reassignIfIneligible(db, req, ctx)` — re-resolves **only the last step in the chain** (step 2;
+  step 1 is a direct-report relationship that exit already unwinds via cancellation, not
+  reassignment). If the current approver is no longer eligible, resolves a fresh `step2Approver`
+  and, if that's a different eligible user, `UPDATE`s `current_approver_id`/`approval_chain`
+  (guarded by `WHERE current_approver_id = $old` for race safety) and writes a
+  `leave.request.reassign_approver` audit event (`actor_id NULL`).
+- Wired at two points in `routes.ts`: `GET /leave/requests/:id` (re-resolve on read, before
+  returning) and the decision handler (re-resolve on the `FOR UPDATE` row right after fetching it,
+  before the status/version checks). The decision handler's `expectedVersion` was changed from
+  `const` to `let`: a reassignment bumps the row's `version`, so if the caller's submitted
+  `If-Match` version matches the *pre*-reassignment version, `expectedVersion` is advanced to match
+  — otherwise a real stale-version conflict from the caller would be masked. Reasoned through and
+  fixed before writing the test, not discovered as a failure.
+- `apps/api/src/modules/employees/routes.ts`'s exit handler: in the same transaction as the
+  existing "cancel the exiting employee's own pending leave" step, now also finds every PENDING
+  `leave_requests` row where the exiting user is `current_approver_id` and calls
+  `reassignIfIneligible` for each, recording the affected request ids in the exit's own audit
+  (`after_state.offboarding.reassigned_approval_request_ids`) — audit-only, not in the exit
+  endpoint's response body.
+
+**RED.** `apps/api/test/s3.test.ts`, `describe("leave step-2 approver: reassigned when it becomes
+stale ...")`: (1) exit flow — approver exits, request reassigns to the next eligible HR
+manager/admin, confirmed via the exit's own audit trail; (2) disabled approver reassigned on
+`GET` — reads with the stale approver still current-on-disk, response comes back re-resolved, then
+decides successfully using that response's version; (3) disabled approver reassigned on `decision`
+directly, no prior read, using the pre-disable version (proves the mid-request version bump is
+handled, not just the read path); (4) never reassigns to the applicant even if they're the org's
+only other HR manager.
+
+**GREEN.** All pass; full API suite green (see below).
+
+**Files.** `apps/api/src/modules/leave/approverResolution.ts` (new),
+`apps/api/src/modules/leave/routes.ts`, `apps/api/src/modules/employees/routes.ts`,
+`apps/api/test/s3.test.ts`. Commit `6e596d1` (logic), `5708708` (tests).
+
+### Item 2 (important) — decision (b) follow-up: the January job had no date gate
+
+**Bug, exactly as reported (controller ruling).** The scheduled open-year job only checked "has
+(org, year) already run," not "is it actually January" — deploying in September would open next
+year for every org on the very first worker tick.
+
+**Fix.** `apps/api/src/modules/jobs/leaveYearOpen.ts`: new `currentOrgYearMonth()` resolves both
+year and month from the org's timezone (same `orgTodaySql`/`orgZoneSql` source as `currentOrgYear`
+elsewhere in this batch); the job now no-ops (`COMMIT` and move to the next org) for any org whose
+current org-local month isn't January, before the existing "already opened" check. New
+`RunLeaveYearOpenOptions.resolveOrgDate` override parameter — defaults to the real query, only
+overridden in tests — since Postgres's `now()` can't be faked from a test.
+
+**RED.** `apps/api/test/s3.test.ts`, `describe("automatic leave year-open: date gate ...")`: 24 Sep
+→ no-op, nothing created, no tracking row; 1 Jan → opens; 15 Jan → opens once and is idempotent on
+a second call the same day; 1 Feb → no-op (year already missed its window, doesn't retroactively
+open). All four existing round-1 "automatic leave year-open" tests updated to pass
+`{resolveOrgDate: forceOrgDate(currentTestYear(), 1)}`, since real September calls are now
+correctly a no-op under the new gate.
+
+**GREEN.** All pass.
+
+**Files.** `apps/api/src/modules/jobs/leaveYearOpen.ts`, `apps/api/test/s3.test.ts`. Commit
+`6286e06` (logic), `5708708` (tests).
+
+### Item 3 (nit) — a request could still be approved into a 0-day debit if holidays changed after filing
+
+**Fix.** `approvalBlocker()` in `apps/api/src/modules/leave/routes.ts` now runs the same
+`daysByYear`+`sandwichSkipDates` split used by item 4 of round 1 *before* the balance gate, for
+paid types: if every year in the range now nets 0 days (e.g. a holiday was added over a
+previously-chargeable day between filing and approval), the decision is refused with 422
+`ALL_DAYS_EXCLUDED` rather than silently approving a request that would debit nothing.
+
+**RED.** `apps/api/test/s3.test.ts`, D-012 describe block: files a single non-Sunday weekday paid
+request (passes filing's own `ALL_DAYS_EXCLUDED` check, since no holiday exists yet), then adds a
+holiday on that exact day, then attempts to approve — expects 422 `ALL_DAYS_EXCLUDED`, and confirms
+the request stays PENDING with `total_days`/`version` unchanged and no debit posted.
+
+**GREEN.** Passes.
+
+**Files.** `apps/api/src/modules/leave/routes.ts`, `apps/api/test/s3.test.ts`. Commit `6e596d1`
+(logic), `5708708` (tests).
+
+### Suite fix found only by running the suite (not a numbered item)
+
+`apps/api/test/catalogue/ut-lp.test.ts` — "ends the request at the first rejection and requires a
+note" filed its single-day paid CL request on raw `plusDays(100)`. Today's run date puts that
+offset on 2027-01-03, a Sunday, so round 1's `ALL_DAYS_EXCLUDED` filing refusal (correctly) now
+rejects it, leaving `request.id` undefined and blowing up downstream in `ifMatch`/`versionOf` —
+same class of calendar-drift flake round 1 already fixed for two other tests in this same file,
+just missed for this one at the time. Switched to the file's existing `nonSundayPlusDays()`
+helper. Commit `f367b4d`.
+
+## 9. Fix round 2 — verification
+
+Full API suite, VM slot `e`, `TEST_DATABASE_URL` → `test_slot_e`:
+- First run (before the `ut-lp.test.ts` fix above): 78 passed / 2 failed (2177/2179 tests) — the
+  known pre-existing `survey-operations.test.ts` date-drift flake (§7) plus the new `UT-LP-03`
+  Sunday-landing failure this section fixes.
+- Targeted re-run of `test/catalogue/ut-lp.test.ts` alone after the fix: 44/44 green.
+- Full re-run: **79 passed / 1 failed (2178/2179 tests)**, 597s. The one remaining failure is
+  `test/catalogue/survey-operations.test.ts` > "raises a village past the date somebody committed
+  to" — the same hardcoded "5 days ago" vs. actual-elapsed-days flake documented and left unfixed
+  in §7 (unrelated module, confirmed pre-existing, confirmed to fail identically regardless of this
+  round's changes).
+
+Web `tsc` not run this round — no web files touched by any round-2 commit (`git status` checked
+clean of web changes before each commit).
+
+No new migrations this round.
