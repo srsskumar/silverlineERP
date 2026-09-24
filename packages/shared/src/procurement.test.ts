@@ -241,6 +241,37 @@ describe('matchInvoiceToOrder', () => {
     expect(result.exceptions.map(e => e.code).sort())
       .toEqual(['NOT_ON_ORDER', 'QUANTITY_EXCEEDS_RECEIPT']);
   });
+
+  it('passes an exact 4-decimal-place rate match at zero tolerance (fix round 2, item 1)', () => {
+    // Rates are NUMERIC(16,4). round2-ing the value-weighted invoiced rate
+    // turned an exact match (12.3456 invoiced at 12.3456) into 12.35, which
+    // tripped a false RATE_EXCEEDS_ORDER (and, with a value tolerance
+    // configured, a false VALUE_VARIANCE alongside it) at tolerance 0.
+    const orderLines = [
+      orderLine({ id: 'pol-1', orderedQuantity: 1000, orderedRate: 12.3456, receivedQuantity: 1000 }),
+    ];
+    const result = matchInvoiceToOrder(orderLines, [
+      invoiceLine({ quantity: 1000, rate: 12.3456 }),
+    ], { valueAbsolute: 0.005 });
+    expect(result.matched).toBe(true);
+    expect(result.exceptions).toHaveLength(0);
+    expect(result.invoicedValue).toBe(12_345.6);
+  });
+
+  it('still catches a sub-paisa-per-unit overcharge once it is multiplied by a large quantity (fix round 2, item 1)', () => {
+    // A 0.0001/unit overcharge is invisible once the rate is rounded to 2 dp
+    // (12.3456 and 12.3457 both round to 12.35), but at a large enough
+    // quantity it is real money and must still fail at zero tolerance.
+    const orderLines = [
+      orderLine({ id: 'pol-1', orderedQuantity: 100_000, orderedRate: 12.3456, receivedQuantity: 100_000 }),
+    ];
+    const result = matchInvoiceToOrder(orderLines, [
+      invoiceLine({ quantity: 100_000, rate: 12.3457 }),
+    ], { valueAbsolute: 0.005 });
+    expect(result.matched).toBe(false);
+    expect(result.exceptions.some(e => e.code === 'RATE_EXCEEDS_ORDER')).toBe(true);
+    expect(result.exceptions.some(e => e.code === 'VALUE_VARIANCE')).toBe(true);
+  });
 });
 
 describe('requisition scope', () => {

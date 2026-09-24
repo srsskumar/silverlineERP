@@ -19,6 +19,9 @@ import type { RoleCode } from './rbac.js';
 
 const round3 = (n: number) => Math.round((n + Number.EPSILON) * 1000) / 1000;
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+// Rates are NUMERIC(16,4); round2-ing a value-weighted invoiced rate to 2 dp
+// turns an exact match into a false RATE_EXCEEDS_ORDER (fix round 2, item 1).
+const round4 = (n: number) => Math.round((n + Number.EPSILON) * 10000) / 10000;
 
 export interface ReceiptPosition {
   orderedQuantity: number;
@@ -66,6 +69,14 @@ export interface MatchLine {
   receivedQuantity: number;
   invoicedQuantity: number;
   invoicedRate: number;
+  /**
+   * The line's exact invoiced value, when it is not simply invoicedQuantity
+   * x invoicedRate — e.g. several invoice lines summed into one value-weighted
+   * rate, where re-multiplying the (rounded) rate back out would reintroduce
+   * the rounding error the rate itself absorbed. Falls back to quantity x
+   * rate when omitted (fix round 2, item 1).
+   */
+  invoicedValue?: number;
 }
 
 export interface MatchTolerance {
@@ -117,6 +128,10 @@ export function threeWayMatch(lines: MatchLine[], tolerance: MatchTolerance = {}
   const qtyTolerance = tolerance.quantityPct ?? 0;
   const rateTolerance = tolerance.ratePct ?? 0;
   const valueTolerance = tolerance.valueAbsolute ?? 0;
+  // The line's exact invoiced value where the caller supplied one, rather
+  // than reconstructing it from a rate that may itself be a rounded,
+  // value-weighted average (fix round 2, item 1).
+  const invoicedLineValue = (l: MatchLine) => l.invoicedValue ?? l.invoicedQuantity * l.invoicedRate;
 
   for (const line of lines) {
     if (line.invoicedQuantity > 0 && line.receivedQuantity === 0) {
@@ -150,7 +165,7 @@ export function threeWayMatch(lines: MatchLine[], tolerance: MatchTolerance = {}
     // inside tolerance but together move the line more than intended.
     if (valueTolerance > 0) {
       const expected = line.receivedQuantity * line.orderedRate;
-      const invoiced = line.invoicedQuantity * line.invoicedRate;
+      const invoiced = invoicedLineValue(line);
       if (invoiced - expected > valueTolerance) {
         exceptions.push({
           reference: line.reference, code: 'VALUE_VARIANCE',
@@ -167,7 +182,7 @@ export function threeWayMatch(lines: MatchLine[], tolerance: MatchTolerance = {}
     exceptions,
     orderedValue: sum(l => l.orderedQuantity * l.orderedRate),
     receivedValue: sum(l => l.receivedQuantity * l.orderedRate),
-    invoicedValue: sum(l => l.invoicedQuantity * l.invoicedRate),
+    invoicedValue: sum(invoicedLineValue),
   };
 }
 
@@ -271,7 +286,10 @@ export function matchInvoiceToOrder(
     // silently pick one of them — the effective rate is what the invoice
     // actually charges per unit across every line billed against this order
     // line.
-    const invoicedRate = invoicedQuantity > 0 ? round2(invoicedValueRaw / invoicedQuantity) : 0;
+    // 4 dp, not 2: rates are NUMERIC(16,4), and rounding this to the rupee's
+    // 2 dp turned an exact match into a false RATE_EXCEEDS_ORDER while also
+    // hiding a genuine sub-paisa-per-unit overcharge (fix round 2, item 1).
+    const invoicedRate = invoicedQuantity > 0 ? round4(invoicedValueRaw / invoicedQuantity) : 0;
     return {
       reference: o.reference,
       orderedQuantity: o.orderedQuantity,
@@ -279,6 +297,10 @@ export function matchInvoiceToOrder(
       receivedQuantity: o.receivedQuantity,
       invoicedQuantity,
       invoicedRate,
+      // Exact, from the raw invoice lines -- not invoicedQuantity x
+      // invoicedRate, which would reintroduce the rounding invoicedRate
+      // (a rounded, value-weighted average) already absorbed.
+      invoicedValue: invoicedValueRaw,
     };
   });
 
