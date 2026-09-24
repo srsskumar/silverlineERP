@@ -614,6 +614,79 @@ describe("HR-14 exit disables the login, withdraws leave, unassigns open tasks a
     expect(otherNotifications.rows[0].n).toBe(0);
   });
 
+  it("notifies the org's HR manager when the project has no manager (policy batch fix round 1, item 3)", async () => {
+    const { employeeId, userId } = await worker();
+    const noManagerProject = await post(w.admin, "/api/v1/projects", {
+      workspace_id: w.workspaceId, project_type_id: w.projectTypeId,
+      code: uniq("PNOMGR"), name: "No manager project",
+    });
+    expect(noManagerProject.status, JSON.stringify(noManagerProject.body)).toBe(201);
+    const projectId = noManagerProject.data.id;
+    const task = await w.pool.query(
+      `INSERT INTO tasks(org_id, project_id, title, status, assignee_id, created_by)
+       VALUES ($1, $2, 'Orphaned project task', 'TO_DO', $3, $4) RETURNING id`,
+      [w.orgId, projectId, userId, w.adminId],
+    );
+
+    const exit = await w.app.inject({
+      method: "POST", url: `/api/v1/employees/${employeeId}/exit`,
+      headers: { ...w.admin, ...idem() },
+      payload: { exit_date: workDate(), reason: "Resigned" },
+    });
+    expect(exit.statusCode, exit.body).toBe(200);
+
+    const unassigned = await w.pool.query("SELECT assignee_id FROM tasks WHERE id = $1", [task.rows[0].id]);
+    expect(unassigned.rows[0].assignee_id).toBeNull();
+    const hrNotified = await w.pool.query(
+      `SELECT count(*)::int AS n FROM notifications
+        WHERE recipient_id = $1 AND type = 'TASK_REASSIGN_NEEDED' AND entity_id = $2`,
+      [w.roleUserId.HR_MANAGER, projectId],
+    );
+    expect(hrNotified.rows[0].n).toBe(1);
+  });
+
+  it("notifies the org's HR manager when the project's manager is the person exiting (policy batch fix round 1, item 3)", async () => {
+    const { employeeId, userId } = await worker();
+    const selfManagedProject = await post(w.admin, "/api/v1/projects", {
+      workspace_id: w.workspaceId, project_type_id: w.projectTypeId,
+      code: uniq("PSELF"), name: "Self-managed project",
+    });
+    expect(selfManagedProject.status, JSON.stringify(selfManagedProject.body)).toBe(201);
+    const projectId = selfManagedProject.data.id;
+    await w.app.inject({
+      method: "PATCH", url: `/api/v1/projects/${projectId}`,
+      headers: { ...w.admin, ...(await ifMatch(w, "projects", projectId)), ...idem() },
+      payload: { project_manager_id: userId },
+    });
+    const task = await w.pool.query(
+      `INSERT INTO tasks(org_id, project_id, title, status, assignee_id, created_by)
+       VALUES ($1, $2, 'Self-managed task', 'TO_DO', $3, $4) RETURNING id`,
+      [w.orgId, projectId, userId, w.adminId],
+    );
+
+    const exit = await w.app.inject({
+      method: "POST", url: `/api/v1/employees/${employeeId}/exit`,
+      headers: { ...w.admin, ...idem() },
+      payload: { exit_date: workDate(), reason: "Resigned" },
+    });
+    expect(exit.statusCode, exit.body).toBe(200);
+
+    const unassigned = await w.pool.query("SELECT assignee_id FROM tasks WHERE id = $1", [task.rows[0].id]);
+    expect(unassigned.rows[0].assignee_id).toBeNull();
+    // Not notified themselves -- their own account was just disabled.
+    const selfNotified = await w.pool.query(
+      "SELECT count(*)::int AS n FROM notifications WHERE recipient_id = $1 AND type = 'TASK_REASSIGN_NEEDED'",
+      [userId],
+    );
+    expect(selfNotified.rows[0].n).toBe(0);
+    const hrNotified = await w.pool.query(
+      `SELECT count(*)::int AS n FROM notifications
+        WHERE recipient_id = $1 AND type = 'TASK_REASSIGN_NEEDED' AND entity_id = $2`,
+      [w.roleUserId.HR_MANAGER, projectId],
+    );
+    expect(hrNotified.rows[0].n).toBe(1);
+  });
+
   it("refuses to roster or allocate somebody who has exited", async () => {
     const shift = await w.app.inject({
       method: "POST",

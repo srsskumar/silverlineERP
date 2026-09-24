@@ -1524,6 +1524,7 @@ export async function registerEmployeeRoutes(
         list.push({ id: task.id, title: task.title });
         byProject.set(task.project_id, list);
       }
+      let hrManagerId: string | null | undefined; // resolved lazily, at most once
       const notifiedManagers: string[] = [];
       for (const [projectId, tasksForProject] of byProject) {
         const project = (
@@ -1532,21 +1533,44 @@ export async function registerEmployeeRoutes(
             [projectId, user.orgId],
           )
         ).rows[0] as { name: string; project_manager_id: string | null } | undefined;
-        if (!project?.project_manager_id) {
-          continue;
+        /*
+         * A project with no manager, or one whose manager is the very
+         * person exiting, has nobody left to tell. The org's HR manager
+         * stands in -- offboarding is HR's business even on someone else's
+         * project -- and if this org has none either, the person who acted
+         * on the exit is at least somebody who knows it happened (policy
+         * batch fix round 1, item 3).
+         */
+        let recipientId = project?.project_manager_id ?? null;
+        if (!recipientId || accountIds.includes(recipientId)) {
+          if (hrManagerId === undefined) {
+            hrManagerId = (
+              await db.query(
+                `SELECT u.id FROM users u
+                   JOIN user_roles ur ON ur.user_id = u.id
+                   JOIN roles r ON r.id = ur.role_id
+                  WHERE u.org_id = $1 AND u.auth_status = 'ACTIVE' AND r.code = 'HR_MANAGER'
+                  ORDER BY u.created_at ASC
+                  LIMIT 1`,
+                [user.orgId],
+              )
+            ).rows[0]?.id ?? null;
+          }
+          recipientId = hrManagerId ?? user.id;
         }
         const taskList = tasksForProject.map((t) => `- ${t.title}`).join("\n");
+        const projectLabel = project ? ` on ${project.name}` : "";
         await emitNotification(db, {
           orgId: user.orgId,
-          recipientId: project.project_manager_id,
+          recipientId,
           type: "TASK_REASSIGN_NEEDED",
-          title: `${tasksForProject.length} task${tasksForProject.length === 1 ? "" : "s"} need reassignment on ${project.name}`,
+          title: `${tasksForProject.length} task${tasksForProject.length === 1 ? "" : "s"} need reassignment${projectLabel}`,
           body: `${body.first_name} ${body.last_name ?? ""}`.trim()
-            + ` exited and left these tasks unassigned on ${project.name}:\n${taskList}`,
+            + ` exited and left these tasks unassigned${projectLabel}:\n${taskList}`,
           entityType: "project",
           entityId: projectId,
         });
-        notifiedManagers.push(project.project_manager_id);
+        notifiedManagers.push(recipientId);
       }
 
       await writeAudit(db, {
