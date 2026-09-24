@@ -125,3 +125,39 @@ after every step):
 
 Each ends with the latest figures on the server, one entry and no CONFLICT.
 The rounds 2 and 3 suites still pass unchanged.
+
+## Fix round 5
+
+| # | Sev | What was wrong | Fix | Commit |
+|---|---|---|---|---|
+| 1 | important (race) | Nothing serialised `enqueueOp` against `flushQueue`. `submitQueued` enqueues while a flush may be running. The settle's hand-over UPDATE was a read-modify-write that did not check the row was unchanged, so it could overwrite a re-file that enqueue had just folded into the waiting op, and the newest figures were lost. It also worked the other way: an enqueue overwrote the hand-over, the older op was then deleted on absorb, and its record of what it had sent went with it, giving a false CONFLICT | One async lock in `createQueue` covers every queue mutation: enqueue with its supersede, the flush's claim and re-read, its settle (hand-over, absorb, the op's new state), `rewriteOp`, retry, discard and the purge. The executor's network call runs outside the lock, so a filing made while a request is on the wire still goes in at once. A lock was chosen over compare-and-set because the app has one JS runtime and one queue instance, and three sites read, merge in JS and write back. CAS would need a retry-and-re-merge loop at each site, and each of those loops is a new place for the chain logic to go wrong. Recovery on open (SENDING back to QUEUED) runs inside `getDb` before any queue call can start | 3f39a2c |
+| 2 | minor (growth) | `_prior` gained a full body at every in-place re-file, sent or not, and every retry replayed all of them | The queue tells the chain rule whether the older op may have sent anything (`sent`: SENDING, BACKOFF or tried before) and whether it is on the wire (`sending`). A never-sent op records nothing. A tried op adds its body only if its key has no record yet, because the executor records every request before it goes. A request refused with a 409 never landed and is dropped. Of the requests known to have landed (`landed` = the version in its stored reply), only the highest is kept, and its key holds no other body. The list is capped at `PRIOR_MAX` = 8, and the first body sent under each key is always kept. "The device's version" still comes only from replaying its own keyed requests. `landed` is used only for pruning | 3f39a2c |
+
+On "keep only the last sent body per key": that rule is wrong when a later
+body under a key is refused because an earlier one landed. The server keeps
+the first body that landed, not the last one sent. The list therefore drops
+bodies that were refused or displaced by a landed one, rather than older
+ones.
+
+Tests (`test/survey-outbox-round5.test.ts`): the fake outbox runs a hook just
+before a matching write, so each interleaving is forced at an exact point.
+- The flush is writing the hand-over when the crew re-files. Before the fix
+  the server ended at 3 instead of 4.
+- A re-file has merged and is about to write when the flush settles and
+  absorbs the older op, whose PATCH reply was lost. Before the fix this gave
+  a false CONFLICT.
+- 20 re-files of a never-sent op leave `_prior` empty.
+- 11 lost replies, each followed by a re-file, keep ≤ 2 entries.
+- 19 offline attempts after one landed are capped at 8, and the landed one
+  is still found.
+
+The invariant (no FAILED row, ≤1 waiting op behind ≤1 sending op) is
+asserted after every step. Each case ends with the latest figures, one
+entry and no CONFLICT. Mobile suite 481/481 and `tsc --noEmit` pass on
+slot a. Rounds 2–4 pass unchanged.
+
+Residual: the lock is in-process. A second JS runtime writing the same
+SQLite file (a headless background task while the UI runtime is alive)
+would not be serialised by it. The cap can in theory drop the one body
+the server kept, which turns a correction into a review. It never loses
+data.
