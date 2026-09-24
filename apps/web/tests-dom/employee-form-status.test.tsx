@@ -47,7 +47,7 @@ const EXISTING_EMPLOYEE = {
 
 describe('EmployeeForm edit mode', () => {
   it('does not send status back on an untouched save (A-008)', async () => {
-    const onSubmit = vi.fn(async () => {});
+    const onSubmit = vi.fn(async (_values: Record<string, unknown>) => {});
     wrap(
       <EmployeeForm mode="edit" defaultValues={EXISTING_EMPLOYEE} submitLabel="Save changes" onSubmit={onSubmit} />,
     );
@@ -66,7 +66,7 @@ describe('EmployeeForm edit mode', () => {
     'saves an employee with Gender left on its blank placeholder option (A-009: an optional ' +
       '<select> enum with no ""-tolerant schema blocked every save, not just that field)',
     async () => {
-      const onSubmit = vi.fn(async () => {});
+      const onSubmit = vi.fn(async (_values: Record<string, unknown>) => {});
       // EXISTING_EMPLOYEE has no `gender`, so the native <select> sits on its
       // blank "Select gender" option (value ""), exactly like a real
       // employee record with gender never recorded.
