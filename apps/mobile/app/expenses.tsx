@@ -51,11 +51,8 @@ import {
   Subtle,
 } from "../src/ui/primitives";
 import { radius, space, useTheme } from "../src/theme";
+import { formatMoney as money } from "../src/money";
 
-function money(v: number | string | undefined): string {
-  const n = Number(v ?? 0);
-  return `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
-}
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
