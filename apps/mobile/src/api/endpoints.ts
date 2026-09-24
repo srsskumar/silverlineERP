@@ -1957,19 +1957,8 @@ export async function getCycles(projectId: string): Promise<Cycle[]> {
 // way a payslip is, with no changes to the shared fetch wrapper. CSV/XLSX
 // reports (e.g. from a desktop-created recurring schedule) still show up in
 // "Your reports" with their status, just without a working Save button here.
-export const REPORT_TYPE_META: ReadonlyArray<{ type: string; label: string; permission: string }> = [
-  { type: "projects", label: "Project progress", permission: "project.read" },
-  { type: "cycles", label: "Cycle velocity", permission: "cycle.read" },
-  { type: "audit", label: "Audit trail", permission: "audit.read" },
-  { type: "inventory", label: "Inventory", permission: "inventory.read" },
-  { type: "assets", label: "Assets", permission: "asset.manage" },
-  { type: "invoices", label: "Invoices", permission: "inventory.read" },
-  { type: "payroll", label: "Payroll", permission: "payroll.read" },
-  { type: "employees", label: "Employees", permission: "employees.read" },
-  { type: "attendance", label: "Attendance", permission: "attendance.read" },
-  { type: "tasks", label: "Tasks", permission: "task.read" },
-  { type: "leave", label: "Leave", permission: "leave.read" },
-];
+// MA-004: moved to src/reportsFormat.ts (pure, testable); re-exported here.
+export { REPORT_TYPE_META } from "../reportsFormat";
 
 export interface ReportJob {
   id: string;
