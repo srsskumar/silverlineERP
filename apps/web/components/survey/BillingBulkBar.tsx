@@ -14,6 +14,7 @@ import {
 } from '@silverline/shared';
 
 type Row = Record<string, any>;
+type Action = 'SUBMIT' | 'DECIDE' | 'REVERSE';
 
 const field = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
 
@@ -36,12 +37,14 @@ const labelOfStage = (code: string): string =>
  * is written until they have read the answer.
  */
 export function BillingBulkBar({
-  selected, villages, canManage, onDone, onClear, onKeepEligible,
+  selected, villages, canManage, canReverse = false, onDone, onClear, onKeepEligible,
 }: {
   selected: string[];
   /** The selected villages themselves, so eligibility can be read off them. */
   villages: Row[];
   canManage: boolean;
+  /** Administrators only, as the API has it: reversing recorded payments (SV-019). */
+  canReverse?: boolean;
   onDone: () => void;
   onClear: () => void;
   /** Narrow the selection to the villages that have earned the milestone. */
@@ -49,7 +52,8 @@ export function BillingBulkBar({
 }) {
   const qc = useQueryClient();
   const toast = useToast();
-  const [action, setAction] = React.useState<'SUBMIT' | 'DECIDE'>('SUBMIT');
+  const [action, setAction] = React.useState<Action>('SUBMIT');
+  const [reason, setReason] = React.useState('');
   const [milestone, setMilestone] = React.useState('1');
   const [on, setOn] = React.useState(businessToday());
   const [reference, setReference] = React.useState('');
@@ -60,7 +64,7 @@ export function BillingBulkBar({
 
   // Anything changed after a preview describes a different batch.
   React.useEffect(() => { setPreview(null); },
-    [action, milestone, on, reference, useExtent, status, selected]);
+    [action, milestone, on, reference, useExtent, status, selected, reason]);
 
   const body = (dryRun: boolean) => ({
     survey_village_ids: selected,
@@ -72,8 +76,10 @@ export function BillingBulkBar({
         reference_no: reference.trim() || undefined,
         use_village_extent: useExtent || undefined,
       }
-      : { status, decided_on: on || undefined }),
-    ...(remarks.trim() ? { remarks: remarks.trim() } : {}),
+      : action === 'REVERSE'
+        ? { reason: reason.trim() }
+        : { status, decided_on: on || undefined }),
+    ...(action !== 'REVERSE' && remarks.trim() ? { remarks: remarks.trim() } : {}),
     dry_run: dryRun,
   });
 
@@ -90,6 +96,8 @@ export function BillingBulkBar({
       toast.success(
         action === 'SUBMIT'
           ? `${Number(d.updated)} village(s) submitted for billing`
+          : action === 'REVERSE'
+            ? `${Number(d.updated)} payment(s) reversed to approved`
           : `${Number(d.updated)} claim(s) recorded as ${
             (BILLING_STATUS_LABELS as Row)[status]?.toLowerCase() ?? status.toLowerCase()}`,
         (d.skipped as Row[] ?? []).length > 0
@@ -97,7 +105,7 @@ export function BillingBulkBar({
           : undefined,
       );
       setPreview(null);
-      setReference(''); setRemarks('');
+      setReference(''); setRemarks(''); setReason('');
       qc.invalidateQueries({ queryKey: ['survey-villages'] });
       qc.invalidateQueries({ queryKey: ['survey-billing'] });
       onDone();
@@ -161,9 +169,12 @@ export function BillingBulkBar({
         <label className="flex flex-col gap-1 text-2xs text-text-muted">
           Record
           <select className={field} value={action}
-            onChange={(e) => setAction(e.target.value as 'SUBMIT' | 'DECIDE')}>
+            onChange={(e) => setAction(e.target.value as Action)}>
             <option value="SUBMIT">A submission for billing</option>
             <option value="DECIDE">The department’s decision</option>
+            {canReverse ? (
+              <option value="REVERSE">A reversal of a payment recorded by mistake</option>
+            ) : null}
           </select>
         </label>
 
@@ -190,11 +201,20 @@ export function BillingBulkBar({
           </label>
         ) : null}
 
-        <label className="flex flex-col gap-1 text-2xs text-text-muted">
-          {action === 'SUBMIT' ? 'Submitted on' : 'Decided on'}
-          <input type="date" className={field} value={on} max={businessToday()}
-            onChange={(e) => setOn(e.target.value)} />
-        </label>
+        {action !== 'REVERSE' ? (
+          <label className="flex flex-col gap-1 text-2xs text-text-muted">
+            {action === 'SUBMIT' ? 'Submitted on' : 'Decided on'}
+            <input type="date" className={field} value={on} max={businessToday()}
+              onChange={(e) => setOn(e.target.value)} />
+          </label>
+        ) : (
+          <label className="flex flex-col gap-1 text-2xs text-text-muted">
+            Reason for reversing
+            <input className={field} value={reason} maxLength={1000}
+              placeholder="Marked paid in the wrong batch"
+              onChange={(e) => setReason(e.target.value)} />
+          </label>
+        )}
 
         {action === 'SUBMIT' ? (
           <>
@@ -212,12 +232,15 @@ export function BillingBulkBar({
           </>
         ) : null}
 
-        <label className="flex flex-col gap-1 text-2xs text-text-muted">
-          Remarks
-          <input className={field} value={remarks} onChange={(e) => setRemarks(e.target.value)} />
-        </label>
+        {action !== 'REVERSE' ? (
+          <label className="flex flex-col gap-1 text-2xs text-text-muted">
+            Remarks
+            <input className={field} value={remarks} onChange={(e) => setRemarks(e.target.value)} />
+          </label>
+        ) : null}
 
-        <Button type="button" variant="secondary" disabled={run.isPending}
+        <Button type="button" variant="secondary"
+          disabled={run.isPending || (action === 'REVERSE' && reason.trim().length < 5)}
           onClick={() => run.mutate(true)}>
           {preview ? 'Check again' : 'Show what would happen'}
         </Button>
@@ -269,6 +292,8 @@ export function BillingBulkBar({
               ? action === 'SUBMIT'
                 ? `${Number(preview.would_change)} village(s) would be submitted at ${
                   MILESTONE_LABELS[Number(milestone)]?.toLowerCase()}`
+                : action === 'REVERSE'
+                  ? `${Number(preview.would_change)} payment(s) would be reversed to approved`
                 : `${Number(preview.would_change)} claim(s) would be recorded as ${
                   (BILLING_STATUS_LABELS as Row)[status]?.toLowerCase() ?? status.toLowerCase()}`
               : 'Nothing would change'}

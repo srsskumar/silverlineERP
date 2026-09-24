@@ -253,11 +253,11 @@ describe("stage history", () => {
   it("keeps every movement, so time spent per stage is answerable", async () => {
     // The specification's worked example: nine days in GT, two in QC.
     await post(w.admin, `/api/v1/survey/villages/${villageA}/stage`,
-      { stage_code: "GROUND_TRUTHING", state: "IN_PROGRESS", started_on: day(0),
+      { stage_code: "GROUND_TRUTHING", state: "IN_PROGRESS", started_on: day(-9),
         gt_govt_staff_allocated: 2, gt_crew_allocated: 4 });
     await post(w.admin, `/api/v1/survey/villages/${villageA}/stage`,
       { stage_code: "GROUND_TRUTHING", state: "COMPLETED",
-        started_on: day(0), completed_on: day(9), remarks: "All parcels walked" });
+        started_on: day(-9), completed_on: day(0), remarks: "All parcels walked" });
 
     const r = await get(w.admin, `/api/v1/survey/villages/${villageA}/history`);
     expect(r.status, JSON.stringify(r.body)).toBe(200);
@@ -1054,7 +1054,7 @@ describe("alerting on work that has stopped", () => {
   it("raises a village past the date somebody committed to", async () => {
     const id = await newVillage("Overdue village");
     await w.pool.query(
-      "UPDATE survey_villages SET expected_completion_on = CURRENT_DATE - 5 WHERE id = $1",
+      "UPDATE survey_villages SET expected_completion_on = ((now() AT TIME ZONE 'Asia/Kolkata')::date) - 5 WHERE id = $1",
       [id]);
 
     await runSurveyAlerts(w.pool);
@@ -1062,7 +1062,14 @@ describe("alerting on work that has stopped", () => {
     const overdue = rows.find(r => String(r.event_key).startsWith("survey.overdue:"));
     expect(overdue, JSON.stringify(rows)).toBeTruthy();
     expect(overdue!.title).toContain("past its completion date");
-    expect(overdue!.body).toContain("5 days ago");
+    // Counted the way the job counts, from the organisation's day as it is
+    // now, so a run that crosses IST midnight between the fixture and the
+    // job still agrees with it (fix round 1, item 4).
+    const days = Number((await w.pool.query(
+      `SELECT (((now() AT TIME ZONE 'Asia/Kolkata')::date) - expected_completion_on)::int AS d
+         FROM survey_villages WHERE id = $1`, [id])).rows[0].d);
+    expect(days).toBeGreaterThanOrEqual(5);
+    expect(overdue!.body).toContain(`${days} days ago`);
   });
 
   it("does not say it twice, however often the worker runs", async () => {
@@ -1070,7 +1077,7 @@ describe("alerting on work that has stopped", () => {
     // muted, and then the feature is worse than not having it.
     const id = await newVillage("Repeat village");
     await w.pool.query(
-      "UPDATE survey_villages SET expected_completion_on = CURRENT_DATE - 2 WHERE id = $1",
+      "UPDATE survey_villages SET expected_completion_on = ((now() AT TIME ZONE 'Asia/Kolkata')::date) - 2 WHERE id = $1",
       [id]);
 
     await runSurveyAlerts(w.pool);
@@ -1089,13 +1096,13 @@ describe("alerting on work that has stopped", () => {
     // rather than the village for exactly that reason.
     const id = await newVillage("Moved village");
     await w.pool.query(
-      "UPDATE survey_villages SET expected_completion_on = CURRENT_DATE - 9 WHERE id = $1",
+      "UPDATE survey_villages SET expected_completion_on = ((now() AT TIME ZONE 'Asia/Kolkata')::date) - 9 WHERE id = $1",
       [id]);
     await runSurveyAlerts(w.pool);
     const before = (await alertsFor(id)).length;
 
     await w.pool.query(
-      "UPDATE survey_villages SET expected_completion_on = CURRENT_DATE - 1 WHERE id = $1",
+      "UPDATE survey_villages SET expected_completion_on = ((now() AT TIME ZONE 'Asia/Kolkata')::date) - 1 WHERE id = $1",
       [id]);
     await runSurveyAlerts(w.pool);
     expect((await alertsFor(id)).length).toBeGreaterThan(before);
@@ -1105,7 +1112,7 @@ describe("alerting on work that has stopped", () => {
     // Somebody has already decided about it. Telling them again is noise.
     const id = await newVillage("Held village");
     await w.pool.query(
-      `UPDATE survey_villages SET expected_completion_on = CURRENT_DATE - 5,
+      `UPDATE survey_villages SET expected_completion_on = ((now() AT TIME ZONE 'Asia/Kolkata')::date) - 5,
          status_override = 'ON_HOLD' WHERE id = $1`, [id]);
     await runSurveyAlerts(w.pool);
     expect(await alertsFor(id)).toHaveLength(0);
@@ -1140,7 +1147,7 @@ describe("alerting on work that has stopped", () => {
       gt_govt_staff_allocated: 2, gt_crew_allocated: 4,
     });
     await w.pool.query(
-      `UPDATE survey_village_stages SET started_on = CURRENT_DATE - 60
+      `UPDATE survey_village_stages SET started_on = ((now() AT TIME ZONE 'Asia/Kolkata')::date) - 60
        WHERE survey_village_id = $1`, [id]);
 
     await runSurveyAlerts(w.pool);
@@ -1205,7 +1212,7 @@ describe("alerting on work that has stopped", () => {
       await w.pool.query(
         `INSERT INTO survey_entries(org_id, survey_project_id, survey_village_id, entry_date,
            teams_deployed, created_by, updated_by)
-         VALUES ($1, $2, $3, CURRENT_DATE - 4, 1, $4, $4)`,
+         VALUES ($1, $2, $3, ((now() AT TIME ZONE 'Asia/Kolkata')::date) - 4, 1, $4, $4)`,
         [w.orgId, programmeId, id, w.adminId]);
     }
     const worst = await newVillage("Never once filed");

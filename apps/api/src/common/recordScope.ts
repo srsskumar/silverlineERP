@@ -58,8 +58,16 @@ export async function enforceRecordScope(req:FastifyRequest,permission:string):P
  if(params.id&&path.startsWith('/api/v1/tasks/:id'))await task(params.id);
  if(params.id&&path.startsWith('/api/v1/employees/:id'))await employee(params.id);
  if(params.id&&path.startsWith('/api/v1/projects/:id'))await project(params.id);
+ /*
+  * Putting somebody on a survey programme or a village's crew is decided by
+  * the survey module's own authority rule (SV-018: the survey project's PM,
+  * a team leader on it, an admin), which the route applies. The directory
+  * scope refused a project's own PM one person at a time while start-gt let
+  * them put the same people on in bulk.
+  */
+ const surveyAssignment=path==='/api/v1/survey/projects/:id/employees'||path==='/api/v1/survey/villages/:id/crew';
  if(!scopes.global){
-  if(typeof body.employee_id==='string')await employee(body.employee_id);
+  if(typeof body.employee_id==='string'&&!surveyAssignment)await employee(body.employee_id);
   if(typeof body.project_id==='string')await project(body.project_id);
   for(const key of ['predecessor_id','successor_id','task_id'])if(typeof body[key]==='string')await task(body[key] as string);
   const linked=path.startsWith('/api/v1/attendance/records/:id')?'attendance_records':path.startsWith('/api/v1/attendance/exceptions/:id')?'attendance_exceptions':path.startsWith('/api/v1/leave/requests/:id')?'leave_requests':null;

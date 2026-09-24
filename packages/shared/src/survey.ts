@@ -2209,6 +2209,43 @@ export function billingDecisionRequired(status: BillingStatus): boolean {
 }
 
 /**
+ * Where a claim may go from where it is (SV-011).
+ *
+ * A claim goes in, the department approves or returns it, and an approved
+ * claim is paid. A returned claim may go in again once the work is put
+ * right, which is how rework is billed. A paid claim is money received: it
+ * does not go back to submitted or become returned, because the covering
+ * letter, the receipt and the department's file all say it was paid.
+ */
+export const BILLING_TRANSITIONS: Record<BillingStatus, BillingStatus[]> = {
+  SUBMITTED: ['APPROVED', 'REJECTED', 'PAID'],
+  // Back to submitted undoes a decision pressed on the wrong row (SV-023).
+  APPROVED: ['PAID', 'REJECTED', 'SUBMITTED'],
+  REJECTED: ['SUBMITTED'],
+  PAID: [],
+};
+
+export function billingTransitionAllowed(from: BillingStatus, to: BillingStatus): boolean {
+  return from === to || BILLING_TRANSITIONS[from]?.includes(to) === true;
+}
+
+/**
+ * Withdrawing a payment recorded by mistake (SV-019).
+ *
+ * A paid claim is closed to ordinary edits, and the milestone's row is
+ * unique per village, so the one way back is an administrator reversing it,
+ * with a reason. The claim returns to APPROVED -- the department accepted
+ * it; only the payment is withdrawn -- and is editable from there.
+ */
+export const BILLING_REVERSAL_TARGET: BillingStatus = 'APPROVED';
+
+export const billingReversalSchema = z.object({
+  reason: z.string().trim()
+    .min(5, 'Say why the payment is being reversed')
+    .max(1000, 'Keep the reason under 1,000 characters'),
+}).strict();
+
+/**
  * The share of a village's value that has been claimed.
  *
  * Returned claims release nothing: the work comes back and is claimed again
@@ -2241,7 +2278,7 @@ export const villageBillingBulkSchema = z.object({
     // A thousand is more villages than any single claim covers, and it caps
     // what one request can do by accident.
     .max(1000, 'That is more than 1,000 villages at once'),
-  action: z.enum(['SUBMIT', 'DECIDE']),
+  action: z.enum(['SUBMIT', 'DECIDE', 'REVERSE']),
   milestone: z.number().int()
     .min(1, 'Milestones are numbered from 1')
     .max(9, 'A contract with more than nine claims is not one this handles'),
@@ -2267,6 +2304,9 @@ export const villageBillingBulkSchema = z.object({
   status: z.enum(['APPROVED', 'REJECTED', 'PAID']).optional(),
   decided_on: pastDate.optional(),
 
+  /* --- reversing a payment (administrators only, SV-019) --- */
+  reason: z.string().trim().max(1000).optional(),
+
   /**
    * Show what would happen, and write nothing.
    *
@@ -2275,6 +2315,12 @@ export const villageBillingBulkSchema = z.object({
    */
   dry_run: z.boolean().default(true),
 }).strict().superRefine((v, ctx) => {
+  if (v.action === 'REVERSE' && (v.reason ?? '').trim().length < 5) {
+    ctx.addIssue({
+      code: 'custom', path: ['reason'],
+      message: 'Say why the payment is being reversed',
+    });
+  }
   if (v.action === 'DECIDE') {
     if (!v.status) {
       ctx.addIssue({
@@ -2306,7 +2352,10 @@ export type BillingSkipReason =
   | 'NOTHING_TO_DECIDE'
   | 'ALREADY_IN_THAT_STATE'
   | 'NOT_EARNED'
-  | 'CLAIMED_OVER_100';
+  | 'CLAIMED_OVER_100'
+  | 'CLAIM_CLOSED'
+  | 'NOT_PAID'
+  | 'DECIDED_BEFORE_SUBMITTED';
 
 export const BILLING_SKIP_LABELS: Record<BillingSkipReason, string> = {
   ALREADY_CLAIMED: 'already submitted at this milestone',
@@ -2316,6 +2365,9 @@ export const BILLING_SKIP_LABELS: Record<BillingSkipReason, string> = {
   // for a setting rather than for the QC that has not been signed off.
   NOT_EARNED: 'the stage this milestone falls due at is not signed off yet',
   CLAIMED_OVER_100: 'this claim would take the village past 100% claimed',
+  CLAIM_CLOSED: 'the claim is already paid or cannot move to that status',
+  NOT_PAID: 'nothing paid at this milestone to reverse',
+  DECIDED_BEFORE_SUBMITTED: 'the decision date is before this claim was submitted',
 };
 
 /* ----------------------------------------------- ground-truthing staffing */
@@ -2639,6 +2691,11 @@ export const villageFinalSchema = z.object({
   // Mandatory: a figure that differs from the record with no explanation is
   // exactly what this exists to stop.
   reason: z.string().trim().min(3, 'Say why the certified figure differs').max(2000),
+  /**
+   * The version of the certified figure being replaced, as GET finals gave it
+   * (SV-016). Left out for a measure nobody has certified yet.
+   */
+  version: z.number().int().positive().optional(),
 }).strict();
 
 export const villageFinalsSchema = z.object({

@@ -10,6 +10,7 @@ import { Card } from '@/components/ui/Card';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { ExportMenu, cellNum, cellText } from '@/components/ui/ExportMenu';
 import { BillingBulkBar } from '@/components/survey/BillingBulkBar';
+import { mayReversePayments } from '@/components/survey/ReversePaymentDialog';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
@@ -2321,6 +2322,7 @@ function Villages({
   geoDrill?: { level: ReportLevel; name: string } | null;
   onDrillConsumed?: () => void;
 }) {
+  const { session } = useAuth();
   const [open, setOpen] = React.useState<string | null>(null);
   /* Which part of the opened village to bring into view. */
   const [section, setSection] =
@@ -2652,6 +2654,7 @@ function Villages({
         selected={selectedHere}
         villages={rows}
         canManage={canManage}
+        canReverse={mayReversePayments(session?.roles)}
         onDone={() => setPicked(new Set())}
         onClear={() => setPicked(new Set())}
         onKeepEligible={(ids) => setPicked(new Set(ids))}

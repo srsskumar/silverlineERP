@@ -24,7 +24,8 @@ import {
   forecast, findBottlenecks, delayReasonLabel as reasonLabel,
   villageStatusSchema, villagePlanSchema, delayReasonLabel, DELAY_REASONS,
   villageBillingSchema, villageBillingPatchSchema, MILESTONE_PERCENT,
-  billingDecisionRequired, claimedPercent, type BillingStatus,
+  billingDecisionRequired, billingTransitionAllowed, claimedPercent, type BillingStatus,
+  billingReversalSchema, BILLING_REVERSAL_TARGET,
   villageBillingBulkSchema,
   summariseStaffing, stageTracksStaffing, priorRange, type StaffingDay,
   milestoneEarned, MILESTONE_REQUIRES, villageFinalsSchema,
@@ -35,7 +36,7 @@ import {
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { z } from 'zod';
 import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
-import { orgTodaySql } from '../../common/orgTime.js';
+import { orgTodaySql, orgZoneSql, orgTimeZone, cachedOrgZone } from '../../common/orgTime.js';
 
 /**
  * Land survey progress (§59).
@@ -50,16 +51,24 @@ export async function registerSurveyRoutes(
 ) {
   const { pool } = opts;
   const auth = buildAuthenticate(opts);
-  const guard = (p: string) => requirePermission(auth, p);
-  // The calendar day where the work happens, not in UTC. For the first
-  // five and a half hours of every Indian day, UTC is still yesterday.
-  const today = () => businessDay();
+  /*
+   * Every survey route loads the caller's organisation timezone after the
+   * permission check (SV-017), so today(orgId) below is synchronous and
+   * agrees with the SQL jobs' orgTodaySql().
+   */
+  const loadZone = async (req: FastifyRequest) => {
+    if (req.authUser?.orgId) await orgTimeZone(pool, req.authUser.orgId);
+  };
+  const guard = (p: string) => [requirePermission(auth, p), loadZone];
+  // The calendar day where the work happens, in the organisation's own
+  // timezone (default Asia/Kolkata), not in UTC and not fixed to IST.
+  const today = (orgId?: string | null) => businessDay(new Date(), cachedOrgZone(orgId));
   // A timestamp becomes the calendar day it fell on *here*, not in UTC. A
   // stage completed at half past midnight would otherwise be dated to the day
   // before on the summary sheet. Date columns land on the same answer either
   // way, so one helper serves both.
-  const iso = (v: unknown) =>
-    v instanceof Date ? businessDay(v) : v ? String(v).slice(0, 10) : null;
+  const iso = (v: unknown, orgId?: string | null) =>
+    v instanceof Date ? businessDay(v, cachedOrgZone(orgId)) : v ? String(v).slice(0, 10) : null;
   const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
 
   /**
@@ -184,7 +193,7 @@ export async function registerSurveyRoutes(
     db: Pool | PoolClient, orgId: string, projectId: string,
     opts: { asOf?: string; from?: string; villageId?: string } = {},
   ): Promise<Array<VillageProgress & { row: Record<string, any> }>> {
-    const asOf = opts.asOf ?? today();
+    const asOf = opts.asOf ?? today(orgId);
     const values: unknown[] = [orgId, projectId, asOf];
     // `from` bounds what was done *in* a period. Cumulative and percentage
     // complete always run from the beginning, because "40% done" is a
@@ -310,8 +319,8 @@ export async function registerSurveyRoutes(
         stageCode: String(s.stage_code),
         linked: Boolean(s.task_id),
         taskStatus: s.task_status,
-        taskStartedAt: iso(s.actual_start_at),
-        taskCompletedAt: iso(s.actual_end_at),
+        taskStartedAt: iso(s.actual_start_at, orgId),
+        taskCompletedAt: iso(s.actual_end_at, orgId),
         ownState: s.own_state as StageState,
         ownStartedOn: iso(s.own_started_on),
         ownCompletedOn: iso(s.own_completed_on),
@@ -471,6 +480,20 @@ export async function registerSurveyRoutes(
   }
 
   /**
+   * Whether phone numbers are withheld from this reader (owner decision
+   * 2026-09-24, SV-003 / fix round 1): anybody holding an observer role,
+   * even alongside a staff role, and anybody reading as an observer.
+   */
+  function masksPhones(u: { permissions: string[]; roles?: string[] }): boolean {
+    return readsAsObserver(u) || (u.roles ?? []).some(
+      r => r === 'CLIENT_VIEWER' || r === 'GOVT_OBSERVER');
+  }
+  const withoutPhone = <T extends Record<string, unknown>>(r: T): Omit<T, 'phone'> => {
+    const { phone: _phone, ...rest } = r;
+    return rest;
+  };
+
+  /**
    * The programmes a client may look at: those run against a project they
    * are assigned to. A client is scoped to projects everywhere else in the
    * system, and an observer's "every active programme in the organisation"
@@ -560,20 +583,159 @@ export async function registerSurveyRoutes(
    * programme did not need to be posted to a village to have business
    * correcting a point on it.
    */
+  /**
+   * Who may do the village's own work: complete a stage, or record, correct
+   * or delete a control point (owner decision, 2026-09-24; SV-001, SV-002).
+   *
+   * Five people, and the same five for both, so the two rules cannot drift:
+   *   - the crew member assigned to the village (for a stage, to that stage),
+   *   - that crew member's reporting manager (employees.reports_to),
+   *   - a team leader -- already confined by villageOr404 to the programmes
+   *     they are on, which is how the scope model ties a TL to a project,
+   *   - the project manager of the survey's project: a PROJECT_MANAGER who
+   *     is the paired project's manager, is enrolled on the programme as its
+   *     PM, or whose role is scoped to that project or organisation-wide,
+   *   - an administrator.
+   * Holding survey.enter is not on the list: it is the right to record a
+   * day, not to sign off somebody else's work.
+   */
+  interface WorkAuthority {
+    everything: boolean;
+    ownStages: Set<string>;
+    managedStages: Set<string>;
+  }
+  async function workAuthority(
+    db: Pool | PoolClient,
+    u: { orgId: string; id: string; roles?: string[] },
+    villageId: string,
+  ): Promise<WorkAuthority> {
+    const roles = u.roles ?? [];
+    const f = (await db.query(
+      `SELECT
+         ARRAY(SELECT DISTINCT c.stage_id::text FROM survey_crew c
+                 JOIN users me ON me.employee_id = c.employee_id
+                WHERE me.id = $2 AND c.org_id = $1 AND c.survey_village_id = sv.id
+                  AND c.released_on IS NULL) AS own_stages,
+         ARRAY(SELECT DISTINCT c.stage_id::text FROM survey_crew c
+                 JOIN employees e ON e.id = c.employee_id
+                 JOIN users me ON me.employee_id = e.reports_to
+                WHERE me.id = $2 AND c.org_id = $1 AND c.survey_village_id = sv.id
+                  AND c.released_on IS NULL) AS managed_stages,
+         COALESCE(p.project_manager_id = $2, false) AS runs_project,
+         sp.id AS programme_id,
+         EXISTS (SELECT 1 FROM survey_project_employees pe
+                   JOIN users me ON me.employee_id = pe.employee_id
+                  WHERE me.id = $2 AND pe.survey_project_id = sp.id
+                    AND pe.released_on IS NULL
+                    AND pe.project_role = 'PROJECT_MANAGER') AS enrolled_pm,
+         EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+                  WHERE ur.user_id = $2 AND r.code = 'PROJECT_MANAGER'
+                    AND (ur.scope_type IS NULL
+                         OR (ur.scope_type = 'project' AND ur.scope_id = sp.project_id))
+                ) AS pm_scope_covers
+         FROM survey_villages sv
+         JOIN survey_projects sp ON sp.id = sv.survey_project_id
+         LEFT JOIN projects p ON p.id = sp.project_id
+        WHERE sv.id = $3 AND sv.org_id = $1`,
+      [u.orgId, u.id, villageId])).rows[0];
+    const pm = roles.includes('PROJECT_MANAGER')
+      && Boolean(f && (f.runs_project || f.enrolled_pm || f.pm_scope_covers));
+    // The same confinement as staffing (SV-026): a TL on this programme.
+    const tl = roles.includes('TEAM_LEAD') && Boolean(f?.programme_id)
+      && await onProgramme(db, u, String(f.programme_id));
+    return {
+      everything: roles.includes('SUPER_ADMIN') || roles.includes('ADMIN') || tl || pm,
+      ownStages: new Set((f?.own_stages ?? []).map(String)),
+      managedStages: new Set((f?.managed_stages ?? []).map(String)),
+    };
+  }
+
+  /** Whether the authority covers one stage, or (null) any work on the village. */
+  function authorityCovers(a: WorkAuthority, stageId: string | null): boolean {
+    if (a.everything) return true;
+    if (stageId === null) return a.ownStages.size > 0 || a.managedStages.size > 0;
+    return a.ownStages.has(stageId) || a.managedStages.has(stageId);
+  }
+
+  /**
+   * Whether this caller may put people on this programme (SV-018): an admin,
+   * a team leader on it (projectOr404 has already confined a TL to their own
+   * programmes), or the survey project's PM as workAuthority defines one.
+   */
+  async function mayStaffProgramme(
+    db: Pool | PoolClient, u: { orgId: string; id: string; roles?: string[] },
+    programmeId: string,
+  ): Promise<boolean> {
+    const roles = u.roles ?? [];
+    if (roles.includes('SUPER_ADMIN') || roles.includes('ADMIN')) return true;
+    // A team leader staffs the programmes they are on (SV-026), not every one
+    // an oversight permission such as survey.forecast happens to show them.
+    if (roles.includes('TEAM_LEAD') && await onProgramme(db, u, programmeId)) return true;
+    if (!roles.includes('PROJECT_MANAGER')) return false;
+    const f = (await db.query(
+      `SELECT COALESCE(p.project_manager_id = $2, false) AS runs_project,
+              EXISTS (SELECT 1 FROM survey_project_employees pe
+                        JOIN users me ON me.employee_id = pe.employee_id
+                       WHERE me.id = $2 AND pe.survey_project_id = sp.id
+                         AND pe.released_on IS NULL
+                         AND pe.project_role = 'PROJECT_MANAGER') AS enrolled_pm,
+              EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+                       WHERE ur.user_id = $2 AND r.code = 'PROJECT_MANAGER'
+                         AND (ur.scope_type IS NULL
+                              OR (ur.scope_type = 'project' AND ur.scope_id = sp.project_id))
+                     ) AS pm_scope_covers
+         FROM survey_projects sp LEFT JOIN projects p ON p.id = sp.project_id
+        WHERE sp.id = $3 AND sp.org_id = $1`, [u.orgId, u.id, programmeId])).rows[0];
+    return Boolean(f && (f.runs_project || f.enrolled_pm || f.pm_scope_covers));
+  }
+
+  /**
+   * The owner's staffing rule as a guard (SV-027): refuse unless this caller
+   * may staff the programme. Used by every write that changes who, or what
+   * kit, is on a programme.
+   */
+  async function requireStaffing(
+    db: Pool | PoolClient, u: { orgId: string; id: string; roles?: string[] },
+    programmeId: string, what: string,
+  ): Promise<void> {
+    if (!(await mayStaffProgramme(db, u, programmeId))) {
+      fail('NOT_ON_THIS_PROGRAMME',
+        `Only this programme’s project manager, a team leader on it or an `
+        + `administrator can ${what}.`, 403);
+    }
+  }
+
+  /** Enrolled on the programme, or on a crew on one of its villages. */
+  async function onProgramme(
+    db: Pool | PoolClient, u: { orgId: string; id: string }, programmeId: string,
+  ): Promise<boolean> {
+    return Boolean((await db.query(
+      `SELECT 1 FROM users me
+        WHERE me.id = $2 AND me.org_id = $1 AND me.employee_id IS NOT NULL AND (
+          EXISTS (SELECT 1 FROM survey_project_employees pe
+                   WHERE pe.employee_id = me.employee_id AND pe.survey_project_id = $3
+                     AND pe.released_on IS NULL)
+          OR EXISTS (SELECT 1 FROM survey_crew c
+                       JOIN survey_villages sv ON sv.id = c.survey_village_id
+                      WHERE c.employee_id = me.employee_id AND sv.survey_project_id = $3
+                        AND c.released_on IS NULL))`,
+      [u.orgId, u.id, programmeId])).rowCount);
+  }
+
+  const STAGE_NOT_ASSIGNED_REASON =
+    'Only the crew assigned to this stage, their reporting manager, a team leader, '
+    + 'the project manager or an administrator can complete it.';
+
   async function requireOwnCrew(
-    db: Pool | PoolClient, u: { orgId: string; id: string; permissions: string[] },
+    db: Pool | PoolClient,
+    u: { orgId: string; id: string; permissions: string[]; roles?: string[] },
     villageId: string,
   ) {
-    if (u.permissions.includes('survey.manage') || u.permissions.includes('survey.assign')) return;
-    const onCrew = await db.query(
-      `SELECT 1 FROM survey_crew c JOIN users usr ON usr.employee_id = c.employee_id
-        WHERE c.org_id = $1 AND usr.id = $2 AND c.survey_village_id = $3
-          AND c.released_on IS NULL`,
-      [u.orgId, u.id, villageId]);
-    if (!onCrew.rowCount) {
+    if (!authorityCovers(await workAuthority(db, u, villageId), null)) {
       fail('NOT_YOUR_VILLAGE',
-        'You are not on this village’s crew. Ask whoever assigned the crew, or your '
-        + 'team lead, to record or correct this point.', 403);
+        'You are not on this village’s crew. A control point is recorded or corrected by '
+        + 'the crew on the village, their reporting manager, a team leader, the project '
+        + 'manager or an administrator.', 403);
     }
   }
 
@@ -1006,7 +1168,7 @@ export async function registerSurveyRoutes(
 
     const [m, codes, all] = await Promise.all([
       measures(pool, u.orgId), stageCodes(pool, u.orgId),
-      positions(pool, u.orgId, id, { asOf: dateParam(req, q.as_of, 'as_of', today()) }),
+      positions(pool, u.orgId, id, { asOf: dateParam(req, q.as_of, 'as_of', today(u.orgId)) }),
     ]);
 
     /*
@@ -1050,7 +1212,7 @@ export async function registerSurveyRoutes(
     const [m, codes, all] = await Promise.all([
       measures(pool, u.orgId), stageCodes(pool, u.orgId),
       positions(pool, u.orgId, String(sv.survey_project_id), {
-        asOf: dateParam(req, q.as_of, 'as_of', today()), villageId: id,
+        asOf: dateParam(req, q.as_of, 'as_of', today(u.orgId)), villageId: id,
       }),
     ]);
     if (!all.length) fail('NOT_FOUND', 'Not found', 404);
@@ -1250,6 +1412,35 @@ export async function registerSurveyRoutes(
         }
 
         /*
+         * The start date is kept unless this call says otherwise (SV-007).
+         *
+         * Omitting started_on used to write NULL over the recorded start, so
+         * "mark it complete" through the API erased when the stage began and
+         * with it every duration and variance measured from it. Sending
+         * started_on: null still clears it on purpose.
+         */
+        const held = (await db.query(
+          `SELECT started_on FROM survey_village_stages
+            WHERE survey_village_id = $1 AND stage_id = $2`, [id, stage.id])).rows[0];
+        const startedOn = input.started_on !== undefined
+          ? input.started_on : iso(held?.started_on);
+        // Work that has not happened yet is not a date anybody can record,
+        // and a finish before the start is a typo (SV-008).
+        const now = today(u.orgId);
+        if (startedOn && input.started_on !== undefined && startedOn > now) {
+          fail('VALIDATION_ERROR', `A stage cannot start in the future (${startedOn}).`, 422);
+        }
+        if (input.completed_on && input.completed_on > now) {
+          fail('VALIDATION_ERROR',
+            `A stage cannot be completed in the future (${input.completed_on}).`, 422);
+        }
+        if (input.completed_on && startedOn && input.completed_on < startedOn) {
+          fail('VALIDATION_ERROR',
+            `This stage started on ${startedOn}; it cannot be completed on ${input.completed_on}.`,
+            422);
+        }
+
+        /*
          * Signing ground truthing off late must say why (§074).
          *
          * The other moment the question can be put, and the last one worth
@@ -1385,7 +1576,7 @@ export async function registerSurveyRoutes(
                          updated_at = now(), updated_by = EXCLUDED.updated_by
            RETURNING *`,
           [u.orgId, id, stage.id, input.state,
-            input.started_on ?? null, input.completed_on ?? null,
+            startedOn ?? null, input.completed_on ?? null,
             input.remarks ?? null,
             input.expected_start_on ?? null, input.expected_end_on ?? null,
             input.variance_reason ?? null, input.variance_remarks ?? null,
@@ -1400,7 +1591,7 @@ export async function registerSurveyRoutes(
           completedOn: iso(row.completed_on),
           expectedEndOn: iso(row.expected_end_on),
           varianceReason: row.variance_reason,
-        }, today());
+        }, today(u.orgId));
         return {
           ...row,
           started_on: iso(row.started_on),
@@ -1447,6 +1638,14 @@ export async function registerSurveyRoutes(
       const data = await mutate(pool, req, 'survey.village.start_gt', 'survey_village',
         async db => {
           const village = await villageOr404(db, u.orgId, id, u, true);
+          // The owner's staffing rule, as on the single crew route (SV-025).
+          // It is about the caller, not any one person named, so it refuses
+          // the whole start rather than skipping rows.
+          if (!(await mayStaffProgramme(db, u, String(village.survey_project_id)))) {
+            fail('NOT_ON_THIS_PROGRAMME',
+              'Only this programme’s project manager, a team leader on it or an '
+              + 'administrator can start ground truthing on its villages.', 403);
+          }
 
           const stage = (await db.query(
             `SELECT id FROM survey_stages
@@ -1470,7 +1669,14 @@ export async function registerSurveyRoutes(
           // written, so a typo in the fifth id does not leave the first four
           // assigned to a village that never started.
           for (const employeeId of input.employee_ids) {
-            await inOrg(db, 'employees', employeeId, u.orgId);
+            const e = await inOrg(db, 'employees', employeeId, u.orgId);
+            // Somebody who has left cannot be put on work (SV-005), the same
+            // rule the bulk crew route applies.
+            if (e.status !== 'ACTIVE') {
+              fail('EMPLOYEE_INACTIVE',
+                `${[e.first_name, e.last_name].filter(Boolean).join(' ') || e.emp_no} is not an `
+                + 'active employee and cannot be put on a village.', 422);
+            }
           }
 
           // Headcounts live on the village: they govern every day's return
@@ -1510,6 +1716,7 @@ export async function registerSurveyRoutes(
           // same village within a minute of each other is ordinary, and the
           // second one should not be told off for it.
           let added = 0;
+          const brought: string[] = [], elsewhere: string[] = [];
           for (const employeeId of input.employee_ids) {
             const r = await db.query(
               `INSERT INTO survey_crew
@@ -1521,6 +1728,13 @@ export async function registerSurveyRoutes(
                      AND employee_id = $4 AND released_on IS NULL)`,
               [u.orgId, id, stage.id, employeeId, input.started_on, u.id]);
             added += r.rowCount ?? 0;
+            // Their instruments come with them, as on every other way onto a
+            // crew (SV-006).
+            if (r.rowCount) {
+              const kit = await carryKitToVillage(db, u.orgId, id, employeeId, u.id, input.started_on);
+              brought.push(...kit.brought);
+              elsewhere.push(...kit.elsewhere);
+            }
           }
 
           const gcps = Number((await db.query(
@@ -1534,6 +1748,8 @@ export async function registerSurveyRoutes(
             expected_end_on: input.expected_end_on,
             crew_added: added,
             crew_named: input.employee_ids.length,
+            rovers_brought: brought,
+            rovers_left_elsewhere: elsewhere,
             gcp_count: gcps,
             /*
              * Said plainly rather than refused. A village under way with no
@@ -1598,7 +1814,7 @@ export async function registerSurveyRoutes(
    */
   app.get('/api/v1/survey/me/villages', { preHandler: guard('survey.read') }, async req => {
     const u = actor(req);
-    const workDate = today();
+    const workDate = today(u.orgId);
     const rows = (await pool.query(
       `SELECT DISTINCT ON (sv.id)
               sv.id, sv.survey_project_id, sv.total_extent_ac,
@@ -1685,8 +1901,17 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(crewAssignmentSchema, req.body);
       const row = await mutate(pool, req, 'survey.crew.assign', 'survey_crew', async db => {
-        await villageOr404(db, u.orgId, id, u);
-        await inOrg(db, 'employees', input.employee_id, u.orgId);
+        const village = await villageOr404(db, u.orgId, id, u);
+        // The survey rule, in place of the directory scope (SV-018).
+        if (!(await mayStaffProgramme(db, u, String(village.survey_project_id)))) {
+          fail('NOT_ON_THIS_PROGRAMME',
+            'Only this programme’s project manager, a team leader on it or an '
+            + 'administrator can assign its crews.', 403);
+        }
+        const e = await inOrg(db, 'employees', input.employee_id, u.orgId);
+        if (e.status !== 'ACTIVE') {
+          fail('EMPLOYEE_INACTIVE', 'Only an active employee can be put on a crew.', 422);
+        }
         const stage = (await db.query(
           'SELECT id FROM survey_stages WHERE org_id = $1 AND code = $2 AND active',
           [u.orgId, input.stage_code])).rows[0];
@@ -1707,7 +1932,7 @@ export async function registerSurveyRoutes(
              assigned_on, released_on, created_by)
            VALUES($1,$2,$3,$4,$5::date,$6,$7) RETURNING *`,
           [u.orgId, id, stage.id, input.employee_id,
-            input.assigned_on ?? today(), input.released_on ?? null, u.id])).rows[0];
+            input.assigned_on ?? today(u.orgId), input.released_on ?? null, u.id])).rows[0];
         // Said rather than done silently: somebody who expected to allocate
         // the rovers needs to know it has already happened.
         return { ...crewRow, rovers_brought: kit.brought, rovers_left_elsewhere: kit.elsewhere };
@@ -1729,7 +1954,14 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(crewBulkAssignmentSchema, req.body);
       const out = await mutate(pool, req, 'survey.crew.assign.bulk', 'survey_crew', async db => {
-        await villageOr404(db, u.orgId, id, u);
+        const village = await villageOr404(db, u.orgId, id, u);
+        // As on the single route and start-gt (SV-025); the whole batch,
+        // because the rule is about who is asking.
+        if (!(await mayStaffProgramme(db, u, String(village.survey_project_id)))) {
+          fail('NOT_ON_THIS_PROGRAMME',
+            'Only this programme’s project manager, a team leader on it or an '
+            + 'administrator can assign its crews.', 403);
+        }
         const stage = (await db.query(
           'SELECT id FROM survey_stages WHERE org_id = $1 AND code = $2 AND active',
           [u.orgId, input.stage_code])).rows[0];
@@ -1752,7 +1984,7 @@ export async function registerSurveyRoutes(
                WHERE survey_village_id = $2 AND stage_id = $3 AND employee_id = $4
                  AND released_on IS NULL)
              RETURNING id`,
-            [u.orgId, id, stage.id, employeeId, input.assigned_on ?? today(), u.id]);
+            [u.orgId, id, stage.id, employeeId, input.assigned_on ?? today(u.orgId), u.id]);
           if (done.rowCount) {
             assigned.push(employeeId);
             // Their instruments come with them, so nobody allocates the same
@@ -1785,7 +2017,8 @@ export async function registerSurveyRoutes(
       const input = parse(roverBulkAllocationSchema, req.body);
       const out = await mutate(pool, req, 'survey.rover.allocate.bulk',
         'survey_rover_allocation', async db => {
-          await villageOr404(db, u.orgId, id, u);
+          const village = await villageOr404(db, u.orgId, id, u);
+          await requireStaffing(db, u, String(village.survey_project_id), 'allocate its instruments');
           const allocated: string[] = [];
           const clashes: Array<{ asset_id: string; asset_code: string; with_village: string }> = [];
 
@@ -1837,6 +2070,8 @@ export async function registerSurveyRoutes(
       const input = parse(roverAllocationEditSchema, req.body);
       return mutate(pool, req, 'survey.rover.update', 'survey_rover_allocation', async db => {
         const row = await inOrg(db, 'survey_rover_allocations', id, u.orgId, true);
+        const village = await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+        await requireStaffing(db, u, String(village.survey_project_id), 'correct its instruments');
         const allocatedOn = input.allocated_on ?? iso(row.allocated_on);
         const releasedOn = input.released_on === undefined
           ? iso(row.released_on) : input.released_on;
@@ -1876,8 +2111,12 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(villageMoveSchema, req.body);
       return mutate(pool, req, 'survey.villages.move', 'survey_project', async db => {
-        await projectOr404(db, u.orgId, id);
-        const target = await projectOr404(db, u.orgId, input.to_project_id);
+        await projectOr404(db, u.orgId, id, u);
+        const target = await projectOr404(db, u.orgId, input.to_project_id, u);
+        // Villages carry their crews and kit with them, so both programmes'
+        // staffing changes (SV-027).
+        await requireStaffing(db, u, id, 'move its villages');
+        await requireStaffing(db, u, input.to_project_id, 'take villages into it');
         if (input.to_project_id === id) {
           fail('VALIDATION_ERROR', 'That is the programme they are already in', 422);
         }
@@ -1921,11 +2160,18 @@ export async function registerSurveyRoutes(
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(z.object({ released_on: z.string().optional() }), req.body ?? {});
+      // A typed date, checked here: handed raw to $n::date it was a 500 (SV-004).
+      const releasedOn = dateParam(req, input.released_on, 'released_on', today(u.orgId));
       return {
         data: await mutate(pool, req, 'survey.crew.release', 'survey_crew', async db => {
           const row = (await db.query(
-            'SELECT * FROM survey_crew WHERE id = $1 AND org_id = $2', [id, u.orgId])).rows[0];
+            'SELECT * FROM survey_crew WHERE id = $1 AND org_id = $2 FOR UPDATE',
+            [id, u.orgId])).rows[0];
           if (!row) fail('NOT_FOUND', 'Not found', 404);
+          // Through the village, so a programme the caller cannot see is a
+          // 404, then the staffing rule (SV-027).
+          const village = await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+          await requireStaffing(db, u, String(village.survey_project_id), 'release its crew');
           /*
            * What their posting brought goes back with them.
            *
@@ -1934,12 +2180,12 @@ export async function registerSurveyRoutes(
            */
           const returned = await releaseKitFromVillage(
             db, u.orgId, String(row.survey_village_id), String(row.employee_id),
-            input.released_on ?? null);
+            releasedOn);
           // Released rather than deleted, so who surveyed a village last
           // season is still answerable.
           const released = (await db.query(
             `UPDATE survey_crew SET released_on = $2::date
-             WHERE id = $1 RETURNING *`, [id, input.released_on ?? today()])).rows[0];
+             WHERE id = $1 RETURNING *`, [id, releasedOn])).rows[0];
           return { ...released, rovers_released: returned };
         }),
       };
@@ -2041,7 +2287,10 @@ export async function registerSurveyRoutes(
           ORDER BY aa.asset_id, aa.issued_at DESC`, [id, u.orgId])).rows;
 
       return {
-        data: rows.map(r => ({ ...r, issued_at: iso(r.issued_at), due_date: iso(r.due_date) })),
+        data: rows.map(r => {
+          const row = { ...r, issued_at: iso(r.issued_at, u.orgId), due_date: iso(r.due_date) };
+          return masksPhones(u) ? withoutPhone(row) : row;
+        }),
       };
     });
 
@@ -2105,7 +2354,7 @@ export async function registerSurveyRoutes(
            ),
            $5,$6)
          RETURNING allocated_on`,
-        [orgId, villageId, k.asset_id, on ?? today(), userId, employeeId])).rows[0];
+        [orgId, villageId, k.asset_id, on ?? today(orgId), userId, employeeId])).rows[0];
       brought.push(String(k.label));
       startedOn.set(String(k.label), String(started.allocated_on).slice(0, 10));
     }
@@ -2128,7 +2377,7 @@ export async function registerSurveyRoutes(
           SET released_on = $4::date
         WHERE org_id = $1 AND survey_village_id = $2
           AND assigned_via_employee_id = $3 AND released_on IS NULL`,
-      [orgId, villageId, employeeId, on ?? today()])).rowCount ?? 0;
+      [orgId, villageId, employeeId, on ?? today(orgId)])).rowCount ?? 0;
   }
 
   app.post('/api/v1/survey/villages/:id/rovers', { preHandler: guard('survey.manage') },
@@ -2137,7 +2386,8 @@ export async function registerSurveyRoutes(
       const input = parse(roverAllocationSchema, req.body);
       const row = await mutate(pool, req, 'survey.rover.allocate', 'survey_rover_allocation',
         async db => {
-          await villageOr404(db, u.orgId, id, u);
+          const village = await villageOr404(db, u.orgId, id, u);
+          await requireStaffing(db, u, String(village.survey_project_id), 'allocate its instruments');
           await inOrg(db, 'assets', input.asset_id, u.orgId);
           try {
             return (await db.query(
@@ -2172,20 +2422,24 @@ export async function registerSurveyRoutes(
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(z.object({ released_on: z.string().optional() }), req.body ?? {});
+      // A typed date, checked here: handed raw to $n::date it was a 500 (SV-004).
+      const releasedOn = dateParam(req, input.released_on, 'released_on', today(u.orgId));
       return {
         data: await mutate(pool, req, 'survey.rover.release', 'survey_rover_allocation',
           async db => {
             const row = (await db.query(
-              'SELECT * FROM survey_rover_allocations WHERE id = $1 AND org_id = $2',
+              'SELECT * FROM survey_rover_allocations WHERE id = $1 AND org_id = $2 FOR UPDATE',
               [id, u.orgId])).rows[0];
             if (!row) fail('NOT_FOUND', 'Not found', 404);
+            const village = await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+            await requireStaffing(db, u, String(village.survey_project_id), 'release its instruments');
             if (row.released_on) {
               fail('ALREADY_RETURNED', 'That allocation is already closed', 409);
             }
             return (await db.query(
               `UPDATE survey_rover_allocations
                SET released_on = $2::date
-               WHERE id = $1 RETURNING *`, [id, input.released_on ?? today()])).rows[0];
+               WHERE id = $1 RETURNING *`, [id, releasedOn])).rows[0];
           }),
       };
     });
@@ -2343,7 +2597,7 @@ export async function registerSurveyRoutes(
       const backdatedBeforeGt = Boolean(
         gtStage?.startedOn && input.entry_date < gtStage.startedOn);
 
-      if (gtStage && gtReasonRequired(gtStage, today())) {
+      if (gtStage && gtReasonRequired(gtStage, today(u.orgId))) {
         if (!input.gt_variance_reason) {
           fail('GT_VARIANCE_REASON_REQUIRED',
             `Ground truthing on this village was due on ${gtStage.expectedEndOn} and is `
@@ -2454,7 +2708,7 @@ export async function registerSurveyRoutes(
         version(req, row as { version: number });
 
         const entryDay = String(row.entry_date).slice(0, 10);
-        if (entryDay !== businessDay() && !u.permissions.includes('survey.manage')) {
+        if (entryDay !== today(u.orgId) && !u.permissions.includes('survey.manage')) {
           fail('PAST_DAY_AMENDMENT',
             `${entryDay} has already been rolled up and reported on. Correcting an earlier `
             + 'day is a decision about the record rather than a typo, so it needs a '
@@ -2568,11 +2822,11 @@ export async function registerSurveyRoutes(
     // Validated like every other window in this module: a value that is not a
     // date reaches Postgres as `$n::date` and comes back as a 500.
     if (q.from) {
-      values.push(dateParam(req, q.from, 'from', today()));
+      values.push(dateParam(req, q.from, 'from', today(u.orgId)));
       where += ` AND e.entry_date >= $${values.length}`;
     }
     if (q.to) {
-      values.push(dateParam(req, q.to, 'to', today()));
+      values.push(dateParam(req, q.to, 'to', today(u.orgId)));
       where += ` AND e.entry_date <= $${values.length}`;
     }
     values.push(limit + 1, offset);
@@ -2631,7 +2885,7 @@ export async function registerSurveyRoutes(
       const { q } = page(req);
       await projectOr404(pool, u.orgId, id, u);
 
-      const to = dateParam(req, q.to, 'to', today());
+      const to = dateParam(req, q.to, 'to', today(u.orgId));
       const from = dateParam(req, q.from, 'from', to);
       if (from > to) fail('VALIDATION_ERROR', 'The window starts after it ends', 422);
       const span = Math.round(
@@ -2769,7 +3023,7 @@ export async function registerSurveyRoutes(
       for (const r of rows) {
         const code = String(r.stage_code);
         if (!durations[code]) durations[code] = { startedOn: null, completedOn: null, days: null };
-        const at = iso(r.changed_at);
+        const at = iso(r.changed_at, u.orgId);
         if (r.to_state === 'IN_PROGRESS' && !durations[code].startedOn) durations[code].startedOn = at;
         if (r.to_state === 'COMPLETED') durations[code].completedOn = at;
       }
@@ -2783,7 +3037,7 @@ export async function registerSurveyRoutes(
 
       return {
         data: {
-          movements: rows.map(r => ({ ...r, changed_at: r.changed_at, on_date: iso(r.changed_at) })),
+          movements: rows.map(r => ({ ...r, changed_at: r.changed_at, on_date: iso(r.changed_at, u.orgId) })),
           durations,
         },
       };
@@ -2850,18 +3104,18 @@ export async function registerSurveyRoutes(
           await db.query('UPDATE org_units SET name = $2, updated_at = now() WHERE id = $1',
             [row.village_id, input.village_name]);
         }
+        // Only the fields sent, and a null sent is a null stored (SV-009):
+        // COALESCE made an extent or an old code impossible to clear.
+        const sets: string[] = [], values: unknown[] = [id];
+        for (const key of ['total_extent_ac', 'dgps_base', 'dgps_rovers', 'teams',
+          'vill_code_old'] as const) {
+          if (input[key] !== undefined) { values.push(input[key]); sets.push(`${key} = $${values.length}`); }
+        }
+        values.push(u.id);
         const updated = (await db.query(
-          `UPDATE survey_villages SET
-             total_extent_ac = COALESCE($2, total_extent_ac),
-             dgps_base = COALESCE($3, dgps_base),
-             dgps_rovers = COALESCE($4, dgps_rovers),
-             teams = COALESCE($5, teams),
-             vill_code_old = COALESCE($6, vill_code_old),
-             version = version + 1, updated_at = now(), updated_by = $7
-           WHERE id = $1 RETURNING *`,
-          [id, input.total_extent_ac ?? null, input.dgps_base ?? null,
-            input.dgps_rovers ?? null, input.teams ?? null,
-            input.vill_code_old ?? null, u.id])).rows[0];
+          `UPDATE survey_villages SET ${sets.map(x => `${x}, `).join('')}
+             version = version + 1, updated_at = now(), updated_by = $${values.length}
+           WHERE id = $1 RETURNING *`, values)).rows[0];
         return { ...updated, total_extent_ac: num(updated.total_extent_ac) };
       });
     });
@@ -2874,6 +3128,16 @@ export async function registerSurveyRoutes(
         data: await mutate(pool, req, 'survey.village.plan', 'survey_village', async db => {
           const row = await villageOr404(db, u.orgId, id, u, true);
           version(req, row as { version: number });
+          // A plan that finishes before it starts is a typo, counted against
+          // the pace figure until somebody notices (SV-010).
+          const start = input.planned_start_on !== undefined
+            ? input.planned_start_on : iso(row.planned_start_on);
+          const finish = input.expected_completion_on !== undefined
+            ? input.expected_completion_on : iso(row.expected_completion_on);
+          if (start && finish && finish < start) {
+            fail('VALIDATION_ERROR',
+              `The expected completion (${finish}) cannot be before the planned start (${start}).`, 422);
+          }
           const sets: string[] = [], values: unknown[] = [id];
           for (const key of ['total_extent_ac', 'expected_completion_on', 'planned_start_on',
             'gt_govt_staff_allocated', 'gt_crew_allocated'] as const) {
@@ -2989,7 +3253,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       const village = await villageOr404(pool, u.orgId, id, u);
-      const to = dateParam(req, q.to, 'to', today());
+      const to = dateParam(req, q.to, 'to', today(u.orgId));
       const from = dateParam(req, q.from, 'from', '1900-01-01');
 
       const rows = (await pool.query(
@@ -3249,13 +3513,19 @@ export async function registerSurveyRoutes(
       };
     });
 
-  app.delete('/api/v1/survey/gcps/:id', { preHandler: guard('survey.manage') },
+  /*
+   * Deleting a point: the same five people as recording one (owner decision,
+   * fix round 1), so survey.enter plus requireOwnCrew rather than
+   * survey.manage. This supersedes §59.9.4's "delete stays with manage".
+   */
+  app.delete('/api/v1/survey/gcps/:id', { preHandler: guard('survey.enter') },
     async req => ({
       data: await mutate(pool, req, 'survey.gcp.delete', 'survey_village_gcp', async db => {
         const u = actor(req), id = (req.params as { id: string }).id;
         const row = await inOrg(db, 'survey_village_gcps', id, u.orgId, true);
         if (!row) fail('NOT_FOUND', 'That control point no longer exists.', 404);
         await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+        await requireOwnCrew(db, u, String(row.survey_village_id));
         await db.query('DELETE FROM survey_village_gcps WHERE id = $1', [id]);
         return { id, deleted: true };
       }),
@@ -3351,7 +3621,7 @@ export async function registerSurveyRoutes(
           // here with nothing to release first.
           held_by_village_id: r.held_by_village_id,
           held_by_village_name: r.held_by_village_name,
-          held_since: iso(r.held_since),
+          held_since: iso(r.held_since, u.orgId),
         })),
       };
     });
@@ -3374,8 +3644,9 @@ export async function registerSurveyRoutes(
 
       return {
         data: await mutate(pool, req, 'survey.rover.claim', 'survey_rover_allocation', async db => {
-          await villageOr404(db, u.orgId, id, u);
-          const on = input.on ?? today();
+          const village = await villageOr404(db, u.orgId, id, u);
+          await requireStaffing(db, u, String(village.survey_project_id), 'claim instruments for it');
+          const on = input.on ?? today(u.orgId);
           const brought: string[] = [], refused: Array<{ asset_code: string; why: string }> = [];
           const arriving: Array<{ asset_code: string; on: string }> = [];
 
@@ -3497,7 +3768,7 @@ export async function registerSurveyRoutes(
             difference: cert === null ? null : round2(cert - rec),
             reason: f ? f.reason : null,
             certified_by_name: f ? f.certified_by_name : null,
-            certified_at: f ? iso(f.certified_at) : null,
+            certified_at: f ? iso(f.certified_at, u.orgId) : null,
             final_id: f ? f.id : null,
             version: f ? f.version : null,
           };
@@ -3543,16 +3814,48 @@ export async function registerSurveyRoutes(
             if (!measure) {
               fail('UNKNOWN_MEASURE', `There is no measure ${f.measure_code}`, 422);
             }
-            await db.query(
-              `INSERT INTO survey_village_finals(org_id, survey_village_id, measure_id,
-                 quantity, reason, certified_by, created_by, updated_by)
-               VALUES($1,$2,$3,$4,$5,$6,$6,$6)
-               ON CONFLICT (survey_village_id, measure_id)
-               DO UPDATE SET quantity = EXCLUDED.quantity, reason = EXCLUDED.reason,
-                             certified_by = EXCLUDED.certified_by, certified_at = now(),
-                             version = survey_village_finals.version + 1,
-                             updated_at = now(), updated_by = EXCLUDED.updated_by`,
-              [u.orgId, id, measure.id, f.quantity, f.reason, u.id]);
+            /*
+             * Optimistic locking, as every other write here (SV-016). Two
+             * people certifying one measure used to be last-write-wins, and
+             * the loser never learned their recount had been overwritten.
+             */
+            const held = (await db.query(
+              `SELECT id, version FROM survey_village_finals
+                WHERE survey_village_id = $1 AND measure_id = $2 FOR UPDATE`,
+              [id, measure.id])).rows[0];
+            if (held) {
+              if (f.version === undefined) {
+                fail('VERSION_REQUIRED',
+                  `${f.measure_code} is already certified. Send the version you are replacing.`);
+              }
+              if (Number(held.version) !== f.version) {
+                fail('VERSION_CONFLICT',
+                  `${f.measure_code} was certified again by somebody else. Reload before changing it.`,
+                  409);
+              }
+              await db.query(
+                `UPDATE survey_village_finals
+                    SET quantity = $2, reason = $3, certified_by = $4, certified_at = now(),
+                        version = version + 1, updated_at = now(), updated_by = $4
+                  WHERE id = $1`, [held.id, f.quantity, f.reason, u.id]);
+            } else {
+              if (f.version !== undefined) {
+                fail('VERSION_CONFLICT',
+                  `${f.measure_code} is no longer certified. Reload before changing it.`, 409);
+              }
+              const made = await db.query(
+                `INSERT INTO survey_village_finals(org_id, survey_village_id, measure_id,
+                   quantity, reason, certified_by, created_by, updated_by)
+                 VALUES($1,$2,$3,$4,$5,$6,$6,$6)
+                 ON CONFLICT (survey_village_id, measure_id) DO NOTHING`,
+                [u.orgId, id, measure.id, f.quantity, f.reason, u.id]);
+              // Somebody else certified it between our read and our write.
+              if (!made.rowCount) {
+                fail('VERSION_CONFLICT',
+                  `${f.measure_code} was just certified by somebody else. Reload before changing it.`,
+                  409);
+              }
+            }
             written.push(f.measure_code);
           }
           return { certified: written.length, measures: written };
@@ -3568,11 +3871,15 @@ export async function registerSurveyRoutes(
       return {
         data: await mutate(pool, req, 'survey.village.certify.clear', 'survey_village', async db => {
           await villageOr404(db, u.orgId, id, u);
+          // Cleared only by somebody who saw the figure as it is (SV-016).
+          const held = (await db.query(
+            `SELECT f.id, f.version FROM survey_village_finals f
+               JOIN survey_measures mm ON mm.id = f.measure_id
+              WHERE mm.code = $3 AND f.org_id = $1 AND f.survey_village_id = $2
+              FOR UPDATE OF f`, [u.orgId, id, code])).rows[0];
+          if (held) version(req, { version: Number(held.version) });
           const done = await db.query(
-            `DELETE FROM survey_village_finals f
-              USING survey_measures mm
-              WHERE f.measure_id = mm.id AND mm.code = $3
-                AND f.org_id = $1 AND f.survey_village_id = $2`, [u.orgId, id, code]);
+            'DELETE FROM survey_village_finals WHERE id = $1', [held?.id ?? null]);
           return { cleared: done.rowCount ?? 0, code };
         }),
       };
@@ -3682,13 +3989,77 @@ export async function registerSurveyRoutes(
               // Defaulted from the milestone so the usual case needs no
               // decision; stored, so a different contract keeps its own split.
               input.percent ?? MILESTONE_PERCENT[input.milestone] ?? 0,
-              status, input.submitted_on ?? today(), input.decided_on ?? null,
+              status, input.submitted_on ?? today(u.orgId), input.decided_on ?? null,
               input.reference_no ?? null, input.extent_ac ?? null,
               input.remarks ?? null, u.id])).rows[0];
           return { ...row, percent: num(row.percent), extent_ac: num(row.extent_ac) };
         });
       reply.code(201);
       return { data };
+    });
+
+  /*
+   * A paid claim is closed (SV-011) and its milestone row is unique, so a
+   * payment recorded by mistake is undone by reversing it -- never by a
+   * "new claim", which the UNIQUE (village, milestone) constraint forbids.
+   */
+  const PAID_CLAIM_HINT =
+    ' If the payment was recorded by mistake, an administrator can reverse it with a '
+    + 'reason; the claim then returns to approved and can be corrected.';
+  const isAdmin = (u: { roles?: string[] }) =>
+    (u.roles ?? []).some(r => r === 'ADMIN' || r === 'SUPER_ADMIN');
+
+  /** Reverse one paid claim, with its own audit row carrying both states. */
+  async function reverseClaim(
+    db: PoolClient, req: FastifyRequest, u: { orgId: string; id: string },
+    row: Record<string, any>, reason: string,
+  ) {
+    const updated = (await db.query(
+      `UPDATE survey_village_billing
+          SET status = $2, version = version + 1, updated_at = now(), updated_by = $3
+        WHERE id = $1 RETURNING *`, [row.id, BILLING_REVERSAL_TARGET, u.id])).rows[0];
+    const state = (r: Record<string, any>) => ({
+      status: r.status, milestone: Number(r.milestone), percent: num(r.percent),
+      extent_ac: num(r.extent_ac), submitted_on: iso(r.submitted_on),
+      decided_on: iso(r.decided_on), reference_no: r.reference_no ?? null,
+    });
+    await db.query(
+      `INSERT INTO audit_events(org_id, actor_id, action, entity_type, entity_id,
+         before_state, after_state, reason, request_id)
+       VALUES($1,$2,'survey.village.billing.reverse','survey_village_billing',$3,$4,$5,$6,$7)`,
+      [u.orgId, u.id, row.id, JSON.stringify(state(row)), JSON.stringify(state(updated)),
+        reason, req.requestId]);
+    return updated;
+  }
+
+  /**
+   * Reverse a payment recorded by mistake (SV-019).
+   *
+   * Administrators only, with a reason and the claim's current version. The
+   * claim returns to APPROVED: the department accepted it, and only the
+   * payment is being withdrawn. Nothing about its percent or extent moves.
+   */
+  app.post('/api/v1/survey/billing/:id/reverse', { preHandler: guard('survey.manage') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      if (!isAdmin(u)) {
+        fail('ADMIN_ONLY', 'Only an administrator can reverse a recorded payment.', 403);
+      }
+      const input = parse(billingReversalSchema, req.body ?? {});
+      return {
+        data: await mutate(pool, req, 'survey.village.billing.update', 'survey_village_billing',
+          async db => {
+            const row = await inOrg(db, 'survey_village_billing', id, u.orgId, true);
+            await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+            version(req, row as { version: number });
+            if (row.status !== 'PAID') {
+              fail('NOT_PAID', `This claim is ${String(row.status).toLowerCase()}, not paid; `
+                + 'there is no payment to reverse.', 409);
+            }
+            const updated = await reverseClaim(db, req, u, row, input.reason);
+            return { ...updated, percent: num(updated.percent), extent_ac: num(updated.extent_ac) };
+          }),
+      };
     });
 
   app.patch('/api/v1/survey/billing/:id', { preHandler: guard('survey.manage') },
@@ -3707,6 +4078,28 @@ export async function registerSurveyRoutes(
             fail('DECISION_DATE_REQUIRED',
               'A claim recorded as ' + status.toLowerCase() +
               ' needs the date the department decided it.', 422);
+          }
+          // SV-011: the claim's life runs one way, and a paid claim is closed
+          // except for its paper trail (reference number, remarks).
+          const from = row.status as BillingStatus;
+          if (!billingTransitionAllowed(from, status)) {
+            fail('CLAIM_TRANSITION_REFUSED',
+              `A ${from.toLowerCase()} claim cannot be recorded as ${status.toLowerCase()}.`
+              + (from === 'PAID' ? PAID_CLAIM_HINT : ''), 409);
+          }
+          if (from === 'PAID' && (['percent', 'submitted_on', 'decided_on', 'extent_ac'] as const)
+            .some(k => input[k] !== undefined)) {
+            fail('CLAIM_TRANSITION_REFUSED',
+              'This claim has been paid. Only its reference number and remarks can still be '
+              + 'corrected.' + PAID_CLAIM_HINT, 409);
+          }
+          // SV-012: a decision cannot come before the claim went in.
+          const submittedOn = input.submitted_on ?? iso(row.submitted_on);
+          const decidedOn = decided ? (typeof decided === 'string' ? decided : iso(decided)) : null;
+          if (decidedOn && submittedOn && decidedOn < submittedOn) {
+            fail('VALIDATION_ERROR',
+              `The department cannot have decided this claim (${decidedOn}) before it was `
+              + `submitted (${submittedOn}).`, 422);
           }
           // Checked whenever the claim will be standing afterwards: a new
           // percent, or a returned claim put back in, both change the total.
@@ -3737,6 +4130,21 @@ export async function registerSurveyRoutes(
         const row = await inOrg(db, 'survey_village_billing', id, u.orgId, true);
         if (!row) fail('NOT_FOUND', 'That billing claim no longer exists.', 404);
         await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+        // SV-013: a paid claim is money received, and a claim with a later
+        // milestone standing on it is the one the department reconciles
+        // the later one against. Deleting either leaves the file wrong.
+        if (row.status === 'PAID') {
+          fail('CLAIM_PAID', 'This claim has been paid and cannot be deleted.', 409);
+        }
+        const later = await db.query(
+          `SELECT milestone FROM survey_village_billing
+            WHERE survey_village_id = $1 AND milestone > $2 AND status <> 'REJECTED'
+            ORDER BY milestone`, [row.survey_village_id, row.milestone]);
+        if (later.rowCount) {
+          fail('LATER_MILESTONE_STANDING',
+            `Milestone ${later.rows.map(r => r.milestone).join(' and ')} stands on this claim. `
+            + 'Delete or return those first.', 409);
+        }
         await db.query('DELETE FROM survey_village_billing WHERE id = $1', [id]);
         return { id, deleted: true };
       }),
@@ -3848,6 +4256,9 @@ export async function registerSurveyRoutes(
       const u = actor(req);
       const input = parse(villageBillingBulkSchema, req.body);
       const ids = [...new Set(input.survey_village_ids)];
+      if (input.action === 'REVERSE' && !isAdmin(u)) {
+        fail('ADMIN_ONLY', 'Only an administrator can reverse recorded payments.', 403);
+      }
 
       return {
         data: await mutate(pool, req, 'survey.village.billing.bulk',
@@ -3866,6 +4277,7 @@ export async function registerSurveyRoutes(
             const rows = (await db.query(
               `SELECT sv.id, ou.name AS village_name, sv.total_extent_ac,
                       b.id AS claim_id, b.status AS claim_status, b.version AS claim_version,
+                      b.submitted_on AS claim_submitted_on,
                       /*
                        * Whether the village has earned this milestone yet.
                        *
@@ -3954,6 +4366,11 @@ export async function registerSurveyRoutes(
                   skipped.push({ village_name: String(r.village_name), reason: 'CLAIMED_OVER_100' });
                   continue;
                 }
+              } else if (input.action === 'REVERSE') {
+                if (!r.claim_id || String(r.claim_status) !== 'PAID') {
+                  skipped.push({ village_name: String(r.village_name), reason: 'NOT_PAID' });
+                  continue;
+                }
               } else {
                 if (!r.claim_id) {
                   skipped.push({ village_name: String(r.village_name), reason: 'NOTHING_TO_DECIDE' });
@@ -3962,6 +4379,20 @@ export async function registerSurveyRoutes(
                 if (String(r.claim_status) === input.status) {
                   skipped.push({
                     village_name: String(r.village_name), reason: 'ALREADY_IN_THAT_STATE',
+                  });
+                  continue;
+                }
+                if (!billingTransitionAllowed(
+                  String(r.claim_status) as BillingStatus, input.status as BillingStatus)) {
+                  skipped.push({ village_name: String(r.village_name), reason: 'CLAIM_CLOSED' });
+                  continue;
+                }
+                // The single route's SV-012 rule, row by row (SV-022): a
+                // decision cannot predate the claim it decides.
+                const submittedOn = iso(r.claim_submitted_on);
+                if (input.decided_on && submittedOn && input.decided_on < submittedOn) {
+                  skipped.push({
+                    village_name: String(r.village_name), reason: 'DECIDED_BEFORE_SUBMITTED',
                   });
                   continue;
                 }
@@ -3997,6 +4428,7 @@ export async function registerSurveyRoutes(
               };
             }
 
+            let reversed = 0;
             if (input.action === 'SUBMIT') {
               for (const r of eligible) {
                 // A milestone claimed, returned, and claimed again keeps one
@@ -4010,7 +4442,7 @@ export async function registerSurveyRoutes(
                             version = version + 1, updated_at = now(), updated_by = $7
                       WHERE id = $1`,
                     [r.claim_id, input.percent ?? MILESTONE_PERCENT[input.milestone] ?? 0,
-                      input.submitted_on ?? today(), input.reference_no ?? null,
+                      input.submitted_on ?? today(u.orgId), input.reference_no ?? null,
                       input.use_village_extent ? r.total_extent_ac : null,
                       input.remarks ?? null, u.id]);
                   continue;
@@ -4022,9 +4454,20 @@ export async function registerSurveyRoutes(
                    VALUES($1,$2,$3,$4,'SUBMITTED',$5::date,$6,$7,$8,$9,$9)`,
                   [u.orgId, r.id, input.milestone,
                     input.percent ?? MILESTONE_PERCENT[input.milestone] ?? 0,
-                    input.submitted_on ?? today(), input.reference_no ?? null,
+                    input.submitted_on ?? today(u.orgId), input.reference_no ?? null,
                     input.use_village_extent ? r.total_extent_ac : null,
                     input.remarks ?? null, u.id]);
+              }
+            } else if (input.action === 'REVERSE') {
+              const locked = (await db.query(
+                `SELECT * FROM survey_village_billing WHERE id = ANY($1::uuid[])
+                  ORDER BY id FOR UPDATE`, [eligible.map(r => r.claim_id)])).rows;
+              // Counted from what was actually reversed under the lock, not
+              // from the preview: a claim can stop being paid in between.
+              for (const row of locked) {
+                if (row.status !== 'PAID') continue;
+                await reverseClaim(db, req, u, row, input.reason!.trim());
+                reversed += 1;
               }
             } else {
               await db.query(
@@ -4039,7 +4482,7 @@ export async function registerSurveyRoutes(
 
             return {
               dry_run: false,
-              updated: eligible.length,
+              updated: input.action === 'REVERSE' ? reversed : eligible.length,
               villages: eligible.slice(0, 20).map(r => String(r.village_name)),
               skipped, not_found: notFound, out_of_order: outOfOrder,
             };
@@ -4063,10 +4506,13 @@ export async function registerSurveyRoutes(
          WHERE pe.survey_project_id = $1 AND pe.org_id = $2
          ORDER BY pe.project_role, employee_name`, [id, u.orgId])).rows;
       return {
-        data: rows.map(r => ({
-          ...r, assigned_on: iso(r.assigned_on), released_on: iso(r.released_on),
-          active: !r.released_on,
-        })),
+        data: rows.map(r => {
+          const row = {
+            ...r, assigned_on: iso(r.assigned_on), released_on: iso(r.released_on),
+            active: !r.released_on,
+          };
+          return masksPhones(u) ? withoutPhone(row) : row;
+        }),
       };
     });
 
@@ -4082,8 +4528,16 @@ export async function registerSurveyRoutes(
       const input = parse(projectEmployeeSchema, req.body);
       const row = await mutate(pool, req, 'survey.project.assign', 'survey_project_employee',
         async db => {
-          await projectOr404(db, u.orgId, id);
-          await inOrg(db, 'employees', input.employee_id, u.orgId);
+          await projectOr404(db, u.orgId, id, u);
+          if (!(await mayStaffProgramme(db, u, id))) {
+            fail('NOT_ON_THIS_PROGRAMME',
+              'Only this programme’s project manager, a team leader on it or an '
+              + 'administrator can put people on it.', 403);
+          }
+          const e = await inOrg(db, 'employees', input.employee_id, u.orgId);
+          if (e.status !== 'ACTIVE') {
+            fail('EMPLOYEE_INACTIVE', 'Only an active employee can be put on a programme.', 422);
+          }
           return (await db.query(
             `INSERT INTO survey_project_employees(org_id, survey_project_id, employee_id,
                project_role, assigned_on, created_by)
@@ -4092,7 +4546,7 @@ export async function registerSurveyRoutes(
              DO UPDATE SET project_role = EXCLUDED.project_role, released_on = NULL
              RETURNING *`,
             [u.orgId, id, input.employee_id, input.project_role,
-              input.assigned_on ?? today(), u.id])).rows[0];
+              input.assigned_on ?? today(u.orgId), u.id])).rows[0];
         });
       reply.code(201);
       return { data: row };
@@ -4109,7 +4563,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       await projectOr404(pool, u.orgId, id, u);
-      const to = dateParam(req, q.to, 'to', today());
+      const to = dateParam(req, q.to, 'to', today(u.orgId));
       const from = dateParam(req, q.from, 'from', '1900-01-01');
 
       const rows = (await pool.query(
@@ -4164,7 +4618,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       await projectOr404(pool, u.orgId, id, u);
-      const to = dateParam(req, q.to, 'to', today());
+      const to = dateParam(req, q.to, 'to', today(u.orgId));
       const from = dateParam(req, q.from, 'from', '1900-01-01');
 
       const rows = (await pool.query(
@@ -4236,7 +4690,7 @@ export async function registerSurveyRoutes(
       const { id, assetId } = req.params as { id: string; assetId: string };
       const { q } = page(req);
       await projectOr404(pool, u.orgId, id, u);
-      const to = dateParam(req, q.to, 'to', today());
+      const to = dateParam(req, q.to, 'to', today(u.orgId));
       const from = dateParam(req, q.from, 'from', '1900-01-01');
 
       const rows = (await pool.query(
@@ -4426,13 +4880,13 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       await projectOr404(pool, u.orgId, id, u);
-      const from = dateParam(req, q.from, 'from', today());
+      const from = dateParam(req, q.from, 'from', today(u.orgId));
       const to = dateParam(req, q.to, 'to', from);
 
       const rows = (await pool.query(
         `WITH punches AS (
            SELECT ae.survey_village_id,
-                  (ae.client_timestamp AT TIME ZONE 'Asia/Kolkata')::date AS work_date,
+                  (ae.client_timestamp AT TIME ZONE ${orgZoneSql('$4')})::date AS work_date,
                   ae.employee_id,
                   -- One person may punch more than once in a day; the reason
                   -- given at the last punch-out is the one that stands.
@@ -4444,7 +4898,7 @@ export async function registerSurveyRoutes(
                    FILTER (WHERE ae.progress_deferred_remarks IS NOT NULL))[1] AS remarks
            FROM attendance_events ae
            WHERE ae.survey_village_id IS NOT NULL
-             AND (ae.client_timestamp AT TIME ZONE 'Asia/Kolkata')::date
+             AND (ae.client_timestamp AT TIME ZONE ${orgZoneSql('$4')})::date
                  BETWEEN $2::date AND $3::date
            GROUP BY 1, 2, 3
          )
@@ -4488,7 +4942,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       const programme = await projectOr404(pool, u.orgId, id, u);
-      const asOf = dateParam(req, q.as_of, 'as_of', today());
+      const asOf = dateParam(req, q.as_of, 'as_of', today(u.orgId));
 
       const [pipeline, pos] = await Promise.all([
         stagePipeline(pool, u.orgId), positions(pool, u.orgId, id, { asOf }),
@@ -4563,7 +5017,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       const programme = await projectOr404(pool, u.orgId, id, u);
-      const asOf = dateParam(req, q.as_of, 'as_of', today());
+      const asOf = dateParam(req, q.as_of, 'as_of', today(u.orgId));
 
       const [m, codes, pos] = await Promise.all([
         measures(pool, u.orgId), stageCodes(pool, u.orgId),
@@ -4652,8 +5106,8 @@ export async function registerSurveyRoutes(
 
       const level = (REPORT_LEVELS as readonly string[]).includes(String(q.level))
         ? String(q.level) as ReportLevel : 'mandal';
-      const asOf = dateParam(req, q.to ?? q.as_of, q.to ? 'to' : 'as_of', today());
-      const from = q.from ? dateParam(req, q.from, 'from', today()) : undefined;
+      const asOf = dateParam(req, q.to ?? q.as_of, q.to ? 'to' : 'as_of', today(u.orgId));
+      const from = q.from ? dateParam(req, q.from, 'from', today(u.orgId)) : undefined;
 
       const [m, codes, all, pipeline] = await Promise.all([
         measures(pool, u.orgId), stageCodes(pool, u.orgId),
@@ -4985,7 +5439,7 @@ export async function registerSurveyRoutes(
         ? await observerProgrammeOr404(pool, u, id)
         : await projectOr404(pool, u.orgId, id, u);
 
-      const to = dateParam(req, q.to, 'to', today());
+      const to = dateParam(req, q.to, 'to', today(u.orgId));
       const from = dateParam(req, q.from, 'from', '');
       const level = (REPORT_LEVELS as readonly string[]).includes(String(q.level ?? ''))
         ? String(q.level) as ReportLevel : 'district';
@@ -5081,7 +5535,7 @@ export async function registerSurveyRoutes(
                   holders.names, holders.people`,
         [id, u.orgId])).rows;
 
-      const asOf = today();
+      const asOf = today(u.orgId);
       const villages = rows.map(r => {
         const stages = (r.stages ?? {}) as Record<string, StageState>;
         const plan = (r.stage_plan ?? []) as Array<Record<string, string | null>>;
@@ -5712,9 +6166,15 @@ export async function registerSurveyRoutes(
       // never whose desk it is on" line the dashboard draws for crew names.
       // Dropped for an observer rather than withheld from the query, so the
       // name, designation and what they cover still come through.
+      //
+      // Owner decision 2026-09-24 (SV-003): anybody holding an observer role
+      // is masked, even alongside a staff role, and the free-text notes go
+      // too -- "ring after 10 on 98480…" is where a number ends up when the
+      // phone field is the one being hidden.
+      const masked = masksPhones(u);
       return {
-        data: scoped
-          ? rows.map(({ phone: _phone, email: _email, ...rest }) => rest)
+        data: masked
+          ? rows.map(({ phone: _phone, email: _email, notes: _notes, ...rest }) => rest)
           : rows,
       };
     });
@@ -5999,7 +6459,7 @@ export async function registerSurveyRoutes(
     { preHandler: guard('survey.manage') }, async (req, reply) => {
       const u = actor(req);
       const input = parse(alertSubscriptionSchema, req.body);
-      if (input.active_until < today()) {
+      if (input.active_until < today(u.orgId)) {
         fail('VALIDATION_ERROR',
           `An alert that stops on ${input.active_until} has already stopped. `
           + 'Pick a date in the future.', 422);
@@ -6065,7 +6525,7 @@ export async function registerSurveyRoutes(
 
       const grain = (PERIOD_GRAINS as readonly string[]).includes(String(q.grain))
         ? String(q.grain) as PeriodGrain : 'DAY';
-      const asOf = dateParam(req, q.as_of, 'as_of', today());
+      const asOf = dateParam(req, q.as_of, 'as_of', today(u.orgId));
 
       /*
        * A range somebody chose, rather than a calendar period.
@@ -6078,8 +6538,8 @@ export async function registerSurveyRoutes(
        */
       const custom = q.from && q.to
         ? {
-          from: dateParam(req, q.from, 'from', today()),
-          to: dateParam(req, q.to, 'to', today()),
+          from: dateParam(req, q.from, 'from', today(u.orgId)),
+          to: dateParam(req, q.to, 'to', today(u.orgId)),
         }
         : null;
       if (custom && custom.from > custom.to) {
@@ -6142,7 +6602,7 @@ export async function registerSurveyRoutes(
            JOIN survey_stages s ON s.id = h.stage_id
            JOIN survey_villages sv ON sv.id = h.survey_village_id
            WHERE h.org_id = $1 AND sv.survey_project_id = $2
-             AND (h.changed_at AT TIME ZONE 'Asia/Kolkata')::date
+             AND (h.changed_at AT TIME ZONE ${orgZoneSql('$1')})::date
                  BETWEEN $3::date AND $4::date
            GROUP BY 1, 2, 3, s.display_order
            ORDER BY s.display_order`,
@@ -6253,9 +6713,9 @@ export async function registerSurveyRoutes(
 
       const grain = (['DAY', 'WEEK', 'MONTH', 'YEAR'] as const).includes(String(q.grain) as PeriodGrain)
         ? String(q.grain) as PeriodGrain : 'MONTH';
-      const fy = financialYearRange(today());
+      const fy = financialYearRange(today(u.orgId));
       const from = dateParam(req, q.from, 'from', fy.from);
-      const to = dateParam(req, q.to, 'to', today());
+      const to = dateParam(req, q.to, 'to', today(u.orgId));
 
       const buckets = periodBuckets(from, to, grain);
       if (buckets.length > 400) {

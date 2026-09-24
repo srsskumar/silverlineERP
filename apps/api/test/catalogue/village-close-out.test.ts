@@ -17,10 +17,11 @@ let village = "";
 
 async function send(
   method: "POST" | "GET" | "PUT" | "PATCH" | "DELETE", h: Headers, url: string, payload?: unknown,
+  extra: Headers = {},
 ) {
   const res = await w.app.inject({
     method, url,
-    headers: { ...h, ...(method === "GET" ? {} : idem()) },
+    headers: { ...h, ...(method === "GET" ? {} : idem()), ...extra },
     ...(payload === undefined ? {} : { payload }),
   });
   let body: any = null;
@@ -226,8 +227,12 @@ describe("certifying the totals", () => {
   });
 
   it("lets a certified figure be taken back off", async () => {
+    // Cleared with the version read, like every other write (SV-016).
+    const before = await get(w.admin, `/api/v1/survey/villages/${village}/finals`);
+    const held = before.data.find((m: any) => m.code === "GOVT_LAND_POINTS");
     const r = await send("DELETE", w.admin,
-      `/api/v1/survey/villages/${village}/finals/GOVT_LAND_POINTS`);
+      `/api/v1/survey/villages/${village}/finals/GOVT_LAND_POINTS`, undefined,
+      { "if-match": String(held.version) });
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     const after = await get(w.admin, `/api/v1/survey/villages/${village}/finals`);
     const points = after.data.find((m: any) => m.code === "GOVT_LAND_POINTS");
@@ -237,9 +242,13 @@ describe("certifying the totals", () => {
   });
 
   it("replaces a certified figure rather than stacking a second one", async () => {
-    await put(w.admin, `/api/v1/survey/villages/${village}/finals`, {
-      finals: [{ measure_code: "GOVT_LAND_EXTENT_AC", quantity: 119, reason: "Second recount" }],
+    // Replacing a figure sends the version it replaces (SV-016).
+    const before = await get(w.admin, `/api/v1/survey/villages/${village}/finals`);
+    const version = before.data.find((m: any) => m.code === "GOVT_LAND_EXTENT_AC").version;
+    const replaced = await put(w.admin, `/api/v1/survey/villages/${village}/finals`, {
+      finals: [{ measure_code: "GOVT_LAND_EXTENT_AC", quantity: 119, reason: "Second recount", version }],
     });
+    expect(replaced.status, JSON.stringify(replaced.body)).toBe(200);
     const r = await get(w.admin, `/api/v1/survey/villages/${village}/finals`);
     const acres = r.data.find((m: any) => m.code === "GOVT_LAND_EXTENT_AC");
     expect(acres.certified).toBe(119);
