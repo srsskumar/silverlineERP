@@ -1,3 +1,4 @@
+import { submissionKey } from './submissionKeys';
 /**
  * API client for Silverline ERP (apps/web, S0).
  *
@@ -430,6 +431,31 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
  * that `unwrap` would otherwise discard. Existing callers are untouched.
  */
 export async function apiRequestRaw(
+  path: string,
+  options: RequestOptions = {},
+): Promise<{ body: unknown; requestId?: string; status: number }> {
+  /*
+   * One Idempotency-Key per submission, not per click (D-015). A second
+   * identical write started while the first is in flight is the same
+   * submission — a double-click — and gets the same key, so the server does
+   * the work once and replays the answer. A write the caller keyed itself,
+   * or any read, passes straight through.
+   */
+  const method = (options.method ?? 'GET').toUpperCase();
+  if (!MUTATING_METHODS.has(method) || new Headers(options.headers).has('Idempotency-Key')) {
+    return apiRequestRawOnce(path, options);
+  }
+  const submission = submissionKey(`${method} ${path} ${JSON.stringify(options.body ?? null)}`, newIdempotencyKey);
+  try {
+    const headers = new Headers(options.headers);
+    headers.set('Idempotency-Key', submission.key);
+    return await apiRequestRawOnce(path, { ...options, headers });
+  } finally {
+    submission.done();
+  }
+}
+
+async function apiRequestRawOnce(
   path: string,
   options: RequestOptions = {},
 ): Promise<{ body: unknown; requestId?: string; status: number }> {
