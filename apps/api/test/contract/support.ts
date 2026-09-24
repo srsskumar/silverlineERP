@@ -165,6 +165,16 @@ export function fillPath(url: string, randomId: () => string = randomUUID): stri
   });
 }
 
+/** Same as `fillPath`, but the literal `:id` param (only) gets a
+ *  syntactically-invalid value -- every other param still gets a
+ *  well-formed stand-in, so only the id's shape is under test. */
+export function fillPathWithBadId(url: string): string {
+  return url.replace(/:([a-zA-Z_]+)/g, (_m, name: string) => {
+    if (name === "id") return "not-a-uuid";
+    return PARAM_VALUES[name] ?? randomUUID();
+  });
+}
+
 // --- token crafting ---------------------------------------------------------
 
 export function garbageToken(): string {
