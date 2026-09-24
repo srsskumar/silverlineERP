@@ -89,15 +89,24 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
        * What that path has paid is taken off here, and that path counts the
        * allocations in turn, so the two cannot each pay the claim in full.
        * Both lock the claim row, so they also serialise against each other.
+       *
+       * The lock and the read are two statements on purpose. Under READ
+       * COMMITTED a statement that waits for a row lock keeps the snapshot it
+       * started with, so a sum taken in the same statement missed a
+       * reimbursement committed while it waited (a part payment does not
+       * touch the claim row, so nothing forces a re-read) and paid twice.
+       * The second statement starts after the lock is held and sees it.
        */
       const row = (await db.query(
-        `SELECT c.approved_amount, c.total_allowed, c.status,
-                (SELECT COALESCE(sum(r.amount), 0) FROM expense_reimbursements r WHERE r.claim_id = c.id) AS reimbursed
-           FROM expense_claims c WHERE c.id = $1 AND c.org_id = $2${lock ? ' FOR UPDATE OF c' : ''}`, [id, orgId])).rows[0];
+        `SELECT approved_amount, total_allowed, status
+           FROM expense_claims WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
       if (!row) fail('NOT_FOUND', 'Expense claim not found', 404);
-      const approved = Number(row.approved_amount ?? row.total_allowed);
+      const reimbursedPaise = Number((await db.query(
+        `SELECT COALESCE(round(sum(amount) * 100), 0)::bigint AS p
+           FROM expense_reimbursements WHERE claim_id = $1`, [id])).rows[0].p);
+      const approvedPaise = Math.round(Number(row.approved_amount ?? row.total_allowed) * 100);
       return {
-        invoiced: Math.round((approved - Number(row.reimbursed)) * 100) / 100, dueDate: null,
+        invoiced: (approvedPaise - reimbursedPaise) / 100, dueDate: null,
         notPayable: ['APPROVED', 'REIMBURSED'].includes(String(row.status)) ? undefined
           : `This claim is ${String(row.status).toLowerCase()}. Only an approved claim can be paid.`,
       };
