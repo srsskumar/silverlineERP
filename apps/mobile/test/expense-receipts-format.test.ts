@@ -6,9 +6,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
-  ALLOWED_RECEIPT_EXTENSIONS, MAX_RECEIPT_BYTES, MAX_RECEIPTS_PER_CLAIM,
+  ALLOWED_RECEIPT_EXTENSIONS, ALLOWED_RECEIPT_MIME_TYPES, MAX_RECEIPT_BYTES, MAX_RECEIPTS_PER_CLAIM,
   canAddReceipt, checkReceiptFile, claimTakesReceipts, formatReceiptSize,
-  receiptExtension, receiptIcon,
+  receiptExtension, receiptIcon, safeReceiptFileName,
 } from "../src/expenseReceiptsFormat";
 
 describe("receiptExtension", () => {
@@ -53,6 +53,66 @@ describe("checkReceiptFile", () => {
 
   it("accepts a file right at the limit", () => {
     assert.equal(checkReceiptFile("bill.png", MAX_RECEIPT_BYTES).ok, true);
+  });
+
+  it("ignores mime type when the picker/camera didn't report one", () => {
+    assert.equal(checkReceiptFile("bill.png", 1000, undefined).ok, true);
+    assert.equal(checkReceiptFile("bill.png", 1000, null).ok, true);
+  });
+
+  it("accepts a mime type that matches its extension", () => {
+    assert.equal(checkReceiptFile("bill.png", 1000, "image/png").ok, true);
+    assert.equal(checkReceiptFile("bill.jpg", 1000, "image/jpeg").ok, true);
+    assert.equal(checkReceiptFile("bill.jpeg", 1000, "image/jpeg").ok, true);
+    assert.equal(checkReceiptFile("bill.pdf", 1000, "application/pdf").ok, true);
+  });
+
+  it("allow-lists exactly the three mime types the API accepts", () => {
+    assert.deepEqual(
+      [...ALLOWED_RECEIPT_MIME_TYPES].sort(),
+      ["application/pdf", "image/jpeg", "image/png"],
+    );
+  });
+
+  it("refuses a mime type outside the allow-list even with an allowed extension", () => {
+    const r = checkReceiptFile("bill.png", 1000, "application/zip");
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.match(r.reason, /isn't supported/);
+  });
+
+  it("refuses a mime type that doesn't match the file's extension", () => {
+    const r = checkReceiptFile("bill.png", 1000, "application/pdf");
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.match(r.reason, /match/);
+  });
+});
+
+describe("safeReceiptFileName", () => {
+  it("keeps an already-clean name as is", () => {
+    assert.equal(safeReceiptFileName("taxi-bill.png"), "taxi-bill.png");
+  });
+
+  it("strips a unix-style path down to the last segment", () => {
+    assert.equal(safeReceiptFileName("/data/user/0/com.app/cache/scan.pdf"), "scan.pdf");
+  });
+
+  it("strips a windows-style path down to the last segment", () => {
+    assert.equal(safeReceiptFileName("C:\\Users\\me\\Downloads\\scan.pdf"), "scan.pdf");
+  });
+
+  it("strips control characters and trims whitespace", () => {
+    assert.equal(safeReceiptFileName("  bad\u0000name\u0007.png\n"), "badname.png");
+  });
+
+  it("falls back to a generic name when nothing usable remains", () => {
+    assert.equal(safeReceiptFileName("\u0000\u0001"), "receipt");
+  });
+
+  it("caps an overlong name while keeping its extension", () => {
+    const long = `${"a".repeat(300)}.png`;
+    const result = safeReceiptFileName(long);
+    assert.ok(result.length <= 120);
+    assert.match(result, /\.png$/);
   });
 });
 
