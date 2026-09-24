@@ -109,3 +109,19 @@ Tests (`test/survey-outbox-round3.test.ts`, shared fake server in
   false conflict.
 - The review lists teams, attendance, a note-clear and instruments, and
   restores the rover lines.
+
+## Fix round 4
+
+| # | Sev | What was wrong | Fix | Commit |
+|---|---|---|---|---|
+| 1 | important | enqueueOp's supersede found the **oldest** active op for the village-day. In a chain (A SENDING → B3 queued behind as C → B4 arrives), B4 found A again and made a second behind-op, giving a false CONFLICT or out-of-order sends. If A fell to BACKOFF, B4 folded into A while C's older B3 landed after it. A behind-op's `_sent` was A's first body, not what A actually sent, so its replay got IDEMPOTENCY_CONFLICT | **(1)** The supersede targets the newest active op (`ORDER BY seq DESC`). **(2)** Each op records every request it sends (POST and PATCH, key and body) in `_prior` *before* sending. Supersede, and a new hand-over when an op settles, carry that list down the chain, so replays use what was actually sent; it replaces `_sent`/`_sentKey`/`_amend`. If an op goes back to BACKOFF while a newer filing waits behind it, the newer one absorbs it and the older row is removed. **(3)** Invariant: per village-day there is at most one QUEUED/BACKOFF op, behind at most one SENDING op, and `flushQueue` never sends an op while an older one for the same record is active. The executor amends only when the day's version is the form's base or the version one of the device's own replayed requests produced; anything else is still CONFLICT | 3b90215 |
+
+Tests (`test/survey-outbox-round4.test.ts`, real queue, invariant asserted
+after every step):
+- SENDING, then two re-files.
+- BACKOFF with a behind-op present, then a re-file.
+- A rewritten-then-sent op, then a behind-op.
+- A four-step chain.
+
+Each ends with the latest figures on the server, one entry and no CONFLICT.
+The rounds 2 and 3 suites still pass unchanged.
