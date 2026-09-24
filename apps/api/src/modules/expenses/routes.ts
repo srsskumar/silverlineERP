@@ -729,8 +729,16 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
           `A ${String(claim.status).toLowerCase()} claim cannot be paid. Only an approved claim is a payable.`);
       }
       const approved = Number(claim.approved_amount ?? claim.total_allowed);
+      // Paid is both paths (D-008): reimbursements recorded here, and any
+      // payment allocated to the claim through finance, which cannot see
+      // this table's rows unless told. Either alone let the claim be paid
+      // in full twice.
       const paid = (await db.query(
-        'SELECT COALESCE(sum(amount),0) AS paid FROM expense_reimbursements WHERE claim_id = $1', [id])).rows[0];
+        `SELECT (SELECT COALESCE(sum(amount),0) FROM expense_reimbursements WHERE claim_id = $1)
+              + (SELECT COALESCE(sum(a.amount + a.tds_amount + a.advance_adjusted),0)
+                   FROM payment_allocations a JOIN payments p ON p.id = a.payment_id
+                  WHERE a.document_type = 'EXPENSE_CLAIM' AND a.document_id = $1
+                    AND a.reversed_at IS NULL AND p.reversed_at IS NULL) AS paid`, [id])).rows[0];
       const position = reimbursementPosition(approved, [{ amount: Number(paid.paid) }]);
       if (input.amount > position.outstanding) {
         fail('OVERPAYMENT',

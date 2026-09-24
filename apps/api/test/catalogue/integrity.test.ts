@@ -280,3 +280,76 @@ describe("D-006 audit report date filter in the organisation's timezone", () => 
     expect(csv).not.toContain(`${probe}.late`);
   });
 });
+
+/* ------------------------------------------------- two settlement channels */
+
+describe("D-008 an expense claim settled through both payment paths", () => {
+  async function claim(status: string, amount = 1000): Promise<string> {
+    return (await w.pool.query(
+      `INSERT INTO expense_claims(org_id, claim_no, requested_by, claim_date, purpose,
+         total_claimed, total_allowed, approved_amount, status)
+       VALUES($1,$2,$3,'2026-09-01','Double pay probe',$4,$4,$4,$5) RETURNING id`,
+      [w.orgId, uniq("EXP"), w.directUserId, amount, status])).rows[0].id as string;
+  }
+  async function payment(amount: number): Promise<string> {
+    const p = await post(w.admin, "/api/v1/payments", {
+      direction: "PAYABLE", payment_no: uniq("PAY"), paid_on: workDate(), amount, mode: "NEFT",
+    });
+    expect(p.status, JSON.stringify(p.body)).toBe(201);
+    return p.data.id as string;
+  }
+
+  it("will not allocate a payment to a claim already reimbursed in full", async () => {
+    const id = await claim("APPROVED");
+    const paid = await post(w.admin, `/api/v1/expense-claims/${id}/reimburse`, {
+      amount: 1000, paid_on: workDate(), mode: "NEFT",
+    });
+    expect(paid.status, JSON.stringify(paid.body)).toBe(201);
+    const again = await post(w.admin, `/api/v1/payments/${await payment(1000)}/allocations`, {
+      document_type: "EXPENSE_CLAIM", document_id: id, amount: 1000,
+    });
+    expect(again.status, JSON.stringify(again.body)).toBe(422);
+  });
+
+  it("will not reimburse a claim a payment has already settled", async () => {
+    const id = await claim("APPROVED");
+    const allocated = await post(w.admin, `/api/v1/payments/${await payment(1000)}/allocations`, {
+      document_type: "EXPENSE_CLAIM", document_id: id, amount: 1000,
+    });
+    expect(allocated.status, JSON.stringify(allocated.body)).toBe(201);
+    const again = await post(w.admin, `/api/v1/expense-claims/${id}/reimburse`, {
+      amount: 1000, paid_on: workDate(), mode: "NEFT",
+    });
+    expect(again.status, JSON.stringify(again.body)).toBe(422);
+    expect(again.body.code).toBe("OVERPAYMENT");
+  });
+
+  it("will not allocate a payment to a claim nobody approved", async () => {
+    for (const status of ["DRAFT", "SUBMITTED"]) {
+      const id = await claim(status);
+      const res = await post(w.admin, `/api/v1/payments/${await payment(500)}/allocations`, {
+        document_type: "EXPENSE_CLAIM", document_id: id, amount: 500,
+      });
+      expect(res.status, `${status}: ${JSON.stringify(res.body)}`).toBe(422);
+    }
+  });
+
+  it("will not allocate a receipt to an RA bill that was never certified", async () => {
+    const ws = await w.pool.query("SELECT id FROM workspaces WHERE org_id=$1 LIMIT 1", [w.orgId]);
+    const project = await w.pool.query(
+      `INSERT INTO projects(org_id, workspace_id, code, name, status) VALUES($1,$2,$3,'Draft bill project','ACTIVE') RETURNING id`,
+      [w.orgId, ws.rows[0].id, uniq("PRJ")]);
+    const bill = (await w.pool.query(
+      `INSERT INTO ra_bills(org_id, project_id, bill_no, period_from, period_to, gross_value, net_payable, status)
+       VALUES($1,$2,1,'2026-08-01','2026-08-31',1000,1000,'DRAFT') RETURNING id`,
+      [w.orgId, project.rows[0].id])).rows[0].id as string;
+    const receipt = await post(w.admin, "/api/v1/payments", {
+      direction: "RECEIVABLE", payment_no: uniq("RCP"), paid_on: workDate(), amount: 1000, mode: "NEFT",
+    });
+    expect(receipt.status, JSON.stringify(receipt.body)).toBe(201);
+    const res = await post(w.admin, `/api/v1/payments/${receipt.data.id}/allocations`, {
+      document_type: "RA_BILL", document_id: bill, amount: 1000,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(422);
+  });
+});

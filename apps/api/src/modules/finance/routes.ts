@@ -61,13 +61,20 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
    */
   async function documentValue(
     db: Pool | PoolClient, orgId: string, type: string, id: string, lock = false,
-  ): Promise<{ invoiced: number; dueDate: string | null }> {
+  ): Promise<{ invoiced: number; dueDate: string | null; notPayable?: string }> {
     const forUpdate = lock ? ' FOR UPDATE' : '';
     if (type === 'RA_BILL') {
       const row = (await db.query(
-        `SELECT certified_amount, gross_value FROM ra_bills WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
+        `SELECT certified_amount, gross_value, status FROM ra_bills WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
       if (!row) fail('NOT_FOUND', 'RA bill not found', 404);
-      return { invoiced: Number(row.certified_amount ?? row.gross_value), dueDate: null };
+      // Only a certified bill is a receivable (D-008). A draft one is still a
+      // measurement: receipting it at its gross leaves money allocated to a
+      // figure the client may certify lower, or cancel.
+      return {
+        invoiced: Number(row.certified_amount ?? row.gross_value), dueDate: null,
+        notPayable: ['CERTIFIED', 'PAID'].includes(String(row.status)) ? undefined
+          : `This RA bill is ${String(row.status).toLowerCase()}. Only a certified bill can take a receipt.`,
+      };
     }
     if (type === 'VENDOR_INVOICE') {
       const row = (await db.query(
@@ -76,10 +83,24 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
       return { invoiced: Number(row.total), dueDate: row.due_date ? iso(row.due_date) : null };
     }
     if (type === 'EXPENSE_CLAIM') {
+      /*
+       * A claim is also paid through POST /expense-claims/:id/reimburse,
+       * which writes expense_reimbursements rather than an allocation (D-008).
+       * What that path has paid is taken off here, and that path counts the
+       * allocations in turn, so the two cannot each pay the claim in full.
+       * Both lock the claim row, so they also serialise against each other.
+       */
       const row = (await db.query(
-        `SELECT approved_amount, total_allowed FROM expense_claims WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
+        `SELECT c.approved_amount, c.total_allowed, c.status,
+                (SELECT COALESCE(sum(r.amount), 0) FROM expense_reimbursements r WHERE r.claim_id = c.id) AS reimbursed
+           FROM expense_claims c WHERE c.id = $1 AND c.org_id = $2${lock ? ' FOR UPDATE OF c' : ''}`, [id, orgId])).rows[0];
       if (!row) fail('NOT_FOUND', 'Expense claim not found', 404);
-      return { invoiced: Number(row.approved_amount ?? row.total_allowed), dueDate: null };
+      const approved = Number(row.approved_amount ?? row.total_allowed);
+      return {
+        invoiced: Math.round((approved - Number(row.reimbursed)) * 100) / 100, dueDate: null,
+        notPayable: ['APPROVED', 'REIMBURSED'].includes(String(row.status)) ? undefined
+          : `This claim is ${String(row.status).toLowerCase()}. Only an approved claim can be paid.`,
+      };
     }
     const row = (await db.query(
       `SELECT amount FROM project_advances WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
@@ -266,6 +287,7 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
         }));
 
       const doc = await documentValue(db, u.orgId, input.document_type, input.document_id, true);
+      if (doc.notPayable) fail('DOCUMENT_NOT_PAYABLE', doc.notPayable);
       const position = settlementPosition({
         invoiced: doc.invoiced,
         allocations: await allocationsFor(db, input.document_type, input.document_id),
