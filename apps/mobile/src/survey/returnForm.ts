@@ -40,6 +40,8 @@ export interface ReturnDraft {
   crewPresent: string;
   /** Teams out in the village today (§59.4.2). Blank means not asked. */
   teamsDeployed: string;
+  /** The version of a filed day this draft corrects, pinned when it was filled. */
+  baseVersion?: number;
   notes: string;
   lowProgressReason: string | null;
   lowProgressRemarks: string;

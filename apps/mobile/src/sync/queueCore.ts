@@ -145,6 +145,7 @@ async function enqueueOp(args: {
   payload: Record<string, unknown>;
   baseVersion?: number;
   idempotencyKey?: string;
+  supersede?: (pending: Record<string, unknown>, next: Record<string, unknown>) => Record<string, unknown> | null;
 }): Promise<PendingOpRow> {
   const db = await getDb();
   const account=await getAccount();if(!account)throw new Error("Sign in first");
@@ -154,6 +155,29 @@ async function enqueueOp(args: {
     [key, ...ACTIVE_STATES],
   );
   if (existing && (await unseal(account,existing.payload)) === JSON.stringify(args.payload)) return existing;
+  /*
+   * A second go at the same record while the first still waits (fix round 2).
+   *
+   * Where the caller says how to fold the new payload into the pending one,
+   * the pending op is rewritten rather than a second op queued behind it: one
+   * op lands, with the latest figures. Only an op that is QUEUED or in
+   * BACKOFF is rewritten; one that is SENDING may be on the wire, so the new
+   * filing queues behind it as before. The idempotency key is kept, and the
+   * supersede function is responsible for making that safe (survey_entry
+   * remembers the first body the key may already have carried).
+   */
+  if (existing && args.supersede && (existing.state === "QUEUED" || existing.state === "BACKOFF")) {
+    const merged = args.supersede(JSON.parse(await unseal(account, existing.payload)), args.payload);
+    if (merged) {
+      const sealed = await seal(account, JSON.stringify(merged));
+      const base = args.baseVersion ?? existing.base_version ?? null;
+      await db.runAsync(
+        "UPDATE pending_ops SET payload = ?, base_version = ?, updated_at = ? WHERE client_uuid = ? AND state IN ('QUEUED','BACKOFF')",
+        [sealed, base, Date.now(), existing.client_uuid],
+      );
+      return { ...existing, payload: sealed, base_version: base };
+    }
+  }
   const now = Date.now();
   // Monotonic within the outbox: two operations enqueued in the same
   // millisecond still have a defined order, which FIFO flush depends on.
@@ -358,5 +382,11 @@ async function listOps():Promise<PendingOpRow[]> {
  return (await getDb()).getAllAsync<PendingOpRow>(LIST_OPS_SQL,[]);
 }
 
-return {enqueueOp,flushQueue,rewriteOp,retryOp,discardOp,listOps};
+async function readPayload(clientUuid:string):Promise<unknown> {
+ const db=await getDb(),account=await getAccount();if(!account)throw new Error("Sign in first");
+ const row=await db.getFirstAsync<PendingOpRow>('SELECT * FROM pending_ops WHERE client_uuid=?',[clientUuid]);
+ return row?JSON.parse(await unseal(account,row.payload)):null;
+}
+
+return {enqueueOp,flushQueue,rewriteOp,retryOp,discardOp,listOps,readPayload};
 }

@@ -8,11 +8,13 @@
  * from a photograph of a notebook.
  */
 import { withScreenBoundary } from "../../src/ui/ErrorBoundary";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Modal, View } from "react-native";
 import { useAuth } from "../../src/auth/AuthContext";
-import { getMyVillages, type MyVillage } from "../../src/api/endpoints";
+import { getMyVillages, type MyVillage, type SurveyEntryInput } from "../../src/api/endpoints";
+import { readPayload } from "../../src/sync/queue";
+import { useLocalSearchParams } from "expo-router";
 import { DailyReturn } from "../../src/survey/DailyReturn";
 import { ControlPointForm } from "../../src/survey/ControlPointForm";
 import { StageComplete } from "../../src/survey/StageComplete";
@@ -35,7 +37,11 @@ import {
 import { space, useTheme } from "../../src/theme";
 import { day } from "@silverline/shared";
 
-type Sheet = { village: MyVillage; kind: "return" | "point" | "stage" } | null;
+type Sheet = {
+  village: MyVillage;
+  kind: "return" | "point" | "stage";
+  review?: { clientUuid: string; payload: SurveyEntryInput } | null;
+} | null;
 
 function SurveyScreen() {
   const t = useTheme();
@@ -49,6 +55,22 @@ function SurveyScreen() {
 
   const mayEnter = canDo("survey.enter");
   const outstanding = villages.filter(v => !v.filed_today);
+
+  /*
+   * Opened from the Sync queue on a conflicted return (fix round 2): the
+   * queued draft, read back and reopened on its village for review.
+   */
+  const { review: reviewId } = useLocalSearchParams<{ review?: string }>();
+  useEffect(() => {
+    if (!reviewId || !villages.length) return;
+    void readPayload(reviewId).then(p => {
+      const payload = p as SurveyEntryInput | null;
+      const village = payload && villages.find(v => v.id === payload.survey_village_id);
+      if (payload && village) {
+        setSheet({ village, kind: "return", review: { clientUuid: reviewId, payload } });
+      }
+    }).catch(() => undefined);
+  }, [reviewId, villages.length]);
 
   const close = (note?: string) => {
     setSheet(null);
@@ -182,7 +204,8 @@ function SurveyScreen() {
             <Button title="Close" variant="ghost" onPress={() => close()} />
           </Row>
           {sheet?.kind === "return" ? (
-            <DailyReturn village={sheet.village} workDate={workDate} onFiled={close} />
+            <DailyReturn village={sheet.village} workDate={workDate} onFiled={close}
+              review={sheet.review ?? null} />
           ) : sheet?.kind === "point" ? (
             <ControlPointForm village={sheet.village} workDate={workDate} onRecorded={close} />
           ) : sheet?.kind === "stage" ? (

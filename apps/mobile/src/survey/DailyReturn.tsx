@@ -14,6 +14,7 @@ import {
   getSurveyMeasures,
   getVillageRovers,
   type MyVillage,
+  type SurveyEntryInput,
   type SurveyMeasure,
 } from "../api/endpoints";
 import { submitQueued } from "../sync/engine";
@@ -33,7 +34,11 @@ import {
 } from "../ui/primitives";
 import { space, useTheme } from "../theme";
 import { emptyDraft, type ReturnDraft } from "./returnForm";
-import { draftFromEntry, partitionKit, returnSubmission } from "./fieldCrew";
+import {
+  conflictReview, draftFromEntry, partitionKit, returnSubmission, type ReviewDifference,
+} from "./fieldCrew";
+import { supersedeSurveyEntry } from "../sync/surveyEntryOp";
+import { discardOp } from "../sync/queue";
 
 function ReasonPicker({
   value,
@@ -61,16 +66,23 @@ export function DailyReturn({
   village,
   workDate,
   onFiled,
+  review,
 }: {
   village: MyVillage;
   workDate: string;
   onFiled: (message: string) => void;
+  /**
+   * A conflicted return reopened from the Sync queue (fix round 2): the
+   * crew's queued figures, to be laid on the day as it stands now.
+   */
+  review?: { clientUuid: string; payload: SurveyEntryInput } | null;
 }) {
   const t = useTheme();
   const [draft, setDraft] = useState<ReturnDraft>(emptyDraft);
   const [problems, setProblems] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [prefilled, setPrefilled] = useState(false);
+  const [differences, setDifferences] = useState<ReviewDifference[]>([]);
 
   const catalogue = useQuery({ queryKey: ["survey", "measures"], queryFn: getSurveyMeasures });
   const kit = useQuery({
@@ -93,15 +105,21 @@ export function DailyReturn({
   const filed = useQuery({
     queryKey: ["survey", "filed", village.id, workDate],
     queryFn: () => getFiledEntry(village.id, workDate),
-    enabled: village.filed_today,
+    enabled: village.filed_today || Boolean(review),
   });
   useEffect(() => {
     if (!prefilled && filed.data && measures.length) {
-      setDraft(draftFromEntry(filed.data, measures));
+      if (review) {
+        const r = conflictReview(review.payload, filed.data, measures);
+        setDraft(r.draft);
+        setDifferences(r.differences);
+      } else {
+        setDraft(draftFromEntry(filed.data, measures));
+      }
       setPrefilled(true);
     }
-  }, [filed.data, measures, prefilled]);
-  const correcting = village.filed_today;
+  }, [filed.data, measures, prefilled, review]);
+  const correcting = village.filed_today || Boolean(review);
 
   /*
    * Only the instruments, and only the ones still out.
@@ -153,7 +171,12 @@ export function DailyReturn({
         op: built.op.op,
         payload: built.op.payload as unknown as Record<string, unknown>,
         ...(built.op.baseVersion !== undefined ? { baseVersion: built.op.baseVersion } : {}),
+        // A second go at the day while the first still waits replaces it
+        // rather than queueing behind it (fix round 2).
+        supersede: supersedeSurveyEntry,
       });
+      // The reviewed conflict is answered by this filing; its row goes.
+      if (review) await discardOp(review.clientUuid).catch(() => undefined);
       onFiled(message);
     } catch (e) {
       setProblems([e instanceof Error ? e.message : "The return could not be filed."]);
@@ -183,7 +206,16 @@ export function DailyReturn({
         <Subtle>Return for {day(workDate)}</Subtle>
       </Row>
 
-      {correcting ? (
+      {review ? (
+        <Banner
+          tone="warning"
+          icon="git-compare-outline"
+          title="Somebody else changed this day"
+          message={differences.length
+            ? `Your figures are below, on the day as it stands now. ${differences.map(d => d.note).join(" ")} Check them and save.`
+            : "Your figures are below, on the day as it stands now. Check them and save."}
+        />
+      ) : correcting ? (
         <Banner
           tone="info"
           icon="create-outline"

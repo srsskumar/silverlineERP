@@ -98,7 +98,48 @@ export function draftFromEntry(entry: FiledEntry, measures: SurveyMeasure[]): Re
     govtStaffPresent: text(entry.govt_staff_present),
     crewPresent: text(entry.crew_present),
     notes: entry.notes ?? "",
+    // Pinned here, when the form is filled (fix round 2): a later read of the
+    // day must not move the version the crew is correcting.
+    baseVersion: entry.version,
   };
+}
+
+/** One figure where the server's day and the crew's queued draft differ. */
+export interface ReviewDifference { code: string; label: string; note: string }
+
+/**
+ * A conflicted return, reopened for review (fix round 2).
+ *
+ * The crew's own figures, laid on the day as the server holds it now and
+ * based on its current version, so re-submitting corrects today's day rather
+ * than the one they first saw. Every figure the server now holds differently
+ * is listed, so they can see what somebody else changed before sending.
+ */
+export function conflictReview(
+  payload: SurveyEntryInput,
+  current: FiledEntry,
+  measures: SurveyMeasure[],
+): { draft: ReturnDraft; differences: ReviewDifference[] } {
+  const theirs = payload.values ?? {};
+  const now = current.values ?? {};
+  const draft = draftFromEntry({
+    ...current,
+    values: { ...now, ...theirs },
+    teams_deployed: payload.teams_deployed ?? current.teams_deployed,
+    notes: payload.notes ?? current.notes,
+    govt_staff_present: payload.govt_staff_present ?? current.govt_staff_present,
+    crew_present: payload.crew_present ?? current.crew_present,
+  }, measures);
+  const differences: ReviewDifference[] = [];
+  for (const m of measures) {
+    if (!(m.code in theirs)) continue;
+    const a = Number(now[m.code] ?? 0), b = Number(theirs[m.code]);
+    if (a !== b) {
+      differences.push({ code: m.code, label: m.label,
+        note: `${m.label}: the day now says ${a}; you had ${b}.` });
+    }
+  }
+  return { draft, differences };
 }
 
 export interface EntryAmendment {
@@ -343,6 +384,9 @@ export function returnSubmission(args: {
   | { ok: false; problems: string[] } {
   const dateProblem = workDateProblem(args.workDate);
   if (dateProblem) return { ok: false, problems: [dateProblem] };
+  // The version pinned when the form was filled wins over whatever the
+  // screen's query holds now (fix round 2).
+  const base = args.draft.baseVersion ?? args.filed?.version;
   const mine = new Set(partitionKit(args.kit).mine.map(r => r.asset_id));
   const draft: ReturnDraft = {
     ...args.draft,
@@ -361,7 +405,7 @@ export function returnSubmission(args: {
       varianceReason: args.village.gt_variance_reason,
     },
     today: args.workDate,
-    keepZeros: Boolean(args.filed),
+    keepZeros: base !== undefined,
   });
   if (!built.ok) return { ok: false, problems: built.problems };
   return {
@@ -373,7 +417,7 @@ export function returnSubmission(args: {
       // the dedupe key: a double tap cannot queue two.
       op: `${args.village.id}:${args.workDate}`,
       payload: built.entry,
-      ...(args.filed ? { baseVersion: args.filed.version } : {}),
+      ...(base !== undefined ? { baseVersion: base } : {}),
     },
   };
 }
@@ -421,3 +465,4 @@ export function stageSubmission(
     },
   };
 }
+

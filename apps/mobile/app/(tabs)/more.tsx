@@ -270,6 +270,19 @@ function MoreScreen() {
                       onPress={() => void retryOp(op.client_uuid).then(() => sync.syncNow())}
                     />
                   ) : null}
+                  {op.state === "FAILED" && op.decision === "CONFLICT"
+                  && op.entity === "survey_entry" ? (
+                    // Fix round 2: reopen the queued return on its village,
+                    // against the day as it stands now, and re-submit.
+                    <Button
+                      title="Review"
+                      variant="ghost"
+                      onPress={() => router.push({
+                        pathname: "/(tabs)/survey",
+                        params: { review: op.client_uuid },
+                      })}
+                    />
+                  ) : null}
                   {op.state === "FAILED" &&
                   ["CONFLICT", "REJECTED"].includes(op.decision ?? "") ? (
                     <Button
