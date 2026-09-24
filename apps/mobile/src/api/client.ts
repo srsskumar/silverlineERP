@@ -1,5 +1,5 @@
 import { randomUUID } from "expo-crypto";
-import { submissionKey } from "./submissionKeys";
+import { submissionKey, bodyFingerprint } from "./submissionKeys";
 /**
  * fetch wrapper for the single Silverline API (same backend as web).
  *
@@ -233,7 +233,14 @@ export async function apiFetch<T>(
   const keyed = (method === "POST" || method === "PATCH" || method === "PUT")
     && !opts.idempotencyKey && !opts.headers?.["Idempotency-Key"];
   if (!keyed) return apiFetchOnce<T>(path, opts);
-  const submission = submissionKey(`${method} ${path} ${JSON.stringify(opts.body ?? null)}`, newIdempotencyKey);
+  // A body too large to fingerprint cheaply (fix round 2, item 5) skips
+  // dedup entirely rather than holding a stringified copy of it -- a real
+  // memory constraint on a phone uploading a multi-MB photo -- just to
+  // detect a double-tap; it gets its own key every time instead.
+  const fingerprint = bodyFingerprint(opts.body);
+  const submission = fingerprint
+    ? submissionKey(`${method} ${path} ${fingerprint}`, newIdempotencyKey)
+    : { key: newIdempotencyKey(), done: () => {} };
   try {
     return await apiFetchOnce<T>(path, { ...opts, idempotencyKey: submission.key });
   } finally {

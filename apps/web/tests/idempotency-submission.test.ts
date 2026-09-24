@@ -42,6 +42,18 @@ describe('Idempotency-Key per submission (D-015)', () => {
     expect(k2).toBe(k1);
   });
 
+  it('skips dedup for a body too large to fingerprint cheaply, giving each submission its own key (fix round 2, item 5)', async () => {
+    const big = { file: 'x'.repeat(300 * 1024) };
+    const a = apiRequest('/api/v1/uploads', { method: 'POST', body: big });
+    const b = apiRequest('/api/v1/uploads', { method: 'POST', body: { ...big } });
+    await Promise.resolve(); await new Promise((r) => setTimeout(r, 0));
+    release();
+    await Promise.all([a, b]);
+    const [k1, k2] = keys();
+    expect(k1).toBeTruthy();
+    expect(k2).not.toBe(k1);
+  });
+
   it('gives a different write, or the next submission, a new key', async () => {
     const a = apiRequest('/api/v1/x', { method: 'POST', body: { n: 1 } });
     const b = apiRequest('/api/v1/x', { method: 'POST', body: { n: 2 } });

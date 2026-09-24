@@ -10,7 +10,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { submissionKey } from "../src/api/submissionKeys";
+import { submissionKey, bodyFingerprint } from "../src/api/submissionKeys";
 
 let n = 0;
 const mint = () => `k${++n}`;
@@ -51,5 +51,29 @@ describe("submissionKey", () => {
   it("is what the API client uses to key its writes", () => {
     const src = readFileSync(join(import.meta.dirname, "..", "src", "api", "client.ts"), "utf8");
     assert.match(src, /submissionKey\(/);
+  });
+});
+
+describe("bodyFingerprint (fix round 2, item 5)", () => {
+  it("gives an ordinary body a stable fingerprint", () => {
+    assert.equal(bodyFingerprint({ amount: 600, mode: "NEFT" }), bodyFingerprint({ amount: 600, mode: "NEFT" }));
+  });
+
+  it("gives different bodies different fingerprints", () => {
+    assert.notEqual(bodyFingerprint({ n: 1 }), bodyFingerprint({ n: 2 }));
+  });
+
+  it("returns null, skipping dedup, for a body over ~256 KB rather than stringifying it", () => {
+    // A 10 MB base64 upload held as {photo: base64string, ...} would
+    // otherwise be JSON.stringify'd just to fingerprint it, on top of the
+    // original body and the copy the request itself serializes to send --
+    // three copies of a multi-MB string alive at once on a phone.
+    const huge = { photo: "x".repeat(300 * 1024) };
+    assert.equal(bodyFingerprint(huge), null);
+  });
+
+  it("still fingerprints a body comfortably under the threshold", () => {
+    const small = { note: "x".repeat(1000) };
+    assert.notEqual(bodyFingerprint(small), null);
   });
 });

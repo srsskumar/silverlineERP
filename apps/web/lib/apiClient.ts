@@ -1,4 +1,4 @@
-import { submissionKey } from './submissionKeys';
+import { submissionKey, bodyFingerprint } from './submissionKeys';
 /**
  * API client for Silverline ERP (apps/web, S0).
  *
@@ -445,7 +445,13 @@ export async function apiRequestRaw(
   if (!MUTATING_METHODS.has(method) || new Headers(options.headers).has('Idempotency-Key')) {
     return apiRequestRawOnce(path, options);
   }
-  const submission = submissionKey(`${method} ${path} ${JSON.stringify(options.body ?? null)}`, newIdempotencyKey);
+  // A body too large to fingerprint cheaply (fix round 2, item 5) skips
+  // dedup entirely rather than holding a stringified copy of it just to
+  // detect a double-tap; it gets its own key every time instead.
+  const fingerprint = bodyFingerprint(options.body);
+  const submission = fingerprint
+    ? submissionKey(`${method} ${path} ${fingerprint}`, newIdempotencyKey)
+    : { key: newIdempotencyKey(), done: () => {} };
   try {
     const headers = new Headers(options.headers);
     headers.set('Idempotency-Key', submission.key);
