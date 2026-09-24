@@ -67,13 +67,15 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
       const row = (await db.query(
         `SELECT certified_amount, gross_value, status FROM ra_bills WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
       if (!row) fail('NOT_FOUND', 'RA bill not found', 404);
-      // Only a certified bill is a receivable (D-008). A draft one is still a
-      // measurement: receipting it at its gross leaves money allocated to a
-      // figure the client may certify lower, or cancel.
+      // A submitted, certified or paid bill is a receivable (owner decision
+      // 2026-09-24): a client may pay before the engineer certifies, and the
+      // receipt should not have to wait on that. A draft one is still a
+      // measurement with no claim behind it yet, and a cancelled one never
+      // owed anything -- both stay refused, under the same stable code.
       return {
         invoiced: Number(row.certified_amount ?? row.gross_value), dueDate: null,
-        notPayable: ['CERTIFIED', 'PAID'].includes(String(row.status)) ? undefined
-          : `This RA bill is ${String(row.status).toLowerCase()}. Only a certified bill can take a receipt.`,
+        notPayable: ['SUBMITTED', 'CERTIFIED', 'PAID'].includes(String(row.status)) ? undefined
+          : `This RA bill is ${String(row.status).toLowerCase()}. A submitted, certified or paid bill can take a receipt.`,
       };
     }
     if (type === 'VENDOR_INVOICE') {
