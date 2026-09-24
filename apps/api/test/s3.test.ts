@@ -1389,6 +1389,45 @@ describe("D-012 sandwich rule: paid leave does not debit Sundays/holidays", () =
     );
     expect((count.rows[0] as { n: number }).n).toBe(0);
   });
+
+  it("fix round 2, item 3: refuses to approve a request holidays have reduced to zero days since filing", async () => {
+    const { adminH, emp, eId, types } = await chainFixture();
+    await pool.query("UPDATE employees SET reports_to = NULL WHERE id = $1::uuid", [eId]);
+    const day = nextWeekday(plusDays(60), 3);
+    await setBalance(adminH, eId, types["CL"] as string, yr(day), 10);
+    const filed = await fileLeave(emp.headers, { leave_type_id: types["CL"], from_date: day, to_date: day });
+    expect(filed.statusCode).toBe(201);
+    expect((filed.json() as { total_days: number }).total_days).toBe(1);
+    const reqId = (filed.json() as { id: string }).id;
+
+    // A holiday lands on that exact day before anyone decides it.
+    await mkHoliday(adminH, day);
+
+    const decided = await app.inject({
+      method: "POST",
+      url: `/api/v1/leave/requests/${reqId}/decision`,
+      headers: { ...adminH, "If-Match": "1" },
+      payload: { decision: "APPROVE" },
+    });
+    expect(decided.statusCode).toBe(422);
+    expect((decided.json() as { code: string }).code).toBe("ALL_DAYS_EXCLUDED");
+
+    const stillPending = await pool.query(
+      "SELECT status, total_days, version FROM leave_requests WHERE id = $1::uuid",
+      [reqId],
+    );
+    const row = stillPending.rows[0] as { status: string; total_days: number; version: number };
+    expect(row.status).toBe("PENDING");
+    // Unchanged from filing -- a refused approval does not touch the row.
+    expect(Number(row.total_days)).toBe(1);
+    expect(row.version).toBe(1);
+
+    const noDebit = await pool.query(
+      "SELECT consumed FROM leave_balances WHERE employee_id = $1::uuid AND period_year = $2",
+      [eId, yr(day)],
+    );
+    expect(Number((noDebit.rows[0] as { consumed: number }).consumed)).toBe(0);
+  });
 });
 
 describe("leave step-2 approver: HR manager preferred over admin (owner decision, 2026-09-24)", () => {
@@ -1470,10 +1509,189 @@ describe("leave step-2 approver: HR manager preferred over admin (owner decision
   });
 });
 
+describe("leave step-2 approver: reassigned when it becomes stale (fix round 2, item 1)", () => {
+  it("reassigns a pending approval when the exiting employee was the current (step-2) approver", async () => {
+    const { emp, tl, eId, adminId, types } = await chainFixture();
+    const adminH = await adminHeaders();
+    const hrEmp = await mkEmployee(adminH);
+    await activateEmployee(hrEmp);
+    const hr = await mkUser(["HR_MANAGER"], "hrExit");
+    await linkUser(hr.id, hrEmp);
+
+    const from = plusDays(30);
+    await setBalance(adminH, eId, types["CL"] as string, yr(from), 12);
+    const filed = await fileLeave(emp.headers, { leave_type_id: types["CL"], from_date: from, to_date: from });
+    const reqId = (filed.json() as { id: string }).id;
+    const step1 = await app.inject({
+      method: "POST",
+      url: `/api/v1/leave/requests/${reqId}/decision`,
+      headers: { ...tl.headers, "If-Match": "1" },
+      payload: { decision: "APPROVE" },
+    });
+    expect(step1.statusCode).toBe(200);
+    expect((step1.json() as { current_approver_id: string }).current_approver_id).toBe(hr.id);
+
+    const exited = await app.inject({
+      method: "POST",
+      url: `/api/v1/employees/${hrEmp}/exit`,
+      headers: adminH,
+      payload: { exit_date: "2025-01-31", reason: "resigned" },
+    });
+    expect(exited.statusCode).toBe(200);
+    // No other HR manager exists in this org, so the exit-flow reassignment
+    // falls back to admin -- in the SAME transaction as the exit, not
+    // waiting for a later read. The exit's own audit row records which
+    // pending approvals it reassigned.
+    const exitAudit = await pool.query(
+      "SELECT after_state FROM audit_events WHERE action = 'employee.exit' AND entity_id = $1::uuid",
+      [hrEmp],
+    );
+    const exitOffboarding = (exitAudit.rows[0] as { after_state: { offboarding: { reassigned_approval_request_ids: string[] } } })
+      .after_state.offboarding;
+    expect(exitOffboarding.reassigned_approval_request_ids).toContain(reqId);
+
+    const got = await app.inject({ method: "GET", url: `/api/v1/leave/requests/${reqId}`, headers: adminH });
+    expect((got.json() as { current_approver_id: string }).current_approver_id).toBe(adminId);
+
+    const audit = await pool.query(
+      "SELECT after_state, actor_id FROM audit_events WHERE action = 'leave.request.reassign_approver' AND entity_id = $1::uuid",
+      [reqId],
+    );
+    expect(audit.rowCount).toBe(1);
+    expect((audit.rows[0] as { actor_id: string }).actor_id).toBe(
+      (await pool.query("SELECT id FROM users WHERE username = $1", [ADMIN_USERNAME])).rows[0].id,
+    );
+  });
+
+  it("re-resolves a disabled (not exited) approver on the next read, and the new approver can then decide", async () => {
+    const { emp, tl, eId, types } = await chainFixture();
+    const adminH = await adminHeaders();
+    const hrA = await mkUser(["HR_MANAGER"], "hrA");
+    const hrB = await mkUser(["HR_MANAGER"], "hrB");
+    const ordered = (
+      await pool.query("SELECT id FROM users WHERE id = ANY($1::uuid[]) ORDER BY id ASC", [
+        [hrA.id, hrB.id],
+      ])
+    ).rows as Array<{ id: string }>;
+    const first = ordered[0]!.id === hrA.id ? hrA : hrB;
+    const next = ordered[1]!.id === hrA.id ? hrA : hrB;
+
+    const from = plusDays(30);
+    await setBalance(adminH, eId, types["CL"] as string, yr(from), 12);
+    const filed = await fileLeave(emp.headers, { leave_type_id: types["CL"], from_date: from, to_date: from });
+    const reqId = (filed.json() as { id: string }).id;
+    const step1 = await app.inject({
+      method: "POST",
+      url: `/api/v1/leave/requests/${reqId}/decision`,
+      headers: { ...tl.headers, "If-Match": "1" },
+      payload: { decision: "APPROVE" },
+    });
+    expect((step1.json() as { current_approver_id: string }).current_approver_id).toBe(first.id);
+
+    await pool.query("UPDATE users SET auth_status = 'DISABLED' WHERE id = $1::uuid", [first.id]);
+
+    const got = await app.inject({ method: "GET", url: `/api/v1/leave/requests/${reqId}`, headers: adminH });
+    const afterRead = got.json() as { current_approver_id: string; version: number };
+    expect(afterRead.current_approver_id).toBe(next.id);
+
+    // The newly-resolved approver can decide it immediately, using the
+    // version GET just returned (proves the version bump was reflected).
+    const decide = await app.inject({
+      method: "POST",
+      url: `/api/v1/leave/requests/${reqId}/decision`,
+      headers: { ...next.headers, "If-Match": String(afterRead.version) },
+      payload: { decision: "APPROVE" },
+    });
+    expect(decide.statusCode).toBe(200);
+    expect((decide.json() as { status: string }).status).toBe("APPROVED");
+  });
+
+  it("re-resolves a disabled approver directly on a decide attempt too, not only on a prior read", async () => {
+    const { emp, tl, eId, types } = await chainFixture();
+    const adminH = await adminHeaders();
+    const hrA = await mkUser(["HR_MANAGER"], "hrA2");
+    const hrB = await mkUser(["HR_MANAGER"], "hrB2");
+    const ordered = (
+      await pool.query("SELECT id FROM users WHERE id = ANY($1::uuid[]) ORDER BY id ASC", [
+        [hrA.id, hrB.id],
+      ])
+    ).rows as Array<{ id: string }>;
+    const first = ordered[0]!.id === hrA.id ? hrA : hrB;
+    const next = ordered[1]!.id === hrA.id ? hrA : hrB;
+
+    const from = plusDays(30);
+    await setBalance(adminH, eId, types["CL"] as string, yr(from), 12);
+    const filed = await fileLeave(emp.headers, { leave_type_id: types["CL"], from_date: from, to_date: from });
+    const reqId = (filed.json() as { id: string }).id;
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/leave/requests/${reqId}/decision`,
+      headers: { ...tl.headers, "If-Match": "1" },
+      payload: { decision: "APPROVE" },
+    });
+    await pool.query("UPDATE users SET auth_status = 'DISABLED' WHERE id = $1::uuid", [first.id]);
+
+    // `next` was never told the version changed (no read happened) --
+    // decides straight off the version they know from filing/step-1.
+    const decide = await app.inject({
+      method: "POST",
+      url: `/api/v1/leave/requests/${reqId}/decision`,
+      headers: { ...next.headers, "If-Match": "2" },
+      payload: { decision: "APPROVE" },
+    });
+    expect(decide.statusCode).toBe(200);
+    expect((decide.json() as { status: string }).status).toBe("APPROVED");
+  });
+
+  it("never reassigns to the applicant, even when they are otherwise the lowest-id eligible HR manager", async () => {
+    const adminH = await adminHeaders();
+    const hrApplicant = await mkUser(["HR_MANAGER"], "hrSelf");
+    const hrOriginal = await mkUser(["HR_MANAGER"], "hrOrig");
+    const empId = await mkEmployee(adminH);
+    await activateEmployee(empId);
+    await linkUser(hrApplicant.id, empId);
+    const types = await typeMap(adminH);
+    const from = plusDays(30);
+    await setBalance(adminH, empId, types["CL"] as string, yr(from), 12);
+
+    const filed = await fileLeave(hrApplicant.headers, {
+      leave_type_id: types["CL"],
+      from_date: from,
+      to_date: from,
+    });
+    expect(filed.statusCode).toBe(201);
+    const body = filed.json() as { id: string; current_approver_id: string };
+    // Already guaranteed by step2Approver's own exclusion at filing time --
+    // confirms the fixture, not the fix under test.
+    expect(body.current_approver_id).not.toBe(hrApplicant.id);
+    expect(body.current_approver_id).toBe(hrOriginal.id);
+
+    await pool.query("UPDATE users SET auth_status = 'DISABLED' WHERE id = $1::uuid", [hrOriginal.id]);
+
+    const got = await app.inject({ method: "GET", url: `/api/v1/leave/requests/${body.id}`, headers: adminH });
+    const reassignedTo = (got.json() as { current_approver_id: string }).current_approver_id;
+    expect(reassignedTo).not.toBe(hrApplicant.id);
+    expect(reassignedTo).not.toBe(hrOriginal.id);
+    expect(reassignedTo).toBeTruthy();
+  });
+});
+
+/**
+ * Fixes the job's "what is this org's current (year, month)" answer for a
+ * test, since there is no way to fake Postgres's own `now()`. Round 1's
+ * tests (mechanics: create/fill/skip/audit) force January of the current
+ * test year, so they keep exercising the same year they always did
+ * regardless of what month the suite actually runs in; round 2's gate
+ * tests force whichever month each scenario needs.
+ */
+function forceOrgDate(year: number, month: number) {
+  return async () => ({ year, month });
+}
+
 describe("automatic leave year-open (owner decision, 2026-09-24, item (b))", () => {
   it("opens the org's current year automatically, calling the same logic the manual button uses", async () => {
     const { eId, types } = await chainFixture();
-    const result = await runLeaveYearOpen(pool);
+    const result = await runLeaveYearOpen(pool, { resolveOrgDate: forceOrgDate(currentTestYear(), 1) });
     expect(result.orgsOpened).toBeGreaterThanOrEqual(1);
 
     const y = currentTestYear();
@@ -1505,14 +1723,15 @@ describe("automatic leave year-open (owner decision, 2026-09-24, item (b))", () 
 
   it("does not re-run for an org/year it has already opened", async () => {
     await chainFixture();
-    const first = await runLeaveYearOpen(pool);
-    expect(first.orgsOpened).toBeGreaterThanOrEqual(1);
     const y = currentTestYear();
+    const dateOverride = { resolveOrgDate: forceOrgDate(y, 1) };
+    const first = await runLeaveYearOpen(pool, dateOverride);
+    expect(first.orgsOpened).toBeGreaterThanOrEqual(1);
     const countBefore = (
       await pool.query("SELECT count(*)::int AS n FROM leave_balances WHERE period_year = $1", [y])
     ).rows[0] as { n: number };
 
-    const second = await runLeaveYearOpen(pool);
+    const second = await runLeaveYearOpen(pool, dateOverride);
     // This org (and every other already-opened one) is not processed again.
     const countAfter = (
       await pool.query("SELECT count(*)::int AS n FROM leave_balances WHERE period_year = $1", [y])
@@ -1546,10 +1765,10 @@ describe("automatic leave year-open (owner decision, 2026-09-24, item (b))", () 
     );
     const otherTypeId = (otherType.rows[0] as { id: string }).id;
 
-    const result = await runLeaveYearOpen(pool);
+    const y = currentTestYear();
+    const result = await runLeaveYearOpen(pool, { resolveOrgDate: forceOrgDate(y, 1) });
     expect(result.orgsOpened).toBeGreaterThanOrEqual(2);
 
-    const y = currentTestYear();
     const mainBal = await pool.query(
       "SELECT opening_balance FROM leave_balances WHERE employee_id = $1::uuid AND leave_type_id = $2::uuid AND period_year = $3",
       [eId, types["CL"], y],
@@ -1569,22 +1788,18 @@ describe("automatic leave year-open (owner decision, 2026-09-24, item (b))", () 
   });
 
   it("targets only the org's current year -- a prior year already marked open does not block this year", async () => {
-    // The real date gate ("only on/after 1 January for the new year") is
-    // implicit in currentOrgYear: a year value only ever becomes an org's
-    // "current year" once its calendar reaches 1 January of it, so there is
-    // no separate before/after-the-boundary state to force in a test that
-    // cannot fake the database's clock. What is directly testable, and
-    // tested here, is that the per-(org, year) tracking is exactly that --
-    // per year, not a one-time-ever flag -- so a year already marked open
-    // never blocks a *different* year, and the job never reaches past the
-    // org's own current year into a different one.
+    // The per-(org, year) tracking is exactly that -- per year, not a
+    // one-time-ever flag -- so a year already marked open never blocks a
+    // *different* year, and the job never reaches past the org's own
+    // current year into a different one. (The month gate itself is
+    // covered separately, below -- "fix round 2, item 2".)
     const { eId } = await chainFixture();
     const y = currentTestYear();
     await pool.query(
       "INSERT INTO leave_year_open_runs (org_id, year, created, filled, skipped, total) VALUES ($1, $2, 0, 0, 0, 0)",
       [orgId, y - 1],
     );
-    const result = await runLeaveYearOpen(pool);
+    const result = await runLeaveYearOpen(pool, { resolveOrgDate: forceOrgDate(y, 1) });
     expect(result.orgsOpened).toBeGreaterThanOrEqual(1);
 
     const thisYearRow = await pool.query(
@@ -1598,6 +1813,64 @@ describe("automatic leave year-open (owner decision, 2026-09-24, item (b))", () 
       [eId, y + 1],
     );
     expect((nextYearBal.rows[0] as { n: number }).n).toBe(0);
+  });
+});
+
+describe("automatic leave year-open: date gate (fix round 2, item 2, controller ruling)", () => {
+  it("24 September -> no-op (deploying mid-year must not backfill the current year early)", async () => {
+    const { eId } = await chainFixture();
+    const result = await runLeaveYearOpen(pool, { resolveOrgDate: forceOrgDate(2026, 9) });
+    expect(result.orgsOpened).toBe(0);
+    const runs = await pool.query(
+      "SELECT count(*)::int AS n FROM leave_year_open_runs WHERE org_id = $1",
+      [orgId],
+    );
+    expect((runs.rows[0] as { n: number }).n).toBe(0);
+    const bal = await pool.query(
+      "SELECT count(*)::int AS n FROM leave_balances WHERE employee_id = $1::uuid",
+      [eId],
+    );
+    expect((bal.rows[0] as { n: number }).n).toBe(0);
+  });
+
+  it("1 January -> opens", async () => {
+    const { eId, types } = await chainFixture();
+    const result = await runLeaveYearOpen(pool, { resolveOrgDate: forceOrgDate(2027, 1) });
+    expect(result.orgsOpened).toBeGreaterThanOrEqual(1);
+    const bal = await pool.query(
+      "SELECT opening_balance FROM leave_balances WHERE employee_id = $1::uuid AND leave_type_id = $2::uuid AND period_year = 2027",
+      [eId, types["CL"]],
+    );
+    expect(Number((bal.rows[0] as { opening_balance: number }).opening_balance)).toBe(12);
+  });
+
+  it("15 January -> opens once, idempotent with the (org, year) run key", async () => {
+    await chainFixture();
+    const first = await runLeaveYearOpen(pool, { resolveOrgDate: forceOrgDate(2027, 1) });
+    expect(first.orgsOpened).toBeGreaterThanOrEqual(1);
+    const second = await runLeaveYearOpen(pool, { resolveOrgDate: forceOrgDate(2027, 1) });
+    expect(second.orgsOpened).toBe(0);
+    const runs = await pool.query(
+      "SELECT count(*)::int AS n FROM leave_year_open_runs WHERE org_id = $1 AND year = 2027",
+      [orgId],
+    );
+    expect((runs.rows[0] as { n: number }).n).toBe(1);
+  });
+
+  it("1 February -> no-op (the window has closed)", async () => {
+    const { eId } = await chainFixture();
+    const result = await runLeaveYearOpen(pool, { resolveOrgDate: forceOrgDate(2027, 2) });
+    expect(result.orgsOpened).toBe(0);
+    const runs = await pool.query(
+      "SELECT count(*)::int AS n FROM leave_year_open_runs WHERE org_id = $1",
+      [orgId],
+    );
+    expect((runs.rows[0] as { n: number }).n).toBe(0);
+    const bal = await pool.query(
+      "SELECT count(*)::int AS n FROM leave_balances WHERE employee_id = $1::uuid",
+      [eId],
+    );
+    expect((bal.rows[0] as { n: number }).n).toBe(0);
   });
 });
 
