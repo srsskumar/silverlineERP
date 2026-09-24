@@ -37,6 +37,7 @@ function meFor(permissions: string[]) {
 }
 const ME_MANAGE = meFor(['reservation.read', 'reservation.manage']);
 const ME_READ_ONLY = meFor(['reservation.read']);
+const ME_NO_ACCESS = meFor([]);
 let ME = ME_MANAGE;
 
 function jsonResponse(body: unknown, status = 200) {
@@ -146,5 +147,25 @@ describe('fix round 1 item 1 — StockReservationsTab already gates write contro
     fireEvent.click(await screen.findByRole('button', { name: 'Open' }));
     expect(screen.queryByRole('button', { name: 'Reserve' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Release' })).not.toBeInTheDocument();
+  });
+});
+
+describe('R5 item 4(b) — the reservations list itself is gated on reservation.read', () => {
+  it('renders nothing for a session without reservation.read, rather than the list unguarded', async () => {
+    ME = ME_NO_ACCESS;
+    handlers['GET /api/v1/stock-reservations'] = () => jsonResponse({
+      data: [{
+        id: 'res-1', item_id: 'item-1', item_code: 'CEM', item_name: 'Cement',
+        location_name: 'Warehouse 1', quantity: 25, project_code: null,
+        state: 'ACTIVE', expires_on: null, version: 3,
+      }],
+    });
+    mount(<StockReservationsTab />);
+
+    // Give any stray request a tick, then confirm the panel/list never
+    // rendered for a session that cannot read reservations.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByText('Reservations')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cement')).not.toBeInTheDocument();
   });
 });
