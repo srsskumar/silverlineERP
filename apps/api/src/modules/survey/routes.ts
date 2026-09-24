@@ -1925,20 +1925,43 @@ export async function registerSurveyRoutes(
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       await villageOr404(pool, u.orgId, id, u);
+      const supervises = u.permissions.includes('survey.manage')
+        || u.permissions.includes('survey.assign');
       const rows = (await pool.query(
         `SELECT r.*, a.asset_code, a.name AS asset_name, a.serial_number, a.condition,
                 -- So a caller can tell a rover from the tripod that travelled
                 -- with it: the kit follows the crew, the daily return does not
                 -- ask them to account for a welding set.
-                a.category
+                a.category,
+                /*
+                 * Whose hands it is in, and whether that makes it the
+                 * caller's to report (SG-001).
+                 *
+                 * The same test POST /survey/entries applies (ROVER_NOT_YOURS):
+                 * issued to the caller, or to somebody who reports to them.
+                 * The phone listed every allocated rover, the second crew
+                 * member marked the first one's, and the outbox dropped the
+                 * refused day. Said here so the device can apply the rule
+                 * before it queues anything (§59.9.3).
+                 */
+                COALESCE(NULLIF(trim(concat_ws(' ', holder.first_name, holder.last_name)), ''),
+                         holder.emp_no) AS holder_name,
+                (holder.id IS NOT NULL
+                  AND (holder.id = me.employee_id OR holder.reports_to = me.employee_id))
+                  AS carried_by_me
          FROM survey_rover_allocations r
          JOIN assets a ON a.id = r.asset_id
+         LEFT JOIN asset_assignments aa ON aa.asset_id = r.asset_id AND aa.returned_at IS NULL
+         LEFT JOIN employees holder ON holder.id = aa.employee_id
+         LEFT JOIN users me ON me.id = $3
          WHERE r.survey_village_id = $1 AND r.org_id = $2
-         ORDER BY r.allocated_on DESC`, [id, u.orgId])).rows;
+         ORDER BY r.allocated_on DESC`, [id, u.orgId, u.id])).rows;
       return {
-        data: rows.map(r => ({
+        data: rows.map(({ carried_by_me: carried, ...r }) => ({
           ...r, allocated_on: iso(r.allocated_on), released_on: iso(r.released_on),
           out: !r.released_on,
+          holder_name: r.holder_name ?? null,
+          issued_to_me: supervises || carried === true,
         })),
       };
     });
