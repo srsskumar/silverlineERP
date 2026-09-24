@@ -117,23 +117,34 @@ export interface EntryAmendment {
  * form again.
  */
 export function amendmentFor(filed: FiledEntry, next: SurveyEntryInput): EntryAmendment {
+  /*
+   * Only what the crew entered (fix round 1). A measure missing from the
+   * form, a blank team count, blank attendance and blank notes mean "not
+   * provided", and the PATCH route leaves an omitted field as it is. They
+   * used to go as 0 or null, so a replay zeroed figures somebody else had
+   * put on the day. To take a figure off, the crew types 0 (the route
+   * treats a 0 quantity as "remove").
+   */
   const before = filed.values ?? {};
   const values: Record<string, number> = {};
   for (const [code, q] of Object.entries(next.values ?? {})) {
     if (Number(before[code] ?? 0) !== Number(q)) values[code] = q;
   }
-  for (const code of Object.keys(before)) {
-    if (!(code in (next.values ?? {})) && Number(before[code]) !== 0) values[code] = 0;
-  }
   const out: EntryAmendment = { values, amendment_reason: "Corrected from the phone on the day" };
-  const teams = next.teams_deployed ?? 0;
-  if (teams !== Number(filed.teams_deployed ?? 0)) out.teams_deployed = teams;
-  const notes = next.notes?.trim() ? next.notes.trim() : null;
-  if (notes !== (filed.notes?.trim() ? filed.notes.trim() : null)) out.notes = notes;
-  const govt = next.govt_staff_present ?? null;
-  if (govt !== (filed.govt_staff_present ?? null)) out.govt_staff_present = govt;
-  const crew = next.crew_present ?? null;
-  if (crew !== (filed.crew_present ?? null)) out.crew_present = crew;
+  if (next.teams_deployed !== undefined && next.teams_deployed !== null
+      && next.teams_deployed !== Number(filed.teams_deployed ?? 0)) {
+    out.teams_deployed = next.teams_deployed;
+  }
+  const notes = next.notes?.trim();
+  if (notes && notes !== (filed.notes ?? "").trim()) out.notes = notes;
+  const govt = next.govt_staff_present;
+  if (govt !== undefined && govt !== null && govt !== (filed.govt_staff_present ?? null)) {
+    out.govt_staff_present = govt;
+  }
+  const crew = next.crew_present;
+  if (crew !== undefined && crew !== null && crew !== (filed.crew_present ?? null)) {
+    out.crew_present = crew;
+  }
   return out;
 }
 

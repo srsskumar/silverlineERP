@@ -23,7 +23,8 @@ import {
 import { enqueueOp, flushQueue, rewriteOp, type OpExecutor } from "./queue";
 import { reviewMessage } from "./queueCore";
 import { punchBody } from "./replay";
-import { amendmentFor, isEmptyAmendment, isSecondFiling } from "../survey/fieldCrew";
+import { runSurveyEntryOp } from "./surveyEntryOp";
+import { ApiError } from "../api/client";
 import { getRefreshToken } from "../device/auth";
 import { countPendingOps, countReadyOps, getAccount, getDb, type PendingOpRow } from "./db";
 
@@ -149,22 +150,16 @@ export const defaultExecutor: OpExecutor = async (op) => {
        * It becomes an amendment of the day already in, keyed off this op so
        * a retry sends the same request.
        */
-      const entry = payload as unknown as Parameters<typeof postSurveyEntry>[0];
-      try {
-        return { status: 201, body: await postSurveyEntry(entry, op.idempotency_key) };
-      } catch (err) {
-        if (!isSecondFiling(err)) throw err;
-        const filed = await getFiledEntry(entry.survey_village_id, entry.entry_date);
-        if (!filed) throw err;
-        const amendment = amendmentFor(filed, entry);
-        if (isEmptyAmendment(amendment)) return { status: 200, body: filed };
-        return {
-          status: 200,
-          body: await patchSurveyEntry(
-            filed.id, filed.version, amendment, `${op.idempotency_key}:amend`,
-          ),
-        };
-      }
+      // Only amended when the server still holds the version the crew
+      // corrected; otherwise a CONFLICT they review (fix round 1).
+      return runSurveyEntryOp(op, {
+        post: postSurveyEntry,
+        getFiled: getFiledEntry,
+        patch: patchSurveyEntry,
+        conflict: (message) => new ApiError({
+          status: 409, code: "SURVEY_DAY_CHANGED", message, retryable: false,
+        }),
+      });
     }
     case "survey_stage": {
       // The crew member's own stage, completed from the village (SG-013).

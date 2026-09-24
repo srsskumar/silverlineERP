@@ -84,17 +84,34 @@ describe("correcting today's return from the phone (SG-003)", () => {
     assert.equal(d.notes, "rain after 3");
   });
 
-  it("turns the corrected form into an amendment that clears what was removed", () => {
-    // PATCH sets only the measures it names, so a measure taken off the form
-    // has to be sent as zero or it silently stays.
+  it("amends only the measures the crew entered; one left blank is not zeroed", () => {
+    // Fix round 1: a measure absent from the form was sent as 0, so a replay
+    // zeroed figures somebody else had put on the day.
     const patch = amendmentFor(filed, {
       survey_village_id: VILLAGE, entry_date: TODAY,
-      values: { PVT_EXTENT: 25 }, teams_deployed: 2, crew_present: 4,
-      govt_staff_present: 0, notes: "rain after 3",
+      values: { PVT_EXTENT: 25 }, govt_staff_present: 0,
     });
-    assert.deepEqual(patch.values, { PVT_EXTENT: 25, VB_POINTS: 0 });
+    assert.deepEqual(patch.values, { PVT_EXTENT: 25 });
     assert.equal(patch.govt_staff_present, 0);
     assert.match(patch.amendment_reason ?? "", /phone/);
+  });
+
+  it("treats blank teams, attendance and notes as not provided, never 0 or cleared", () => {
+    const patch = amendmentFor(filed, {
+      survey_village_id: VILLAGE, entry_date: TODAY, values: {},
+      govt_staff_present: null, crew_present: null,
+    });
+    assert.deepEqual(patch.values, {});
+    for (const k of ["teams_deployed", "govt_staff_present", "crew_present", "notes"]) {
+      assert.equal(k in patch, false, k);
+    }
+  });
+
+  it("removes a figure the crew typed 0 for", () => {
+    const patch = amendmentFor(filed, {
+      survey_village_id: VILLAGE, entry_date: TODAY, values: { VB_POINTS: 0 },
+    });
+    assert.deepEqual(patch.values, { VB_POINTS: 0 });
   });
 
   it("sends nothing it was not asked to change", () => {
@@ -124,13 +141,6 @@ describe("correcting today's return from the phone (SG-003)", () => {
     assert.equal(isSecondFiling(null), false);
   });
 
-  it("clears a note that was removed, rather than keeping the old one", () => {
-    const patch = amendmentFor(filed, {
-      survey_village_id: VILLAGE, entry_date: TODAY, values: filed.values,
-      teams_deployed: 2, govt_staff_present: 1, crew_present: 4,
-    });
-    assert.equal(patch.notes, null);
-  });
 });
 
 describe("teams deployed is part of the day (SG-008, §59.4.2)", () => {
