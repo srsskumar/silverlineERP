@@ -515,37 +515,32 @@ describe("§46.4 revising what never expires", () => {
 });
 
 describe("§46.6.2 releasing a hold is its own permission", () => {
-  it("refuses a release to a role that may place a hold but not lift one", async () => {
-    // Take the release away from the auditor for this test only; the suite
-    // runs in one fork, so no other file sees the change.
-    const roleId = (await w.pool.query("SELECT id FROM roles WHERE code = 'AUDITOR'")).rows[0].id;
-    await w.pool.query(
-      "DELETE FROM role_permissions WHERE role_id = $1 AND permission_code = 'document.legalhold.release'",
-      [roleId]);
-    try {
-      const doc = await orgDoc({ expires_on: dayOffset(-365 * 20) });
-      const held = await post({ ...w.role.AUDITOR, ...(await ver(doc.id)) },
-        `/api/v1/documents/${doc.id}/legal-hold`, { legal_hold: true, reason: "Statutory audit" });
-      expect(held.status).toBe(200);
+  it("refuses a release to a role that may place a hold but not lift one (AUDITOR, owner decision 2026-09-24 #4)", async () => {
+    // AUDITOR is now that role by design (112_auditor_legalhold_release.sql,
+    // packages/shared's DOCUMENT_ROLE_GRANTS.AUDITOR): it holds
+    // document.legalhold but not document.legalhold.release, so no manual
+    // grant surgery is needed to exercise this -- it is the seeded state.
+    const doc = await orgDoc({ expires_on: dayOffset(-365 * 20) });
+    const held = await post({ ...w.role.AUDITOR, ...(await ver(doc.id)) },
+      `/api/v1/documents/${doc.id}/legal-hold`, { legal_hold: true, reason: "Statutory audit" });
+    expect(held.status).toBe(200);
 
-      const released = await post({ ...w.role.AUDITOR, ...(await ver(doc.id)) },
-        `/api/v1/documents/${doc.id}/legal-hold`, { legal_hold: false });
-      expect(released.status).toBe(403);
-      expect(released.body.message).toContain("document.legalhold.release");
-      const after = await get(w.admin, `/api/v1/documents/${doc.id}`);
-      expect(after.data.legal_hold).toBe(true);
-    } finally {
-      await w.pool.query(
-        `INSERT INTO role_permissions (role_id, permission_code)
-         VALUES ($1, 'document.legalhold.release') ON CONFLICT DO NOTHING`, [roleId]);
-    }
+    const released = await post({ ...w.role.AUDITOR, ...(await ver(doc.id)) },
+      `/api/v1/documents/${doc.id}/legal-hold`, { legal_hold: false });
+    expect(released.status).toBe(403);
+    expect(released.body.message).toContain("document.legalhold.release");
+    const after = await get(w.admin, `/api/v1/documents/${doc.id}`);
+    expect(after.data.legal_hold).toBe(true);
   });
 
   it("lets a role with the release permission lift the hold", async () => {
+    // ADMIN holds every document permission, release included -- AUDITOR no
+    // longer does (owner decision 2026-09-24 #4), so this exercises the
+    // permission with a role that still has it.
     const doc = await orgDoc({ expires_on: dayOffset(-365 * 20) });
-    await post({ ...w.role.AUDITOR, ...(await ver(doc.id)) },
+    await post({ ...w.admin, ...(await ver(doc.id)) },
       `/api/v1/documents/${doc.id}/legal-hold`, { legal_hold: true, reason: "Statutory audit" });
-    const released = await post({ ...w.role.AUDITOR, ...(await ver(doc.id)) },
+    const released = await post({ ...w.admin, ...(await ver(doc.id)) },
       `/api/v1/documents/${doc.id}/legal-hold`, { legal_hold: false });
     expect(released.status, JSON.stringify(released.body)).toBe(200);
     expect(released.data.legal_hold).toBe(false);

@@ -155,6 +155,22 @@ describe("building a database from nothing", () => {
       "expense.read",
       "org.units.read",
     ]);
+
+    // Owner decision 2026-09-24 #4 / 112_auditor_legalhold_release.sql:
+    // AUDITOR may place a legal hold but not release one. 112's own DELETE
+    // is a no-op on a genuinely empty database -- AUDITOR does not exist
+    // until seedDatabase() creates it -- so what a fresh build actually
+    // rests on is the seed's canonical grant map (packages/shared's
+    // DOCUMENT_ROLE_GRANTS.AUDITOR) already excluding the release grant.
+    const auditorHold = await pool.query(
+      `SELECT rp.permission_code
+         FROM role_permissions rp
+         JOIN roles r ON r.id = rp.role_id
+        WHERE r.code = 'AUDITOR' AND r.org_id IS NULL
+          AND rp.permission_code IN ('document.legalhold', 'document.legalhold.release')
+        ORDER BY rp.permission_code`,
+    );
+    expect(auditorHold.rows.map((r) => r.permission_code)).toEqual(["document.legalhold"]);
   }, 180_000);
 
   it("ends with a survey module that can be used", async () => {
@@ -249,5 +265,88 @@ describe("097 on an already-deployed database (P-002)", () => {
       "expense.read",
       "org.units.read",
     ]);
+  });
+});
+
+describe("112 on an already-deployed database (owner decision 2026-09-24 #4)", () => {
+  // The scenario 112 exists for: a database seeded before this decision,
+  // carrying AUDITOR's old grant -- document.legalhold *and*
+  // document.legalhold.release, seeded together by 082 back when the two
+  // were not yet distinguished. A redeploy ships the new packages/shared
+  // source, but nothing re-runs seedDatabase() against a live environment --
+  // migrate() is the only thing that touches its role_permissions. Simulated
+  // here the same way 097's own already-deployed test is: build fully
+  // (migrate + seed), put AUDITOR back in the pre-112 state, then re-run
+  // 112's own SQL directly -- the same statement migrate() would run were it
+  // pending.
+  const NAME = `silverline_auditor_hold_${process.pid}_test`;
+
+  function urlFor(db: string): string {
+    const u = new URL(testDatabaseUrl());
+    u.pathname = `/${db}`;
+    return u.toString();
+  }
+
+  async function admin<T>(fn: (c: Client) => Promise<T>): Promise<T> {
+    const c = new Client({ connectionString: urlFor("postgres") });
+    await c.connect();
+    try { return await fn(c); } finally { await c.end(); }
+  }
+
+  let pool: Pool;
+
+  beforeAll(async () => {
+    await admin(async (c) => {
+      await c.query(`DROP DATABASE IF EXISTS "${NAME}"`);
+      await c.query(`CREATE DATABASE "${NAME}"`);
+    });
+    await migrate(urlFor(NAME));
+    pool = new Pool({ connectionString: urlFor(NAME) });
+    await seedDatabase(pool, { bcryptRounds: 4 });
+  }, 180_000);
+
+  afterAll(async () => {
+    await pool?.end();
+    await admin((c) => c.query(`DROP DATABASE IF EXISTS "${NAME}"`));
+  }, 120_000);
+
+  it("revokes AUDITOR's document.legalhold.release while leaving document.legalhold alone", async () => {
+    // Put AUDITOR back in the pre-decision state: both grants present, as
+    // 082 would have left any deployment seeded before this decision.
+    await pool.query(
+      `INSERT INTO role_permissions (role_id, permission_code)
+       SELECT id, 'document.legalhold.release' FROM roles WHERE code = 'AUDITOR' AND org_id IS NULL
+       ON CONFLICT (role_id, permission_code) DO NOTHING`,
+    );
+    const before = await pool.query(
+      `SELECT rp.permission_code FROM role_permissions rp
+         JOIN roles r ON r.id = rp.role_id
+        WHERE r.code = 'AUDITOR' AND r.org_id IS NULL
+          AND rp.permission_code IN ('document.legalhold', 'document.legalhold.release')
+        ORDER BY rp.permission_code`,
+    );
+    expect(before.rows.map((r) => r.permission_code)).toEqual([
+      "document.legalhold",
+      "document.legalhold.release",
+    ]);
+
+    const sql = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)),
+        "../src/database/migrations/112_auditor_legalhold_release.sql"),
+      "utf8",
+    );
+    await pool.query(sql);
+
+    const after = await pool.query(
+      `SELECT rp.permission_code FROM role_permissions rp
+         JOIN roles r ON r.id = rp.role_id
+        WHERE r.code = 'AUDITOR' AND r.org_id IS NULL
+          AND rp.permission_code IN ('document.legalhold', 'document.legalhold.release')
+        ORDER BY rp.permission_code`,
+    );
+    expect(after.rows.map((r) => r.permission_code)).toEqual(["document.legalhold"]);
+
+    // Idempotent: running it again changes nothing and errors on nothing.
+    await expect(pool.query(sql)).resolves.not.toThrow();
   });
 });

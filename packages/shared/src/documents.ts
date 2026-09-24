@@ -494,8 +494,10 @@ export const DOCUMENT_ROLE_GRANTS: Record<RoleCode, string[]> = {
   PAYROLL_OFFICER: ['document.read', 'document.confidential'],
   // Reads everything including the confidential types, and places a hold.
   // Cannot delete: an auditor who can destroy evidence is not a control.
-  AUDITOR: ['document.read', 'document.confidential', 'document.legalhold',
-    'document.legalhold.release'],
+  // Cannot release a hold either (owner decision 2026-09-24 #4): placing one
+  // protects a document, releasing it is the step that makes the document
+  // deletable again, and that is not an auditor's call to make alone.
+  AUDITOR: ['document.read', 'document.confidential', 'document.legalhold'],
   TEAM_LEAD: ['document.read'],
   SALES_BD_EXECUTIVE: ['document.read'],
   // Sees the register for their own employer's documents through the employee

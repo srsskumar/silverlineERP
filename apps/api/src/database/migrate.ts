@@ -106,6 +106,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "097_auditor_base_reads", file: "097_auditor_base_reads.sql" },
   { version: "098_govt_observer_notification_read", file: "098_govt_observer_notification_read.sql" },
   { version: "100_sales_bid_notification_read", file: "100_sales_bid_notification_read.sql" },
+  { version: "112_auditor_legalhold_release", file: "112_auditor_legalhold_release.sql" },
 ];
 
 /**
