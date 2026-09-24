@@ -20,6 +20,7 @@ import { NewRequisition } from '@/components/procurement/NewRequisitionForm';
 import { NewPurchaseOrder } from '@/components/procurement/NewPurchaseOrderForm';
 import { NewGrn } from '@/components/procurement/NewGrnForm';
 import { NewRfq } from '@/components/procurement/NewRfqForm';
+import { AmendOrder } from '@/components/procurement/AmendOrderForm';
 
 type Row = Record<string, any>;
 type Tab = 'requisitions' | 'orders' | 'rfqs' | 'returns';
@@ -449,8 +450,10 @@ function OrderDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
   const { session } = useAuth();
   const canManage = hasPermission({ permissions: session?.permissions }, 'po.manage');
   const canManageGrn = hasPermission({ permissions: session?.permissions }, 'grn.manage');
+  const canAmend = hasPermission({ permissions: session?.permissions }, 'po.amend');
   const [error, setError] = React.useState<unknown>(null);
   const [recordingGrn, setRecordingGrn] = React.useState(false);
+  const [amending, setAmending] = React.useState(false);
 
   const detail = useQuery({
     queryKey: ['purchase-order', id],
@@ -627,6 +630,16 @@ function OrderDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
             </Section>
           ) : null}
 
+          {canAmend && !['CLOSED', 'CANCELLED', 'FULLY_RECEIVED'].includes(String(po.status)) ? (
+            <Section title="Amend">
+              <Button variant="secondary" onClick={() => setAmending(true)}>Amend this order</Button>
+              <p className="mt-1.5 text-2xs text-text-subtle">
+                Changes quantity, rate or delivery date on an issued order. A change that moves the value
+                materially sends it back through approval.
+              </p>
+            </Section>
+          ) : null}
+
           {canManage ? (
             <Section title="Move to">
               <div className="flex flex-wrap gap-2">
@@ -658,6 +671,14 @@ function OrderDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
           lines={lines}
           onClose={() => setRecordingGrn(false)}
           onCreated={() => { setRecordingGrn(false); after(); }}
+        />
+      ) : null}
+
+      {amending && po ? (
+        <AmendOrder
+          po={po}
+          onClose={() => setAmending(false)}
+          onDone={() => { setAmending(false); after(); }}
         />
       ) : null}
     </RecordSheet>
