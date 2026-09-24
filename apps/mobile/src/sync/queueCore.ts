@@ -141,10 +141,18 @@ export const LIST_OPS_SQL = `SELECT * FROM pending_ops
  */
 export interface OpChain {
   supersede(pending: Record<string, unknown>, next: Record<string, unknown>,
-    ctx: { idempotencyKey: string }): Record<string, unknown> | null;
+    ctx: SupersedeContext): Record<string, unknown> | null;
   handOver(older: Record<string, unknown>, newer: Record<string, unknown>,
-    ctx: { idempotencyKey: string }): Record<string, unknown>;
+    ctx: SupersedeContext): Record<string, unknown>;
 }
+/**
+ * What a chain rule is told about the older op: its key, and whether a
+ * request may have gone out under it (round 5). An op that was never sent
+ * carries nothing the server could hold, so nothing of it is remembered.
+ */
+export interface SupersedeContext { idempotencyKey: string; sent: boolean; sending: boolean }
+/** An op that is sending, or has been tried, may have delivered its body. */
+const maySent = (op: PendingOpRow) => op.state !== "QUEUED" || op.retry_count > 0;
 
 export function createQueue({getDb,getAccount,seal,unseal,uuid,isApiError,chains={}}:{getDb:()=>Promise<QueueDatabase>;getAccount:()=>Promise<string|null>;seal:(account:string,value:string)=>Promise<string>;unseal:(account:string,value:string)=>Promise<string>;uuid:()=>string;isApiError:(e:unknown)=>e is RequestError;chains?:Partial<Record<string,OpChain>>}) {
 const ACTIVE_STATES = ["QUEUED", "SENDING", "BACKOFF"];
@@ -156,7 +164,28 @@ const rowsChanged = (r: unknown): number | null => {
 
 function newUuid(): string { return uuid(); }
 
-async function enqueueOp(args: {
+/*
+ * One lock for every change to the outbox (round 5).
+ *
+ * Enqueue (with its supersede), the flush's claim, its settle (hand-over,
+ * absorb, the op's new state) and the executor's own rewrites each read a
+ * row, merge in JS across awaits, and write it back. Nothing stopped an
+ * enqueue from running inside a flush's read-modify-write, or the other way
+ * round, so one overwrote the other: the newest figures were lost, or the
+ * older op's record of what it sent was (then a false CONFLICT). Each step
+ * now runs whole, one at a time. The network call is outside the lock, so a
+ * filing made while a request is on the wire still goes in at once.
+ * Recovery on open (SENDING back to QUEUED) runs inside getDb, before any
+ * of this can start.
+ */
+let tail: Promise<unknown> = Promise.resolve();
+function locked<T>(fn: () => Promise<T>): Promise<T> {
+  const run = tail.then(fn, fn);
+  tail = run.catch(() => undefined);
+  return run;
+}
+
+type EnqueueArgs = {
   entity: QueueEntity;
   op: string;
   payload: Record<string, unknown>;
@@ -165,9 +194,13 @@ async function enqueueOp(args: {
   supersede?: (
     pending: Record<string, unknown>,
     next: Record<string, unknown>,
-    ctx: { idempotencyKey: string },
+    ctx: SupersedeContext,
   ) => Record<string, unknown> | null;
-}): Promise<PendingOpRow> {
+};
+function enqueueOp(args: EnqueueArgs): Promise<PendingOpRow> {
+  return locked(() => enqueueUnlocked(args));
+}
+async function enqueueUnlocked(args: EnqueueArgs): Promise<PendingOpRow> {
   const db = await getDb();
   const account=await getAccount();if(!account)throw new Error("Sign in first");
   const key = dedupeKey(args.entity, args.op);
@@ -208,7 +241,7 @@ async function enqueueOp(args: {
   let baseVersion = args.baseVersion ?? null;
   if (existing && supersede) {
     const merged = supersede(JSON.parse(await unseal(account, existing.payload)), args.payload,
-      { idempotencyKey: existing.idempotency_key });
+      { idempotencyKey: existing.idempotency_key, sent: maySent(existing), sending: existing.state === "SENDING" });
     if (merged) {
       payload = merged;
       baseVersion = args.baseVersion ?? existing.base_version ?? null;
@@ -307,7 +340,7 @@ async function settleChain(op: PendingOpRow, outcome: string): Promise<boolean> 
   const merged = chain.handOver(
     JSON.parse(await unseal(account, current.payload)),
     JSON.parse(await unseal(account, newer.payload)),
-    { idempotencyKey: op.idempotency_key },
+    { idempotencyKey: op.idempotency_key, sent: true, sending: true },
   );
   await db.runAsync(
     "UPDATE pending_ops SET payload=?, base_version=COALESCE(base_version, ?), updated_at=? WHERE client_uuid=? AND state IN ('QUEUED','BACKOFF')",
@@ -351,13 +384,17 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
      * if it is still QUEUED/BACKOFF, and its payload and base are read after
      * the claim, so what is sent is what the row says at that moment.
      */
-    const claim = await db.runAsync(
-      "UPDATE pending_ops SET state='SENDING', error=NULL, updated_at=? WHERE client_uuid=? AND state IN ('QUEUED','BACKOFF')",
-      [Date.now(), op.client_uuid],
-    );
-    if (rowsChanged(claim) === 0) continue;
-    const fresh = await db.getFirstAsync<PendingOpRow>("SELECT * FROM pending_ops WHERE client_uuid=?", [op.client_uuid]);
-    if (fresh) Object.assign(op, { payload: fresh.payload, base_version: fresh.base_version });
+    const claimed = await locked(async () => {
+      const claim = await db.runAsync(
+        "UPDATE pending_ops SET state='SENDING', error=NULL, updated_at=? WHERE client_uuid=? AND state IN ('QUEUED','BACKOFF')",
+        [Date.now(), op.client_uuid],
+      );
+      if (rowsChanged(claim) === 0) return false;
+      const fresh = await db.getFirstAsync<PendingOpRow>("SELECT * FROM pending_ops WHERE client_uuid=?", [op.client_uuid]);
+      if (fresh) Object.assign(op, { payload: fresh.payload, base_version: fresh.base_version });
+      return true;
+    });
+    if (!claimed) continue;
     result.attempted += 1;
     // Decryption is not a network step: a payload this account's key cannot
     // open never will be, so it fails immediately rather than burning the whole
@@ -367,18 +404,22 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
       payload = await unseal(account, op.payload);
     } catch {
       result.failed += 1;
-      await update(op.client_uuid, {
+      await locked(() => update(op.client_uuid, {
         state: "FAILED",
         decision: "REJECTED",
         error: "payload could not be decrypted for the signed-in account",
-      });
+      }));
       continue;
     }
-    try {
-      const { status, body } = await executor({ ...op, payload });
+    // The request goes outside the lock; what came of it is written under it.
+    let sent: { status: number; body: unknown } | { err: unknown };
+    try { sent = await executor({ ...op, payload }); } catch (err) { sent = { err }; }
+    await locked(async () => {
+    if (!("err" in sent)) {
+      const { status, body } = sent;
       const decision = classifySyncResponse(status, body);
       const outcome = resolveOutcome(decision);
-      if (await settleChain(op, outcome.state)) { result.deferred += 1; continue; }
+      if (await settleChain(op, outcome.state)) { result.deferred += 1; return; }
       if (outcome.state === "SUCCEEDED") {
         result.succeeded += 1;
         // The server has it now, so the sealed body -- a photo can be megabytes
@@ -413,17 +454,18 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
           state: "FAILED", decision, error: code,
         });
       }
-    } catch (err) {
+    } else {
+      const { err } = sent;
       if (isApiError(err) && !err.retryable && err.status !== 401) {
         await settleChain(op, "FAILED");
         result.failed += 1;
         await update(op.client_uuid, { state: "FAILED", decision: err.status === 409 ? "CONFLICT" : "REJECTED", error: describeApiError(err, err.message) });
-        continue;
+        return;
       }
       // Transport failure (network down, timeout) or a server that asked us
       // to wait (429, 503): back off, keep op -- unless a newer filing for
       // the same record is waiting behind it, which absorbs it (round 4).
-      if (await settleChain(op, "BACKOFF")) { result.deferred += 1; continue; }
+      if (await settleChain(op, "BACKOFF")) { result.deferred += 1; return; }
       const retryCount = op.retry_count + 1;
       const message = describeApiError(err, "unknown error");
       if (maxRetriesExceeded(retryCount, MAX_QUEUE_RETRIES)) {
@@ -447,8 +489,9 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
         });
       }
     }
+    });
   }
-  await purgeSettledOps(db);
+  await locked(() => purgeSettledOps(db));
   return result;
 }
 
@@ -460,17 +503,21 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
  * differs by one field is refused as a different request. Sealed with the
  * signed-in account's key like the original; a delivered row is left alone.
  */
-async function rewriteOp(clientUuid:string,payload:string):Promise<void> {
+function rewriteOp(clientUuid:string,payload:string):Promise<void> {
+ return locked(async()=>{
  const db=await getDb();
  const account=await getAccount();if(!account)throw new Error("Sign in first");
  await db.runAsync("UPDATE pending_ops SET payload=? WHERE client_uuid=? AND state IN ('QUEUED','SENDING','BACKOFF')",[await seal(account,payload),clientUuid]);
+ });
 }
 
-async function retryOp(clientUuid:string):Promise<void> {
+function retryOp(clientUuid:string):Promise<void> {
+ return locked(async()=>{
  const db=await getDb();
  const row=await db.getFirstAsync<PendingOpRow>('SELECT * FROM pending_ops WHERE client_uuid=?',[clientUuid]);
  if(!row||row.decision==='CONFLICT'||row.decision==='REJECTED')throw new Error('Review and correct this operation before submitting a new request.');
  await db.runAsync("UPDATE pending_ops SET state='QUEUED',retry_count=0,next_retry_at=NULL,error=NULL WHERE client_uuid=? AND state='FAILED'",[clientUuid]);
+ });
 }
 
 /**
@@ -480,11 +527,13 @@ async function retryOp(clientUuid:string):Promise<void> {
  * rows can go -- a row that is waiting or sending may still be delivered, and
  * discarding it would lose work the user has not seen fail.
  */
-async function discardOp(clientUuid:string):Promise<void> {
+function discardOp(clientUuid:string):Promise<void> {
+ return locked(async()=>{
  const db=await getDb();
  const row=await db.getFirstAsync<PendingOpRow>('SELECT * FROM pending_ops WHERE client_uuid=?',[clientUuid]);
  if(!row||row.state!=='FAILED')throw new Error('Only a failed operation can be discarded.');
  await db.runAsync("DELETE FROM pending_ops WHERE client_uuid=? AND state='FAILED'",[clientUuid]);
+ });
 }
 
 async function listOps():Promise<PendingOpRow[]> {

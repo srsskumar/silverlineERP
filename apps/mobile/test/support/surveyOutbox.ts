@@ -83,12 +83,22 @@ export function server() {
 export function outbox() {
   const db = new DatabaseSync(":memory:");
   db.exec(SCHEMA_SQL);
+  /*
+   * Round 5: a test can run something just before a matching write goes
+   * through (once), to interleave an enqueue with a flush at an exact point.
+   */
+  const hooks: Array<{ match: RegExp; run: () => Promise<void> }> = [];
+  const before = (match: RegExp, run: () => Promise<void>) => { hooks.push({ match, run }); };
   const port: QueueDatabase = {
     getFirstAsync: async <T>(sql: string, p: (string | number | null)[]) =>
       (db.prepare(sql).get(...p) as T) ?? null,
     getAllAsync: async <T>(sql: string, p: (string | number | null)[]) =>
       db.prepare(sql).all(...p) as T[],
-    runAsync: async (sql, p) => db.prepare(sql).run(...p),
+    runAsync: async (sql, p) => {
+      const i = hooks.findIndex(h => h.match.test(sql));
+      if (i >= 0) await hooks.splice(i, 1)[0].run();
+      return db.prepare(sql).run(...p);
+    },
   };
   const queue = createQueue({
     getDb: async () => port, getAccount: async () => "crew", uuid: randomUUID,
@@ -100,5 +110,5 @@ export function outbox() {
   const rows = () => db.prepare(
     "SELECT client_uuid, entity, state, decision, error FROM pending_ops ORDER BY seq").all() as
     Array<{ client_uuid: string; entity: string; state: string; decision: string | null; error: string | null }>;
-  return { db, queue, rows };
+  return { db, queue, rows, before };
 }

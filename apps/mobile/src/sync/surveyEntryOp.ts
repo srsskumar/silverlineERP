@@ -43,18 +43,61 @@ export interface SurveyEntryDeps {
  */
 const PRIOR = "_prior";
 
+/**
+ * `landed` is the version a request's reply gave, once one came back (the
+ * server stores a key only with a request that succeeded). Without it, the
+ * request may or may not have landed.
+ */
 export type PriorRequest =
-  | { kind: "post"; key: string; body: Record<string, unknown> }
-  | { kind: "patch"; key: string; id: string; base: number; body: EntryAmendment };
+  | { kind: "post"; key: string; body: Record<string, unknown>; landed?: number }
+  | { kind: "patch"; key: string; id: string; base: number; body: EntryAmendment; landed?: number };
 
 const sameRequest = (a: PriorRequest, b: PriorRequest) =>
   a.kind === b.kind && a.key === b.key && JSON.stringify(a.body) === JSON.stringify(b.body);
 
-function withPrior(list: PriorRequest[], ...more: PriorRequest[]): PriorRequest[] {
-  const out = [...list];
-  for (const p of more) if (!out.some(q => sameRequest(q, p))) out.push(p);
+/*
+ * The list is kept to what a replay needs (round 5). It used to gain a full
+ * body at every re-file, sent or not, and every retry replayed them all.
+ *
+ * - Only requests that went, or may have gone, are recorded (see ctx.sent).
+ * - A request the server refused (a 409: its key holds another body, or it
+ *   was not applied) never landed, and is dropped.
+ * - Replay only has to reach the latest version this device made, so of the
+ *   requests known to have landed only the one with the highest version is
+ *   kept; and a key that has a landed body holds no other.
+ * - Past PRIOR_MAX, the oldest may-have-landed entries go, except the first
+ *   body sent under each key (the likeliest to be the one the server kept).
+ *   Dropping one can only turn a correction into a review, never lose data.
+ */
+export const PRIOR_MAX = 8;
+
+function trim(list: PriorRequest[]): PriorRequest[] {
+  let out: PriorRequest[] = [];
+  for (const p of list) {
+    const i = out.findIndex(q => sameRequest(q, p));
+    if (i < 0) out.push(p);
+    else if (p.landed !== undefined) out[i] = p;
+  }
+  const best = out.reduce<PriorRequest | null>((b, p) =>
+    p.landed !== undefined && (b === null || p.landed > (b.landed as number)) ? p : b, null);
+  if (best) out = out.filter(p => p === best || (p.landed === undefined && p.key !== best.key));
+  while (out.length > PRIOR_MAX) {
+    const i = out.findIndex((p, n) => p !== best && out.findIndex(q => q.key === p.key) !== n);
+    out.splice(i >= 0 ? i : out.findIndex(p => p !== best), 1);
+  }
   return out;
 }
+
+function withPrior(list: PriorRequest[], ...more: PriorRequest[]): PriorRequest[] {
+  return trim([...list, ...more]);
+}
+
+const versionOf = (reply: unknown): number | undefined => {
+  const v = (reply as { version?: unknown } | null)?.version;
+  return typeof v === "number" ? v : undefined;
+};
+/** Refused outright: this body never landed under this key. */
+const refused = (err: unknown) => (err as { status?: number } | null)?.status === 409;
 
 function split(payload: Record<string, unknown>): { entry: Record<string, unknown>; prior: PriorRequest[] } {
   const { [PRIOR]: prior, ...entry } = payload;
@@ -72,12 +115,21 @@ function split(payload: Record<string, unknown>): { entry: Record<string, unknow
 export function supersedeSurveyEntry(
   pending: Record<string, unknown>,
   next: Record<string, unknown>,
-  ctx?: { idempotencyKey: string },
+  ctx?: { idempotencyKey: string; sent?: boolean; sending?: boolean },
 ): Record<string, unknown> {
   const older = split(pending);
   const newer = split(next);
-  const prior = withPrior(newer.prior, ...older.prior,
-    ...(ctx ? [{ kind: "post" as const, key: ctx.idempotencyKey, body: older.entry }] : []));
+  /*
+   * The older op's own body counts only if it may have gone (round 5). An op
+   * on the wire is sending exactly its body. One that was tried and is
+   * waiting again may hold a re-file that never went; the executor records
+   * each request before it goes, so if its key has a record, that says what
+   * was sent, and the body is added only when there is none.
+   */
+  const own = ctx && ctx.sent !== false &&
+    (ctx.sending || !older.prior.some(p => p.key === ctx.idempotencyKey))
+    ? [{ kind: "post" as const, key: ctx.idempotencyKey, body: older.entry }] : [];
+  const prior = withPrior(newer.prior, ...older.prior, ...own);
   return { ...newer.entry, [PRIOR]: prior };
 }
 
@@ -88,7 +140,7 @@ export function supersedeSurveyEntry(
  */
 export const surveyEntryChain = {
   supersede: supersedeSurveyEntry,
-  handOver: (older: Record<string, unknown>, newer: Record<string, unknown>, ctx: { idempotencyKey: string }) =>
+  handOver: (older: Record<string, unknown>, newer: Record<string, unknown>, ctx: { idempotencyKey: string; sent?: boolean; sending?: boolean }) =>
     supersedeSurveyEntry(older, newer, ctx),
 };
 
@@ -113,20 +165,47 @@ export async function runSurveyEntryOp(
   deps: SurveyEntryDeps,
 ): Promise<{ status: number; body: unknown }> {
   const { entry, prior: carried } = split(JSON.parse(op.payload) as Record<string, unknown>);
-  let prior = carried;
-  const record = async (p: PriorRequest) => {
-    prior = withPrior(prior, p);
+  let prior = trim(carried);
+  const save = async () => {
     if (deps.remember && op.client_uuid) {
       await deps.remember(op.client_uuid, JSON.stringify({ ...entry, [PRIOR]: prior }));
+    }
+  };
+  const record = async (p: PriorRequest) => {
+    prior = withPrior(prior, p);
+    await save();
+  };
+  /** What came of a request: landed (with its version), refused, or unknown. */
+  const learn = (p: PriorRequest, outcome: { reply: unknown } | { err: unknown }) => {
+    const i = prior.findIndex(q => sameRequest(q, p));
+    if (i < 0) return;
+    if ("reply" in outcome) {
+      const landed = versionOf(outcome.reply);
+      if (landed !== undefined) prior = trim(prior.map((q, n) => (n === i ? { ...q, landed } : q)));
+    } else if (refused(outcome.err)) {
+      prior = prior.filter((_, n) => n !== i);
     }
   };
 
   const post: PriorRequest = { kind: "post", key: op.idempotency_key, body: entry };
   await record(post);
   try {
-    return { status: 201, body: await deps.post(entry, op.idempotency_key) };
+    const reply = await deps.post(entry, op.idempotency_key);
+    // Handed to an op queued behind this one, so it knows the version made.
+    learn(post, { reply });
+    await save().catch(() => undefined);
+    return { status: 201, body: reply };
   } catch (err) {
+    learn(post, { err });
     if (!isSecondFiling(err) && !isKeyReused(err)) throw err;
+    try {
+      return await amend(err);
+    } finally {
+      await save().catch(() => undefined);
+    }
+  }
+
+  async function amend(err: unknown): Promise<{ status: number; body: unknown }> {
     const villageId = String(entry.survey_village_id), date = String(entry.entry_date);
     let filed = await deps.getFiled(villageId, date);
     if (!filed) throw err;
@@ -147,14 +226,16 @@ export async function runSurveyEntryOp(
     let base = op.base_version;
     if (base !== filed.version) {
       let ours: number | null = null;
-      for (const p of prior) {
+      for (const p of [...prior]) {
         if (sameRequest(p, post)) continue;
         try {
-          const reply = (p.kind === "post"
+          const reply = p.kind === "post"
             ? await deps.post(p.body, p.key)
-            : await deps.patch(p.id, p.base, p.body, p.key)) as { version?: number } | null;
-          if (typeof reply?.version === "number") ours = Math.max(ours ?? 0, reply.version);
-        } catch { /* never landed, or not ours */ }
+            : await deps.patch(p.id, p.base, p.body, p.key);
+          const v = versionOf(reply);
+          if (v !== undefined) ours = Math.max(ours ?? 0, v);
+          learn(p, { reply });
+        } catch (e) { learn(p, { err: e }); /* never landed, or not ours */ }
       }
       filed = (await deps.getFiled(villageId, date)) ?? filed;
       if (ours !== null && ours === filed.version) base = filed.version;
@@ -167,7 +248,15 @@ export async function runSurveyEntryOp(
     // Each distinct correction gets a key of its own, so a superseded one is
     // never sent under a key that already carried a different body.
     const key = `${op.idempotency_key}:amend:${fingerprint([base, amendment])}`;
-    await record({ kind: "patch", key, id: filed.id, base, body: amendment });
-    return { status: 200, body: await deps.patch(filed.id, base, amendment, key) };
+    const patch: PriorRequest = { kind: "patch", key, id: filed.id, base, body: amendment };
+    await record(patch);
+    try {
+      const reply = await deps.patch(filed.id, base, amendment, key);
+      learn(patch, { reply });
+      return { status: 200, body: reply };
+    } catch (e) {
+      learn(patch, { err: e });
+      throw e;
+    }
   }
 }
