@@ -107,6 +107,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   // followed by 080 above, skipping 079) and `migrate()` never assumes
   // contiguity.
   { version: "097_auditor_base_reads", file: "097_auditor_base_reads.sql" },
+  { version: "098_govt_observer_notification_read", file: "098_govt_observer_notification_read.sql" },
 ];
 
 /**

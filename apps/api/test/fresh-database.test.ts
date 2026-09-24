@@ -83,6 +83,21 @@ describe("building a database from nothing", () => {
     expect(defined.rows.map((r) => r.code)).toEqual(["expense.read", "org.units.read"]);
   });
 
+  it("grants GOVT_OBSERVER notification.read from the migration alone (098)", async () => {
+    // Unlike AUDITOR, GOVT_OBSERVER is created by a migration (071, the same
+    // way 031 creates the two tender-domain roles) rather than only by the
+    // seed -- so 098's role_permissions grant is not a no-op here, and can be
+    // checked directly after migrate(), with no seedDatabase() call yet.
+    const granted = await pool.query(
+      `SELECT rp.permission_code
+         FROM role_permissions rp
+         JOIN roles r ON r.id = rp.role_id
+        WHERE r.code = 'GOVT_OBSERVER' AND r.org_id IS NULL
+          AND rp.permission_code = 'notification.read'`,
+    );
+    expect(granted.rows).toHaveLength(1);
+  });
+
   it("grants nothing it has not defined", async () => {
     /*
      * The failure itself, asserted directly. Every permission any migration

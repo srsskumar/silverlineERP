@@ -1069,6 +1069,17 @@ describe("notifications inbox", () => {
     expect(anon.statusCode).toBe(401);
   });
 
+  it("lets GOVT_OBSERVER open its own inbox, like every other role (round-2 deep walk)", async () => {
+    // Every role in S5_ROLE_GRANTS holds notification.read except
+    // SALES_BD_EXECUTIVE and BID_TENDER_MANAGER (empty grants generally) --
+    // GOVT_OBSERVER was the one role with survey.dashboard and nothing else,
+    // so opening the Inbox tab every signed-in user sees 403'd. Found live
+    // during the round-2 govt crawl.
+    const observer = await mkUser(["GOVT_OBSERVER"], "govt");
+    const res = await inbox(observer.headers);
+    expect(res).toEqual(expect.objectContaining({ data: expect.any(Array) }));
+  });
+
   it("stores no PII beyond visible names in any notification", async () => {
     const rows = await pool.query("SELECT title, body FROM notifications");
     expect(rows.rowCount).toBeGreaterThanOrEqual(0);
