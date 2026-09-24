@@ -420,6 +420,16 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     return {
       data: await mutate(pool, req, `approval.${input.decision.toLowerCase()}`, 'approval_instance', async db => {
         const instance = await inOrg(db, 'approval_instances', id, u.orgId, true);
+        // I1 (owner decision 2026-09-24, fix round 1): the same project
+        // scope the inbox filters by (resolveScopes over the approval.act
+        // scope this guard already resolved) applies to deciding one
+        // directly by id -- otherwise the inbox's filtering is cosmetic,
+        // not a boundary. Refused as FORBIDDEN, matching projectAccess()'s
+        // own wording for "this exists, but not in your scope" elsewhere.
+        const scopes = resolveScopes(u.scopes);
+        if (!scopes.global && instance.project_id && !scopes.projects.includes(String(instance.project_id))) {
+          fail('FORBIDDEN', 'This request is for a project outside your scope', 403);
+        }
         version(req, instance as { version: number }, 'approval request');
         if (instance.status !== 'PENDING') {
           fail('NOT_PENDING', `This request is already ${String(instance.status).toLowerCase()}`);

@@ -670,6 +670,28 @@ describe("inbox project scope (owner decision 2026-09-24)", () => {
     expect(ids).not.toContain(someoneElses.data.id);
   });
 
+  it("refuses to decide an out-of-scope document by id, matching the inbox (owner decision 2026-09-24, fix round 1, I1)", async () => {
+    const mine = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_ORDER", document_id: randomUUID(), amount: 100_000, project_id: w.activeProject,
+    });
+    await toLevel2(mine.data.id);
+    const someoneElses = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_ORDER", document_id: randomUUID(), amount: 100_000, project_id: w.inactiveProject,
+    });
+    await toLevel2(someoneElses.data.id);
+
+    const scoped = await scopedProjectManager(w.activeProject);
+    const blocked = await post({ ...scoped, ...(await instanceVersion(someoneElses.data.id)) },
+      `/api/v1/approvals/${someoneElses.data.id}/decision`, { decision: "APPROVE" });
+    expect(blocked.status, JSON.stringify(blocked.body)).toBe(403);
+    expect(blocked.body.code).toBe("FORBIDDEN");
+
+    // Still free to decide their own project's item.
+    const allowed = await post({ ...scoped, ...(await instanceVersion(mine.data.id)) },
+      `/api/v1/approvals/${mine.data.id}/decision`, { decision: "APPROVE" });
+    expect(allowed.status, JSON.stringify(allowed.body)).toBe(200);
+  });
+
   it("still shows a globally-scoped approver items from every project", async () => {
     const a = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
       document_type: "PURCHASE_ORDER", document_id: randomUUID(), amount: 100_000, project_id: w.activeProject,
