@@ -232,7 +232,13 @@ export function creditBlockLabel(reason: string | null | undefined): string | nu
   }
 }
 
-export const PAYMENT_MODES = ['NEFT', 'RTGS', 'IMPS', 'UPI', 'CHEQUE', 'CASH', 'PAYROLL'] as const;
+/**
+ * Re-exported from @silverline/shared rather than kept as a second, hand
+ * copied list here: this file's own copy had drifted (missing DD and
+ * ADJUSTMENT — R5 parity finding), which is exactly what a second list of
+ * the same instruments always ends up doing.
+ */
+export { PAYMENT_MODES } from '@silverline/shared';
 
 /**
  * Today, where the work happens.
