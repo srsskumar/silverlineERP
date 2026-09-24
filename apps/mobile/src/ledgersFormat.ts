@@ -1,4 +1,4 @@
-import { PAYABLE_INVOICE_FLAG_TONES } from "@silverline/shared";
+import { PAYABLE_INVOICE_FLAG_TONES, type Tone } from "@silverline/shared";
 
 /**
  * Pure display helpers shared by Receivables and Payables — dependency-free,
@@ -72,6 +72,6 @@ export function paymentRunTone(status: string): "success" | "warning" | "neutral
  * warning, whichever side of the ledger it is on. Payables is the only side
  * with `on_hold`.
  */
-export function payableFlagTone(flag: "on_hold" | "disputed"): "danger" | "warning" {
+export function payableFlagTone(flag: "on_hold" | "disputed"): Tone {
   return PAYABLE_INVOICE_FLAG_TONES[flag];
 }
