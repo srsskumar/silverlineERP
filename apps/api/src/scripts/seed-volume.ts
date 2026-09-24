@@ -181,6 +181,37 @@ async function run(db: PoolClient): Promise<void> {
     count("payroll_policies", r.rowCount ?? 0);
   }
 
+  // Org-wide fallback approval ladder for requisitions and purchase orders
+  // (owner decision 2026-09-24, fix round 1 minor): the same default
+  // seed.ts gives every real organisation, one ADMIN step with no amount
+  // band. This script bypasses seed.ts, so without this every volume-seeded
+  // org would have nothing to route a project-less requisition or PO to.
+  // Skipped when a policy already exists -- active or not, matching
+  // seed.ts's own check -- so a re-run never re-creates one this script (or
+  // an administrator) already turned off.
+  for (const id of orgIds) {
+    for (const documentType of ["PURCHASE_REQUISITION", "PURCHASE_ORDER"]) {
+      const existing = await one<{ n: number }>(
+        `SELECT count(*)::int AS n FROM approval_policies
+          WHERE org_id = $1 AND document_type = $2 AND project_id IS NULL`,
+        [id, documentType],
+      );
+      if (existing.n > 0) continue;
+      const policy = await one<{ id: string }>(
+        `INSERT INTO approval_policies (org_id, document_type, name, mode, project_id, active)
+         VALUES ($1,$2,$3,'CUMULATIVE',NULL,true) RETURNING id`,
+        [id, documentType, `Org default -- ${documentType.replaceAll("_", " ").toLowerCase().replace(/^./, (c) => c.toUpperCase())}`],
+      );
+      await db.query(
+        `INSERT INTO approval_levels (org_id, policy_id, sequence, min_amount, max_amount, approver_role)
+         VALUES ($1,$2,1,0,NULL,'ADMIN')`,
+        [id, policy.id],
+      );
+      count("approval_policies");
+      count("approval_levels");
+    }
+  }
+
   // ------------------------------------------------------- permissions ----
   // Top up to TARGET without inventing codes the RBAC map would not recognise:
   // these are documented as reserved for future modules.

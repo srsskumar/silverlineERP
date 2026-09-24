@@ -406,14 +406,19 @@ export async function seedDatabase(
    * one just created above. Migration 101 backfills existing installs; this
    * is what covers a brand new org, the same way it covers a fresh database
    * in tests, which never runs migrate() again after seeding. Skipped when
-   * an active org-wide policy for the document type already exists, so it
-   * never overrides one an administrator configured.
+   * an org-wide policy for the document type already exists -- active or
+   * not (fix round 1, minor) -- so this never overrides an administrator's
+   * own policy, and never resurrects the seeded default after they
+   * deliberately deactivated it (Approvals -> Policies' own "Deactivate").
+   * A re-seed with no live policy left at all only happens because nobody
+   * has ever configured one for that org and document type; that is exactly
+   * the case this exists to cover.
    */
   for (const o of allOrgs.rows as Array<{ id: string }>) {
     for (const documentType of ["PURCHASE_REQUISITION", "PURCHASE_ORDER"]) {
       const existing = await pool.query(
         `SELECT 1 FROM approval_policies
-          WHERE org_id = $1 AND document_type = $2 AND active AND project_id IS NULL`,
+          WHERE org_id = $1 AND document_type = $2 AND project_id IS NULL`,
         [o.id, documentType],
       );
       if ((existing.rowCount ?? 0) > 0) continue;

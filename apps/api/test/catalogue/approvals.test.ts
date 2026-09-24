@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { workDate, buildWorld, idem, uniq, createUser, PASSWORD, type CatalogueWorld, type Headers } from "./fixture.js";
+import { seedDatabase } from "../../src/database/seed.js";
 
 let w: CatalogueWorld;
 
@@ -192,6 +193,42 @@ describe("organisation-wide fallback approval ladders (owner decision 2026-09-24
     const res = await submit(50_000, "PURCHASE_REQUISITION", w.role.EMPLOYEE);
     expect(res.status).toBe(422);
     expect(res.body.code).toBe("NO_APPROVAL_POLICY");
+  });
+
+  it("does not resurrect a fallback an administrator deliberately deactivated (fix round 1, minor)", async () => {
+    // The previous test left w.orgId's PURCHASE_REQUISITION org-wide
+    // fallback row deactivated but still in the table -- exactly the state
+    // "Deactivate" in the web admin screen leaves behind. Re-seeding must
+    // see that row and skip, not read "no *active* policy" as "none was
+    // ever configured" and insert a fresh one on top of the deliberate
+    // deactivation.
+    const before = await w.pool.query(
+      `SELECT count(*)::int AS n FROM approval_policies
+        WHERE org_id = $1 AND document_type = 'PURCHASE_REQUISITION' AND project_id IS NULL`,
+      [w.orgId]);
+    expect(before.rows[0].n).toBeGreaterThan(0); // the deactivated row from the previous test
+
+    await seedDatabase(w.pool, { bcryptRounds: 4 });
+
+    const after = await w.pool.query(
+      `SELECT active FROM approval_policies
+        WHERE org_id = $1 AND document_type = 'PURCHASE_REQUISITION' AND project_id IS NULL
+        ORDER BY created_at`,
+      [w.orgId]);
+    expect(after.rows.every(r => r.active === false), JSON.stringify(after.rows)).toBe(true);
+
+    // Still refused -- the deactivation held.
+    const res = await submit(50_000, "PURCHASE_REQUISITION", w.role.EMPLOYEE);
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("NO_APPROVAL_POLICY");
+
+    // PURCHASE_ORDER's own fallback, never touched, is unaffected by the
+    // re-seed either way -- this isn't a blanket skip of the whole loop.
+    const poFallback = await w.pool.query(
+      `SELECT 1 FROM approval_policies
+        WHERE org_id = $1 AND document_type = 'PURCHASE_ORDER' AND active AND project_id IS NULL`,
+      [w.orgId]);
+    expect(poFallback.rowCount).toBeGreaterThan(0);
   });
 });
 
