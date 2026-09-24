@@ -99,6 +99,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "090_role_module_visibility", file: "090_role_module_visibility.sql" },
   { version: "091_payment_run_execution", file: "091_payment_run_execution.sql" },
   { version: "092_expense_receipts", file: "092_expense_receipts.sql" },
+  { version: "093_po_amendment_pre_status", file: "093_po_amendment_pre_status.sql" },
 ];
 
 /**
