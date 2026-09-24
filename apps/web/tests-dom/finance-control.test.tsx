@@ -245,15 +245,89 @@ describe('BankImportForm', () => {
     expect(typeof (sent[0].body as any).transactions[0].amount).toBe('number');
   });
 
-  it('flags an unparsable row instead of sending it', async () => {
+  it('shows a header-level problem when there is no data row at all', async () => {
     mount(<BankImportForm />);
 
-    fireEvent.change(screen.getByLabelText(/CSV/), {
-      target: { value: 'statement_ref,value_date,amount\nTXN002,not-a-date,abc' },
+    fireEvent.change(screen.getByLabelText(/CSV/), { target: { value: 'statement_ref,value_date,amount' } });
+
+    expect(await screen.findByText(/Add a header row plus at least one transaction/)).toBeInTheDocument();
+  });
+
+  describe('fix round 1 item 2 — every row is previewed, and Import is blocked while any row is wrong', () => {
+    it('previews every parsed row, valid or not, with its own status', async () => {
+      mount(<BankImportForm />);
+
+      fireEvent.change(screen.getByLabelText(/CSV/), {
+        target: {
+          value: 'statement_ref,value_date,amount\n'
+            + 'TXN001,2026-09-20,50000\n'
+            + 'TXN002,not-a-date,abc',
+        },
+      });
+
+      // Both rows show up in the preview table, not just the valid one.
+      expect(await screen.findByText('TXN001')).toBeInTheDocument();
+      expect(screen.getByText('TXN002')).toBeInTheDocument();
+      expect(screen.getByText('OK')).toBeInTheDocument();
+      expect(screen.getByText('Error')).toBeInTheDocument();
     });
 
-    expect(await screen.findByText(/could not be read/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Import 1 transaction/ })).not.toBeInTheDocument();
+    it('blocks Import outright while any row has an error — never "import N, skip M"', async () => {
+      mount(<BankImportForm />);
+
+      fireEvent.change(screen.getByLabelText(/CSV/), {
+        target: {
+          value: 'statement_ref,value_date,amount\n'
+            + 'TXN001,2026-09-20,50000\n'
+            + 'TXN002,not-a-date,abc',
+        },
+      });
+
+      const button = await screen.findByRole('button', { name: /Import 2 transactions/ });
+      expect(button).toBeDisabled();
+      expect(screen.getByText(/1 row cannot be imported/)).toBeInTheDocument();
+      fireEvent.click(button);
+      expect(sent).toHaveLength(0);
+    });
+
+    it('re-enables Import once every row is fixed', async () => {
+      mount(<BankImportForm />);
+
+      fireEvent.change(screen.getByLabelText(/CSV/), {
+        target: { value: 'statement_ref,value_date,amount\nTXN002,not-a-date,abc' },
+      });
+      expect(await screen.findByRole('button', { name: /Import 1 transaction/ })).toBeDisabled();
+
+      fireEvent.change(screen.getByLabelText(/CSV/), {
+        target: { value: 'statement_ref,value_date,amount\nTXN002,2026-09-20,50000' },
+      });
+      await waitFor(() => expect(screen.getByRole('button', { name: /Import 1 transaction/ })).not.toBeDisabled());
+    });
+
+    it('refuses more than 1000 transactions, before ever calling the API', async () => {
+      mount(<BankImportForm />);
+
+      const header = 'statement_ref,value_date,amount';
+      const rows = Array.from({ length: 1001 }, (_, i) => `TXN${i},2026-09-20,100`).join('\n');
+      fireEvent.change(screen.getByLabelText(/CSV/), { target: { value: `${header}\n${rows}` } });
+
+      expect(await screen.findByText(/Too many transactions/)).toBeInTheDocument();
+      expect(screen.getByText(/only 1000 can be imported at once/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Import 1001 transactions/ })).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: /Import 1001 transactions/ }));
+      expect(sent).toHaveLength(0);
+    });
+
+    it('refuses a statement over the body-size cap without trying to parse it', async () => {
+      mount(<BankImportForm />);
+
+      // 9MB of text — over the 8MB apps/api/src/createApp.ts bodyLimit this mirrors.
+      const oversized = 'a'.repeat(9 * 1024 * 1024);
+      fireEvent.change(screen.getByLabelText(/CSV/), { target: { value: oversized } });
+
+      expect(await screen.findByText(/This file is too large/)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Import \d/ })).not.toBeInTheDocument();
+    });
   });
 });
 
