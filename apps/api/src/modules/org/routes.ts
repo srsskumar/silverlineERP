@@ -143,7 +143,7 @@ export async function registerOrgUnitRoutes(
     }
     if (q) {
       values.push(likeContains(q));
-      clauses.push(`(code ILIKE $${values.length} OR name ILIKE $${values.length})`);
+      clauses.push(`(code ILIKE $${values.length} ESCAPE '!' OR name ILIKE $${values.length} ESCAPE '!')`);
     }
     if (cursor) {
       const decoded = decodeCursor<PageCursor>(cursor);

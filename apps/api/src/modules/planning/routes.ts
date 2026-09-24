@@ -92,7 +92,7 @@ export async function registerPlanningRoutes(app:FastifyInstance,opts:{pool:Pool
   const rows=(await pool.query(`SELECT u.id,u.username,
       NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)),'') AS name, e.emp_no
     FROM users u LEFT JOIN employees e ON e.id=u.employee_id AND e.org_id=u.org_id
-    WHERE u.org_id=$1 AND u.auth_status='ACTIVE' AND (u.employee_id IS NULL OR u.employee_id IN(SELECT id FROM employees WHERE status='ACTIVE' AND ${clause})) AND u.username ILIKE $${textIndex} ORDER BY u.username,u.id LIMIT $${limitIndex} OFFSET $${offsetIndex}`,values)).rows;
+    WHERE u.org_id=$1 AND u.auth_status='ACTIVE' AND (u.employee_id IS NULL OR u.employee_id IN(SELECT id FROM employees WHERE status='ACTIVE' AND ${clause})) AND u.username ILIKE $${textIndex} ESCAPE '!' ORDER BY u.username,u.id LIMIT $${limitIndex} OFFSET $${offsetIndex}`,values)).rows;
   return {data:rows.slice(0,limit),has_more:rows.length>limit};
  });
  app.get('/api/v1/projects/:id/dependencies',{preHandler:guard('task.read')},async req=>{const id=(req.params as {id:string}).id;await projectAccess(pool,req,id);return {data:(await scopedReads(pool,pool,actor(req)).query('SELECT d.predecessor_id,d.successor_id FROM task_dependencies d JOIN tasks t ON t.id=d.successor_id JOIN tasks predecessor ON predecessor.id=d.predecessor_id WHERE t.org_id=$1 AND t.project_id=$2 ORDER BY d.predecessor_id,d.successor_id LIMIT 1000',[actor(req).orgId,id])).rows};});

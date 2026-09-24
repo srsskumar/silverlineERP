@@ -1309,7 +1309,7 @@ export async function registerWorkRoutes(
     if (q) {
       values.push(likeContains(q));
       clauses.push(
-        `(code ILIKE $${values.length} OR name ILIKE $${values.length})`,
+        `(code ILIKE $${values.length} ESCAPE '!' OR name ILIKE $${values.length} ESCAPE '!')`,
       );
     }
     if (cursor) {
@@ -1806,7 +1806,7 @@ export async function registerWorkRoutes(
     if (q) {
       values.push(likeContains(q));
       clauses.push(
-        `(title ILIKE $${values.length} OR description ILIKE $${values.length})`,
+        `(title ILIKE $${values.length} ESCAPE '!' OR description ILIKE $${values.length} ESCAPE '!')`,
       );
     }
     if (label_ids) {

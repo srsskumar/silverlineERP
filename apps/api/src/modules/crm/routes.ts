@@ -58,7 +58,7 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
     const u = actor(req), { limit, offset, q } = page(req);
     const values: unknown[] = [u.orgId, limit + 1, offset];
     let where = 'org_id = $1';
-    if (q.search) { values.push(likeContains(q.search)); where += ` AND (name ILIKE $${values.length} OR code ILIKE $${values.length})`; }
+    if (q.search) { values.push(likeContains(q.search)); where += ` AND (name ILIKE $${values.length} ESCAPE '!' OR code ILIKE $${values.length} ESCAPE '!')`; }
     if (q.client_type) { values.push(q.client_type); where += ` AND client_type = $${values.length}`; }
     if (q.status) { values.push(q.status); where += ` AND status = $${values.length}`; }
     const rows = (await pool.query(
@@ -198,7 +198,7 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
     const values: unknown[] = [u.orgId, limit + 1, offset];
     let where = 'org_id = $1';
     if (q.client_id) { values.push(q.client_id); where += ` AND client_id = $${values.length}::uuid`; }
-    if (q.search) { values.push(likeContains(q.search)); where += ` AND name ILIKE $${values.length}`; }
+    if (q.search) { values.push(likeContains(q.search)); where += ` AND name ILIKE $${values.length} ESCAPE '!'`; }
     const rows = (await pool.query(
       `SELECT * FROM contacts WHERE ${where} ORDER BY name, id LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit, next_offset: rows.length > limit ? offset + limit : null };
@@ -242,7 +242,7 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
     if (q.stage) { values.push(q.stage); where += ` AND l.stage = $${values.length}`; }
     if (q.owner_id) { values.push(q.owner_id); where += ` AND l.owner_id = $${values.length}::uuid`; }
     if (q.lead_type) { values.push(q.lead_type); where += ` AND l.lead_type = $${values.length}`; }
-    if (q.search) { values.push(likeContains(q.search)); where += ` AND (l.organization_name ILIKE $${values.length} OR l.lead_no ILIKE $${values.length})`; }
+    if (q.search) { values.push(likeContains(q.search)); where += ` AND (l.organization_name ILIKE $${values.length} ESCAPE '!' OR l.lead_no ILIKE $${values.length} ESCAPE '!')`; }
     const rows = (await pool.query(
       `SELECT l.*, c.name AS client_name, u.username AS owner_username
        FROM leads l

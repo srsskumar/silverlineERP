@@ -62,7 +62,7 @@ export async function registerCatalogueRoutes(
     if (q.kind) { values.push(q.kind); clauses.push(`kind = $${values.length}`); }
     if (q.q) {
       values.push(likeContains(q.q));
-      clauses.push(`(name ILIKE $${values.length} OR code ILIKE $${values.length})`);
+      clauses.push(`(name ILIKE $${values.length} ESCAPE '!' OR code ILIKE $${values.length} ESCAPE '!')`);
     }
     const rows = await pool.query(
       `SELECT id, code, name, kind, uom, hsn_sac,

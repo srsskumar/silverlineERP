@@ -66,7 +66,7 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
   app.get(`/api/v1/${path}`,{preHandler:guard(`${permission}.read`)},async req=>{
    const u=actor(req),{limit,offset,q}=page(req),values:unknown[]=[u.orgId,limit+1,offset];
    let where='a.org_id=$1';
-   if(q.search){values.push(likeContains(q.search));where+=` AND (a.name ILIKE $${values.length} OR ${table==='assets'?'a.asset_code':'a.code'} ILIKE $${values.length})`;}
+   if(q.search){values.push(likeContains(q.search));where+=` AND (a.name ILIKE $${values.length} ESCAPE '!' OR ${table==='assets'?'a.asset_code':'a.code'} ILIKE $${values.length} ESCAPE '!')`;}
    if(table==='assets')where+=` AND ${await assetClause(req,values,'a.id')}`;
    const extra=table==='inventory_items'
     // A transfer moves stock between locations and leaves the item's total alone.

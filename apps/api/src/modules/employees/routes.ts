@@ -548,7 +548,7 @@ export async function registerEmployeeRoutes(
     if (q) {
       values.push(likeContains(q));
       clauses.push(
-        `(emp_no ILIKE $${values.length} OR first_name ILIKE $${values.length} OR last_name ILIKE $${values.length} OR phone ILIKE $${values.length})`,
+        `(emp_no ILIKE $${values.length} ESCAPE '!' OR first_name ILIKE $${values.length} ESCAPE '!' OR last_name ILIKE $${values.length} ESCAPE '!' OR phone ILIKE $${values.length} ESCAPE '!')`,
       );
     }
     if (cursor) {
