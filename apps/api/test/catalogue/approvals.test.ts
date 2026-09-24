@@ -9,6 +9,9 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { workDate, buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
 
 let w: CatalogueWorld;
@@ -81,6 +84,112 @@ describe("policy configuration", () => {
 
   it("needs configuration before anything can be submitted", async () => {
     const res = await submit(1000, "RETENTION_RELEASE");
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("NO_APPROVAL_POLICY");
+  });
+});
+
+describe("organisation-wide fallback approval ladders (owner decision 2026-09-24)", () => {
+  // Placed before any describe below touches PURCHASE_ORDER or
+  // PURCHASE_REQUISITION, so these run against exactly what seedDatabase()
+  // left behind: nothing configured through the API, only the org-wide
+  // default migration 101 (and seed.ts, for a brand new org) backfills.
+
+  it("a fresh DB has the fallback for both document types, one ADMIN step, no amount band", async () => {
+    const rows = await w.pool.query(
+      `SELECT p.document_type, l.approver_role, l.min_amount, l.max_amount
+         FROM approval_policies p JOIN approval_levels l ON l.policy_id = p.id
+        WHERE p.org_id = $1 AND p.active AND p.project_id IS NULL
+          AND p.document_type IN ('PURCHASE_REQUISITION', 'PURCHASE_ORDER')
+        ORDER BY p.document_type`, [w.orgId]);
+    expect(rows.rows.map(r => r.document_type)).toEqual(["PURCHASE_ORDER", "PURCHASE_REQUISITION"]);
+    for (const row of rows.rows) {
+      expect(row.approver_role, JSON.stringify(row)).toBe("ADMIN");
+      expect(Number(row.min_amount)).toBe(0);
+      expect(row.max_amount).toBeNull();
+    }
+  });
+
+  it("routes a project-less requisition to the seeded org-wide ADMIN ladder", async () => {
+    const res = await submit(50_000, "PURCHASE_REQUISITION", w.role.EMPLOYEE);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const steps = await w.pool.query(
+      "SELECT approver_role FROM approval_steps WHERE instance_id=$1", [res.data.id]);
+    expect(steps.rows.map(r => r.approver_role)).toEqual(["ADMIN"]);
+  });
+
+  it("a project with its own policy still uses it, not the org-wide fallback", async () => {
+    const own = await post(w.admin, "/api/v1/approval-policies", {
+      document_type: "PURCHASE_REQUISITION", name: `Project ladder ${uniq()}`,
+      project_id: w.activeProject,
+      levels: [{ sequence: 1, min_amount: 0, max_amount: null, approver_role: "PROJECT_MANAGER" }],
+    });
+    expect(own.status, JSON.stringify(own.body)).toBe(201);
+
+    const withProject = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_REQUISITION", document_id: randomUUID(), amount: 50_000,
+      project_id: w.activeProject,
+    });
+    expect(withProject.status, JSON.stringify(withProject.body)).toBe(201);
+    const projectSteps = await w.pool.query(
+      "SELECT approver_role FROM approval_steps WHERE instance_id=$1", [withProject.data.id]);
+    expect(projectSteps.rows.map(r => r.approver_role)).toEqual(["PROJECT_MANAGER"]);
+
+    // A different, project-less requisition still falls back to org-wide.
+    const orgWide = await submit(50_000, "PURCHASE_REQUISITION", w.role.EMPLOYEE);
+    expect(orgWide.status, JSON.stringify(orgWide.body)).toBe(201);
+    const orgSteps = await w.pool.query(
+      "SELECT approver_role FROM approval_steps WHERE instance_id=$1", [orgWide.data.id]);
+    expect(orgSteps.rows.map(r => r.approver_role)).toEqual(["ADMIN"]);
+  });
+
+  it("running migration 101 a second time creates no duplicate fallback policies", async () => {
+    const count = async () => {
+      const r = await w.pool.query(
+        `SELECT count(*)::int AS n FROM approval_policies
+          WHERE org_id = $1 AND active AND project_id IS NULL
+            AND document_type IN ('PURCHASE_REQUISITION', 'PURCHASE_ORDER')`, [w.orgId]);
+      return r.rows[0].n as number;
+    };
+    const before = await count();
+    const sql = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)),
+        "../../src/database/migrations/101_org_fallback_approval_policies.sql"),
+      "utf8");
+    await w.pool.query(sql);
+    await w.pool.query(sql);
+    expect(await count()).toBe(before);
+  });
+
+  it("keeps the fallback scoped to its own organisation (cross-org isolation)", async () => {
+    // The catalogue's test database is shared across every suite file in the
+    // worker, and `organizations` is never truncated between them, so this
+    // cannot assert "the other org has no policy of its own" as a given.
+    // Instead it is made certain, deterministically: give the other tenant
+    // its own active org-wide PURCHASE_REQUISITION ladder and switch this
+    // org's off. If policy lookup ever crossed the org boundary -- the
+    // `WHERE org_id = $1` in policyFor()/submitForApproval() -- this org's
+    // submission would silently route through the other tenant's ladder
+    // instead of refusing.
+    await w.pool.query(
+      `UPDATE approval_policies SET active = false
+        WHERE org_id = $1 AND document_type = 'PURCHASE_REQUISITION' AND active AND project_id IS NULL`,
+      [w.otherOrgId]);
+    const otherPolicy = await w.pool.query(
+      `INSERT INTO approval_policies(org_id, document_type, name, mode, project_id, active)
+       VALUES($1, 'PURCHASE_REQUISITION', 'Other org ladder', 'CUMULATIVE', NULL, true) RETURNING id`,
+      [w.otherOrgId]);
+    await w.pool.query(
+      `INSERT INTO approval_levels(org_id, policy_id, sequence, min_amount, max_amount, approver_role)
+       VALUES($1, $2, 1, 0, NULL, 'ADMIN')`,
+      [w.otherOrgId, otherPolicy.rows[0].id]);
+
+    await w.pool.query(
+      `UPDATE approval_policies SET active = false
+        WHERE org_id = $1 AND document_type = 'PURCHASE_REQUISITION' AND active AND project_id IS NULL`,
+      [w.orgId]);
+
+    const res = await submit(50_000, "PURCHASE_REQUISITION", w.role.EMPLOYEE);
     expect(res.status).toBe(422);
     expect(res.body.code).toBe("NO_APPROVAL_POLICY");
   });

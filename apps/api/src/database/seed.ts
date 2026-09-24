@@ -400,6 +400,36 @@ export async function seedDatabase(
     );
   }
 
+  /*
+   * Org-wide fallback approval ladder for requisitions and purchase orders
+   * (owner decision 2026-09-24), for every org this run touches -- including
+   * one just created above. Migration 101 backfills existing installs; this
+   * is what covers a brand new org, the same way it covers a fresh database
+   * in tests, which never runs migrate() again after seeding. Skipped when
+   * an active org-wide policy for the document type already exists, so it
+   * never overrides one an administrator configured.
+   */
+  for (const o of allOrgs.rows as Array<{ id: string }>) {
+    for (const documentType of ["PURCHASE_REQUISITION", "PURCHASE_ORDER"]) {
+      const existing = await pool.query(
+        `SELECT 1 FROM approval_policies
+          WHERE org_id = $1 AND document_type = $2 AND active AND project_id IS NULL`,
+        [o.id, documentType],
+      );
+      if ((existing.rowCount ?? 0) > 0) continue;
+      const policy = await pool.query(
+        `INSERT INTO approval_policies (org_id, document_type, name, mode, project_id, active)
+         VALUES ($1, $2, $3, 'CUMULATIVE', NULL, true) RETURNING id`,
+        [o.id, documentType, `Org default -- ${documentType.replaceAll("_", " ").toLowerCase().replace(/^./, c => c.toUpperCase())}`],
+      );
+      await pool.query(
+        `INSERT INTO approval_levels (org_id, policy_id, sequence, min_amount, max_amount, approver_role)
+         VALUES ($1, $2, 1, 0, NULL, 'ADMIN')`,
+        [o.id, policy.rows[0].id],
+      );
+    }
+  }
+
   return { orgId, adminId };
 }
 
