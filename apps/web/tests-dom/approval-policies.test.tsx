@@ -218,6 +218,35 @@ describe('ApprovalPoliciesManager deactivate', () => {
   });
 });
 
+describe('fix round 1 item 6 — only the clicked row shows a loading state while deactivating', () => {
+  it('leaves every other row\'s Deactivate button alone while one is in flight', async () => {
+    handlers['GET /api/v1/approval-policies'] = () => jsonResponse({
+      data: [
+        { id: 'policy-1', document_type: 'PAYMENT', name: 'Payments DoA', mode: 'CUMULATIVE', project_id: null, active: true, version: 1, levels: [] },
+        { id: 'policy-2', document_type: 'ADVANCE', name: 'Advance DoA', mode: 'CUMULATIVE', project_id: null, active: true, version: 1, levels: [] },
+      ],
+    });
+    let resolveDeactivate: (() => void) | null = null;
+    handlers['POST /api/v1/approval-policies/policy-1/deactivate'] = () => new Promise((resolve) => {
+      resolveDeactivate = () => resolve(jsonResponse({ data: { id: 'policy-1', version: 2, active: false } }));
+    });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    mount(<ApprovalPoliciesManager />);
+
+    const deactivateButtons = await screen.findAllByRole('button', { name: 'Deactivate' });
+    expect(deactivateButtons).toHaveLength(2);
+    fireEvent.click(deactivateButtons[0]);
+
+    await waitFor(() => expect(deactivateButtons[0]).toHaveAttribute('aria-busy', 'true'));
+    expect(deactivateButtons[1]).not.toHaveAttribute('aria-busy', 'true');
+    expect(deactivateButtons[1]).not.toBeDisabled();
+
+    resolveDeactivate?.();
+    await waitFor(() => expect(deactivateButtons[0]).not.toHaveAttribute('aria-busy', 'true'));
+  });
+});
+
 describe('fix round 1 item 1 — ApprovalPoliciesManager gates write controls on approval.configure', () => {
   // Defense in depth: app/approvals/policies/page.tsx already requires
   // approval.configure to open the page at all, but the manager checks its

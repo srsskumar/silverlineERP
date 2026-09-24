@@ -115,7 +115,7 @@ export function ApprovalPoliciesManager() {
                           {p.active ? (
                             <Button
                               variant="ghost" size="sm"
-                              loading={deactivate.isPending}
+                              loading={deactivate.isPending && deactivate.variables?.id === p.id}
                               onClick={() => {
                                 if (window.confirm(`Deactivate "${p.name}"? Submissions for ${DOCUMENT_TYPE_LABELS[p.document_type] ?? p.document_type} will fail until another policy covers it.`)) {
                                   deactivate.mutate(p);
