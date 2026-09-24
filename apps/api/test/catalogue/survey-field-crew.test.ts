@@ -160,3 +160,22 @@ describe("the crew member's own stage, on their list (SG-013)", () => {
     expect(row.stage_started_on).toBe(workDate());
   });
 });
+
+describe("starting ground truthing keeps what was said (SG-007)", () => {
+  it("stores the remarks given at start on the ground-truthing stage", async () => {
+    const mandal = String((await w.pool.query(
+      "SELECT id FROM org_units WHERE org_id=$1 AND type='mandal' LIMIT 1", [w.orgId])).rows[0].id);
+    const v = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Start remarks village", village_code: uniq("SRV"), mandal_id: mandal,
+      total_extent_ac: 40,
+    });
+    const r = await post(w.admin, `/api/v1/survey/villages/${v.data.id}/start-gt`, {
+      started_on: workDate(), expected_end_on: "2099-01-01",
+      employee_ids: [w.siteEmployee], govt_staff_allocated: 1, crew_allocated: 1,
+      remarks: "VRO agreed two staff from Monday",
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    const after = await get(w.admin, `/api/v1/survey/villages/${v.data.id}`);
+    expect(after.data.stage_dates.GROUND_TRUTHING.remarks).toBe("VRO agreed two staff from Monday");
+  });
+});

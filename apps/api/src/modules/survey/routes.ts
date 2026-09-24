@@ -1477,19 +1477,23 @@ export async function registerSurveyRoutes(
           // and expected finish, and a second copy on the village is how the
           // two come to disagree.
           await db.query(
+            // The remarks too (SG-007): what was agreed with the mandal is
+            // said once, here, and was being accepted and thrown away.
             `INSERT INTO survey_village_stages
                (org_id, survey_village_id, stage_id, state, started_on,
-                expected_start_on, expected_end_on, updated_by)
-             VALUES ($1, $2, $3, 'IN_PROGRESS', $4, $4, $5, $6)
+                expected_start_on, expected_end_on, remarks, updated_by)
+             VALUES ($1, $2, $3, 'IN_PROGRESS', $4, $4, $5, $7, $6)
              ON CONFLICT (survey_village_id, stage_id) DO UPDATE
                SET state = 'IN_PROGRESS',
                    started_on = COALESCE(survey_village_stages.started_on, EXCLUDED.started_on),
                    expected_start_on = COALESCE(
                      survey_village_stages.expected_start_on, EXCLUDED.expected_start_on),
                    expected_end_on = EXCLUDED.expected_end_on,
+                   remarks = COALESCE(EXCLUDED.remarks, survey_village_stages.remarks),
                    updated_by = EXCLUDED.updated_by,
                    updated_at = now()`,
-            [u.orgId, id, stage.id, input.started_on, input.expected_end_on, u.id]);
+            [u.orgId, id, stage.id, input.started_on, input.expected_end_on, u.id,
+              input.remarks?.trim() || null]);
 
           // Already-on-the-village is not an error. Two people starting the
           // same village within a minute of each other is ordinary, and the
