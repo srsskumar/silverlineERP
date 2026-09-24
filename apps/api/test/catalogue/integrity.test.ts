@@ -257,3 +257,26 @@ describe("D-005 inactive masters", () => {
     expect(res.body.code).toBe("ITEM_INACTIVE");
   });
 });
+
+/* ------------------------------------------------------------------- time */
+
+describe("D-006 audit report date filter in the organisation's timezone", () => {
+  it("puts an event at 01:30 IST on the IST day, as the audit screen does", async () => {
+    const probe = `qa.tz.probe.${uniq()}`;
+    // 2031-03-09 20:00 UTC is 2031-03-10 01:30 in Asia/Kolkata; the second is
+    // 2031-03-10 20:00 UTC, which is already the 11th in India.
+    await w.pool.query(
+      `INSERT INTO audit_events(org_id, actor_id, action, entity_type, created_at)
+       VALUES($1,$2,$3,'probe','2031-03-09T20:00:00Z'), ($1,$2,$3 || '.late','probe','2031-03-10T20:00:00Z')`,
+      [w.orgId, w.adminId, probe]);
+    const created = await w.app.inject({
+      method: "POST", url: "/api/v1/reports", headers: { ...w.admin, ...idem() },
+      payload: { type: "audit", format: "csv", filters: { from: "2031-03-10", to: "2031-03-10" } },
+    });
+    expect([200, 201], created.body).toContain(created.statusCode);
+    const { id } = created.json() as { id: string };
+    const csv = (await w.app.inject({ method: "GET", url: `/api/v1/reports/${id}/download`, headers: w.admin })).body;
+    expect(csv).toContain(`${probe},probe`);
+    expect(csv).not.toContain(`${probe}.late`);
+  });
+});
