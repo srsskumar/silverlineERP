@@ -24,7 +24,7 @@ import {
   forecast, findBottlenecks, delayReasonLabel as reasonLabel,
   villageStatusSchema, villagePlanSchema, delayReasonLabel, DELAY_REASONS,
   villageBillingSchema, villageBillingPatchSchema, MILESTONE_PERCENT,
-  billingDecisionRequired, claimedPercent, type BillingStatus,
+  billingDecisionRequired, billingTransitionAllowed, claimedPercent, type BillingStatus,
   villageBillingBulkSchema,
   summariseStaffing, stageTracksStaffing, priorRange, type StaffingDay,
   milestoneEarned, MILESTONE_REQUIRES, villageFinalsSchema,
@@ -3760,6 +3760,27 @@ export async function registerSurveyRoutes(
               'A claim recorded as ' + status.toLowerCase() +
               ' needs the date the department decided it.', 422);
           }
+          // SV-011: the claim's life runs one way, and a paid claim is closed
+          // except for its paper trail (reference number, remarks).
+          const from = row.status as BillingStatus;
+          if (!billingTransitionAllowed(from, status)) {
+            fail('CLAIM_TRANSITION_REFUSED',
+              `A ${from.toLowerCase()} claim cannot be recorded as ${status.toLowerCase()}.`
+              + (from === 'PAID' ? ' It has been paid; record a correction as a new claim.' : ''), 409);
+          }
+          if (from === 'PAID' && (['percent', 'submitted_on', 'decided_on', 'extent_ac'] as const)
+            .some(k => input[k] !== undefined)) {
+            fail('CLAIM_TRANSITION_REFUSED',
+              'This claim has been paid. Only its reference number and remarks can still be corrected.', 409);
+          }
+          // SV-012: a decision cannot come before the claim went in.
+          const submittedOn = input.submitted_on ?? iso(row.submitted_on);
+          const decidedOn = decided ? (typeof decided === 'string' ? decided : iso(decided)) : null;
+          if (decidedOn && submittedOn && decidedOn < submittedOn) {
+            fail('VALIDATION_ERROR',
+              `The department cannot have decided this claim (${decidedOn}) before it was `
+              + `submitted (${submittedOn}).`, 422);
+          }
           // Checked whenever the claim will be standing afterwards: a new
           // percent, or a returned claim put back in, both change the total.
           if (status !== 'REJECTED') {
@@ -3789,6 +3810,21 @@ export async function registerSurveyRoutes(
         const row = await inOrg(db, 'survey_village_billing', id, u.orgId, true);
         if (!row) fail('NOT_FOUND', 'That billing claim no longer exists.', 404);
         await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+        // SV-013: a paid claim is money received, and a claim with a later
+        // milestone standing on it is the one the department reconciles
+        // the later one against. Deleting either leaves the file wrong.
+        if (row.status === 'PAID') {
+          fail('CLAIM_PAID', 'This claim has been paid and cannot be deleted.', 409);
+        }
+        const later = await db.query(
+          `SELECT milestone FROM survey_village_billing
+            WHERE survey_village_id = $1 AND milestone > $2 AND status <> 'REJECTED'
+            ORDER BY milestone`, [row.survey_village_id, row.milestone]);
+        if (later.rowCount) {
+          fail('LATER_MILESTONE_STANDING',
+            `Milestone ${later.rows.map(r => r.milestone).join(' and ')} stands on this claim. `
+            + 'Delete or return those first.', 409);
+        }
         await db.query('DELETE FROM survey_village_billing WHERE id = $1', [id]);
         return { id, deleted: true };
       }),
@@ -4015,6 +4051,11 @@ export async function registerSurveyRoutes(
                   skipped.push({
                     village_name: String(r.village_name), reason: 'ALREADY_IN_THAT_STATE',
                   });
+                  continue;
+                }
+                if (!billingTransitionAllowed(
+                  String(r.claim_status) as BillingStatus, input.status as BillingStatus)) {
+                  skipped.push({ village_name: String(r.village_name), reason: 'CLAIM_CLOSED' });
                   continue;
                 }
               }

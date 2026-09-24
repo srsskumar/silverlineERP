@@ -2209,6 +2209,26 @@ export function billingDecisionRequired(status: BillingStatus): boolean {
 }
 
 /**
+ * Where a claim may go from where it is (SV-011).
+ *
+ * A claim goes in, the department approves or returns it, and an approved
+ * claim is paid. A returned claim may go in again once the work is put
+ * right, which is how rework is billed. A paid claim is money received: it
+ * does not go back to submitted or become returned, because the covering
+ * letter, the receipt and the department's file all say it was paid.
+ */
+export const BILLING_TRANSITIONS: Record<BillingStatus, BillingStatus[]> = {
+  SUBMITTED: ['APPROVED', 'REJECTED', 'PAID'],
+  APPROVED: ['PAID', 'REJECTED'],
+  REJECTED: ['SUBMITTED'],
+  PAID: [],
+};
+
+export function billingTransitionAllowed(from: BillingStatus, to: BillingStatus): boolean {
+  return from === to || BILLING_TRANSITIONS[from]?.includes(to) === true;
+}
+
+/**
  * The share of a village's value that has been claimed.
  *
  * Returned claims release nothing: the work comes back and is claimed again
@@ -2306,7 +2326,8 @@ export type BillingSkipReason =
   | 'NOTHING_TO_DECIDE'
   | 'ALREADY_IN_THAT_STATE'
   | 'NOT_EARNED'
-  | 'CLAIMED_OVER_100';
+  | 'CLAIMED_OVER_100'
+  | 'CLAIM_CLOSED';
 
 export const BILLING_SKIP_LABELS: Record<BillingSkipReason, string> = {
   ALREADY_CLAIMED: 'already submitted at this milestone',
@@ -2316,6 +2337,7 @@ export const BILLING_SKIP_LABELS: Record<BillingSkipReason, string> = {
   // for a setting rather than for the QC that has not been signed off.
   NOT_EARNED: 'the stage this milestone falls due at is not signed off yet',
   CLAIMED_OVER_100: 'this claim would take the village past 100% claimed',
+  CLAIM_CLOSED: 'the claim is already paid or cannot move to that status',
 };
 
 /* ----------------------------------------------- ground-truthing staffing */
