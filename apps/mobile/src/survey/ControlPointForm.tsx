@@ -27,6 +27,7 @@ import {
 } from "../ui/primitives";
 import { space } from "../theme";
 import { buildPoint, emptyPoint, fromDeviceFix, type PointDraft } from "./controlPoint";
+import { pointConfirmations, type DeviceFix } from "./fieldCrew";
 
 export function ControlPointForm({
   village,
@@ -42,6 +43,10 @@ export function ControlPointForm({
   const [warnings, setWarnings] = useState<string[]>([]);
   const [fixNote, setFixNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The phone's last fix, so filing it untouched can be asked about (SG-004).
+  const [lastFix, setLastFix] = useState<DeviceFix | null>(null);
+  // The draft the person has already been asked about and said yes to.
+  const [confirmedFor, setConfirmedFor] = useState<string | null>(null);
 
   const existing = useQuery({
     queryKey: ["survey", "gcps", village.id],
@@ -55,6 +60,7 @@ export function ControlPointForm({
     try {
       const fix = await getPunchFix();
       setDraft(d => fromDeviceFix(d, fix));
+      setLastFix({ latitude: fix.latitude, longitude: fix.longitude, accuracy: fix.accuracy });
       setFixNote(
         `Filled from this phone, accurate to about ${
           fix.accuracy === null ? "an unknown distance" : `${Math.round(fix.accuracy)} m`
@@ -73,6 +79,18 @@ export function ControlPointForm({
       setProblems(built.problems);
       return;
     }
+    /*
+     * Looked at twice (SG-004). The warnings used to appear only after the
+     * point was queued, on a sheet that closed straight away, so a swapped
+     * pair or an untouched phone fix went in with nobody seeing a word.
+     */
+    const asks = pointConfirmations(draft, lastFix);
+    const key = JSON.stringify(draft);
+    if (asks.length && confirmedFor !== key) {
+      setWarnings(asks);
+      setConfirmedFor(key);
+      return;
+    }
     setBusy(true);
     try {
       const message = await submitQueued({
@@ -83,8 +101,7 @@ export function ControlPointForm({
           ...built.input,
         } as unknown as Record<string, unknown>,
       });
-      setWarnings(built.warnings);
-      onRecorded(message);
+      onRecorded(built.warnings.length ? `${message} Recorded with a warning: check it on the web.` : message);
       setDraft(emptyPoint(workDate));
     } catch (e) {
       setProblems([e instanceof Error ? e.message : "The point could not be recorded."]);
@@ -110,7 +127,7 @@ export function ControlPointForm({
         <Banner
           tone="warning"
           icon="help-circle-outline"
-          title="Recorded — but check these"
+          title="Check before recording — tap again to record anyway"
           message={warnings.join("\n")}
         />
       ) : null}
@@ -216,7 +233,8 @@ export function ControlPointForm({
           multiline
         />
         <Button
-          title="Record this point"
+          title={warnings.length && confirmedFor === JSON.stringify(draft)
+            ? "Record anyway" : "Record this point"}
           icon="pin-outline"
           loading={busy}
           onPress={record}

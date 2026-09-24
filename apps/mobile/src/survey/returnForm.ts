@@ -38,6 +38,8 @@ export interface ReturnDraft {
   rovers: Record<string, RoverDraft>;
   govtStaffPresent: string;
   crewPresent: string;
+  /** Teams out in the village today (§59.4.2). Blank means not asked. */
+  teamsDeployed: string;
   notes: string;
   lowProgressReason: string | null;
   lowProgressRemarks: string;
@@ -52,6 +54,7 @@ export function emptyDraft(): ReturnDraft {
     rovers: {},
     govtStaffPresent: "",
     crewPresent: "",
+    teamsDeployed: "",
     notes: "",
     lowProgressReason: null,
     lowProgressRemarks: "",
@@ -169,6 +172,13 @@ export function buildEntry(args: {
   if (govt.error) problems.push(govt.error);
   const crew = parseNumber(draft.crewPresent, "Crew present", { integer: true });
   if (crew.error) problems.push(crew.error);
+  // Teams out today (SG-008). Every phone-filed day was stored as zero teams
+  // because the form never asked, and a supervisor's team-days read nought.
+  const teams = parseNumber(draft.teamsDeployed ?? "", "Teams deployed");
+  if (teams.error) problems.push(teams.error);
+  else if (teams.value !== null && !Number.isInteger(teams.value)) {
+    problems.push("Teams deployed counts teams, so it has to be a whole number.");
+  }
 
   const low = checkLowProgress({
     areaToday: extentToday(draft.quantities, measures),
@@ -225,6 +235,7 @@ export function buildEntry(args: {
       entry_date: args.entryDate,
       values,
       ...(rovers.length ? { rovers } : {}),
+      ...(teams.value !== null ? { teams_deployed: teams.value } : {}),
       ...(draft.notes.trim() ? { notes: draft.notes.trim() } : {}),
       ...(draft.lowProgressReason
         ? {

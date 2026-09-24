@@ -159,9 +159,9 @@ function SurveyScreen() {
             <Button title="Close" variant="ghost" onPress={() => close()} />
           </Row>
           {sheet?.kind === "return" ? (
-            <DailyReturn village={sheet.village} workDate={day(workDate)} onFiled={close} />
+            <DailyReturn village={sheet.village} workDate={workDate} onFiled={close} />
           ) : sheet?.kind === "point" ? (
-            <ControlPointForm village={sheet.village} workDate={day(workDate)} onRecorded={close} />
+            <ControlPointForm village={sheet.village} workDate={workDate} onRecorded={close} />
           ) : null}
         </View>
       </Modal>

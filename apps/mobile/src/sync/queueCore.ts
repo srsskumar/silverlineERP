@@ -43,6 +43,7 @@ export type QueueEntity =
   | "notification_read"
   | "survey_entry"
   | "survey_gcp"
+  | "survey_stage"
   | "client_error";
 
 

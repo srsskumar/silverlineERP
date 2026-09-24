@@ -145,7 +145,7 @@ export function DailyReturn({
         entity: "survey_entry",
         // One return per village per day is the rule the server enforces, so
         // it is also the dedupe key: a double tap cannot queue two.
-        op: `${village.id}:${day(workDate)}`,
+        op: `${village.id}:${workDate}`,
         payload: built.entry as unknown as Record<string, unknown>,
       });
       onFiled(message);
