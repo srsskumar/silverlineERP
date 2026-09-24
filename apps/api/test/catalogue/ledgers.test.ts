@@ -775,9 +775,11 @@ describe("vendor MSME fields", () => {
     // validates the whole body against vendorSchema before filtering down to
     // what was actually sent, so code/name -- required, no default -- travel
     // on every edit, not only a full replace.
-    const res = await patch(w.admin, `/api/v1/vendors/${vendor.id}`, {
-      code: vendor.code, name: vendor.name, msme_registered: false,
-    });
+    const res = await patch(
+      { ...w.admin, ...(await ver("vendors", vendor.id)) },
+      `/api/v1/vendors/${vendor.id}`,
+      { code: vendor.code, name: vendor.name, msme_registered: false },
+    );
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.data.msme_registered).toBe(false);
 
