@@ -81,7 +81,8 @@ export type MatchExceptionCode =
   | 'QUANTITY_EXCEEDS_RECEIPT'
   | 'RATE_EXCEEDS_ORDER'
   | 'VALUE_VARIANCE'
-  | 'NOTHING_RECEIVED';
+  | 'NOTHING_RECEIVED'
+  | 'NOT_ON_ORDER';
 
 export interface MatchException {
   reference: string;
@@ -167,6 +168,119 @@ export function threeWayMatch(lines: MatchLine[], tolerance: MatchTolerance = {}
     orderedValue: sum(l => l.orderedQuantity * l.orderedRate),
     receivedValue: sum(l => l.receivedQuantity * l.orderedRate),
     invoicedValue: sum(l => l.invoicedQuantity * l.invoicedRate),
+  };
+}
+
+/* ------------------------------------------------ invoice-to-order matching */
+
+export interface OrderLineForMatch {
+  id: string;
+  itemId?: string | null;
+  /** The order line's description, used only when neither id links. */
+  reference: string;
+  orderedQuantity: number;
+  orderedRate: number;
+  /** Cumulative accepted quantity from every GRN raised against this line. */
+  receivedQuantity: number;
+}
+
+export interface InvoiceLineForMatch {
+  poLineId?: string | null;
+  itemId?: string | null;
+  reference: string;
+  quantity: number;
+  rate: number;
+}
+
+export interface InvoiceMatchResult extends MatchResult {
+  /** Invoice lines billed for something that is not on the order at all. */
+  extraLines: InvoiceLineForMatch[];
+}
+
+/**
+ * Pair a vendor invoice's lines against its order and run the three-way match.
+ *
+ * po_line_id is the preferred key: two order lines routinely share a
+ * description (two deliveries of "Cement OPC 53" at different rates), and
+ * matching on text alone would pick whichever comes first and silently check
+ * the invoice against the wrong price. Where a line carries no po_line_id —
+ * an older invoice, or one entered without picking a line — item_id and then
+ * description are the fallback, in that order.
+ *
+ * A purchase order is commonly billed across more than one invoice, and one
+ * order line is commonly billed across more than one line on the same
+ * invoice (a part-delivery split for a client's own approval limits, say).
+ * Every invoice line that resolves to the same order line is summed into one
+ * matched quantity and one value-weighted rate before threeWayMatch ever
+ * sees it, rather than matching only the first and silently dropping the
+ * rest.
+ *
+ * An invoice line that resolves to no order line at all is not a matching
+ * problem threeWayMatch already reports — the site could bill for a line
+ * that arrived and still make up a description for a line that was never
+ * ordered. It is reported separately as `extraLines`, and its presence
+ * always fails the match: there is no tolerance that makes billing for
+ * something nobody agreed to buy acceptable.
+ */
+export function matchInvoiceToOrder(
+  orderLines: OrderLineForMatch[],
+  invoiceLines: InvoiceLineForMatch[],
+  tolerance: MatchTolerance = {},
+): InvoiceMatchResult {
+  const byId = new Map(orderLines.map(o => [o.id, o]));
+  const byItem = new Map(
+    orderLines.filter(o => o.itemId).map(o => [String(o.itemId), o]));
+  const byDescription = new Map(orderLines.map(o => [o.reference, o]));
+
+  const grouped = new Map<string, InvoiceLineForMatch[]>();
+  const extraLines: InvoiceLineForMatch[] = [];
+
+  for (const inv of invoiceLines) {
+    const target =
+      (inv.poLineId && byId.get(inv.poLineId)) ||
+      (inv.itemId && byItem.get(String(inv.itemId))) ||
+      byDescription.get(inv.reference);
+    if (!target) { extraLines.push(inv); continue; }
+    const bucket = grouped.get(target.id) ?? [];
+    bucket.push(inv);
+    grouped.set(target.id, bucket);
+  }
+
+  const lines: MatchLine[] = orderLines.map(o => {
+    const invs = grouped.get(o.id) ?? [];
+    const invoicedQuantity = round3(invs.reduce((t, l) => t + l.quantity, 0));
+    const invoicedValueRaw = invs.reduce((t, l) => t + l.quantity * l.rate, 0);
+    // A value-weighted rate, so summing two lines at different rates does not
+    // silently pick one of them — the effective rate is what the invoice
+    // actually charges per unit across every line billed against this order
+    // line.
+    const invoicedRate = invoicedQuantity > 0 ? round2(invoicedValueRaw / invoicedQuantity) : 0;
+    return {
+      reference: o.reference,
+      orderedQuantity: o.orderedQuantity,
+      orderedRate: o.orderedRate,
+      receivedQuantity: o.receivedQuantity,
+      invoicedQuantity,
+      invoicedRate,
+    };
+  });
+
+  const result = threeWayMatch(lines, tolerance);
+  if (extraLines.length === 0) return { ...result, extraLines };
+
+  const extraExceptions: MatchException[] = extraLines.map(l => ({
+    reference: l.reference,
+    code: 'NOT_ON_ORDER',
+    message: `${l.reference}: invoiced but this line is not on the purchase order`,
+    ordered: 0, received: 0, invoiced: l.quantity,
+  }));
+  const extraValue = round2(extraLines.reduce((t, l) => t + l.quantity * l.rate, 0));
+  return {
+    ...result,
+    matched: false,
+    exceptions: [...result.exceptions, ...extraExceptions],
+    invoicedValue: round2(result.invoicedValue + extraValue),
+    extraLines,
   };
 }
 

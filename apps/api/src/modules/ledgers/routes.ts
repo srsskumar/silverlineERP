@@ -269,7 +269,7 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
               i.disputed, i.on_hold, i.hold_reason, i.match_status, i.lifecycle_status,
               i.purchase_order_id,
               v.id AS vendor_id, v.name AS vendor_name,
-              v.udyam_number, v.msme_category, v.has_written_agreement,
+              v.udyam_number, v.msme_category, v.has_written_agreement, v.msme_registered,
               ${SETTLED.replace('$DOCTYPE', "'VENDOR_INVOICE'").replace('$DOCID', 'i.id')} AS settled,
               (SELECT r.run_no FROM payment_run_lines l JOIN payment_runs r ON r.id = l.run_id
                 WHERE l.document_type = 'VENDOR_INVOICE' AND l.document_id = i.id
@@ -287,7 +287,7 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
       const due = payableDue({
         party: {
           udyamNumber: r.udyam_number, msmeCategory: r.msme_category,
-          hasWrittenAgreement: r.has_written_agreement,
+          hasWrittenAgreement: r.has_written_agreement, msmeRegistered: r.msme_registered,
         },
         acceptanceDate: iso(r.accepted_on) ?? iso(r.invoice_date),
         contractualDueDate: iso(r.due_date),

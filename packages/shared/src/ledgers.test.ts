@@ -134,6 +134,23 @@ describe('payableDue', () => {
       acceptanceDate: '2026-07-01', contractualDueDate: null, asOf: '2026-09-15',
     }).isMsme).toBe(false);
   });
+
+  it('treats an unset registration flag the same as registered, for callers written before it existed', () => {
+    expect(payableDue({
+      party: msme, acceptanceDate: '2026-07-01', contractualDueDate: null, asOf: '2026-09-15',
+    }).isMsme).toBe(true);
+  });
+
+  it('turns off statutory treatment when a vendor is explicitly not registered', () => {
+    // A vendor with an old Udyam number and category on file who has since
+    // let the registration lapse — msme_registered says so explicitly.
+    const d = payableDue({
+      party: { ...msme, msmeRegistered: false }, acceptanceDate: '2026-07-01',
+      contractualDueDate: '2026-09-29', asOf: '2026-09-15',
+    });
+    expect(d.isMsme).toBe(false);
+    expect(d.statutoryDueDate).toBeNull();
+  });
 });
 
 describe('msmeInterestOn', () => {

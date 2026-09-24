@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
-  receiptStatus, threeWayMatch, withinRequisition,
+  receiptStatus, threeWayMatch, withinRequisition, matchInvoiceToOrder,
   requisitionSchema, purchaseOrderSchema, grnSchema,
   PR_TRANSITIONS, PO_TRANSITIONS, PROCUREMENT_ROLE_GRANTS,
   compareQuotes, lowestQuote, checkAmendment,
   returnSchema, acknowledgementSchema, rfqSchema,
   type MatchLine, type VendorQuote, type AmendmentLine,
+  type OrderLineForMatch, type InvoiceLineForMatch,
 } from './procurement.js';
 
 const line = (over: Partial<MatchLine> = {}): MatchLine => ({
@@ -136,6 +137,76 @@ describe('three-way match', () => {
       line({ reference: 'C', receivedQuantity: 0, invoicedQuantity: 10 }),
     ]);
     expect(result.exceptions.map(e => e.reference)).toEqual(['B', 'C']);
+  });
+});
+
+describe('matchInvoiceToOrder', () => {
+  const orderLine = (over: Partial<OrderLineForMatch> = {}): OrderLineForMatch => ({
+    id: 'pol-1', reference: 'Cement OPC 53', orderedQuantity: 100, orderedRate: 400,
+    receivedQuantity: 100, ...over,
+  });
+  const invoiceLine = (over: Partial<InvoiceLineForMatch> = {}): InvoiceLineForMatch => ({
+    poLineId: 'pol-1', reference: 'Cement OPC 53', quantity: 100, rate: 400, ...over,
+  });
+
+  it('keys a line to its order line by po_line_id even when descriptions collide', () => {
+    // Two lines share a description but are priced differently — matching by
+    // description alone would pick whichever line comes first and misprice
+    // the check. po_line_id says exactly which one this bill is for.
+    const orderLines = [
+      orderLine({ id: 'pol-1', orderedRate: 400, receivedQuantity: 100 }),
+      orderLine({ id: 'pol-2', orderedRate: 450, receivedQuantity: 50 }),
+    ];
+    const result = matchInvoiceToOrder(orderLines, [
+      invoiceLine({ poLineId: 'pol-2', quantity: 50, rate: 450 }),
+    ]);
+    expect(result.matched).toBe(true);
+    expect(result.extraLines).toHaveLength(0);
+  });
+
+  it('falls back to item_id, then description, when po_line_id is absent', () => {
+    const orderLines = [orderLine({ id: 'pol-1', itemId: 'item-9' })];
+    const byItem = matchInvoiceToOrder(orderLines, [
+      invoiceLine({ poLineId: null, itemId: 'item-9' }),
+    ]);
+    expect(byItem.matched).toBe(true);
+
+    const byDescription = matchInvoiceToOrder(orderLines, [
+      invoiceLine({ poLineId: null, itemId: null }),
+    ]);
+    expect(byDescription.matched).toBe(true);
+  });
+
+  it('sums several invoice lines billed against one order line', () => {
+    const orderLines = [orderLine({ id: 'pol-1', orderedQuantity: 100, receivedQuantity: 100 })];
+    const result = matchInvoiceToOrder(orderLines, [
+      invoiceLine({ poLineId: 'pol-1', quantity: 40, rate: 400 }),
+      invoiceLine({ poLineId: 'pol-1', quantity: 60, rate: 400 }),
+    ]);
+    expect(result.matched).toBe(true);
+    expect(result.invoicedValue).toBe(40_000);
+  });
+
+  it('flags an invoice line that matches no order line, and fails the match', () => {
+    const orderLines = [orderLine({ id: 'pol-1' })];
+    const result = matchInvoiceToOrder(orderLines, [
+      invoiceLine(),
+      invoiceLine({ poLineId: null, itemId: null, reference: 'Rebar 12mm', quantity: 20, rate: 500 }),
+    ]);
+    expect(result.matched).toBe(false);
+    expect(result.extraLines).toHaveLength(1);
+    expect(result.extraLines[0].reference).toBe('Rebar 12mm');
+    expect(result.exceptions.some(e => e.code === 'NOT_ON_ORDER')).toBe(true);
+  });
+
+  it('still runs the ordinary quantity and rate checks alongside extra-line detection', () => {
+    const orderLines = [orderLine({ id: 'pol-1', receivedQuantity: 60 })];
+    const result = matchInvoiceToOrder(orderLines, [
+      invoiceLine({ quantity: 100 }),
+      invoiceLine({ poLineId: null, itemId: null, reference: 'Not ordered', quantity: 5, rate: 100 }),
+    ]);
+    expect(result.exceptions.map(e => e.code).sort())
+      .toEqual(['NOT_ON_ORDER', 'QUANTITY_EXCEEDS_RECEIPT']);
   });
 });
 

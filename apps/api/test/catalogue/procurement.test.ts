@@ -12,7 +12,7 @@ import { buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fix
 
 let w: CatalogueWorld;
 
-async function send(method: "POST" | "GET", headers: Headers, url: string, payload?: unknown) {
+async function send(method: "POST" | "GET" | "PATCH", headers: Headers, url: string, payload?: unknown) {
   const res = await w.app.inject({
     method, url,
     headers: { ...headers, ...(method === "GET" ? {} : idem()) },
@@ -24,6 +24,7 @@ async function send(method: "POST" | "GET", headers: Headers, url: string, paylo
 }
 const post = (h: Headers, u: string, p?: unknown) => send("POST", h, u, p);
 const get = (h: Headers, u: string) => send("GET", h, u);
+const patch = (h: Headers, u: string, p?: unknown) => send("PATCH", h, u, p);
 
 async function ver(table: string, id: string): Promise<Headers> {
   const r = await w.pool.query(`SELECT version FROM ${table} WHERE id = $1`, [id]);
@@ -581,6 +582,193 @@ describe("three-way match", () => {
     const res = await post(w.admin, `/api/v1/invoices/${invoice.rows[0].id}/match`, {});
     expect(res.status).toBe(422);
     expect(res.body.code).toBe("NO_PURCHASE_ORDER");
+  });
+});
+
+describe("vendor invoice lines (finding B-004)", () => {
+  /** A sent purchase order with the given lines, plus the vendor and PO-line ids. */
+  async function poWithLines(
+    lines: { description: string; quantity: number; rate: number; hsnSac?: string; gstRatePct?: number }[],
+  ) {
+    const vendor = await makeVendor();
+    const po = (await post(w.admin, "/api/v1/purchase-orders", {
+      po_number: uniq("PO"), vendor_id: vendor.id, po_date: "2026-09-15",
+      lines: lines.map(l => ({
+        description: l.description, unit: "bag", quantity: l.quantity, unit_rate: l.rate,
+        hsn_sac: l.hsnSac, gst_rate_pct: l.gstRatePct ?? 0,
+      })),
+    })).data;
+    await w.pool.query("UPDATE purchase_orders SET status='SENT' WHERE id=$1", [po.id]);
+    const poLines = (await w.pool.query(
+      "SELECT id FROM purchase_order_lines WHERE purchase_order_id=$1 ORDER BY line_no", [po.id])).rows;
+    return { vendor, po, poLines };
+  }
+
+  async function receive(poId: string, poLineId: string, qty: number) {
+    const res = await post(w.admin, "/api/v1/grns", {
+      grn_no: uniq("GRN"), purchase_order_id: poId, received_date: "2026-09-16",
+      lines: [{ po_line_id: poLineId, received_quantity: qty, accepted_quantity: qty }],
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+  }
+
+  it("creates a vendor invoice with lines, pricing them on the server and ignoring client totals", async () => {
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 100, rate: 400, hsnSac: "25232910", gstRatePct: 28 },
+    ]);
+    const res = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: true,
+      // A client that lies about its own totals is exactly the case the rule
+      // guards against.
+      gst_rate: "999", subtotal: "1", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      lines: [{
+        po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910",
+        quantity: 100, unit_rate: 400, gst_rate_pct: 28,
+      }],
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(Number(res.data.subtotal)).toBe(40_000);
+    expect(Number(res.data.total)).toBeCloseTo(40_000 * 1.28, 2);
+    const lines = (await w.pool.query(
+      "SELECT * FROM invoice_lines WHERE invoice_id=$1", [res.data.id])).rows;
+    expect(lines).toHaveLength(1);
+    expect(Number(lines[0].taxable_value)).toBe(40_000);
+    expect(String(lines[0].po_line_id)).toBe(String(poLines[0].id));
+  });
+
+  it("refuses a line whose po_line_id belongs to a different purchase order", async () => {
+    const a = await poWithLines([{ description: "Cement OPC 53", quantity: 10, rate: 400 }]);
+    const b = await poWithLines([{ description: "Sand", quantity: 10, rate: 100 }]);
+    const res = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: a.vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: a.po.id,
+      lines: [{
+        po_line_id: b.poLines[0].id, description: "Sand", hsn_sac: "25232910",
+        quantity: 10, unit_rate: 100, gst_rate_pct: 0,
+      }],
+    });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("matches by po_line_id when two order lines share a description", async () => {
+    // The old fallback (item_id, else description) would collide on these
+    // two lines and check one of them against the wrong price.
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 100, rate: 400 },
+      { description: "Cement OPC 53", quantity: 50, rate: 450 },
+    ]);
+    await receive(po.id, poLines[0].id, 100);
+    await receive(po.id, poLines[1].id, 50);
+    const inv = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      lines: [
+        { po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 100, unit_rate: 400, gst_rate_pct: 0 },
+        { po_line_id: poLines[1].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 50, unit_rate: 450, gst_rate_pct: 0 },
+      ],
+    });
+    const res = await post(w.admin, `/api/v1/invoices/${inv.data.id}/match`, {});
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.data.matched).toBe(true);
+  });
+
+  it("sums multiple invoice lines billed against one order line", async () => {
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 100, rate: 400 },
+    ]);
+    await receive(po.id, poLines[0].id, 100);
+    const inv = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      lines: [
+        { po_line_id: poLines[0].id, description: "Cement OPC 53 (part 1)", hsn_sac: "25232910", quantity: 40, unit_rate: 400, gst_rate_pct: 0 },
+        { po_line_id: poLines[0].id, description: "Cement OPC 53 (part 2)", hsn_sac: "25232910", quantity: 60, unit_rate: 400, gst_rate_pct: 0 },
+      ],
+    });
+    const res = await post(w.admin, `/api/v1/invoices/${inv.data.id}/match`, {});
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.data.matched).toBe(true);
+    expect(res.data.invoicedValue).toBe(40_000);
+  });
+
+  it("fails the match when an invoice line is billed for something not on the order", async () => {
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 100, rate: 400 },
+    ]);
+    await receive(po.id, poLines[0].id, 100);
+    const inv = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      lines: [
+        { po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 100, unit_rate: 400, gst_rate_pct: 0 },
+        { description: "Rebar 12mm (never ordered)", hsn_sac: "72142000", quantity: 20, unit_rate: 500, gst_rate_pct: 0 },
+      ],
+    });
+    const res = await post(w.admin, `/api/v1/invoices/${inv.data.id}/match`, {});
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.data.matched).toBe(false);
+    expect(res.data.exceptions.some((e: { code: string }) => e.code === "NOT_ON_ORDER")).toBe(true);
+    const row = await w.pool.query("SELECT match_status FROM invoices WHERE id=$1", [inv.data.id]);
+    expect(row.rows[0].match_status).toBe("EXCEPTION");
+  });
+
+  it("lets a vendor invoice's lines be edited while it is unmatched", async () => {
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 100, rate: 400 },
+    ]);
+    const inv = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 100, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    const res = await patch(w.admin, `/api/v1/invoices/${inv.data.id}/lines`, {
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 80, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(Number(res.data.subtotal)).toBe(32_000);
+    expect(res.data.lines).toHaveLength(1);
+  });
+
+  it("refuses to edit lines once the invoice has been matched", async () => {
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 100, rate: 400 },
+    ]);
+    await receive(po.id, poLines[0].id, 100);
+    const inv = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 100, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    await post(w.admin, `/api/v1/invoices/${inv.data.id}/match`, {});
+    const res = await patch(w.admin, `/api/v1/invoices/${inv.data.id}/lines`, {
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 50, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("INVALID_STATUS");
+  });
+
+  it("keeps invoice line writes behind invoice.manage, not invoice.read", async () => {
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 10, rate: 400 },
+    ]);
+    const inv = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 10, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    const res = await patch(w.role.AUDITOR, `/api/v1/invoices/${inv.data.id}/lines`, {
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 5, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    expect(res.status).toBe(403);
   });
 });
 

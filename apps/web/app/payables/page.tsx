@@ -19,6 +19,7 @@ import { AgeingBar, AgeingBuckets, BucketCells, OutsideBuckets } from '@/compone
 import { day, money, businessToday } from '@/lib/finance';
 import { AGEING_BUCKETS, BUCKET_LABELS, msmeNote, type AgeingSummary } from '@/lib/ledgers';
 import { ExecutePaymentRunForm } from '@/components/payables/ExecutePaymentRunForm';
+import { VendorInvoiceLines } from '@/components/procurement/VendorInvoiceLines';
 
 type Row = Record<string, any>;
 
@@ -41,9 +42,11 @@ export default function PayablesPage() {
   const perms = { permissions: session?.permissions };
   const canRead = hasPermission(perms, 'ap.read');
   const canHold = hasPermission(perms, 'payable.hold');
+  const canReadInvoice = hasPermission(perms, 'invoice.read');
   const [tab, setTab] = React.useState<'ageing' | 'runs'>('ageing');
   const [asOf, setAsOf] = React.useState(() => businessToday());
   const [openVendor, setOpenVendor] = React.useState<string | null>(null);
+  const [managingInvoice, setManagingInvoice] = React.useState<string | null>(null);
   const qc = useQueryClient();
 
   const ageing = useQuery({
@@ -212,7 +215,9 @@ export default function PayablesPage() {
                                       <InvoiceDetail
                                         invoices={v.invoices}
                                         canHold={canHold}
+                                        canManageInvoice={canReadInvoice}
                                         onHold={(id, on_hold, reason) => hold.mutate({ id, on_hold, reason })}
+                                        onManageInvoice={setManagingInvoice}
                                         pending={hold.isPending}
                                       />
                                     </TD>
@@ -231,6 +236,10 @@ export default function PayablesPage() {
           </>
         ) : null}
       </PageBody>
+
+      {managingInvoice ? (
+        <VendorInvoiceLines invoiceId={managingInvoice} onClose={() => setManagingInvoice(null)} />
+      ) : null}
     </AppShell>
   );
 }
@@ -244,11 +253,13 @@ export default function PayablesPage() {
  * needs to look at.
  */
 function InvoiceDetail({
-  invoices, canHold, onHold, pending,
+  invoices, canHold, canManageInvoice, onHold, onManageInvoice, pending,
 }: {
   invoices: Row[];
   canHold: boolean;
+  canManageInvoice: boolean;
   onHold: (id: string, onHold: boolean, reason?: string) => void;
+  onManageInvoice: (id: string) => void;
   pending: boolean;
 }) {
   return (
@@ -264,7 +275,7 @@ function InvoiceDetail({
               <TH className="text-right">Outstanding</TH>
               <TH className="text-right">Interest</TH>
               <TH>State</TH>
-              {canHold ? <TH /> : null}
+              {canHold || canManageInvoice ? <TH /> : null}
             </TR>
           </THead>
           <TBody>
@@ -298,9 +309,14 @@ function InvoiceDetail({
                     <Badge tone="warning">{String(i.match_status).toLowerCase()}</Badge>
                   ) : null}
                 </TD>
-                {canHold ? (
-                  <TD className="text-right">
-                    <HoldButton invoice={i} onHold={onHold} pending={pending} />
+                {canHold || canManageInvoice ? (
+                  <TD className="space-x-1 text-right">
+                    {canManageInvoice ? (
+                      <Button type="button" variant="ghost" onClick={() => onManageInvoice(String(i.invoice_id))}>
+                        Lines &amp; match
+                      </Button>
+                    ) : null}
+                    {canHold ? <HoldButton invoice={i} onHold={onHold} pending={pending} /> : null}
                   </TD>
                 ) : null}
               </TR>

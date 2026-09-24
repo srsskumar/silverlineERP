@@ -1022,3 +1022,32 @@ export const paymentRunExecuteSchema = z.object({
   note: optionalText(1000),
 });
 export type PaymentRunExecuteFormInput = z.infer<typeof paymentRunExecuteSchema>;
+
+// ---------------------------------------------------------------------------
+// Vendor invoice lines and three-way match (task 5c, finding B-004). Mirrors
+// invoiceLineInputSchema / invoiceLinesUpdateSchema in
+// packages/shared/src/v2.ts — the server prices every line itself and never
+// trusts a client-computed total, so no amount/total field travels here.
+// ---------------------------------------------------------------------------
+
+const NOTIFIED_GST_RATES = [0, 0.1, 0.25, 1, 1.5, 3, 5, 6, 7.5, 12, 18, 28] as const;
+
+export const invoiceLineSchema = z.object({
+  item_id: optionalUuid,
+  po_line_id: optionalUuid,
+  description: z.string().trim().min(1, 'Description is required').max(255),
+  hsn_sac: z.string().trim().regex(HSN_RE, 'HSN/SAC is 4 to 8 digits'),
+  quantity: z.coerce.number().positive('Quantity must be greater than 0'),
+  unit_rate: moneyField('Enter a rate of 0 or more, with at most 2 decimal places'),
+  gst_rate_pct: z.coerce
+    .number()
+    .refine((v) => (NOTIFIED_GST_RATES as readonly number[]).includes(v), 'Not a notified GST rate')
+    .default(0),
+});
+export type InvoiceLineFormInput = z.infer<typeof invoiceLineSchema>;
+
+/** PATCH /api/v1/invoices/:id/lines */
+export const invoiceLinesUpdateSchema = z.object({
+  lines: z.array(invoiceLineSchema).min(1, 'Add at least one line'),
+});
+export type InvoiceLinesUpdateFormInput = z.infer<typeof invoiceLinesUpdateSchema>;

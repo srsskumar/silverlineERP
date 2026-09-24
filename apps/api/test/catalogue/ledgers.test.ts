@@ -737,3 +737,49 @@ describe("permissions", () => {
     })).status).toBe(403);
   });
 });
+
+/**
+ * MSME registration on a vendor, written through the API (task 5c, finding
+ * B-004). The columns (migration 032) and the due-date maths (payableDue,
+ * above) already existed; vendorSchema never carried the fields, so the
+ * generic vendor CRUD route silently dropped them from every request.
+ */
+describe("vendor MSME fields", () => {
+  it("writes msme_registered, udyam_number and msme_category through the vendor API", async () => {
+    const res = await post(w.admin, "/api/v1/vendors", {
+      code: uniq("VN"), name: `Vendor ${uniq()}`,
+      msme_registered: true, udyam_number: "UDYAM-MH-05-0001234", msme_category: "MICRO",
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.data.udyam_number).toBe("UDYAM-MH-05-0001234");
+    expect(res.data.msme_category).toBe("MICRO");
+    expect(res.data.msme_registered).toBe(true);
+  });
+
+  it("rejects an Udyam number that is not the notified shape", async () => {
+    const res = await post(w.admin, "/api/v1/vendors", {
+      code: uniq("VN"), name: `Vendor ${uniq()}`,
+      udyam_number: "NOT-A-UDYAM-NUMBER", msme_category: "SMALL",
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it("lets an existing vendor's MSME registration be edited, and the edit takes effect in the ageing", async () => {
+    const vendor = await msmeVendor();
+    const bill = await invoice({ vendor_id: vendor.id, total: 1000, accepted_on: "2026-08-01" });
+    const before = await get(w.admin, `/api/v1/ap/ageing?as_of=2026-09-15`);
+    const beforeRow = before.data.vendors.find((v: Record<string, unknown>) => v.vendor_id === vendor.id);
+    expect(beforeRow.invoices.find((i: Record<string, unknown>) => i.invoice_id === bill.id).is_msme).toBe(true);
+
+    const res = await patch(w.admin, `/api/v1/vendors/${vendor.id}`, { msme_registered: false });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.data.msme_registered).toBe(false);
+
+    // Turning registration off takes the vendor out of statutory treatment
+    // for the same invoice, even though udyam_number and msme_category are
+    // still on file.
+    const after = await get(w.admin, `/api/v1/ap/ageing?as_of=2026-09-15`);
+    const afterRow = after.data.vendors.find((v: Record<string, unknown>) => v.vendor_id === vendor.id);
+    expect(afterRow.invoices.find((i: Record<string, unknown>) => i.invoice_id === bill.id).is_msme).toBe(false);
+  });
+});
