@@ -22,7 +22,7 @@ const day = (offset: number) => {
   return d.toISOString().slice(0, 10);
 };
 
-async function send(method: "POST" | "GET" | "PATCH" | "DELETE", headers: Headers, url: string, payload?: unknown, extra: Headers = {}) {
+async function send(method: "POST" | "GET" | "PATCH" | "DELETE" | "PUT", headers: Headers, url: string, payload?: unknown, extra: Headers = {}) {
   const res = await w.app.inject({
     method, url,
     headers: { ...headers, ...(method === "GET" ? {} : idem()), ...extra },
@@ -459,5 +459,82 @@ describe("SV-023 undoing an approval", () => {
       { status: "SUBMITTED", decided_on: null }, { "if-match": String(c.data.version) });
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect(r.data.status).toBe("SUBMITTED");
+  });
+});
+
+/*
+ * SV-016: certifying a figure is optimistic-locked like every other write.
+ * A new figure carries no version; replacing one carries the version read
+ * from GET finals; clearing one sends it as If-Match. Two people certifying
+ * the same measure at once: one wins, the other is told it moved.
+ */
+describe("SV-016 certified totals are version-checked", () => {
+  let v: string;
+  const M = "PRIVATE_LAND_EXTENT_AC";
+  const put = (body: unknown) => send("PUT", w.admin, `/api/v1/survey/villages/${v}/finals`, body);
+  const figure = async () => ((await send("GET", w.admin, `/api/v1/survey/villages/${v}/finals`)).data as any[])
+    .find((f) => f.code === M);
+
+  beforeAll(async () => {
+    v = await village("Certify village");
+    expect((await startGt(v, [await employee()], day(-4))).status).toBe(201);
+    expect((await post(w.admin, `/api/v1/survey/villages/${v}/stage`, {
+      stage_code: "GROUND_TRUTHING", state: "COMPLETED", started_on: day(-4), completed_on: day(-1),
+    })).status).toBe(200);
+  });
+
+  it("certifies a new figure without a version", async () => {
+    const r = await put({ finals: [{ measure_code: M, quantity: 10.5, reason: "Recount at handover" }] });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect((await figure()).version).toBe(1);
+  });
+
+  it("refuses to replace a figure without its version", async () => {
+    const r = await put({ finals: [{ measure_code: M, quantity: 11, reason: "Second recount" }] });
+    // The house convention for a missing version (domain.ts version()).
+    expect(r.status, JSON.stringify(r.body)).toBe(422);
+    expect(r.body.code).toBe("VERSION_REQUIRED");
+  });
+
+  it("replaces it with the current version and bumps it", async () => {
+    const f = await figure();
+    const r = await put({ finals: [{ measure_code: M, quantity: 11, reason: "Second recount", version: f.version }] });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const after = await figure();
+    expect(after.certified).toBe(11);
+    expect(after.version).toBe(f.version + 1);
+  });
+
+  it("lets only one of two concurrent certifications through", async () => {
+    const f = await figure();
+    const [a, b] = await Promise.all([12, 13].map((q) => put({
+      finals: [{ measure_code: M, quantity: q, reason: "Concurrent recount", version: f.version }],
+    })));
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    const loser = a.status === 409 ? a : b;
+    expect(loser.body.code).toBe("VERSION_CONFLICT");
+    const after = await figure();
+    expect(after.version).toBe(f.version + 1);
+    expect([12, 13]).toContain(after.certified);
+  });
+
+  it("lets only one of two concurrent first certifications through", async () => {
+    const M2 = "GOVT_LAND_EXTENT_AC";
+    const [a, b] = await Promise.all([1, 2].map((q) => put({
+      finals: [{ measure_code: M2, quantity: q, reason: "First recount, twice" }],
+    })));
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+  });
+
+  it("clears a figure only with its version as If-Match", async () => {
+    const url = `/api/v1/survey/villages/${v}/finals/${M}`;
+    const bare = await send("DELETE", w.admin, url);
+    expect(bare.status, JSON.stringify(bare.body)).toBe(422);
+    const f = await figure();
+    const stale = await send("DELETE", w.admin, url, undefined, { "if-match": String(f.version + 3) });
+    expect(stale.status).toBe(409);
+    const ok = await send("DELETE", w.admin, url, undefined, { "if-match": String(f.version) });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    expect((await figure()).certified).toBeNull();
   });
 });

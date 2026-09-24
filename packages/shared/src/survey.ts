@@ -2691,6 +2691,11 @@ export const villageFinalSchema = z.object({
   // Mandatory: a figure that differs from the record with no explanation is
   // exactly what this exists to stop.
   reason: z.string().trim().min(3, 'Say why the certified figure differs').max(2000),
+  /**
+   * The version of the certified figure being replaced, as GET finals gave it
+   * (SV-016). Left out for a measure nobody has certified yet.
+   */
+  version: z.number().int().positive().optional(),
 }).strict();
 
 export const villageFinalsSchema = z.object({

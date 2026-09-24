@@ -1345,7 +1345,7 @@ function ClaimEdit({ claim, onDone }: { claim: Row; onDone: () => void }) {
  * came from would be the spreadsheet this module exists to replace, just
  * inside the database — and the gap between them is what a reviewer looks at.
  */
-function CertifiedTotals({ village, canCertify }: { village: Row; canCertify: boolean }) {
+export function CertifiedTotals({ village, canCertify }: { village: Row; canCertify: boolean }) {
   const villageId = String(village.id);
   const qc = useQueryClient();
   const toast = useToast();
@@ -1375,9 +1375,15 @@ function CertifiedTotals({ village, canCertify }: { village: Row; canCertify: bo
       body: {
         finals: Object.entries(draft)
           .filter(([, v]) => v.quantity !== '' && v.reason.trim() !== '')
-          .map(([code, v]) => ({
-            measure_code: code, quantity: Number(v.quantity), reason: v.reason.trim(),
-          })),
+          .map(([code, v]) => {
+            // The version being replaced, so a figure somebody else has
+            // just certified is not overwritten unseen (SV-016).
+            const held = (figures.data ?? []).find((f) => String(f.code) === code);
+            return {
+              measure_code: code, quantity: Number(v.quantity), reason: v.reason.trim(),
+              ...(held?.version ? { version: Number(held.version) } : {}),
+            };
+          }),
       },
     }),
     onError: (e) => toast.error('Nothing was certified', messageOf(e)),
@@ -1389,8 +1395,13 @@ function CertifiedTotals({ village, canCertify }: { village: Row; canCertify: bo
   });
 
   const clear = useMutation({
-    mutationFn: async (code: string) =>
-      apiRequest(`/api/v1/survey/villages/${villageId}/finals/${code}`, { method: 'DELETE' }),
+    mutationFn: async (code: string) => {
+      const held = (figures.data ?? []).find((f) => String(f.code) === code);
+      return apiRequest(`/api/v1/survey/villages/${villageId}/finals/${code}`, {
+        method: 'DELETE',
+        headers: { 'If-Match': String(held?.version ?? '') },
+      });
+    },
     onError: (e) => toast.error('It was not cleared', messageOf(e)),
     onSuccess: () => {
       toast.success('Cleared', 'The village reads as its daily returns again.');

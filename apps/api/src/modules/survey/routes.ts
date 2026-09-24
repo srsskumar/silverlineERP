@@ -3618,16 +3618,48 @@ export async function registerSurveyRoutes(
             if (!measure) {
               fail('UNKNOWN_MEASURE', `There is no measure ${f.measure_code}`, 422);
             }
-            await db.query(
-              `INSERT INTO survey_village_finals(org_id, survey_village_id, measure_id,
-                 quantity, reason, certified_by, created_by, updated_by)
-               VALUES($1,$2,$3,$4,$5,$6,$6,$6)
-               ON CONFLICT (survey_village_id, measure_id)
-               DO UPDATE SET quantity = EXCLUDED.quantity, reason = EXCLUDED.reason,
-                             certified_by = EXCLUDED.certified_by, certified_at = now(),
-                             version = survey_village_finals.version + 1,
-                             updated_at = now(), updated_by = EXCLUDED.updated_by`,
-              [u.orgId, id, measure.id, f.quantity, f.reason, u.id]);
+            /*
+             * Optimistic locking, as every other write here (SV-016). Two
+             * people certifying one measure used to be last-write-wins, and
+             * the loser never learned their recount had been overwritten.
+             */
+            const held = (await db.query(
+              `SELECT id, version FROM survey_village_finals
+                WHERE survey_village_id = $1 AND measure_id = $2 FOR UPDATE`,
+              [id, measure.id])).rows[0];
+            if (held) {
+              if (f.version === undefined) {
+                fail('VERSION_REQUIRED',
+                  `${f.measure_code} is already certified. Send the version you are replacing.`);
+              }
+              if (Number(held.version) !== f.version) {
+                fail('VERSION_CONFLICT',
+                  `${f.measure_code} was certified again by somebody else. Reload before changing it.`,
+                  409);
+              }
+              await db.query(
+                `UPDATE survey_village_finals
+                    SET quantity = $2, reason = $3, certified_by = $4, certified_at = now(),
+                        version = version + 1, updated_at = now(), updated_by = $4
+                  WHERE id = $1`, [held.id, f.quantity, f.reason, u.id]);
+            } else {
+              if (f.version !== undefined) {
+                fail('VERSION_CONFLICT',
+                  `${f.measure_code} is no longer certified. Reload before changing it.`, 409);
+              }
+              const made = await db.query(
+                `INSERT INTO survey_village_finals(org_id, survey_village_id, measure_id,
+                   quantity, reason, certified_by, created_by, updated_by)
+                 VALUES($1,$2,$3,$4,$5,$6,$6,$6)
+                 ON CONFLICT (survey_village_id, measure_id) DO NOTHING`,
+                [u.orgId, id, measure.id, f.quantity, f.reason, u.id]);
+              // Somebody else certified it between our read and our write.
+              if (!made.rowCount) {
+                fail('VERSION_CONFLICT',
+                  `${f.measure_code} was just certified by somebody else. Reload before changing it.`,
+                  409);
+              }
+            }
             written.push(f.measure_code);
           }
           return { certified: written.length, measures: written };
@@ -3643,11 +3675,15 @@ export async function registerSurveyRoutes(
       return {
         data: await mutate(pool, req, 'survey.village.certify.clear', 'survey_village', async db => {
           await villageOr404(db, u.orgId, id, u);
+          // Cleared only by somebody who saw the figure as it is (SV-016).
+          const held = (await db.query(
+            `SELECT f.id, f.version FROM survey_village_finals f
+               JOIN survey_measures mm ON mm.id = f.measure_id
+              WHERE mm.code = $3 AND f.org_id = $1 AND f.survey_village_id = $2
+              FOR UPDATE OF f`, [u.orgId, id, code])).rows[0];
+          if (held) version(req, { version: Number(held.version) });
           const done = await db.query(
-            `DELETE FROM survey_village_finals f
-              USING survey_measures mm
-              WHERE f.measure_id = mm.id AND mm.code = $3
-                AND f.org_id = $1 AND f.survey_village_id = $2`, [u.orgId, id, code]);
+            'DELETE FROM survey_village_finals WHERE id = $1', [held?.id ?? null]);
           return { cleared: done.rowCount ?? 0, code };
         }),
       };
