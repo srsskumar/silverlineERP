@@ -210,9 +210,20 @@ live-DB run performed.
 
 ## Final verification
 
-- Full `apps/api` suite (`npx vitest run`, VM slot g, HEAD `e8b3daa`): pending —
-  running in background at time of writing; result to be appended.
-- Web: `tsc --noEmit`, `next build`, and full `npx vitest run` (77 files / 947
-  tests) all green, run after the invoice.manage commit (which is web-touching
-  and last in the branch).
+- Full `apps/api` suite (`npx vitest run`, VM slot g, HEAD `e8b3daa`, the last
+  code commit): **2148 passed, 1 failed, 2149 total** (79/80 files green).
+  Duration 1114s. The one failure —
+  `test/catalogue/survey-operations.test.ts > alerting on work that has
+  stopped > raises a village past the date somebody committed to`, expected
+  "5 days ago" and got "It was due on 2026-09-19, 6 days ago" — is a
+  pre-existing date-rollover flake: the VM's calendar day advanced from
+  2026-09-24 to 2026-09-25 partway through this session, and that one
+  assertion computes "days ago" against the live system clock rather than a
+  frozen test clock the way the rest of the suite does. No file in the
+  survey module or its tests was touched by any commit in this branch;
+  confirmed with `git diff --stat` against every commit here. Not a
+  regression from this work.
+- Web (after `e8b3daa`, the last web-touching commit; the doc commit added
+  afterward does not touch web): `tsc --noEmit` clean, `next build` clean,
+  full `npx vitest run` — **947 passed, 0 failed** across 77 files.
 - No migrations run against the live DB. No leave-module files touched.
