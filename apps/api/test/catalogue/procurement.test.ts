@@ -757,6 +757,135 @@ describe("vendor invoice lines (finding B-004)", () => {
     expect(res.body.code).toBe("INVALID_STATUS");
   });
 
+  it("lets lines be edited after a failed match (EXCEPTION), and resets match_status to UNMATCHED (fix round 1, item 1)", async () => {
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 100, rate: 400 },
+    ]);
+    await receive(po.id, poLines[0].id, 60);
+    const inv = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      // Invoiced for more than the 60 received -- fails the match.
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 100, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    const matched = await post(w.admin, `/api/v1/invoices/${inv.data.id}/match`, {});
+    expect(matched.data.matched).toBe(false);
+    const afterMatch = await w.pool.query("SELECT match_status FROM invoices WHERE id=$1", [inv.data.id]);
+    expect(afterMatch.rows[0].match_status).toBe("EXCEPTION");
+
+    // Correct the line to what was actually received, and save.
+    const res = await patch(w.admin, `/api/v1/invoices/${inv.data.id}/lines`, {
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 60, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.data.match_status).toBe("UNMATCHED");
+    const afterEdit = await w.pool.query("SELECT match_status FROM invoices WHERE id=$1", [inv.data.id]);
+    expect(afterEdit.rows[0].match_status).toBe("UNMATCHED");
+
+    // And the corrected lines now match cleanly.
+    const rematched = await post(w.admin, `/api/v1/invoices/${inv.data.id}/match`, {});
+    expect(rematched.data.matched).toBe(true);
+  });
+
+  it("refuses to edit lines once the invoice has been overridden", async () => {
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 100, rate: 400 },
+    ]);
+    await receive(po.id, poLines[0].id, 60);
+    const inv = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 100, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    await post(w.admin, `/api/v1/invoices/${inv.data.id}/match`, {});
+    // SUPER_ADMIN holds match.override, which the ADMIN role that raised
+    // the order deliberately does not (§4.1).
+    const overridden = await post(w.role.SUPER_ADMIN, `/api/v1/invoices/${inv.data.id}/match`, {
+      override_reason: "Accepted short delivery",
+    });
+    expect(overridden.data.matched).toBe(false);
+    const status = await w.pool.query("SELECT match_status FROM invoices WHERE id=$1", [inv.data.id]);
+    expect(status.rows[0].match_status).toBe("OVERRIDDEN");
+
+    const res = await patch(w.admin, `/api/v1/invoices/${inv.data.id}/lines`, {
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 60, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("INVALID_STATUS");
+  });
+
+  it("refuses to edit lines once the invoice is approved", async () => {
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 10, rate: 400 },
+    ]);
+    const inv = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 10, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    await w.pool.query("UPDATE invoices SET lifecycle_status='APPROVED' WHERE id=$1", [inv.data.id]);
+    const res = await patch(w.admin, `/api/v1/invoices/${inv.data.id}/lines`, {
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 5, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("INVALID_STATUS");
+  });
+
+  it("refuses to edit lines once a payment has been allocated against the invoice, even a partial one", async () => {
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 10, rate: 400 },
+    ]);
+    const inv = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 10, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    const payment = await w.pool.query(
+      `INSERT INTO payments(org_id, payment_no, direction, paid_on, amount, mode, created_by)
+       VALUES($1,$2,'PAYABLE','2026-09-20',1000,'NEFT',$3) RETURNING id`,
+      [w.orgId, uniq("PAY"), w.adminId]);
+    await w.pool.query(
+      `INSERT INTO payment_allocations(org_id, payment_id, document_type, document_id, amount, created_by)
+       VALUES($1,$2,'VENDOR_INVOICE',$3,500,$4)`,
+      [w.orgId, payment.rows[0].id, inv.data.id, w.adminId]);
+
+    const res = await patch(w.admin, `/api/v1/invoices/${inv.data.id}/lines`, {
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 5, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("INVALID_STATUS");
+  });
+
+  it("refuses to edit lines once the invoice is on an open payment run", async () => {
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 10, rate: 400 },
+    ]);
+    const inv = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 10, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    const run = await w.pool.query(
+      `INSERT INTO payment_runs(org_id, run_no, run_date, due_through, status, created_by)
+       VALUES($1,$2,'2026-09-20','2026-09-20','DRAFT',$3) RETURNING id`,
+      [w.orgId, uniq("PR"), w.adminId]);
+    await w.pool.query(
+      `INSERT INTO payment_run_lines(org_id, run_id, document_type, document_id, party_id, amount)
+       VALUES($1,$2,'VENDOR_INVOICE',$3,$4,4000)`,
+      [w.orgId, run.rows[0].id, inv.data.id, vendor.id]);
+
+    const res = await patch(w.admin, `/api/v1/invoices/${inv.data.id}/lines`, {
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 5, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("INVALID_STATUS");
+  });
+
   it("keeps invoice line writes behind invoice.manage, not invoice.read", async () => {
     const { vendor, po, poLines } = await poWithLines([
       { description: "Cement OPC 53", quantity: 10, rate: 400 },

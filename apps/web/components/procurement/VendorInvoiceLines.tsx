@@ -67,10 +67,13 @@ export function VendorInvoiceLines({ invoiceId, onClose }: { invoiceId: string; 
   });
   const lastMatch = matchQuery.data?.[0];
 
-  const editable = Boolean(
-    invoice && invoice.match_status === 'UNMATCHED' &&
-    !['APPROVED', 'CANCELLED'].includes(String(invoice.lifecycle_status)),
-  );
+  // The server is the single source of truth for whether lines can still be
+  // changed (UNMATCHED and EXCEPTION both are; MATCHED/OVERRIDDEN, approved,
+  // paid or on a payment run are not) — GET /invoices/:id already works this
+  // out (apps/api/src/modules/inventory/routes.ts's invoiceLinesLockReason),
+  // so the screen reflects it rather than recomputing its own, looser rule.
+  const editable = Boolean(invoice?.lines_editable);
+  const lockReason = invoice?.lines_lock_reason as string | undefined;
 
   const linesFromInvoice = (line: Row) => ({
     item_id: line.item_id ?? undefined,
@@ -207,7 +210,7 @@ export function VendorInvoiceLines({ invoiceId, onClose }: { invoiceId: string; 
           >
             {!editable ? (
               <p className="mb-2 text-2xs text-text-subtle">
-                Lines cannot be changed once the invoice has been matched, approved or cancelled.
+                {lockReason ?? 'Lines cannot be changed once the invoice has been matched, approved or cancelled.'}
               </p>
             ) : null}
             <form onSubmit={handleSubmit((v) => save.mutate(v))} noValidate>

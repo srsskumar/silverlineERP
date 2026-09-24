@@ -155,15 +155,59 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
  // gated on inventory.read, so the payables officer who holds invoice.read
  // and invoice.manage could match and pay an invoice but never list one.
  app.get('/api/v1/invoices',{preHandler:guard('invoice.read')},async req=>{const {limit,offset}=page(req),rows=(await pool.query('SELECT * FROM invoices WHERE org_id=$1 ORDER BY created_at DESC,id DESC LIMIT $2 OFFSET $3',[actor(req).orgId,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
+ /**
+  * Whether a vendor invoice's lines can still be changed, and why not if not
+  * (fix round 1, item 1 on task 5c / finding B-004).
+  *
+  * UNMATCHED and EXCEPTION are both editable: EXCEPTION means a match was
+  * run and failed, which is exactly the state somebody needs to correct a
+  * line from — refusing it left override-with-reason as the only way out of
+  * a mismatch, even a mismatch caused by a typo in the invoice's own lines.
+  * MATCHED and OVERRIDDEN are not: a recorded match is a decision, and
+  * changing the lines under it without reversing that decision first would
+  * invalidate it silently.
+  *
+  * Blocked independently of match_status once the invoice is approved or
+  * cancelled, has any payment allocated against it (even a partial one —
+  * changing what a real payment was allocated against is never safe), or
+  * sits on a payment run that is still open or has already paid.
+  */
+ async function invoiceLinesLockReason(db:Pool|import('pg').PoolClient,id:string,invoice:Record<string,any>):Promise<string|null> {
+  if(!['UNMATCHED','EXCEPTION'].includes(String(invoice.match_status)))
+   return 'This invoice has already been matched or overridden. Reverse the match before changing its lines.';
+  if(['APPROVED','CANCELLED'].includes(String(invoice.lifecycle_status)))
+   return `An invoice at ${invoice.lifecycle_status} cannot have its lines changed`;
+  const status=(await db.query(
+   `SELECT
+      COALESCE((SELECT sum(a.amount + a.tds_amount + a.advance_adjusted)
+                FROM payment_allocations a JOIN payments pm ON pm.id = a.payment_id
+                WHERE a.document_type = 'VENDOR_INVOICE' AND a.document_id = $1
+                  AND a.reversed_at IS NULL AND pm.reversed_at IS NULL), 0) AS settled,
+      EXISTS(SELECT 1 FROM payment_run_lines l JOIN payment_runs r ON r.id = l.run_id
+             WHERE l.document_type = 'VENDOR_INVOICE' AND l.document_id = $1
+               AND r.status IN ('DRAFT','APPROVED','PAID')) AS in_run`,
+   [id])).rows[0];
+  if(Number(status.settled)>0.005)
+   return 'This invoice has a payment allocated against it. Its lines cannot be changed.';
+  if(status.in_run)
+   return 'This invoice is on a payment run. Its lines cannot be changed until it is taken off the run.';
+  return null;
+ }
+ async function assertInvoiceLinesEditable(db:import('pg').PoolClient,id:string,invoice:Record<string,any>) {
+  const reason=await invoiceLinesLockReason(db,id,invoice);
+  if(reason)fail('INVALID_STATUS',reason,409);
+ }
  app.get('/api/v1/invoices/:id',{preHandler:guard('invoice.read')},async req=>{
   const u=actor(req),id=(req.params as {id:string}).id,invoice=await inOrg(pool,'invoices',id,u.orgId);
   const vendor=(await pool.query(
    'SELECT name,udyam_number,msme_category,msme_registered,has_written_agreement FROM vendors WHERE id=$1',
    [invoice.vendor_id])).rows[0];
   const lines=(await pool.query('SELECT * FROM invoice_lines WHERE invoice_id=$1 ORDER BY line_no',[id])).rows;
+  const lockReason=await invoiceLinesLockReason(pool,id,invoice);
   return {data:{...invoice,vendor_name:vendor?.name??null,
    vendor_udyam_number:vendor?.udyam_number??null,vendor_msme_category:vendor?.msme_category??null,
    vendor_msme_registered:vendor?.msme_registered??null,vendor_has_written_agreement:vendor?.has_written_agreement??null,
+   lines_editable:!lockReason,lines_lock_reason:lockReason,
    lines}};
  });
  const round2=(n:number)=>Math.round((n+Number.EPSILON)*100)/100;
@@ -264,10 +308,7 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
   const u=actor(req),id=(req.params as {id:string}).id,input=parse(invoiceLinesUpdateSchema,req.body);
   return {data:await mutate(pool,req,'invoice.lines.update','invoice',async db=>{
    const invoice=await inOrg(db,'invoices',id,u.orgId,true);
-   if(invoice.match_status!=='UNMATCHED')
-    fail('INVALID_STATUS','This invoice has already been matched. Reverse the match before changing its lines.',409);
-   if(['APPROVED','CANCELLED'].includes(String(invoice.lifecycle_status)))
-    fail('INVALID_STATUS',`An invoice at ${invoice.lifecycle_status} cannot have its lines changed`,409);
+   await assertInvoiceLinesEditable(db,id,invoice);
 
    const purchaseOrderId=invoice.purchase_order_id?String(invoice.purchase_order_id):null;
    await checkLinePoIds(db,purchaseOrderId,input.lines);
@@ -276,8 +317,13 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    await db.query('DELETE FROM invoice_lines WHERE invoice_id=$1',[id]);
    await writeInvoiceLines(db,u.orgId,id,input.lines,computed);
 
+   // An edit invalidates whatever match_status was on record -- EXCEPTION
+   // most often, since that is the one state this route exists to let
+   // somebody correct — so it resets to UNMATCHED and forces a fresh match
+   // rather than leaving a stale verdict standing over lines that changed
+   // under it.
    const updated=(await db.query(
-    'UPDATE invoices SET subtotal=$2,tax=$3,total=$4 WHERE id=$1 RETURNING *',
+    "UPDATE invoices SET subtotal=$2,tax=$3,total=$4,match_status='UNMATCHED' WHERE id=$1 RETURNING *",
     [id,computed.taxableValue.toFixed(2),computed.taxTotal.toFixed(2),computed.total.toFixed(2)])).rows[0];
    const lines=(await db.query('SELECT * FROM invoice_lines WHERE invoice_id=$1 ORDER BY line_no',[id])).rows;
    return {...updated,lines};
