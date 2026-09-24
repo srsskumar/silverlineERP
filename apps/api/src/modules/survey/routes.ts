@@ -4045,6 +4045,7 @@ export async function registerSurveyRoutes(
             const rows = (await db.query(
               `SELECT sv.id, ou.name AS village_name, sv.total_extent_ac,
                       b.id AS claim_id, b.status AS claim_status, b.version AS claim_version,
+                      b.submitted_on AS claim_submitted_on,
                       /*
                        * Whether the village has earned this milestone yet.
                        *
@@ -4152,6 +4153,15 @@ export async function registerSurveyRoutes(
                 if (!billingTransitionAllowed(
                   String(r.claim_status) as BillingStatus, input.status as BillingStatus)) {
                   skipped.push({ village_name: String(r.village_name), reason: 'CLAIM_CLOSED' });
+                  continue;
+                }
+                // The single route's SV-012 rule, row by row (SV-022): a
+                // decision cannot predate the claim it decides.
+                const submittedOn = iso(r.claim_submitted_on);
+                if (input.decided_on && submittedOn && input.decided_on < submittedOn) {
+                  skipped.push({
+                    village_name: String(r.village_name), reason: 'DECIDED_BEFORE_SUBMITTED',
+                  });
                   continue;
                 }
               }

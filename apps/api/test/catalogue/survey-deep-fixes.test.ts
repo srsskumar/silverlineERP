@@ -373,3 +373,66 @@ describe("SV-019 reversing a paid claim", () => {
     expect(audit).toBe(2);
   });
 });
+
+/*
+ * Round 2, SV-022: a bulk decision dated before a claim was submitted is
+ * refused for that village (named, skipped) without failing the batch.
+ * Round 2, item 3: a bulk reversal reports the rows it actually reversed.
+ */
+describe("SV-022 bulk decisions and reversals, row by row", () => {
+  let early: string;
+  let late: string;
+  const ready = async (name: string, submitted: string) => {
+    const v = await village(name);
+    expect((await startGt(v, [await employee()], day(-12))).status).toBe(201);
+    let n = -11;
+    for (const code of ["GROUND_TRUTHING", "GT_QC"]) {
+      await post(w.admin, `/api/v1/survey/villages/${v}/stage`, { stage_code: code, state: "IN_PROGRESS", started_on: day(n) });
+      const b = await post(w.admin, `/api/v1/survey/villages/${v}/stage`, { stage_code: code, state: "COMPLETED", started_on: day(n), completed_on: day(n + 1) });
+      expect(b.status, JSON.stringify(b.body)).toBe(200);
+      n += 1;
+    }
+    expect((await post(w.admin, `/api/v1/survey/villages/${v}/billing`, { milestone: 1, submitted_on: submitted })).status).toBe(201);
+    return v;
+  };
+  const statusOf = async (v: string) =>
+    ((await send("GET", w.admin, `/api/v1/survey/villages/${v}/billing`)).data as any[])[0].status;
+
+  beforeAll(async () => {
+    early = await ready("Submitted early", day(-8));
+    late = await ready("Submitted late", day(-2));
+  });
+
+  it("skips the village whose claim went in after the decision date, and decides the rest", async () => {
+    const body = {
+      survey_village_ids: [early, late], action: "DECIDE", milestone: 1,
+      status: "APPROVED", decided_on: day(-5),
+    };
+    const dry = await post(w.admin, "/api/v1/survey/billing/bulk", { ...body, dry_run: true });
+    expect(dry.status, JSON.stringify(dry.body)).toBe(200);
+    expect(dry.data.would_change).toBe(1);
+    expect(dry.data.skipped).toEqual([{ village_name: "Submitted late", reason: "DECIDED_BEFORE_SUBMITTED" }]);
+
+    const real = await post(w.admin, "/api/v1/survey/billing/bulk", { ...body, dry_run: false });
+    expect(real.status, JSON.stringify(real.body)).toBe(200);
+    expect(real.data.updated).toBe(1);
+    expect(await statusOf(early)).toBe("APPROVED");
+    expect(await statusOf(late)).toBe("SUBMITTED");
+  });
+
+  it("reports a bulk reversal's count from the rows actually reversed", async () => {
+    const pay = await post(w.admin, "/api/v1/survey/billing/bulk", {
+      survey_village_ids: [early], action: "DECIDE", milestone: 1,
+      status: "PAID", decided_on: day(0), dry_run: false,
+    });
+    expect(pay.data.updated).toBe(1);
+    const rev = await post(w.admin, "/api/v1/survey/billing/bulk", {
+      survey_village_ids: [early, late], action: "REVERSE", milestone: 1,
+      reason: "Paid in error", dry_run: false,
+    });
+    expect(rev.status, JSON.stringify(rev.body)).toBe(200);
+    expect(rev.data.updated).toBe(1);
+    expect(JSON.stringify(rev.data.skipped)).toContain("NOT_PAID");
+    expect(await statusOf(early)).toBe("APPROVED");
+  });
+});

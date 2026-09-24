@@ -2353,7 +2353,8 @@ export type BillingSkipReason =
   | 'NOT_EARNED'
   | 'CLAIMED_OVER_100'
   | 'CLAIM_CLOSED'
-  | 'NOT_PAID';
+  | 'NOT_PAID'
+  | 'DECIDED_BEFORE_SUBMITTED';
 
 export const BILLING_SKIP_LABELS: Record<BillingSkipReason, string> = {
   ALREADY_CLAIMED: 'already submitted at this milestone',
@@ -2365,6 +2366,7 @@ export const BILLING_SKIP_LABELS: Record<BillingSkipReason, string> = {
   CLAIMED_OVER_100: 'this claim would take the village past 100% claimed',
   CLAIM_CLOSED: 'the claim is already paid or cannot move to that status',
   NOT_PAID: 'nothing paid at this milestone to reverse',
+  DECIDED_BEFORE_SUBMITTED: 'the decision date is before this claim was submitted',
 };
 
 /* ----------------------------------------------- ground-truthing staffing */
