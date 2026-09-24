@@ -24,6 +24,7 @@ import {
 } from "../src/api/endpoints";
 import { actionLabel, executionStatusTone, triggerLabel } from "../src/automationFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
 import { listState } from "../src/listState";
 import { LoadError } from "../src/ui/LoadError";
 import {
@@ -69,8 +70,11 @@ function AutomationScreen() {
 
   const rows = rules.data ?? [];
 
+  const pull = usePullRefresh(canRead && projects, canRead && Boolean(projectId) && rules);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader title="Automation" onBack={() => router.back()} />
       <Muted style={{ marginBottom: space.lg }}>
         What rules fire on a project, and what each one does.
@@ -119,7 +123,7 @@ function AutomationScreen() {
                 {listState(rules, rows.length) === "loading" ? (
                   <Loading />
                 ) : listState(rules, rows.length) === "error" ? (
-                  <LoadError error={rules.error} what="the rules" />
+                  <LoadError query={rules} what="the rules" />
                 ) : rows.length === 0 ? (
                   <EmptyState icon="git-branch-outline" title="No rules on this project" />
                 ) : (
@@ -203,7 +207,7 @@ function RuleDetail({ rule, onClose }: { rule: AutomationRule; onClose: () => vo
         {listState(executions, (executions.data ?? []).length) === "loading" ? (
           <Loading />
         ) : listState(executions, (executions.data ?? []).length) === "error" ? (
-          <LoadError error={executions.error} what="recent runs" />
+          <LoadError query={executions} what="recent runs" />
         ) : (executions.data ?? []).length === 0 ? (
           <EmptyState icon="time-outline" title="No runs recorded yet" />
         ) : (

@@ -22,6 +22,7 @@ import { CLIENT_TYPES, validateClientCreate } from "../src/clientsFormat";
 import { describeApiError } from "../src/errorFormat";
 import { canGoNewer, canGoOlder, newerOffset, olderOffset } from "../src/paging";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
 import { listState } from "../src/listState";
 import { LoadError } from "../src/ui/LoadError";
 import {
@@ -74,8 +75,11 @@ function ClientsScreen() {
 
   const rows = clients.data?.items ?? [];
 
+  const pull = usePullRefresh(canRead && clients);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader
         title="Clients"
         onBack={() => router.back()}
@@ -122,7 +126,7 @@ function ClientsScreen() {
             {listState(clients, rows.length) === "loading" ? (
               <Loading />
             ) : listState(clients, rows.length) === "error" ? (
-              <LoadError error={clients.error} what="clients" />
+              <LoadError query={clients} what="clients" />
             ) : rows.length === 0 ? (
               <EmptyState icon="business-outline" title="No clients found" />
             ) : (

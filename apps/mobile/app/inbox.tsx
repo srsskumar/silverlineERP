@@ -18,6 +18,7 @@ import {
 import { mobileDeepLink } from "../src/deepLinks";
 import { distinctTypes, formatNotificationType, isUnread } from "../src/inboxFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
 import { listState } from "../src/listState";
 import { LoadError } from "../src/ui/LoadError";
 import {
@@ -101,8 +102,11 @@ function InboxScreen() {
     }
   };
 
+  const pull = usePullRefresh(list);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader
         title="Inbox"
         onBack={() => router.back()}
@@ -142,7 +146,7 @@ function InboxScreen() {
         {listState(list, rows.length) === "loading" ? (
           <Loading />
         ) : listState(list, rows.length) === "error" ? (
-          <LoadError error={list.error} what="the inbox" />
+          <LoadError query={list} what="the inbox" />
         ) : rows.length === 0 ? (
           <EmptyState
             icon="mail-open-outline"

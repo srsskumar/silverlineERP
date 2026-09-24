@@ -34,6 +34,7 @@ import { listState } from "../src/listState";
 import { LoadError } from "../src/ui/LoadError";
 import { describeApiError } from "../src/errorFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
 import {
   BackHeader,
   Badge,
@@ -80,8 +81,11 @@ function DocumentsScreen() {
   const rows = tab === "renewals" ? (renewals.data?.items ?? []) : (register.data?.items ?? []);
   const active = tab === "renewals" ? renewals : register;
 
+  const pull = usePullRefresh(canRead && tab === "renewals" && renewals, canRead && tab === "register" && register);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader title="Documents" onBack={() => router.back()} />
       <Muted style={{ marginBottom: space.lg }}>
         Licences, policies, certificates and agreements — and when each one runs out.
@@ -131,7 +135,7 @@ function DocumentsScreen() {
             {listState(active, rows.length) === "loading" ? (
               <Loading />
             ) : listState(active, rows.length) === "error" ? (
-              <LoadError error={active.error} what="the register" />
+              <LoadError query={active} what="the register" />
             ) : rows.length === 0 ? (
               <EmptyState
                 icon="document-text-outline"

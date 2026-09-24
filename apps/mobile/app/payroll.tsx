@@ -18,6 +18,7 @@ import { getPayrollRun, getPayrollRunPayslips, getPayrollRuns, type PayrollRun }
 import { payrollPeriodLabel, payrollRunStatusTone } from "../src/payrollFormat";
 import { day } from "@silverline/shared";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
 import { listState } from "../src/listState";
 import { LoadError } from "../src/ui/LoadError";
 import {
@@ -57,8 +58,11 @@ function PayrollScreen() {
 
   const rows = runs.data?.items ?? [];
 
+  const pull = usePullRefresh(canRead && runs);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader title="Payroll" onBack={() => router.back()} />
       <Muted style={{ marginBottom: space.lg }}>
         Payroll runs across the organisation — status, period and totals.
@@ -77,7 +81,7 @@ function PayrollScreen() {
             {listState(runs, rows.length) === "loading" ? (
               <Loading />
             ) : listState(runs, rows.length) === "error" ? (
-              <LoadError error={runs.error} what="payroll runs" />
+              <LoadError query={runs} what="payroll runs" />
             ) : rows.length === 0 ? (
               <EmptyState icon="wallet-outline" title="No payroll runs yet" />
             ) : (
@@ -165,7 +169,7 @@ function RunDetail({ run }: { run: PayrollRun }) {
         {listState(payslips, (payslips.data?.items ?? []).length) === "loading" ? (
           <Loading />
         ) : listState(payslips, (payslips.data?.items ?? []).length) === "error" ? (
-          <LoadError error={payslips.error} what="payslips" />
+          <LoadError query={payslips} what="payslips" />
         ) : (payslips.data?.items ?? []).length === 0 ? (
           <EmptyState icon="document-text-outline" title="No payslips in this run" />
         ) : (

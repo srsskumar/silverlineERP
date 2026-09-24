@@ -23,6 +23,7 @@ import { useAuth } from "../src/auth/AuthContext";
 import { getCycles, getProjects, type Cycle } from "../src/api/endpoints";
 import { cycleMetricsSummary, cycleStatusTone, groupCycles } from "../src/planningFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
 import { listState } from "../src/listState";
 import { LoadError } from "../src/ui/LoadError";
 import {
@@ -60,8 +61,11 @@ function PlanningScreen() {
 
   const selectedProject = projects.data?.find((p) => p.id === projectId);
 
+  const pull = usePullRefresh(canRead && !projectId && projects, canRead && Boolean(projectId) && cycles);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader title="Planning" onBack={() => router.back()} />
       <Muted style={{ marginBottom: space.lg }}>Cycles for a project — what's active, what's next.</Muted>
 
@@ -84,7 +88,7 @@ function PlanningScreen() {
             {listState(projects, (projects.data ?? []).length) === "loading" ? (
               <Loading />
             ) : listState(projects, (projects.data ?? []).length) === "error" ? (
-              <LoadError error={projects.error} what="projects" />
+              <LoadError query={projects} what="projects" />
             ) : (projects.data ?? []).length === 0 ? (
               <EmptyState icon="folder-outline" title="No projects found" />
             ) : (
@@ -109,7 +113,7 @@ function PlanningScreen() {
           {listState(cycles, (cycles.data ?? []).length) === "loading" ? (
             <Loading />
           ) : listState(cycles, (cycles.data ?? []).length) === "error" ? (
-            <LoadError error={cycles.error} what="cycles" />
+            <LoadError query={cycles} what="cycles" />
           ) : (
             <CycleGroups cycles={cycles.data ?? []} />
           )}

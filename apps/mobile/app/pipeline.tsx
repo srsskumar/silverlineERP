@@ -26,6 +26,7 @@ import {
 } from "../src/leadsFormat";
 import { canGoNewer, canGoOlder, newerOffset, olderOffset } from "../src/paging";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
 import { listState } from "../src/listState";
 import { LoadError } from "../src/ui/LoadError";
 import {
@@ -83,8 +84,11 @@ function PipelineScreen() {
     void qc.invalidateQueries({ queryKey: ["leads"] });
   };
 
+  const pull = usePullRefresh(canRead && leads);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader
         title="Pipeline"
         onBack={() => router.back()}
@@ -154,7 +158,7 @@ function PipelineScreen() {
             {listState(leads, rows.length) === "loading" ? (
               <Loading />
             ) : listState(leads, rows.length) === "error" ? (
-              <LoadError error={leads.error} what="leads" />
+              <LoadError query={leads} what="leads" />
             ) : rows.length === 0 ? (
               <EmptyState icon="trending-up-outline" title="No leads found" />
             ) : (

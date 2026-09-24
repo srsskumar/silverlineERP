@@ -29,6 +29,7 @@ import { useAuth } from "../src/auth/AuthContext";
 import { REPORT_TYPE_META, getReportPdf, getReports, postReport, type ReportJob } from "../src/api/endpoints";
 import { availableReportTypes, reportCanDownload, reportStatusTone } from "../src/reportsFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
 import { listState } from "../src/listState";
 import { LoadError } from "../src/ui/LoadError";
 import {
@@ -104,8 +105,11 @@ function ReportsScreen() {
     }
   };
 
+  const pull = usePullRefresh(list);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader title="Reports" onBack={() => router.back()} />
       <Muted style={{ marginBottom: space.lg }}>
         Generate a one-off report. Recurring schedules and csv/xlsx exports stay on the web.
@@ -148,7 +152,7 @@ function ReportsScreen() {
             {listState(list, (list.data?.items ?? []).length) === "loading" ? (
               <Loading />
             ) : listState(list, (list.data?.items ?? []).length) === "error" ? (
-              <LoadError error={list.error} what="your reports" />
+              <LoadError query={list} what="your reports" />
             ) : (list.data?.items ?? []).length === 0 ? (
               <EmptyState icon="document-outline" title="No reports yet" />
             ) : (

@@ -23,6 +23,7 @@ import { describeApiError } from "../src/errorFormat";
 import { canGoNewer, canGoOlder, newerOffset, olderOffset } from "../src/paging";
 import { TENDER_TYPES, tenderStatusTone, validateTenderCreate } from "../src/tendersFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
 import { listState } from "../src/listState";
 import { LoadError } from "../src/ui/LoadError";
 import {
@@ -71,8 +72,11 @@ function TendersScreen() {
 
   const rows = tenders.data?.items ?? [];
 
+  const pull = usePullRefresh(canRead && tenders);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader
         title="Tenders"
         onBack={() => router.back()}
@@ -143,7 +147,7 @@ function TendersScreen() {
             {listState(tenders, rows.length) === "loading" ? (
               <Loading />
             ) : listState(tenders, rows.length) === "error" ? (
-              <LoadError error={tenders.error} what="tenders" />
+              <LoadError query={tenders} what="tenders" />
             ) : rows.length === 0 ? (
               <EmptyState icon="document-lock-outline" title="No tenders found" />
             ) : (

@@ -24,6 +24,7 @@ import {
 } from "../src/api/endpoints";
 import { approvalStatusTone, formatDocumentType, validateApprovalDecision } from "../src/approvalsFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
 import { listState } from "../src/listState";
 import { LoadError } from "../src/ui/LoadError";
 import {
@@ -132,8 +133,11 @@ function ApprovalsScreen() {
 
   const canDecideThis = tab === "inbox" && canAct;
 
+  const pull = usePullRefresh(canAct && tab === "inbox" && inbox, canRead && tab === "mine" && mine);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader title="Approvals" onBack={() => router.back()} />
       <Muted style={{ marginBottom: space.lg }}>
         The authority ladder every financial document climbs.
@@ -168,7 +172,7 @@ function ApprovalsScreen() {
             {listState(active, rows.length) === "loading" ? (
               <Loading />
             ) : listState(active, rows.length) === "error" ? (
-              <LoadError error={active.error} what="approvals" />
+              <LoadError query={active} what="approvals" />
             ) : rows.length === 0 ? (
               <EmptyState
                 icon="checkmark-done-outline"

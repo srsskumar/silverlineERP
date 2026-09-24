@@ -18,6 +18,7 @@ import { useAuth } from "../src/auth/AuthContext";
 import { getAssetMovements, type AssetMovement } from "../src/api/endpoints";
 import { conditionLabel, movementLabel, movementTone } from "../src/assetMovementsFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
 import { listState } from "../src/listState";
 import { LoadError } from "../src/ui/LoadError";
 import {
@@ -52,8 +53,11 @@ function AssetMovementsScreen() {
 
   const rows = moves.data?.items ?? [];
 
+  const pull = usePullRefresh(canRead && moves);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader title="Asset movements" onBack={() => router.back()} />
       <Muted style={{ marginBottom: space.lg }}>
         Every time a piece of equipment changed hands, most recent first.
@@ -68,7 +72,7 @@ function AssetMovementsScreen() {
       ) : listState(moves, rows.length) === "loading" ? (
         <Loading />
       ) : listState(moves, rows.length) === "error" ? (
-        <LoadError error={moves.error} what="asset movements" />
+        <LoadError query={moves} what="asset movements" />
       ) : rows.length === 0 ? (
         <EmptyState icon="swap-horizontal-outline" title="No movements found" />
       ) : (

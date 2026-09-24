@@ -17,6 +17,7 @@ import { getEmployee, getEmployeeDirectory, type DirectoryEmployee } from "../sr
 import { employeeStatusTone, formatEmployeeName } from "../src/employeesFormat";
 import { day } from "@silverline/shared";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
 import { listState } from "../src/listState";
 import { LoadError } from "../src/ui/LoadError";
 import {
@@ -54,8 +55,11 @@ function EmployeesScreen() {
 
   const rows = directory.data?.items ?? [];
 
+  const pull = usePullRefresh(canRead && directory);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader title="Directory" onBack={() => router.back()} />
       <Muted style={{ marginBottom: space.lg }}>Everyone in the organisation, by name.</Muted>
 
@@ -77,7 +81,7 @@ function EmployeesScreen() {
             {listState(directory, rows.length) === "loading" ? (
               <Loading />
             ) : listState(directory, rows.length) === "error" ? (
-              <LoadError error={directory.error} what="the directory" />
+              <LoadError query={directory} what="the directory" />
             ) : rows.length === 0 ? (
               <EmptyState icon="people-outline" title="No one found" />
             ) : (

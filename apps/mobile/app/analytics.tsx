@@ -19,6 +19,8 @@ import { useAuth } from "../src/auth/AuthContext";
 import { getProjectAnalytics, getProjectInsights, getProjects } from "../src/api/endpoints";
 import { delayRiskTone, formatConfidence } from "../src/analyticsFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { usePullRefresh } from "../src/ui/usePullRefresh";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -66,8 +68,11 @@ function AnalyticsScreen() {
 
   const data = metrics.data;
 
+  const pull = usePullRefresh(canRead && projects, canRead && Boolean(projectId) && metrics, canRead && Boolean(projectId) && insights);
+
+
   return (
-    <Screen>
+    <Screen refresh={pull}>
       <BackHeader title="Analytics" onBack={() => router.back()} />
       <Muted style={{ marginBottom: space.lg }}>
         Throughput, workload and delivery risk, from operational records.
@@ -112,7 +117,7 @@ function AnalyticsScreen() {
           ) : metrics.isLoading ? (
             <Loading />
           ) : !data ? (
-            <EmptyState icon="alert-circle-outline" title="Could not load analytics" />
+            <LoadError query={metrics} what="analytics" />
           ) : (
             <>
               <Row gap={space.sm} style={{ flexWrap: "wrap", marginBottom: space.md }}>

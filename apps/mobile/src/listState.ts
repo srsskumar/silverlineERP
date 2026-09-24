@@ -16,3 +16,22 @@ export function listState(
   if (query.isError) return "error";
   return "empty";
 }
+
+/**
+ * Fix round 1: whether retrying a failed load can help. A dropped connection
+ * (status 0, or a non-API error), a timeout, a rate limit or a 5xx may work
+ * next time; a 401/403/404/422 will not, so the screen offers no Retry.
+ */
+export function canRetryLoad(error: unknown): boolean {
+  const status =
+    typeof error === "object" && error !== null && typeof (error as { status?: unknown }).status === "number"
+      ? (error as { status: number }).status
+      : 0;
+  if (status === 0 || status >= 500) return true;
+  return status === 408 || status === 429;
+}
+
+/** The Retry action for a failed query, or undefined when a retry would not help. */
+export function retryAction(query: { error: unknown; refetch: () => unknown }): (() => void) | undefined {
+  return canRetryLoad(query.error) ? () => void query.refetch() : undefined;
+}
