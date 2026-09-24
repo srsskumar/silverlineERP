@@ -2,12 +2,20 @@
 import type {ListTasksParams} from '@/lib/tasks';
 import {useRows} from './Workbench';
 import {useAuth} from '../AuthProvider';
+import {hasPermission,PERMISSIONS} from '@/lib/permissions';
 
 export function AdvancedTaskFilters({project,value,onChange}:{project:string;value:ListTasksParams;onChange:(v:ListTasksParams)=>void}){
  const {session}=useAuth();
- const people=useRows(`projects/${project}/people?limit=100`,!!project&&!session?.roles?.every(r=>r==='CLIENT_VIEWER'));
+ // GET /projects/:id/people and GET /custom-fields are both gated on
+ // task.read (planning/routes.ts) -- gate on that exact permission, not a
+ // role-name check. A role-name check only ever protects the one role it
+ // names: CLIENT_VIEWER holds task.read, so this skipped a permitted role's
+ // fetch while a role with none of task.read (e.g. GOVT_OBSERVER) sailed
+ // past the check and still 403'd on every load (same class as P-001,
+ // KanbanBoard.tsx's equivalent fetch).
+ const people=useRows(`projects/${project}/people?limit=100`,!!project&&hasPermission(session,PERMISSIONS.TASK_READ));
  const cycles=useRows(`cycles?project_id=${project}&limit=100`,!!project&&!!session?.permissions.includes('cycle.read'));
- const fields=useRows(`custom-fields?project_id=${project}`,!!project&&!session?.roles?.every(r=>r==='CLIENT_VIEWER'));
+ const fields=useRows(`custom-fields?project_id=${project}`,!!project&&hasPermission(session,PERMISSIONS.TASK_READ));
  const set=(key:keyof ListTasksParams,v:unknown)=>onChange({...value,[key]:v||undefined});
  const custom=(key:string,v:unknown)=>{const next={...value.custom_fields};if(v===undefined||v==='')delete next[key];else next[key]=v;onChange({...value,custom_fields:Object.keys(next).length?next:undefined});};
  const cls='mt-1 w-full rounded border border-border bg-surface p-2 text-sm text-text';

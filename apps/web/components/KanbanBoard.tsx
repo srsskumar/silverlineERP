@@ -94,12 +94,15 @@ export function KanbanBoard({
   // Terminal columns are collapsed away by default on a busy board; DONE
   // accumulates without bound and pushes the live columns off-screen.
   // Task rows carry only assignee_id, so avatars would otherwise be initialled
-  // from a UUID. One lookup per board beats one request per card. A client
-  // viewer has no read permission for project people (same reason
-  // AdvancedTaskFilters.tsx guards its own equivalent fetch) — asking anyway
-  // just throws a console 403 on every dashboard load, so skip it for a
-  // session that is CLIENT_VIEWER only.
-  const people = useRows(`projects/${projectId}/people?limit=100`, !!projectId && !session?.roles?.every(r=>r==='CLIENT_VIEWER'));
+  // from a UUID. One lookup per board beats one request per card.
+  // GET /projects/:id/people is gated on task.read (planning/routes.ts) --
+  // gate the fetch on that exact permission, not on a role-name check. A
+  // role-name check (`roles.every(r => r === 'CLIENT_VIEWER')`) only ever
+  // catches the one role it was written for: CLIENT_VIEWER has task.read so
+  // this would have kept fetching for it anyway, and any other role that
+  // lacks task.read (e.g. GOVT_OBSERVER, which holds nothing) sailed straight
+  // past the check and still threw a console 403 on every dashboard load.
+  const people = useRows(`projects/${projectId}/people?limit=100`, !!projectId && hasPermission(session, PERMISSIONS.TASK_READ));
   const nameById = React.useMemo(() => {
     const map = new Map<string, string>();
     for (const row of people.data?.rows ?? []) {

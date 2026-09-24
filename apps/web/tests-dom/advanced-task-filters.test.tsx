@@ -17,22 +17,30 @@ const PEOPLE = [
   { id: 'u-admin', username: 'admin', name: null, emp_no: null },
 ];
 
-beforeEach(() => {
-  vi.resetModules();
-  vi.doMock('@/lib/apiClient', () => ({
-    apiRequestRaw: vi.fn(async (path: string) => {
-      if (path.includes('/people')) {
-        return { body: { data: PEOPLE, has_more: false }, requestId: 't' };
-      }
-      return { body: { data: [] }, requestId: 't' };
-    }),
-  }));
+let apiRequestRaw: ReturnType<typeof vi.fn>;
+
+function mockSession(permissions: string[], roles: string[]) {
   vi.doMock('@/components/AuthProvider', () => ({
     useAuth: () => ({
-      session: { permissions: [], roles: ['ADMIN'], user: { id: 'u1' } },
+      session: { permissions, roles, user: { id: 'u1' } },
       status: 'authenticated',
     }),
   }));
+}
+
+beforeEach(() => {
+  vi.resetModules();
+  apiRequestRaw = vi.fn(async (path: string) => {
+    if (path.includes('/people')) {
+      return { body: { data: PEOPLE, has_more: false }, requestId: 't' };
+    }
+    return { body: { data: [] }, requestId: 't' };
+  });
+  vi.doMock('@/lib/apiClient', () => ({ apiRequestRaw }));
+  // ADMIN holds task.read for real (ROLE_PERMISSIONS: [...ALL_PERMISSIONS]);
+  // the mock has to carry it too now that the fetch gates on the permission
+  // itself rather than on the role's name.
+  mockSession(['task.read'], ['ADMIN']);
 });
 
 function wrap(node: React.ReactElement) {
@@ -63,5 +71,41 @@ describe('AdvancedTaskFilters', () => {
     expect(labels).not.toContain('asha.rao');
     // An account with no employee record still has to be pickable.
     expect(labels).toContain('admin');
+  });
+
+  it('does not fetch project people or custom fields for a role without task.read (P-001 round 2)', async () => {
+    // GOVT_OBSERVER holds no permissions at all (GOVT_OBSERVER_ROLE_GRANTS
+    // union: []). The old guard (`!roles.every(r => r === 'CLIENT_VIEWER')`)
+    // only ever protected CLIENT_VIEWER by name -- any other role with no
+    // task.read, this one included, sailed past it and still 403'd GET
+    // /projects/:id/people and GET /custom-fields on every load.
+    mockSession([], ['GOVT_OBSERVER']);
+    const { AdvancedTaskFilters } = await import('@/components/v2/AdvancedTaskFilters');
+    wrap(<AdvancedTaskFilters project="p1" value={{}} onChange={() => {}} />);
+    fireEvent.click(screen.getByText('More filters'));
+
+    const select = await screen.findByLabelText('Assignee') as HTMLSelectElement;
+    // Only "Anyone": no people fetch went out, so nothing populated it.
+    await waitFor(() => expect(select.options.length).toBe(1));
+    expect(apiRequestRaw).not.toHaveBeenCalledWith(
+      expect.stringContaining('/people'), expect.anything(),
+    );
+    expect(apiRequestRaw).not.toHaveBeenCalledWith(
+      expect.stringContaining('/custom-fields'), expect.anything(),
+    );
+  });
+
+  it('does fetch project people for CLIENT_VIEWER, which holds task.read', async () => {
+    // The inverse of P-001: CLIENT_VIEWER actually holds task.read
+    // (S4_ROLE_GRANTS), so the old role-name guard denied it a fetch it was
+    // entitled to make -- the assignee dropdown silently stayed empty for a
+    // permitted role.
+    mockSession(['task.read'], ['CLIENT_VIEWER']);
+    const { AdvancedTaskFilters } = await import('@/components/v2/AdvancedTaskFilters');
+    wrap(<AdvancedTaskFilters project="p1" value={{}} onChange={() => {}} />);
+    fireEvent.click(screen.getByText('More filters'));
+
+    const select = await screen.findByLabelText('Assignee') as HTMLSelectElement;
+    await waitFor(() => expect(select.options.length).toBe(3));
   });
 });
