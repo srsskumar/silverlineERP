@@ -560,20 +560,91 @@ export async function registerSurveyRoutes(
    * programme did not need to be posted to a village to have business
    * correcting a point on it.
    */
+  /**
+   * Who may do the village's own work: complete a stage, or record, correct
+   * or delete a control point (owner decision, 2026-09-24; SV-001, SV-002).
+   *
+   * Five people, and the same five for both, so the two rules cannot drift:
+   *   - the crew member assigned to the village (for a stage, to that stage),
+   *   - that crew member's reporting manager (employees.reports_to),
+   *   - a team leader -- already confined by villageOr404 to the programmes
+   *     they are on, which is how the scope model ties a TL to a project,
+   *   - the project manager of the survey's project: a PROJECT_MANAGER who
+   *     is the paired project's manager, is enrolled on the programme as its
+   *     PM, or whose role is scoped to that project or organisation-wide,
+   *   - an administrator.
+   * Holding survey.enter is not on the list: it is the right to record a
+   * day, not to sign off somebody else's work.
+   */
+  interface WorkAuthority {
+    everything: boolean;
+    ownStages: Set<string>;
+    managedStages: Set<string>;
+  }
+  async function workAuthority(
+    db: Pool | PoolClient,
+    u: { orgId: string; id: string; roles?: string[] },
+    villageId: string,
+  ): Promise<WorkAuthority> {
+    const roles = u.roles ?? [];
+    const f = (await db.query(
+      `SELECT
+         ARRAY(SELECT DISTINCT c.stage_id::text FROM survey_crew c
+                 JOIN users me ON me.employee_id = c.employee_id
+                WHERE me.id = $2 AND c.org_id = $1 AND c.survey_village_id = sv.id
+                  AND c.released_on IS NULL) AS own_stages,
+         ARRAY(SELECT DISTINCT c.stage_id::text FROM survey_crew c
+                 JOIN employees e ON e.id = c.employee_id
+                 JOIN users me ON me.employee_id = e.reports_to
+                WHERE me.id = $2 AND c.org_id = $1 AND c.survey_village_id = sv.id
+                  AND c.released_on IS NULL) AS managed_stages,
+         COALESCE(p.project_manager_id = $2, false) AS runs_project,
+         EXISTS (SELECT 1 FROM survey_project_employees pe
+                   JOIN users me ON me.employee_id = pe.employee_id
+                  WHERE me.id = $2 AND pe.survey_project_id = sp.id
+                    AND pe.released_on IS NULL
+                    AND pe.project_role = 'PROJECT_MANAGER') AS enrolled_pm,
+         EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+                  WHERE ur.user_id = $2 AND r.code = 'PROJECT_MANAGER'
+                    AND (ur.scope_type IS NULL
+                         OR (ur.scope_type = 'project' AND ur.scope_id = sp.project_id))
+                ) AS pm_scope_covers
+         FROM survey_villages sv
+         JOIN survey_projects sp ON sp.id = sv.survey_project_id
+         LEFT JOIN projects p ON p.id = sp.project_id
+        WHERE sv.id = $3 AND sv.org_id = $1`,
+      [u.orgId, u.id, villageId])).rows[0];
+    const pm = roles.includes('PROJECT_MANAGER')
+      && Boolean(f && (f.runs_project || f.enrolled_pm || f.pm_scope_covers));
+    return {
+      everything: roles.includes('SUPER_ADMIN') || roles.includes('ADMIN')
+        || roles.includes('TEAM_LEAD') || pm,
+      ownStages: new Set((f?.own_stages ?? []).map(String)),
+      managedStages: new Set((f?.managed_stages ?? []).map(String)),
+    };
+  }
+
+  /** Whether the authority covers one stage, or (null) any work on the village. */
+  function authorityCovers(a: WorkAuthority, stageId: string | null): boolean {
+    if (a.everything) return true;
+    if (stageId === null) return a.ownStages.size > 0 || a.managedStages.size > 0;
+    return a.ownStages.has(stageId) || a.managedStages.has(stageId);
+  }
+
+  const STAGE_NOT_ASSIGNED_REASON =
+    'Only the crew assigned to this stage, their reporting manager, a team leader, '
+    + 'the project manager or an administrator can complete it.';
+
   async function requireOwnCrew(
-    db: Pool | PoolClient, u: { orgId: string; id: string; permissions: string[] },
+    db: Pool | PoolClient,
+    u: { orgId: string; id: string; permissions: string[]; roles?: string[] },
     villageId: string,
   ) {
-    if (u.permissions.includes('survey.manage') || u.permissions.includes('survey.assign')) return;
-    const onCrew = await db.query(
-      `SELECT 1 FROM survey_crew c JOIN users usr ON usr.employee_id = c.employee_id
-        WHERE c.org_id = $1 AND usr.id = $2 AND c.survey_village_id = $3
-          AND c.released_on IS NULL`,
-      [u.orgId, u.id, villageId]);
-    if (!onCrew.rowCount) {
+    if (!authorityCovers(await workAuthority(db, u, villageId), null)) {
       fail('NOT_YOUR_VILLAGE',
-        'You are not on this village’s crew. Ask whoever assigned the crew, or your '
-        + 'team lead, to record or correct this point.', 403);
+        'You are not on this village’s crew. A control point is recorded or corrected by '
+        + 'the crew on the village, their reporting manager, a team leader, the project '
+        + 'manager or an administrator.', 403);
     }
   }
 
@@ -3176,6 +3247,7 @@ export async function registerSurveyRoutes(
         const row = await inOrg(db, 'survey_village_gcps', id, u.orgId, true);
         if (!row) fail('NOT_FOUND', 'That control point no longer exists.', 404);
         await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+        await requireOwnCrew(db, u, String(row.survey_village_id));
         await db.query('DELETE FROM survey_village_gcps WHERE id = $1', [id]);
         return { id, deleted: true };
       }),
