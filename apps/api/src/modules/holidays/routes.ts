@@ -34,6 +34,14 @@ const listQuerySchema = cursorPageQuerySchema.extend({
    * employee's own location chain, finest scope winning.
    */
   employee_id: z.string().uuid().optional(),
+  /**
+   * A-012: withdrawing a holiday (PATCH active=false) removes it from the
+   * default list below, which is correct for the calendar -- but with no
+   * way to ask for it back, a withdrawn holiday could never be found again
+   * to reactivate. Ignored on the employee_id branch, which always resolves
+   * against what currently applies.
+   */
+  include_inactive: z.coerce.boolean().optional(),
 });
 
 interface HolidayCursor {
@@ -51,6 +59,7 @@ interface HolidayRow {
   /** The unit the scope points at, when the query looked it up. */
   scope_name?: string | null;
   created_at: Date | string;
+  active?: boolean;
 }
 
 /*
@@ -73,6 +82,9 @@ function toShape(row: HolidayRow) {
     scope_type: row.scope_type,
     scope_id: row.scope_id,
     scope_name: row.scope_name ?? null,
+    // Absent (creation's RETURNING doesn't select it) means "just created",
+    // which is always active.
+    active: row.active ?? true,
   };
 }
 
@@ -109,9 +121,12 @@ export async function registerHolidayRoutes(
         message: "Authentication required",
       });
     }
-    const { limit, cursor, year, scope_type, scope_id } = parsed.data;
+    const { limit, cursor, year, scope_type, scope_id, include_inactive } = parsed.data;
     const values: unknown[] = [user.orgId];
-    const clauses = ["org_id = $1", "active = true"];
+    // employee_id resolves what currently applies to that employee, so it
+    // always means active-only regardless of include_inactive.
+    const showInactiveToo = include_inactive === true && !parsed.data.employee_id;
+    const clauses = ["org_id = $1", ...(showInactiveToo ? [] : ["active = true"])];
     if (year !== undefined) {
       values.push(year);
       clauses.push(`EXTRACT(YEAR FROM date) = $${values.length}`);
@@ -165,7 +180,7 @@ export async function registerHolidayRoutes(
       // Resolution needs every candidate for the period, so this branch does
       // not paginate; a year of holidays is a short list by construction.
       const all = await opts.pool.query(
-        `SELECT id, date, name, type, scope_type, scope_id, created_at, ${SCOPE_NAME_COL}
+        `SELECT id, date, name, type, scope_type, scope_id, created_at, active, ${SCOPE_NAME_COL}
            FROM holidays WHERE ${clauses.join(" AND ")}
           ORDER BY date ASC, id ASC LIMIT 1000`,
         values as string[],
@@ -189,7 +204,7 @@ export async function registerHolidayRoutes(
 
     values.push(limit + 1);
     const res = await opts.pool.query(
-      `SELECT id, date, name, type, scope_type, scope_id, created_at, ${SCOPE_NAME_COL}
+      `SELECT id, date, name, type, scope_type, scope_id, created_at, active, ${SCOPE_NAME_COL}
        FROM holidays WHERE ${clauses.join(" AND ")}
        ORDER BY date ASC, id ASC LIMIT $${values.length}`,
       values as string[],

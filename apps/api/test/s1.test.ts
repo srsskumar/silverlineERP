@@ -1088,4 +1088,98 @@ describe("holidays", () => {
     });
     expect(forbidden.statusCode).toBe(403);
   });
+
+  // A-012: PATCH date/name/type/active always existed; nothing on web ever
+  // called it. include_inactive is new here -- without it, a deactivated
+  // holiday could never be found again to reactivate.
+  it("corrects a holiday, deactivates it, and finds it again to reactivate", async () => {
+    const admin = await adminHeaders();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/holidays",
+      headers: admin,
+      payload: { date: "2026-05-01", name: "Labour Day", type: "national" },
+    });
+    expect(created.statusCode).toBe(201);
+    const id = (created.json() as { id: string }).id;
+
+    const noReason = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/holidays/${id}`,
+      headers: admin,
+      payload: { name: "Labor Day" },
+    });
+    expect(noReason.statusCode).toBe(422);
+
+    const corrected = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/holidays/${id}`,
+      headers: admin,
+      payload: { name: "Labor Day", reason: "Fixed the spelling" },
+    });
+    expect(corrected.statusCode, JSON.stringify(corrected.json())).toBe(200);
+    const correctedBody = corrected.json() as { name: string; date: string; active: boolean };
+    expect(correctedBody.name).toBe("Labor Day");
+    expect(correctedBody.date).toBe("2026-05-01");
+    expect(correctedBody.active).toBe(true);
+
+    const deactivated = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/holidays/${id}`,
+      headers: admin,
+      payload: { active: false, reason: "Observed on a different date this year" },
+    });
+    expect(deactivated.statusCode).toBe(200);
+    expect((deactivated.json() as { active: boolean }).active).toBe(false);
+
+    // Gone from the default (active-only) list...
+    const defaultList = await app.inject({
+      method: "GET",
+      url: "/api/v1/holidays?year=2026",
+      headers: admin,
+    });
+    expect((defaultList.json() as { data: Array<{ id: string }> }).data.some((h) => h.id === id)).toBe(false);
+
+    // ...but findable with include_inactive, and marked as such.
+    const allList = await app.inject({
+      method: "GET",
+      url: "/api/v1/holidays?year=2026&include_inactive=true",
+      headers: admin,
+    });
+    const found = (allList.json() as { data: Array<{ id: string; active: boolean }> }).data.find((h) => h.id === id);
+    expect(found?.active).toBe(false);
+
+    const reactivated = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/holidays/${id}`,
+      headers: admin,
+      payload: { active: true, reason: "Restored — was withdrawn in error" },
+    });
+    expect(reactivated.statusCode).toBe(200);
+    const backInList = await app.inject({
+      method: "GET",
+      url: "/api/v1/holidays?year=2026",
+      headers: admin,
+    });
+    expect((backInList.json() as { data: Array<{ id: string }> }).data.some((h) => h.id === id)).toBe(true);
+  });
+
+  it("requires holiday.manage to PATCH", async () => {
+    const admin = await adminHeaders();
+    const tlH = await roleHeaders("TEAM_LEAD");
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/holidays",
+      headers: admin,
+      payload: { date: "2026-06-01", name: "Founders Day", type: "manual" },
+    });
+    const id = (created.json() as { id: string }).id;
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/holidays/${id}`,
+      headers: tlH,
+      payload: { name: "X", reason: "Trying anyway" },
+    });
+    expect(res.statusCode).toBe(403);
+  });
 });

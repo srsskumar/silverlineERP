@@ -825,3 +825,24 @@ export const reportSchema = z.object({
   type: z.enum(REPORT_TYPES, { errorMap: () => ({ message: 'Pick a report type' }) }),
 });
 export type ReportFormInput = z.infer<typeof reportSchema>;
+
+// ---------------------------------------------------------------------------
+// A-012: editing and deactivating/reactivating a holiday. Mirrors the API's
+// holidayPatchSchema (packages/shared/src/s1.ts) exactly — date/name/type,
+// plus a reason the server requires on every PATCH. scope is not patchable
+// server-side, so it is not offered here either.
+// ---------------------------------------------------------------------------
+
+export const holidayEditSchema = z.object({
+  date: dateString('Holiday date must be YYYY-MM-DD'),
+  name: z.string().trim().min(1, 'Name is required').max(255),
+  type: z.enum(HOLIDAY_TYPES, { errorMap: () => ({ message: 'Pick a holiday type' }) }),
+  reason: z.string().trim().min(1, 'Say why the holiday is being changed').max(2000),
+});
+export type HolidayEditInput = z.infer<typeof holidayEditSchema>;
+
+/** Deactivate/reactivate: only `active` changes, but the API still requires a reason. */
+export const holidayStatusChangeSchema = z.object({
+  reason: z.string().trim().min(1, 'Say why the holiday is being changed').max(2000),
+});
+export type HolidayStatusChangeInput = z.infer<typeof holidayStatusChangeSchema>;
