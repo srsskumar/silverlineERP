@@ -535,8 +535,8 @@ describe("UT-LP-03 approve and reject through configured chain", () => {
     const created = await fileLeave(headers, {
       employee_id: employeeId,
       leave_type_id: types.CL,
-      from_date: plusDays(100),
-      to_date: plusDays(100),
+      from_date: nonSundayPlusDays(100),
+      to_date: nonSundayPlusDays(100),
       reason: "To be rejected",
     });
     const request = created.json() as { id: string };
