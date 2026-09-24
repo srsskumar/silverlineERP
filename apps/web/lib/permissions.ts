@@ -62,6 +62,12 @@ export const PERMISSIONS = {
   BANK_RECONCILE: 'bank.reconcile',
   PERIOD_READ: 'period.read',
   PERIOD_MANAGE: 'period.manage',
+  // §15.6/§16 cost control: cost-head masters and per-project budgets
+  // (Task 5f — API existed, no web UI).
+  COSTHEAD_READ: 'costhead.read',
+  COSTHEAD_MANAGE: 'costhead.manage',
+  BUDGET_READ: 'budget.read',
+  BUDGET_MANAGE: 'budget.manage',
   // S2 frozen contract codes (dot-style; backend enforces these).
   ATTENDANCE_PUNCH: 'attendance.punch',
   ATTENDANCE_READ: 'attendance.read',

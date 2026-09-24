@@ -105,6 +105,10 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/approvals/policies', label: 'Approval policies', permission: 'approval.configure', icon: Settings },
       { href: '/procurement', label: 'Procurement', permission: 'requisition.read', icon: ShoppingCart },
       { href: '/expenses', label: 'Expenses', permission: 'expense.read', icon: Receipt },
+      // The fixed labour/material/subcontract/... categories a project
+      // budget (the "Budget vs actual" tab under Project finance) is built
+      // from — a masters screen, not tied to any one project.
+      { href: '/cost-heads', label: 'Cost heads', permission: 'costhead.read', icon: ClipboardList },
       // The bills hang off a project, chosen first.
       { href: '/billing', label: 'Project finance', permission: 'rabill.read', requires: [PERMISSIONS.PROJECT_READ], icon: IndianRupee },
       // The two ledgers (section 58). Separate entries rather than tabs under

@@ -60,6 +60,7 @@ export const MODULE_CATALOG: ModuleCatalogEntry[] = [
   { code: 'approval-policies', label: 'Approval policies', group: 'Finance', permission: 'approval.configure' },
   { code: 'procurement', label: 'Procurement', group: 'Finance', permission: 'requisition.read' },
   { code: 'expenses', label: 'Expenses', group: 'Finance', permission: 'expense.read' },
+  { code: 'cost-heads', label: 'Cost heads', group: 'Finance', permission: 'costhead.read' },
   { code: 'project-finance', label: 'Project finance', group: 'Finance',
     permission: 'rabill.read', requires: ['project.read'] },
   { code: 'receivables', label: 'Receivables', group: 'Finance', permission: 'ar.read' },

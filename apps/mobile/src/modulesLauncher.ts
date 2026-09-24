@@ -52,11 +52,13 @@ export const LAUNCHER_EXCLUDED_CODES: readonly string[] = [
  * District→Site hierarchy is admin set-up, not something a field user looks up.
  * Approval policies (Task 5f, 2026-09-24): the DoA ladder is admin set-up
  * too — configured once, from a desktop, not something a field user opens.
- * Payments / bank reconciliation / financial periods (Task 5f, 2026-09-24):
- * back-office finance control, built desktop-only per the task brief.
+ * Payments / bank reconciliation / financial periods / cost heads
+ * (Task 5f, 2026-09-24): back-office finance control, built desktop-only
+ * per the task brief.
  */
 export const WEB_ONLY_CODES: readonly string[] = [
   "org-locations", "approval-policies", "payments", "bank-reconciliation", "financial-periods",
+  "cost-heads",
 ];
 
 /** Catalog codes this round of mobile work actually built a screen for. */

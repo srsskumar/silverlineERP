@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { APPROVAL_DOCUMENT_TYPES, validateSlabs, PAYMENT_DIRECTIONS, PAYMENT_MODES } from '@silverline/shared';
+import { APPROVAL_DOCUMENT_TYPES, validateSlabs, PAYMENT_DIRECTIONS, PAYMENT_MODES, COST_HEAD_KINDS } from '@silverline/shared';
 
 export const loginSchema = z.object({
   // A username or a mobile number (§34). Still called `username` because
@@ -1210,3 +1210,32 @@ export const bankTransactionRowSchema = z.object({
   bank_account: optionalText(50),
 });
 export type BankTransactionRowInput = z.infer<typeof bankTransactionRowSchema>;
+
+// ---------------------------------------------------------------------------
+// Cost heads + project budgets (Task 5f, §15.6/§16). Mirrors
+// packages/shared/src/cost-control.ts's costHeadSchema / budgetSchema.
+// ---------------------------------------------------------------------------
+
+export { COST_HEAD_KINDS };
+
+export const costHeadFormSchema = z.object({
+  code: z.string().trim().min(1, 'Code is required').max(30).transform((s) => s.toUpperCase()),
+  name: z.string().trim().min(1, 'Name is required').max(120),
+  kind: z.enum(COST_HEAD_KINDS, { errorMap: () => ({ message: 'Pick a kind' }) }),
+  description: optionalText(500),
+  active: z.boolean(),
+});
+export type CostHeadFormInput = z.infer<typeof costHeadFormSchema>;
+
+export const budgetLineFormSchema = z.object({
+  cost_head_id: userUuid('Pick a cost head'),
+  budgeted_amount: moneyField(),
+  notes: optionalText(500),
+});
+export type BudgetLineFormInput = z.infer<typeof budgetLineFormSchema>;
+
+export const budgetFormSchema = z.object({
+  revision_reason: optionalText(500),
+  lines: z.array(budgetLineFormSchema).min(1, 'A budget needs at least one cost head'),
+});
+export type BudgetFormInput = z.infer<typeof budgetFormSchema>;
