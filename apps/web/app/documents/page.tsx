@@ -22,6 +22,7 @@ import {
   CATEGORY_LABELS, OWNER_LABELS, STATE_LABELS, consequence, deadlineLabel,
   registerHeadline, retentionNote, stateTone, type DocumentState,
 } from '@/lib/document-register';
+import { DeleteDocumentButton } from '@/components/documents/DeleteDocumentButton';
 
 type Row = Record<string, any>;
 
@@ -38,6 +39,7 @@ export default function DocumentsPage() {
   const perms = { permissions: session?.permissions };
   const canRead = hasPermission(perms, 'document.read');
   const canManage = hasPermission(perms, 'document.manage');
+  const canDelete = hasPermission(perms, 'document.delete');
 
   const [tab, setTab] = React.useState<'renewals' | 'register'>('renewals');
   const [within, setWithin] = React.useState(60);
@@ -123,7 +125,10 @@ export default function DocumentsPage() {
         {tab === 'renewals' ? (
           <Renewals query={renewals} canManage={canManage} within={within} />
         ) : (
-          <Register query={register} filters={filters} setFilters={setFilters} summary={summary} />
+          <Register
+            query={register} filters={filters} setFilters={setFilters} summary={summary}
+            canDelete={canDelete} onDeleted={() => register.refetch()}
+          />
         )}
       </PageBody>
     </AppShell>
@@ -328,12 +333,14 @@ function RenewDialog({
 /* --------------------------------------------------------------- register */
 
 function Register({
-  query, filters, setFilters, summary,
+  query, filters, setFilters, summary, canDelete, onDeleted,
 }: {
   query: any;
   filters: { category: string; owner_type: string; state: string };
   setFilters: (f: { category: string; owner_type: string; state: string }) => void;
   summary: Row | undefined;
+  canDelete: boolean;
+  onDeleted: () => void;
 }) {
   if (query.isLoading) return <Skeleton className="h-64" />;
   if (query.isError) return <ErrorCard error={query.error} onRetry={() => query.refetch()} />;
@@ -391,6 +398,7 @@ function Register({
                 <TH>Reference</TH>
                 <TH>Expires</TH>
                 <TH>State</TH>
+                {canDelete ? <TH /> : null}
               </TR>
             </THead>
             <TBody>
@@ -426,6 +434,14 @@ function Register({
                     </Badge>
                     {d.legal_hold ? <Badge tone="warning">Legal hold</Badge> : null}
                   </TD>
+                  {canDelete ? (
+                    <TD align="right">
+                      <DeleteDocumentButton
+                        id={String(d.id)} title={String(d.title)} version={Number(d.version)}
+                        retention={d.retention} onDeleted={onDeleted}
+                      />
+                    </TD>
+                  ) : null}
                 </TR>
               ))}
             </TBody>
