@@ -180,6 +180,9 @@ export function amendmentFor(filed: FiledEntry, next: SurveyEntryInput): EntryAm
   }
   const notes = next.notes?.trim();
   if (notes && notes !== (filed.notes ?? "").trim()) out.notes = notes;
+  // An explicit null is the crew clearing the note (round 2); the PATCH
+  // route writes null for it. Blank is still "not provided".
+  if (next.notes === null && (filed.notes ?? "").trim()) out.notes = null;
   const govt = next.govt_staff_present;
   if (govt !== undefined && govt !== null && govt !== (filed.govt_staff_present ?? null)) {
     out.govt_staff_present = govt;

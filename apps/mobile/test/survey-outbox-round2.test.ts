@@ -217,3 +217,23 @@ describe("the base version is pinned when the form is filled (round 2, item 2)",
   });
 });
 
+describe("notes can be cleared on purpose (round 2, item 3)", () => {
+  const filed: FiledEntry = { id: "e1", version: 2, entry_date: D, notes: "rain", values: { PVT: 3 } };
+
+  it("sends null for notes when the crew asks to clear them", () => {
+    const draft = { ...draftFromEntry(filed, MEASURES), notes: "", clearNotes: true };
+    const built = returnSubmission({ village: VILLAGE, workDate: D, measures: MEASURES, draft, kit: [] });
+    assert.equal(built.ok, true);
+    if (!built.ok) return;
+    assert.equal(built.op.payload.notes, null);
+    assert.equal(amendmentFor(filed, built.op.payload).notes, null);
+  });
+
+  it("leaves notes alone when the field is simply blank", () => {
+    const draft = { ...draftFromEntry(filed, MEASURES), notes: "" };
+    const built = returnSubmission({ village: VILLAGE, workDate: D, measures: MEASURES, draft, kit: [] });
+    assert.equal(built.ok, true);
+    if (!built.ok) return;
+    assert.equal("notes" in amendmentFor(filed, built.op.payload), false);
+  });
+});

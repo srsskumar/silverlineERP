@@ -409,9 +409,20 @@ export function DailyReturn({
         <Input
           label="Notes"
           value={draft.notes}
-          onChangeText={(v: string) => setDraft(d => ({ ...d, notes: v }))}
+          onChangeText={(v: string) => setDraft(d => ({ ...d, notes: v, clearNotes: false }))}
           multiline
         />
+        {/*
+          * Clearing a note is said, not implied (fix round 2): a blank field
+          * on a correction means "leave it", so taking a note off is a button.
+          */}
+        {correcting && filed.data?.notes ? (
+          <Button
+            title={draft.clearNotes ? "The note will be cleared" : "Clear the note"}
+            variant="ghost"
+            onPress={() => setDraft(d => ({ ...d, notes: "", clearNotes: true }))}
+          />
+        ) : null}
       </Card>
 
       <Button

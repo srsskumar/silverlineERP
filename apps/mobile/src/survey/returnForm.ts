@@ -42,6 +42,8 @@ export interface ReturnDraft {
   teamsDeployed: string;
   /** The version of a filed day this draft corrects, pinned when it was filled. */
   baseVersion?: number;
+  /** The crew asked to clear the note on a filed day. */
+  clearNotes?: boolean;
   notes: string;
   lowProgressReason: string | null;
   lowProgressRemarks: string;
@@ -243,7 +245,7 @@ export function buildEntry(args: {
       values,
       ...(rovers.length ? { rovers } : {}),
       ...(teams.value !== null ? { teams_deployed: teams.value } : {}),
-      ...(draft.notes.trim() ? { notes: draft.notes.trim() } : {}),
+      ...(draft.notes.trim() ? { notes: draft.notes.trim() } : draft.clearNotes ? { notes: null } : {}),
       ...(draft.lowProgressReason
         ? {
             low_progress_reason: draft.lowProgressReason,
