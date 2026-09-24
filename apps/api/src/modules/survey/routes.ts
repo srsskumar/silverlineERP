@@ -1530,7 +1530,14 @@ export async function registerSurveyRoutes(
           // written, so a typo in the fifth id does not leave the first four
           // assigned to a village that never started.
           for (const employeeId of input.employee_ids) {
-            await inOrg(db, 'employees', employeeId, u.orgId);
+            const e = await inOrg(db, 'employees', employeeId, u.orgId);
+            // Somebody who has left cannot be put on work (SV-005), the same
+            // rule the bulk crew route applies.
+            if (e.status !== 'ACTIVE') {
+              fail('EMPLOYEE_INACTIVE',
+                `${[e.first_name, e.last_name].filter(Boolean).join(' ') || e.emp_no} is not an `
+                + 'active employee and cannot be put on a village.', 422);
+            }
           }
 
           // Headcounts live on the village: they govern every day's return
@@ -1566,6 +1573,7 @@ export async function registerSurveyRoutes(
           // same village within a minute of each other is ordinary, and the
           // second one should not be told off for it.
           let added = 0;
+          const brought: string[] = [], elsewhere: string[] = [];
           for (const employeeId of input.employee_ids) {
             const r = await db.query(
               `INSERT INTO survey_crew
@@ -1577,6 +1585,13 @@ export async function registerSurveyRoutes(
                      AND employee_id = $4 AND released_on IS NULL)`,
               [u.orgId, id, stage.id, employeeId, input.started_on, u.id]);
             added += r.rowCount ?? 0;
+            // Their instruments come with them, as on every other way onto a
+            // crew (SV-006).
+            if (r.rowCount) {
+              const kit = await carryKitToVillage(db, u.orgId, id, employeeId, u.id, input.started_on);
+              brought.push(...kit.brought);
+              elsewhere.push(...kit.elsewhere);
+            }
           }
 
           const gcps = Number((await db.query(
@@ -1590,6 +1605,8 @@ export async function registerSurveyRoutes(
             expected_end_on: input.expected_end_on,
             crew_added: added,
             crew_named: input.employee_ids.length,
+            rovers_brought: brought,
+            rovers_left_elsewhere: elsewhere,
             gcp_count: gcps,
             /*
              * Said plainly rather than refused. A village under way with no
