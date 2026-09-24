@@ -38,7 +38,7 @@ describe('inventory integrity',()=>{
   expect((await pool.query('SELECT count(*) FROM stock_transactions')).rows[0].count).toBe('1');
  });
  it('calculates invoice totals using decimal arithmetic',async()=>{
-  const v=(await call('POST','vendors',{code:'V1',name:'Vendor'})).json();const r=await call('POST','invoices',{serial_number:'INV',vendor_id:v.id,hsn:'1234',gst_enabled:true,gst_rate:'18',subtotal:'0.10',payment_mode:'BANK',reference:'PO'});expect(r.statusCode).toBe(201);expect(r.json().total).toBe('0.1200');
+  const v=(await call('POST','vendors',{code:'V1',name:'Vendor'})).json();const r=await call('POST','invoices',{serial_number:'INV',vendor_id:v.id,hsn:'1234',gst_enabled:true,gst_rate:'18',subtotal:'0.10',payment_mode:'BANK',reference:'PO'});expect(r.statusCode).toBe(201);expect(r.json().data.total).toBe('0.1200');
  });
  it('rounds header-only invoice tax exactly, not through a float round (fix round 2, item 3)',async()=>{
   // 13.25 x 18% is exactly 2.385, which rounds to 2.39 -- but the float
@@ -47,8 +47,8 @@ describe('inventory integrity',()=>{
   const v=(await call('POST','vendors',{code:'V2',name:'Vendor Two'})).json();
   const r=await call('POST','invoices',{serial_number:'INV-2',vendor_id:v.id,hsn:'1234',gst_enabled:true,gst_rate:'18',subtotal:'13.25',payment_mode:'BANK',reference:'PO'});
   expect(r.statusCode).toBe(201);
-  expect(r.json().tax).toBe('2.3900');
-  expect(r.json().total).toBe('15.6400');
+  expect(r.json().data.tax).toBe('2.3900');
+  expect(r.json().data.total).toBe('15.6400');
  });
  it('links an invoice to the purchase order it bills against — B-014',async()=>{
   // invoiceSchema had no purchase_order_id field, so a vendor invoice could
@@ -59,10 +59,10 @@ describe('inventory integrity',()=>{
   const po=(await call('POST','purchase-orders',{po_number:'PO-LINK-1',vendor_id:v.id,po_date:'2026-09-15',lines:[{description:'Cement',unit:'bag',quantity:10,unit_rate:400}]})).json().data;
   const inv=await call('POST','invoices',{serial_number:'INV-LINK-1',vendor_id:v.id,hsn:'1234',gst_enabled:false,gst_rate:'0',subtotal:'4000',payment_mode:'BANK',reference:'PO-LINK-1',purchase_order_id:po.id});
   expect(inv.statusCode).toBe(201);
-  expect(inv.json().purchase_order_id).toBe(po.id);
-  const stored=await pool.query('SELECT purchase_order_id FROM invoices WHERE id=$1',[inv.json().id]);
+  expect(inv.json().data.purchase_order_id).toBe(po.id);
+  const stored=await pool.query('SELECT purchase_order_id FROM invoices WHERE id=$1',[inv.json().data.id]);
   expect(stored.rows[0].purchase_order_id).toBe(po.id);
-  const match=await call('POST',`invoices/${inv.json().id}/match`,{});
+  const match=await call('POST',`invoices/${inv.json().data.id}/match`,{});
   expect(match.json().code).not.toBe('NO_PURCHASE_ORDER');
  });
  it('refuses an invoice linked to another vendor\'s purchase order — B-021',async()=>{
@@ -353,7 +353,7 @@ describe('combined filters and configurable providers',()=>{
  it('does not fabricate weather or dispatch accounting jobs before provider configuration',async()=>{const p=await project();const r=await call('GET',`integrations/weather?project_id=${p.id}&latitude=17&longitude=78`);expect(r.statusCode).toBe(200);expect(r.json().status).toBe('NOT_CONFIGURED');expect((await call('POST','integrations/accounting-export',{invoice_ids:[randomUUID()]})).statusCode).toBe(503);expect((await pool.query('SELECT count(*) FROM provider_jobs')).rows[0].count).toBe('0');expect((await call('GET','integrations')).json().data.every((r:any)=>r.status==='DISABLED')).toBe(true);});
  it('queues encrypted accounting data exactly once and merges notification opt-ins',async()=>{
   const old={...process.env};try{Object.assign(process.env,{PROVIDER_ACCOUNTING_ENABLED:'true',PROVIDER_ACCOUNTING_TOKEN:'test-only',PROVIDER_ACCOUNTING_URL:'https://adapter.example.test/accounting'});
-   const vendor=(await call('POST','vendors',{code:'BOOKS',name:'Bookkeeping'})).json(),invoice=(await call('POST','invoices',{serial_number:'PRIVATE-INV',vendor_id:vendor.id,hsn:'1234',gst_enabled:false,gst_rate:'0',subtotal:'100',payment_mode:'BANK',reference:'PO'})).json(),key=randomUUID();
+   const vendor=(await call('POST','vendors',{code:'BOOKS',name:'Bookkeeping'})).json(),invoice=(await call('POST','invoices',{serial_number:'PRIVATE-INV',vendor_id:vendor.id,hsn:'1234',gst_enabled:false,gst_rate:'0',subtotal:'100',payment_mode:'BANK',reference:'PO'})).json().data,key=randomUUID();
    const a=await call('POST','integrations/accounting-export',{invoice_ids:[invoice.id]},{'idempotency-key':key});expect(a.statusCode).toBe(202);const b=await call('POST','integrations/accounting-export',{invoice_ids:[invoice.id]},{'idempotency-key':key});expect(b.json().id).toBe(a.json().id);const jobs=(await pool.query('SELECT * FROM provider_jobs')).rows;expect(jobs).toHaveLength(1);expect(jobs[0].payload_encrypted).not.toContain('PRIVATE-INV');
    await call('PATCH','auth/preferences',{sms:true});await call('PATCH','auth/preferences',{push:false});const prefs=(await call('GET','auth/preferences')).json().notification_preferences;expect(prefs).toMatchObject({sms:true,push:false});
   }finally{process.env=old;}
