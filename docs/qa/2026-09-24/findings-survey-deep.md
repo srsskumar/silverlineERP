@@ -70,3 +70,32 @@ Round 3 final verification (slot d, `/tmp/svd-lane1-r3.log`): full apps/api suit
 **How "the project's PM" and "today" are decided (item 4):**
 - **Who counts as the project's PM.** A PROJECT_MANAGER whose role scope is org-wide (`user_roles.scope_type IS NULL`) passes as the PM of every survey project. It is the same test in `workAuthority` (stage completion and GCPs) and `mayStaffProgramme` (staffing). The other ways to qualify are being the paired project's `project_manager_id`, being enrolled on the programme as `PROJECT_MANAGER`, or having a role scoped to that project. So an unscoped PM is not refused on any programme; only a PM scoped to other projects is.
 - **How the org's timezone is looked up.** `orgTimeZone` caches it per process for 60 seconds. After an admin changes the org's timezone, each API process can keep using the old zone for up to a minute. The SQL side (`orgTodaySql` / `orgZoneSql`) reads the setting live.
+
+Round 4 verification (slot d, `/tmp/svd-lane1-r4.log`): full apps/api suite 82 files, 2195 passed, 13 skipped, 0 failed.
+
+## Round 5 (relayed by the controller)
+| ID | Sev | Status | What |
+|---|---|---|---|
+| SV-027 | Important | FIXED 00fbb30 | `POST /survey/crew/:id/release` now locks the crew row and resolves it in-org through its village, so an invisible programme is a 404. It then applies the staffing rule before writing: another project's PM gets 403 `NOT_ON_THIS_PROGRAMME` and nothing is released; the project's own PM gets 200. `requireStaffing()` wraps `mayStaffProgramme`. The tests are in 31d4334, in the same describe. |
+| SV-028 | Important | FIXED 31d4334 | Found by the sweep. Every village rover write (allocate single/bulk, correct, release, claim) and `villages/move` was guarded by `survey.manage` alone. All now resolve their programme (404 if not visible) and apply `requireStaffing`; a move checks both the source and the target programme. Tested on each route: another project's PM gets 403 and nothing changes; the project's own PM succeeds; another org gets 404. |
+| SV-029 | Minor | OPEN (outside survey) | `PUT /api/v1/employees/:id/assignments` (employees module) also writes `survey_project_employees`. It is guarded by `users.manage` (org-wide) plus a `survey.assign` check when the programmes change, not by the survey rule. In the shipped roles only ADMIN/SUPER_ADMIN hold both, so it complies today. A custom mix such as HR_MANAGER + TEAM_LEAD would pass for any programme. Recommend calling the survey rule there; I left it alone because it is another lane's module. |
+
+**Every survey write that changes who, or what kit, is on a programme, and its guard after round 5.** The "staffing rule" is `mayStaffProgramme`: admin, a TL enrolled or crewed on the programme, or the survey project's PM (the paired project's `project_manager_id`, enrolled as PM, or a role scoped org-wide or to that project).
+
+| Route | Permission | Visibility | Staffing rule |
+|---|---|---|---|
+| `POST /survey/projects/:id/employees` (enrol) | survey.assign | projectOr404(u) | yes (SV-018); employee must be ACTIVE |
+| `POST /survey/villages/:id/start-gt` | survey.manage | villageOr404 | yes (SV-025); employees ACTIVE (SV-005) |
+| `POST /survey/villages/:id/crew` | survey.manage | villageOr404 | yes (SV-018); employee ACTIVE |
+| `POST /survey/villages/:id/crew/bulk` | survey.manage | villageOr404 | yes (SV-025); inactive rows skipped as refused |
+| `POST /survey/crew/:id/release` | survey.manage | in-org row, then villageOr404 | yes (SV-027) |
+| `POST /survey/villages/:id/rovers` | survey.manage | villageOr404 | yes (SV-028) |
+| `POST /survey/villages/:id/rovers/bulk` | survey.manage | villageOr404 | yes (SV-028) |
+| `PATCH /survey/rovers/:id` | survey.manage | in-org row, then villageOr404 | yes (SV-028) |
+| `POST /survey/rovers/:id/release` | survey.manage | in-org row, then villageOr404 | yes (SV-028) |
+| `POST /survey/villages/:id/rovers/claim` | survey.manage | villageOr404 | yes (SV-028) |
+| `POST /survey/projects/:id/villages/move` | survey.manage | projectOr404(u), source and target | yes, both programmes (SV-028) |
+| kit carried with a crew member (`carryKitToVillage` / `releaseKitFromVillage`) | internal | only from the crew, start-gt and crew-release routes above | inherits theirs |
+| `PUT /employees/:id/assignments` (survey part) | users.manage (org-wide) + survey.assign | in-org programme | **no**, see SV-029 |
+
+Issuing an asset to a person (`/assets/:id/assign`) is the inventory module's own permission and does not touch survey staffing. It only reaches a village through the crew routes above.
