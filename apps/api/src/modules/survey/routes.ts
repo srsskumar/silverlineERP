@@ -1590,6 +1590,14 @@ export async function registerSurveyRoutes(
       const data = await mutate(pool, req, 'survey.village.start_gt', 'survey_village',
         async db => {
           const village = await villageOr404(db, u.orgId, id, u, true);
+          // The owner's staffing rule, as on the single crew route (SV-025).
+          // It is about the caller, not any one person named, so it refuses
+          // the whole start rather than skipping rows.
+          if (!(await mayStaffProgramme(db, u, String(village.survey_project_id)))) {
+            fail('NOT_ON_THIS_PROGRAMME',
+              'Only this programme’s project manager, a team leader on it or an '
+              + 'administrator can start ground truthing on its villages.', 403);
+          }
 
           const stage = (await db.query(
             `SELECT id FROM survey_stages
@@ -1876,7 +1884,14 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(crewBulkAssignmentSchema, req.body);
       const out = await mutate(pool, req, 'survey.crew.assign.bulk', 'survey_crew', async db => {
-        await villageOr404(db, u.orgId, id, u);
+        const village = await villageOr404(db, u.orgId, id, u);
+        // As on the single route and start-gt (SV-025); the whole batch,
+        // because the rule is about who is asking.
+        if (!(await mayStaffProgramme(db, u, String(village.survey_project_id)))) {
+          fail('NOT_ON_THIS_PROGRAMME',
+            'Only this programme’s project manager, a team leader on it or an '
+            + 'administrator can assign its crews.', 403);
+        }
         const stage = (await db.query(
           'SELECT id FROM survey_stages WHERE org_id = $1 AND code = $2 AND active',
           [u.orgId, input.stage_code])).rows[0];
