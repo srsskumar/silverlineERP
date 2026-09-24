@@ -21,6 +21,7 @@ import { messageOf } from '@/lib/form-errors';
 import { RequireDestination } from '@/components/RequirePermission';
 import { NewRaBill } from '@/components/billing/NewRaBillForm';
 import { NewAdvance } from '@/components/billing/NewAdvanceForm';
+import { AdvancesList } from '@/components/billing/AdvancesList';
 
 type Row = Record<string, any>;
 type Tab = 'bills' | 'boq' | 'measured' | 'retention' | 'cost';
@@ -130,7 +131,10 @@ export default function BillingPage() {
         {!projectId ? (
           <EmptyState title="Choose a project" description="Financial records are held per project." />
         ) : tab === 'bills' ? (
-          <RaBills projectId={projectId} onOpen={setSelectedBill} />
+          <>
+            <RaBills projectId={projectId} onOpen={setSelectedBill} />
+            <AdvancesList projectId={projectId} />
+          </>
         ) : tab === 'boq' ? (
           <Boq projectId={projectId} />
         ) : tab === 'measured' ? (
@@ -160,7 +164,11 @@ export default function BillingPage() {
         />
       ) : null}
       {creatingAdvance && projectId ? (
-        <NewAdvance projectId={projectId} onClose={() => setCreatingAdvance(false)} />
+        <NewAdvance
+          projectId={projectId}
+          onClose={() => setCreatingAdvance(false)}
+          onCreated={() => void client.invalidateQueries({ queryKey: ['advances', projectId] })}
+        />
       ) : null}
     </AppShell>
   );

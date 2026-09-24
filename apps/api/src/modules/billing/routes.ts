@@ -146,6 +146,30 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
     return reply.code(201).send({ data: row });
   });
 
+  /**
+   * There was no way to see an advance once it was recorded — "New advance"
+   * on the billing page had no list beside it, and nothing but a direct SQL
+   * query could confirm one had actually been saved (item 6, final QA fix
+   * wave). Same read permission and org-scoping as the RA-bill list
+   * (rabill.read); unlike that one this is not nested under a project, since
+   * the billing page wants "every advance", filterable down to one project.
+   */
+  app.get('/api/v1/advances', { preHandler: guard('rabill.read') }, async req => {
+    const u = actor(req), { limit, offset, q } = page(req);
+    const values: unknown[] = [u.orgId, limit + 1, offset];
+    let where = 'a.org_id = $1';
+    if (q.project_id) {
+      await projectAccess(pool, req, String(q.project_id));
+      values.push(q.project_id);
+      where += ` AND a.project_id = $${values.length}::uuid`;
+    }
+    const rows = (await pool.query(
+      `SELECT a.*, p.code AS project_code, p.name AS project_name
+       FROM project_advances a JOIN projects p ON p.id = a.project_id
+       WHERE ${where} ORDER BY a.paid_on DESC, a.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+    return { data: rows.slice(0, limit), has_more: rows.length > limit };
+  });
+
   /* -------------------------------------------------------------- RA bills */
 
   app.get('/api/v1/projects/:id/ra-bills', { preHandler: guard('rabill.read') }, async req => {

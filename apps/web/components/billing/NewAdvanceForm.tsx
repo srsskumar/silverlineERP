@@ -18,15 +18,20 @@ type Row = Record<string, any>;
 /**
  * New advance (B-007).
  *
- * Fields mirror `advanceSchema`. There is no `GET` route for advances today
- * (§15's RA-bill draw reads outstanding ones internally, at
- * `apps/api/src/modules/billing/routes.ts:236`) so this is create-only — a
- * recorded advance surfaces later as a deduction line on whichever bill
- * recovers it.
+ * Fields mirror `advanceSchema`. GET /api/v1/advances (item 6, final QA fix
+ * wave) now backs a list on the billing page, so a recorded advance is
+ * visible right away rather than only surfacing later as a deduction line on
+ * whichever bill recovers it.
  *
  * A standalone component for the same reason as `NewRaBillForm`.
  */
-export function NewAdvance({ projectId, onClose }: { projectId: string; onClose: () => void }) {
+export function NewAdvance({
+  projectId, onClose, onCreated,
+}: {
+  projectId: string;
+  onClose: () => void;
+  onCreated?: (advance: Row) => void;
+}) {
   const toast = useToast();
   const [submitError, setSubmitError] = React.useState<unknown>(null);
 
@@ -47,9 +52,10 @@ export function NewAdvance({ projectId, onClose }: { projectId: string; onClose:
 
   const create = useMutation({
     mutationFn: (v: AdvanceFormInput) => apiRequest<Row>('/api/v1/advances', { method: 'POST', body: v }),
-    onSuccess: () => {
+    onSuccess: (res) => {
       toast.success('Advance recorded', 'It will be recovered against future RA bills at the rate given.');
       reset(defaults);
+      onCreated?.(res.data);
       onClose();
     },
     onError: (err) => {

@@ -241,6 +241,55 @@ describe("advance recovery", () => {
   });
 });
 
+/**
+ * Item 6 (final QA fix wave): "New advance" on the billing page had no list
+ * beside it and no GET to back one — an advance vanished from view the
+ * moment it was created.
+ */
+describe("listing advances", () => {
+  it("lists an advance just created, and filters it down to its project", async () => {
+    const { projectId } = await projectWithBoq();
+    const advance = await post(w.admin, "/api/v1/advances", {
+      project_id: projectId, advance_type: "MOBILISATION", amount: 200_000,
+      paid_on: "2026-07-01", recovery_pct: 10,
+    });
+    expect(advance.status, JSON.stringify(advance.body)).toBe(201);
+
+    const all = await get(w.admin, "/api/v1/advances");
+    expect(all.status, JSON.stringify(all.body)).toBe(200);
+    expect(all.data.map((a: any) => a.id)).toContain(advance.data.id);
+
+    const scoped = await get(w.admin, `/api/v1/advances?project_id=${projectId}`);
+    expect(scoped.status, JSON.stringify(scoped.body)).toBe(200);
+    expect(scoped.data).toHaveLength(1);
+    expect(scoped.data[0].id).toBe(advance.data.id);
+    expect(scoped.data[0].project_code).toBeTruthy();
+
+    const { projectId: otherProjectId } = await projectWithBoq();
+    const scopedElsewhere = await get(w.admin, `/api/v1/advances?project_id=${otherProjectId}`);
+    expect(scopedElsewhere.status, JSON.stringify(scopedElsewhere.body)).toBe(200);
+    expect(scopedElsewhere.data.map((a: any) => a.id)).not.toContain(advance.data.id);
+  });
+
+  it("never lists another organisation's advances", async () => {
+    const { projectId } = await projectWithBoq();
+    const advance = await post(w.admin, "/api/v1/advances", {
+      project_id: projectId, advance_type: "MOBILISATION", amount: 75_000,
+      paid_on: "2026-07-01", recovery_pct: 10,
+    });
+    expect(advance.status, JSON.stringify(advance.body)).toBe(201);
+
+    const crossOrg = await get(w.other.admin, "/api/v1/advances");
+    expect(crossOrg.status, JSON.stringify(crossOrg.body)).toBe(200);
+    expect(crossOrg.data.map((a: any) => a.id)).not.toContain(advance.data.id);
+
+    // Filtering by a project id from a different organisation is refused
+    // outright, the same as any other cross-org project reference.
+    const crossOrgFilter = await get(w.other.admin, `/api/v1/advances?project_id=${projectId}`);
+    expect(crossOrgFilter.status).toBe(404);
+  });
+});
+
 describe("bill lifecycle", () => {
   it("allows only one open bill per project", async () => {
     const { projectId, boqItemId } = await projectWithBoq();
