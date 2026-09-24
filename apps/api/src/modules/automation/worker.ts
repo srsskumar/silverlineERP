@@ -2,6 +2,7 @@ import {runProviderJobs} from "../integrations/worker.js";
 import {runPushDelivery} from "../jobs/push.js";
 import {runReportJobs} from "../jobs/reports.js";
 import {runScheduledJobs} from "../jobs/scheduled.js";
+import {runLeaveYearOpen} from "../jobs/leaveYearOpen.js";
 import {runSurveyAlerts} from "../jobs/surveyAlerts.js";
 import {drainSurveyAlertMail} from "../jobs/surveyMail.js";
 import {reverseGeocodingEnabled,runPlaceNames} from "../jobs/placeNames.js";
@@ -47,12 +48,12 @@ export async function isolated<T>(name:string,job:()=>Promise<T>):Promise<T|unde
  catch(e){console.error(`Background job "${name}" failed: ${failureText(e)}`);return undefined;}
 }
 
-export async function runJobs(app:FastifyInstance,pool:Pool,jwtSecret:string):Promise<{events:number;deliveries:number;survey_alerts:number;survey_alert_mail:number}> {
+export async function runJobs(app:FastifyInstance,pool:Pool,jwtSecret:string):Promise<{events:number;deliveries:number;survey_alerts:number;survey_alert_mail:number;leave_year_open_orgs:number}> {
  // The run holds one connection for its exclusivity lock and issues every
  // other query alongside it, so a pool of one deadlocks against itself and
  // surfaces ten seconds later as an opaque 500. Say so instead.
  if(pool.options?.max!==undefined&&pool.options.max<2)throw new Error('Background processing needs PGPOOL_MAX>=2 (it holds one connection for its lock while working); got '+pool.options.max);
- const lock=await pool.connect(),count={events:0,deliveries:0,survey_alerts:0,survey_alert_mail:0};
+ const lock=await pool.connect(),count={events:0,deliveries:0,survey_alerts:0,survey_alert_mail:0,leave_year_open_orgs:0};
  try {
   // A session-level lock is not usable through a transaction-mode connection
   // pooler, which hands the same backend to a different client between
@@ -62,6 +63,11 @@ export async function runJobs(app:FastifyInstance,pool:Pool,jwtSecret:string):Pr
   await lock.query('BEGIN');
   const acquired=await lock.query('SELECT pg_try_advisory_xact_lock(7814239) AS ok');if(!acquired.rows[0].ok){await lock.query('COMMIT');return count;}
   await isolated('scheduled jobs',()=>runScheduledJobs(app,pool,jwtSecret));
+  // Owner decision (2026-09-24, item (b)): a safety net so next year's
+  // leave balances open themselves once an org's own calendar reaches 1
+  // January, even if nobody used the manual button or December banner.
+  const leaveYearOpenResult=await isolated('leave year open',()=>runLeaveYearOpen(pool));
+  count.leave_year_open_orgs+=leaveYearOpenResult?.orgsOpened??0;
   // Survey alerts (§27). Failing here must not stop the rest of the pass:
   // the bottleneck report still shows everything these would have said.
   //

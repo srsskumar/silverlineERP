@@ -23,12 +23,14 @@ describe("formatDocumentType", () => {
 });
 
 describe("approvalStatusTone", () => {
-  it("colours the statuses the ladder actually produces", () => {
+  it("colours the statuses the ladder actually produces, matching web's shared map (fix round 1, item 7)", () => {
     assert.equal(approvalStatusTone("APPROVED"), "success");
     assert.equal(approvalStatusTone("PENDING"), "warning");
     assert.equal(approvalStatusTone("REJECTED"), "danger");
     assert.equal(approvalStatusTone("RECALLED"), "danger");
-    assert.equal(approvalStatusTone("SUPERSEDED"), "danger");
+    // Used to read danger here; web reads SUPERSEDED as info for every
+    // document type, and that is the shared value now.
+    assert.equal(approvalStatusTone("SUPERSEDED"), "info");
     assert.equal(approvalStatusTone("WHATEVER"), "neutral");
   });
 });

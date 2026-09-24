@@ -1,3 +1,5 @@
+import { PAYABLE_INVOICE_FLAG_TONES, type Tone } from "@silverline/shared";
+
 /**
  * Pure display helpers shared by Receivables and Payables — dependency-free,
  * same reasoning as rbac.ts/validators.ts (see their headers).
@@ -58,4 +60,18 @@ export function paymentRunTone(status: string): "success" | "warning" | "neutral
   if (status === "PAID" || status === "APPROVED") return "success";
   if (status === "CANCELLED") return "neutral";
   return "warning";
+}
+
+/**
+ * Badge tone for a document's `on_hold`/`disputed` flag (R5-002, plus the
+ * same divergence found on the receivables/RA-bill screens during the R5
+ * mobile-parity sweep). Reads the one map web also reads
+ * (`PAYABLE_INVOICE_FLAG_TONES`, packages/shared/src/financial-control.ts)
+ * instead of a second copy that can drift from it -- despite the name it is
+ * not payables-only: `disputed` means the same thing, coloured the same
+ * warning, whichever side of the ledger it is on. Payables is the only side
+ * with `on_hold`.
+ */
+export function payableFlagTone(flag: "on_hold" | "disputed"): Tone {
+  return PAYABLE_INVOICE_FLAG_TONES[flag];
 }

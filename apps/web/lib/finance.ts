@@ -106,7 +106,14 @@ export function documentHref(type: string | null | undefined, id: string | null 
   }
 }
 
-export type Tone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
+// Re-exported rather than redeclared: one vocabulary of tones for web and
+// mobile (R5-002/003/004) instead of a second copy that can drift from it.
+export type { Tone } from '@silverline/shared';
+import type { Tone } from '@silverline/shared';
+import {
+  PAYABLE_INVOICE_FLAG_TONES, EXPENSE_CLAIM_STATUS_TONES, RA_BILL_STATUS_TONES,
+  PR_STATUS_TONES, PO_STATUS_TONES, APPROVAL_STATUS_TONES,
+} from '@silverline/shared';
 
 /**
  * Colour for a lifecycle status.
@@ -131,6 +138,48 @@ export function financialTone(status: string | null | undefined): Tone {
     default:
       return 'neutral';
   }
+}
+
+/** Badge tone for a payables invoice's `on_hold`/`disputed` flag (R5-002). */
+export function payableFlagTone(flag: 'on_hold' | 'disputed'): Tone {
+  return PAYABLE_INVOICE_FLAG_TONES[flag];
+}
+
+/** Badge tone for an expense claim's status (R5-003/004). */
+export function expenseClaimTone(status: string | null | undefined): Tone {
+  return (status && EXPENSE_CLAIM_STATUS_TONES[status as keyof typeof EXPENSE_CLAIM_STATUS_TONES]) || 'neutral';
+}
+
+/**
+ * Badge tone for an RA bill's status (mobile-parity sweep, R5 item 4).
+ * PAID and DRAFT used to fall through `financialTone`'s silent neutral
+ * default here; mobile's `raBillStatusTone` had them right all along.
+ */
+export function raBillTone(status: string | null | undefined): Tone {
+  return (status && RA_BILL_STATUS_TONES[status as keyof typeof RA_BILL_STATUS_TONES]) || 'neutral';
+}
+
+/**
+ * Badge tone for an approval instance's status (fix round 1, item 7).
+ * RECALLED used to fall through `financialTone`'s silent neutral default.
+ */
+export function approvalTone(status: string | null | undefined): Tone {
+  return (status && APPROVAL_STATUS_TONES[status as keyof typeof APPROVAL_STATUS_TONES]) || 'neutral';
+}
+
+/** Badge tone for a purchase requisition's status (mobile-parity sweep, R5 item 4). */
+export function requisitionTone(status: string | null | undefined): Tone {
+  return (status && PR_STATUS_TONES[status as keyof typeof PR_STATUS_TONES]) || 'neutral';
+}
+
+/**
+ * Badge tone for a purchase order's status (mobile-parity sweep, R5 item
+ * 4). FULLY_RECEIVED used to fall through `financialTone`'s silent neutral
+ * default here (only its sibling literal `RECEIVED` was ever a case);
+ * mobile's `poStatusTone` had this one right all along.
+ */
+export function poTone(status: string | null | undefined): Tone {
+  return (status && PO_STATUS_TONES[status as keyof typeof PO_STATUS_TONES]) || 'neutral';
 }
 
 /* ----------------------------------------------------------------- SLA */
@@ -232,7 +281,13 @@ export function creditBlockLabel(reason: string | null | undefined): string | nu
   }
 }
 
-export const PAYMENT_MODES = ['NEFT', 'RTGS', 'IMPS', 'UPI', 'CHEQUE', 'CASH', 'PAYROLL'] as const;
+/**
+ * Re-exported from @silverline/shared rather than kept as a second, hand
+ * copied list here: this file's own copy had drifted (missing DD and
+ * ADJUSTMENT — R5 parity finding), which is exactly what a second list of
+ * the same instruments always ends up doing.
+ */
+export { PAYMENT_MODES } from '@silverline/shared';
 
 /**
  * Today, where the work happens.

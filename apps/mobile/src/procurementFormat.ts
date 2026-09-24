@@ -1,28 +1,27 @@
+import { PR_STATUS_TONES, PO_STATUS_TONES, type Tone } from "@silverline/shared";
+
 /**
  * Pure display helpers for the Procurement screen — dependency-free, same
  * reasoning as rbac.ts/validators.ts (see their headers).
  */
 
-/** Mirrors PR_STATUSES (packages/shared/src/procurement.ts). */
-export function requisitionStatusTone(
-  status: string,
-): "success" | "warning" | "danger" | "info" | "neutral" {
-  if (status === "APPROVED" || status === "CONVERTED") return "success";
-  if (status === "SUBMITTED") return "warning";
-  if (status === "REJECTED" || status === "CANCELLED") return "danger";
-  if (status === "DRAFT") return "info";
-  return "neutral";
+/**
+ * Mirrors PR_STATUSES (packages/shared/src/procurement.ts). Reads the one
+ * shared tone map (mobile-parity sweep, R5 item 4) instead of a second copy
+ * that can drift from web's -- this screen had CONVERTED and DRAFT wrong.
+ */
+export function requisitionStatusTone(status: string): Tone {
+  return PR_STATUS_TONES[status as keyof typeof PR_STATUS_TONES] ?? "neutral";
 }
 
-/** Mirrors PO_STATUSES (packages/shared/src/procurement.ts). */
-export function poStatusTone(
-  status: string,
-): "success" | "warning" | "danger" | "info" | "neutral" {
-  if (status === "FULLY_RECEIVED" || status === "CLOSED") return "success";
-  if (status === "PARTIALLY_RECEIVED" || status === "SENT" || status === "APPROVED") return "warning";
-  if (status === "CANCELLED") return "danger";
-  if (status === "DRAFT" || status === "PENDING_APPROVAL") return "info";
-  return "neutral";
+/**
+ * Mirrors PO_STATUSES (packages/shared/src/procurement.ts). Reads the one
+ * shared tone map (mobile-parity sweep, R5 item 4) instead of a second copy
+ * that can drift from web's -- this screen showed an APPROVED order as
+ * still-pending amber instead of green, among other mismatches.
+ */
+export function poStatusTone(status: string): Tone {
+  return PO_STATUS_TONES[status as keyof typeof PO_STATUS_TONES] ?? "neutral";
 }
 
 /**

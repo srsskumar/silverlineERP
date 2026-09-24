@@ -51,6 +51,29 @@ export function canIssue(from: InvoiceLifecycle): boolean {
   return (INVOICE_TRANSITIONS[from] ?? []).includes('ISSUED');
 }
 
+/* ------------------------------------------------------------- tones */
+
+/**
+ * Status-badge colour, one vocabulary for web and mobile (R5-002/003/004).
+ * Two screens picking their own tones for the same record is how an invoice
+ * on hold read as more severe than a disputed one on web, and the opposite
+ * on mobile.
+ */
+export type Tone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
+
+/**
+ * A vendor invoice's `on_hold`/`disputed` are independent booleans, not one
+ * lifecycle status, so each gets its own badge tone rather than a
+ * status-keyed map. `on_hold` is the more severe of the two: it is a
+ * deliberate block on payment, where `disputed` is a claim still being
+ * worked out. (Owner reference: web's original mapping; mobile had the two
+ * swapped and is the one that changed, R5-002.)
+ */
+export const PAYABLE_INVOICE_FLAG_TONES: { on_hold: Tone; disputed: Tone } = {
+  on_hold: 'danger',
+  disputed: 'warning',
+};
+
 /* ------------------------------------------------------------ settlement */
 
 export type SettlementState =

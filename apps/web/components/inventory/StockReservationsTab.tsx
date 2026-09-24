@@ -18,37 +18,43 @@ export function StockReservationsTab() {
 
   return (
     <>
-      <Panel title="Reservations">
-        <div className="mb-3 flex items-center gap-2">
-          <label className="text-sm font-medium text-text-muted">
-            State
-            <select
-              className="ml-2 rounded-md border border-border p-1.5 text-sm"
-              value={state}
-              onChange={(e) => setState(e.target.value)}
-            >
-              <option value="">All</option>
-              <option value="ACTIVE">Active</option>
-              <option value="RELEASED">Released</option>
-              <option value="EXPIRED">Expired</option>
-              <option value="CONSUMED">Consumed</option>
-            </select>
-          </label>
-        </div>
-        <Collection
-          path={path}
-          columns={[
-            { key: 'item_code', label: 'Item' },
-            { key: 'item_name', label: 'Name' },
-            { key: 'location_name', label: 'Location' },
-            { key: 'quantity', label: 'Quantity' },
-            { key: 'project_code', label: 'Project' },
-            { key: 'state', label: 'State' },
-            { key: 'expires_on', label: 'Expires' },
-          ]}
-          onSelect={setSelected}
-        />
-      </Panel>
+      {/* R5 item 4(b): the list reads reservation data that reservation.read
+          governs everywhere else it appears (the API route, StockSection's
+          now-removed duplicate panel) — it was the one place showing it
+          unguarded. */}
+      <Can permission="reservation.read">
+        <Panel title="Reservations">
+          <div className="mb-3 flex items-center gap-2">
+            <label className="text-sm font-medium text-text-muted">
+              State
+              <select
+                className="ml-2 rounded-md border border-border p-1.5 text-sm"
+                value={state}
+                onChange={(e) => setState(e.target.value)}
+              >
+                <option value="">All</option>
+                <option value="ACTIVE">Active</option>
+                <option value="RELEASED">Released</option>
+                <option value="EXPIRED">Expired</option>
+                <option value="CONSUMED">Consumed</option>
+              </select>
+            </label>
+          </div>
+          <Collection
+            path={path}
+            columns={[
+              { key: 'item_code', label: 'Item' },
+              { key: 'item_name', label: 'Name' },
+              { key: 'location_name', label: 'Location' },
+              { key: 'quantity', label: 'Quantity' },
+              { key: 'project_code', label: 'Project' },
+              { key: 'state', label: 'State' },
+              { key: 'expires_on', label: 'Expires' },
+            ]}
+            onSelect={setSelected}
+          />
+        </Panel>
+      </Can>
 
       <Can permission="reservation.manage">
         <Panel title="New reservation">

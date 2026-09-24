@@ -15,7 +15,7 @@ import { Badge } from '@/components/ui/Badge';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Field, Notice, RecordSheet, Section, StatusBadge, Stat } from '@/components/finance/Primitives';
-import { day, money, moneyIndian, percent, utilisationWidth } from '@/lib/finance';
+import { day, money, moneyIndian, percent, utilisationWidth, raBillTone } from '@/lib/finance';
 import { useToast } from '@/components/ui/Toast';
 import { messageOf } from '@/lib/form-errors';
 import { RequireDestination } from '@/components/RequirePermission';
@@ -248,7 +248,7 @@ function RaBills({ projectId, onOpen }: { projectId: string; onOpen: (id: string
                   <TD align="right" className="text-text">{money(b.gross_value)}</TD>
                   <TD align="right" className="text-text-muted">{money(b.total_deductions)}</TD>
                   <TD align="right" className="font-medium text-text">{money(b.net_payable)}</TD>
-                  <TD><StatusBadge status={b.status} /></TD>
+                  <TD><StatusBadge status={b.status} tone={raBillTone(b.status)} /></TD>
                   <TD align="right">
                     <Button variant="secondary" size="sm" onClick={() => onOpen(String(b.id))}>Open</Button>
                   </TD>
@@ -302,7 +302,7 @@ function BillDetail({ id, onClose }: { id: string; onClose: () => void }) {
       ) : (
         <>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-4">
-            <Field label="Status" value={<StatusBadge status={b.status} size="md" />} />
+            <Field label="Status" value={<StatusBadge status={b.status} tone={raBillTone(b.status)} size="md" />} />
             <Field label="This bill" value={money(b.gross_value)} />
             <Field label="Deductions" value={money(b.total_deductions)} />
             <Field label="Net payable" value={money(b.net_payable)} />

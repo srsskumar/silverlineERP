@@ -1,3 +1,5 @@
+import { APPROVAL_STATUS_TONES, type Tone } from "@silverline/shared";
+
 /**
  * Pure display helpers for the Approvals screen — kept dependency-free and
  * separate from the screen file so the wording rules are unit-testable
@@ -30,13 +32,14 @@ export function formatDocumentType(code: string): string {
     .join(" ");
 }
 
-export function approvalStatusTone(
-  status: string,
-): "success" | "warning" | "danger" | "neutral" {
-  if (status === "APPROVED") return "success";
-  if (status === "PENDING") return "warning";
-  if (status === "REJECTED" || status === "RECALLED" || status === "SUPERSEDED") return "danger";
-  return "neutral";
+/**
+ * Reads the one shared tone map (fix round 1, item 7) instead of a second
+ * copy that can drift from web's -- this screen used to read SUPERSEDED as
+ * danger where web reads it info, the same meaning that status carries for
+ * every other document type on web.
+ */
+export function approvalStatusTone(status: string): Tone {
+  return APPROVAL_STATUS_TONES[status as keyof typeof APPROVAL_STATUS_TONES] ?? "neutral";
 }
 
 /**

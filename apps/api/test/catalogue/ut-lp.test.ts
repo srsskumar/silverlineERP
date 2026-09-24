@@ -41,6 +41,39 @@ function plusDays(days: number, from = workDate()): string {
   return base.toISOString().slice(0, 10);
 }
 
+/**
+ * `plusDays`, nudged forward a day at a time until it isn't a Sunday. A
+ * single-Sunday *paid* leave request is now correctly refused outright
+ * (422 ALL_DAYS_EXCLUDED, D-012's sandwich rule -- nothing to charge), so a
+ * probe that only cares about overlap/cancel behaviour must not land its
+ * lone day on one by accident of the run's calendar.
+ */
+function nonSundayPlusDays(days: number): string {
+  let d = days;
+  let date = plusDays(d);
+  while (new Date(`${date}T00:00:00Z`).getUTCDay() === 0) {
+    d += 1;
+    date = plusDays(d);
+  }
+  return date;
+}
+
+/**
+ * Calendar days in [from, to] that are not a Sunday (D-012 sandwich rule for
+ * PAID leave; this fixture configures no holidays, so Sunday is the only
+ * exclusion). Used instead of a hardcoded day count so this does not depend
+ * on which day of the week "today + N" happens to land on.
+ */
+function workingDaysCount(from: string, to: string): number {
+  let n = 0;
+  let cur = from;
+  while (cur <= to) {
+    if (new Date(`${cur}T00:00:00Z`).getUTCDay() !== 0) n += 1;
+    cur = plusDays(1, cur);
+  }
+  return n;
+}
+
 interface ErrorBody {
   code: string;
   message: string;
@@ -157,9 +190,11 @@ describe("UT-LP-01 calculate leave ledger", () => {
     });
     expect(decision.statusCode).toBe(200);
 
+    // CL is paid: a Sunday inside the range (D-012 sandwich rule) is not debited.
+    const debited = workingDaysCount(plusDays(30), plusDays(31));
     const after = await balanceOf(employeeId, types.CL!);
-    expect(after.consumed).toBe(before.consumed + 2);
-    expect(after.current_balance).toBe(before.current_balance - 2);
+    expect(after.consumed).toBe(before.consumed + debited);
+    expect(after.current_balance).toBe(before.current_balance - debited);
   });
 
   it("refuses a request that exceeds the available balance", async () => {
@@ -302,11 +337,16 @@ describe("UT-LP-02 submit overlapping approved leave or attendance", () => {
 
   it("stops blocking once the conflicting request is cancelled", async () => {
     const { employeeId, headers } = await worker();
+    // A single-day probe, so it must not land on a Sunday (D-012's
+    // sandwich rule now correctly refuses a paid request with nothing to
+    // charge outright, which is not what this test is about).
+    const day0 = nonSundayPlusDays(80);
+    const day1 = plusDaysFrom(day0, 1);
     const created = await fileLeave(headers, {
       employee_id: employeeId,
       leave_type_id: types.CL,
-      from_date: plusDays(80),
-      to_date: plusDays(81),
+      from_date: day0,
+      to_date: day1,
       reason: "To be cancelled",
     });
     const requestId = (created.json() as { id: string }).id;
@@ -314,11 +354,12 @@ describe("UT-LP-02 submit overlapping approved leave or attendance", () => {
     const blocked = await fileLeave(headers, {
       employee_id: employeeId,
       leave_type_id: types.CL,
-      from_date: plusDays(80),
-      to_date: plusDays(80),
+      from_date: day0,
+      to_date: day0,
       reason: "Blocked by the pending one",
     });
     expect(blocked.statusCode).toBe(422);
+    expect((blocked.json() as { code: string }).code).toBe("LEAVE_OVERLAP");
 
     const cancelled = await w.app.inject({
       method: "POST",
@@ -335,8 +376,8 @@ describe("UT-LP-02 submit overlapping approved leave or attendance", () => {
     const retry = await fileLeave(headers, {
       employee_id: employeeId,
       leave_type_id: types.CL,
-      from_date: plusDays(80),
-      to_date: plusDays(80),
+      from_date: day0,
+      to_date: day0,
       reason: "Now unblocked",
     });
     expect(retry.statusCode).toBe(201);
@@ -494,8 +535,8 @@ describe("UT-LP-03 approve and reject through configured chain", () => {
     const created = await fileLeave(headers, {
       employee_id: employeeId,
       leave_type_id: types.CL,
-      from_date: plusDays(100),
-      to_date: plusDays(100),
+      from_date: nonSundayPlusDays(100),
+      to_date: nonSundayPlusDays(100),
       reason: "To be rejected",
     });
     const request = created.json() as { id: string };

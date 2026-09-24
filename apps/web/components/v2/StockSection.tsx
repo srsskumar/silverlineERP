@@ -107,18 +107,11 @@ export function StockSection() {
         </Can>
       ) : null}
 
-      <Can permission="reservation.read">
-        <Panel title="Reservations">
-          <Collection
-            path="stock-reservations"
-            columns={[
-              { key: 'item_name', label: 'Item' }, { key: 'location_name', label: 'Location' },
-              { key: 'quantity', label: 'Quantity' }, { key: 'state', label: 'State' },
-              { key: 'project_code', label: 'Project' }, { key: 'expires_on', label: 'Expires' },
-            ]}
-          />
-        </Panel>
-      </Can>
+      {/* R5 item 4(b): reservations had two panels showing the same data —
+          this one and the Reservations tab's own StockReservationsTab
+          (components/inventory/StockReservationsTab.tsx), which also has the
+          create/release forms. Removed here rather than there so there is
+          one screen for stock reservations, not two that can drift. */}
 
       <Can permission="stock.read">
         <Panel title="Reorder suggestions">

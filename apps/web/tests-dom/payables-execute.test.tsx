@@ -119,6 +119,15 @@ describe('ExecutePaymentRunForm (B-002)', () => {
     expect(sent[0].body).toMatchObject({ payment_mode: 'RTGS' });
   });
 
+  it('offers every payment mode the shared list defines, DD and ADJUSTMENT included (R5 parity fix)', async () => {
+    mount(
+      <ExecutePaymentRunForm runId="99999999-9999-9999-9999-999999999999" version={3} onClose={vi.fn()} onDone={vi.fn()} />,
+    );
+    const select = await screen.findByLabelText(/Payment mode/) as HTMLSelectElement;
+    const options = [...select.options].map((o) => o.value);
+    expect(options).toEqual(['NEFT', 'RTGS', 'IMPS', 'UPI', 'CHEQUE', 'DD', 'CASH', 'PAYROLL', 'ADJUSTMENT']);
+  });
+
   it('refuses a paid-on date in the future before it ever reaches the server', async () => {
     mount(
       <ExecutePaymentRunForm runId="99999999-9999-9999-9999-999999999999" version={3} onClose={vi.fn()} onDone={vi.fn()} />,

@@ -1,18 +1,18 @@
+import { EXPENSE_CLAIM_STATUS_TONES, type Tone } from "@silverline/shared";
+
 /**
  * Pure display helpers for the Expenses screen — dependency-free, same
  * reasoning as rbac.ts/validators.ts, and split out of app/expenses.tsx so
  * they are importable from a plain node:test without pulling in React Native.
  */
 
-/** Mirrors EXPENSE_CLAIM_STATUSES (packages/shared/src/expenses.ts). */
-export function expenseStatusTone(
-  status: string,
-): "success" | "warning" | "danger" | "info" | "neutral" {
-  if (status === "APPROVED" || status === "REIMBURSED") return "success";
-  if (status === "SUBMITTED") return "warning";
-  if (status === "REJECTED" || status === "WITHDRAWN") return "danger";
-  if (status === "DRAFT") return "info";
-  return "neutral";
+/**
+ * Mirrors EXPENSE_CLAIM_STATUSES (packages/shared/src/expenses.ts). Reads
+ * the one shared tone map (R5-003/004) instead of a second copy that can
+ * drift from web's.
+ */
+export function expenseStatusTone(status: string): Tone {
+  return EXPENSE_CLAIM_STATUS_TONES[status as keyof typeof EXPENSE_CLAIM_STATUS_TONES] ?? "neutral";
 }
 
 /** "SITE_MATERIALS_PETTY" -> "Site materials petty". */

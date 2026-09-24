@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { PAYMENT_MODES, businessToday } from '@/lib/finance';
+import { businessToday } from '@/lib/finance';
 import {
   APPROVAL_DOCUMENT_TYPES,
   validateSlabs,
@@ -1074,10 +1074,12 @@ export const paymentRunExecuteSchema = z.object({
     .trim()
     .min(1, 'Enter the bank reference (UTR/cheque number)')
     .max(100, 'Bank reference must be at most 100 characters'),
-  // Same instrument list the expense reimbursement mode picker uses
-  // (PAYMENT_MODES, lib/finance.ts) — one list rather than a second that
-  // drifts. NEFT by default, matching the server (ledgers.ts).
-  payment_mode: z.enum(PAYMENT_MODES).default('NEFT'),
+  // The one shared instrument list (@silverline/shared's PAYMENT_MODES,
+  // imported above as SHARED_PAYMENT_MODES) rather than a second copy that
+  // drifts — lib/finance.ts used to keep its own hand-copied list here,
+  // which had silently fallen out of date (missing DD, ADJUSTMENT; R5
+  // finding). NEFT by default, matching the server (ledgers.ts).
+  payment_mode: z.enum(SHARED_PAYMENT_MODES).default('NEFT'),
   note: optionalText(1000),
 });
 export type PaymentRunExecuteFormInput = z.infer<typeof paymentRunExecuteSchema>;

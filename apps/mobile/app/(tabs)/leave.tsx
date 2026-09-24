@@ -10,6 +10,7 @@ import { View } from "react-native";
 import { ApiError } from "../../src/api/client";
 import {
   getLeaveBalances,
+  getLeavePreview,
   getLeaveRequests,
   getLeaveTypes,
   postLeaveDecision,
@@ -86,6 +87,21 @@ function LeaveScreen() {
   // from the real list is the only workable version of this on a phone.
   const leaveTypes = useMemo(() => types.data ?? [], [types.data]);
   const selectedType = typeId || (leaveTypes[0]?.id ?? "");
+
+  const fromTrim = from.trim();
+  const toTrim = to.trim();
+  const datesOrdered = !!fromTrim && !!toTrim && toTrim >= fromTrim;
+  /*
+   * Fix round 1, item 2: what filing this range will actually charge, from
+   * the same server-side day-counting function filing itself uses -- not a
+   * client-side calendar-day guess, which overstates a paid request under
+   * the sandwich rule (D-012).
+   */
+  const preview = useQuery({
+    queryKey: ["leave", "preview", selectedType, fromTrim, toTrim],
+    queryFn: () => getLeavePreview({ leave_type_id: selectedType, from_date: fromTrim, to_date: toTrim }),
+    enabled: canAccess && !!selectedType && datesOrdered,
+  });
 
   const submit = async () => {
     setMsg(null);
@@ -230,6 +246,28 @@ function LeaveScreen() {
           value={to}
           onChangeText={setTo}
         />
+        {!selectedType || !fromTrim || !toTrim ? null : !datesOrdered ? (
+          <Subtle style={{ color: t.danger, marginBottom: space.sm }}>
+            To date must be on or after from date
+          </Subtle>
+        ) : preview.isLoading ? (
+          <Subtle style={{ marginBottom: space.sm }}>Checking…</Subtle>
+        ) : preview.isError ? (
+          <Subtle style={{ color: t.danger, marginBottom: space.sm }}>Could not preview this range</Subtle>
+        ) : preview.data ? (
+          preview.data.total_days === 0 ? (
+            <Subtle style={{ color: t.danger, marginBottom: space.sm }}>
+              Every day in this range is a Sunday or a holiday
+            </Subtle>
+          ) : (
+            <Row gap={space.xs} style={{ marginBottom: space.sm }}>
+              <Badge
+                text={`${preview.data.total_days} day${preview.data.total_days === 1 ? "" : "s"}${preview.data.is_paid ? "" : " (unpaid)"}`}
+                tone="info"
+              />
+            </Row>
+          )
+        ) : null}
         <Input
           label="Reason"
           hint="Optional, but helps your approver decide."
@@ -241,7 +279,7 @@ function LeaveScreen() {
           title="Submit request"
           icon="send-outline"
           loading={busy}
-          disabled={busy || !from.trim() || !to.trim() || !selectedType}
+          disabled={busy || !from.trim() || !to.trim() || !selectedType || preview.data?.total_days === 0}
           onPress={() => void submit()}
         />
       </Card>

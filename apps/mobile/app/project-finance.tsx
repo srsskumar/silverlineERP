@@ -17,6 +17,7 @@ import { Modal, ScrollView, View } from "react-native";
 import { useAuth } from "../src/auth/AuthContext";
 import { getProjectRaBills, getProjects, getRaBill, type RaBill } from "../src/api/endpoints";
 import { raBillAmount, raBillOverdue, raBillStatusTone } from "../src/raBillsFormat";
+import { payableFlagTone } from "../src/ledgersFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
 import {
   BackHeader,
@@ -134,7 +135,7 @@ function ProjectFinanceScreen() {
                       }
                       right={
                         <Row gap={space.xs}>
-                          {b.disputed ? <Badge text="DISPUTED" tone="danger" /> : null}
+                          {b.disputed ? <Badge text="DISPUTED" tone={payableFlagTone('disputed')} /> : null}
                           <Badge text={b.status} tone={raBillStatusTone(b.status)} />
                         </Row>
                       }

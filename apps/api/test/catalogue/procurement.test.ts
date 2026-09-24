@@ -650,6 +650,23 @@ describe("vendor invoice lines (finding B-004)", () => {
     expect(String(lines[0].po_line_id)).toBe(String(poLines[0].id));
   });
 
+  it("R5-001: wraps the created invoice in the {data:...} envelope like every other create", async () => {
+    const { vendor } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 10, rate: 400, hsnSac: "25232910", gstRatePct: 0 },
+    ]);
+    const res = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "4000", payment_mode: "BANK", reference: "envelope check",
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    // The raw body, not `res.data` (which tolerates either shape) -- this
+    // pins the actual wire shape so a client written against the API's
+    // usual {data:...} convention gets `.data.id`, not `undefined`.
+    expect(res.body).toHaveProperty('data.id');
+    expect(typeof res.body.data.id).toBe('string');
+    expect(res.body.id).toBeUndefined();
+  });
+
   it("recomputes gst_enabled/gst_rate on an edit too, not only on create (fix round 1, item 5)", async () => {
     const { vendor, po, poLines } = await poWithLines([
       { description: "Cement OPC 53", quantity: 100, rate: 400 },

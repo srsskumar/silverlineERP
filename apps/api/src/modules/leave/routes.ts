@@ -14,15 +14,20 @@ import {
   leaveBalanceUpsertSchema,
   leaveCancelSchema,
   leaveDecisionSchema,
+  leaveOpenYearSchema,
   leaveRequestCreateSchema,
+  resolveEffectiveHolidays,
   toFieldErrors,
   type ApprovalChainStep,
+  type HolidayCandidate,
 } from "@silverline/shared";
 import { buildAuthenticate, requirePermission,scopesForPermission } from "../../common/auth.js";
 import { writeAudit } from "../../common/audit.js";
 import { sendError } from "../../common/httpErrors.js";
 import { emitNotification } from "../s5/notify.js";
 import { parseIfMatch } from '../../common/ifMatch.js';
+import { currentOrgYear, previewOpenYear, runOpenYear } from "./openYear.js";
+import { reassignIfIneligible, step1Approver, step2Approver } from "./approverResolution.js";
 
 export interface LeaveRoutesOptions {
   pool: Pool;
@@ -55,6 +60,7 @@ function currentIstYear(): number {
   return Number(istDayString(new Date()).slice(0, 4));
 }
 
+
 /** Inclusive calendar days between two YYYY-MM-DD dates (to >= from). */
 function inclusiveDays(from: string, to: string): number {
   const ms =
@@ -62,21 +68,50 @@ function inclusiveDays(from: string, to: string): number {
   return Math.round(ms / 86_400_000) + 1;
 }
 
+function addDays(date: string, n: number): string {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + n * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+function isSundayDate(date: string): boolean {
+  return new Date(`${date}T00:00:00Z`).getUTCDay() === 0;
+}
+
 /**
- * The days of a leave, per leave year (D-011).
+ * The days of a leave, per leave year (D-011), skipping any date in
+ * `skipDates`.
  *
  * A balance belongs to a calendar year. Leave from 30 Dec to 2 Jan is two
  * days of one year's balance and two of the next; charging all four to the
  * first year (as the balance check and the debit both did) overdrew it and
  * never touched the second.
+ *
+ * `skipDates` is the sandwich rule (D-012, owner decision 2026-09-24): for a
+ * PAID leave type, a Sunday or an effective holiday inside the range is
+ * already a paid day off and is not deducted a second time. Callers pass an
+ * empty set for unpaid (LOP) leave, which keeps counting every calendar day
+ * exactly as before.
  */
-function daysByYear(from: string, to: string): Array<{ year: number; days: number }> {
+function daysByYear(
+  from: string,
+  to: string,
+  skipDates: ReadonlySet<string> = new Set(),
+): Array<{ year: number; days: number }> {
   const out: Array<{ year: number; days: number }> = [];
   const first = Number(from.slice(0, 4)), last = Number(to.slice(0, 4));
   for (let y = first; y <= last; y++) {
     const start = y === first ? from : `${y}-01-01`;
     const end = y === last ? to : `${y}-12-31`;
-    out.push({ year: y, days: inclusiveDays(start, end) });
+    if (skipDates.size === 0) {
+      out.push({ year: y, days: inclusiveDays(start, end) });
+      continue;
+    }
+    let days = 0;
+    for (let d = start; d <= end; d = addDays(d, 1)) {
+      if (!skipDates.has(d)) days += 1;
+    }
+    out.push({ year: y, days });
   }
   return out;
 }
@@ -219,6 +254,12 @@ interface RequestRow {
   version: number;
   created_at: Date | string;
   updated_at: Date | string;
+  /**
+   * The per-year split actually debited at final approval (fix round 1,
+   * item 3): `[{year, days}]`, a year with 0 days never listed. Empty
+   * (`[]`) until approved -- nothing has been debited yet.
+   */
+  debited_days: unknown;
   /** From the employee record, when the query joined it. */
   employee_name?: string | null;
   employee_emp_no?: string | null;
@@ -226,7 +267,7 @@ interface RequestRow {
 
 const REQUEST_COLS = `id, org_id, employee_id, leave_type_id, from_date,
   to_date, total_days, reason, status, approval_chain, current_approver_id,
-  version, created_at, updated_at`;
+  version, created_at, updated_at, debited_days`;
 
 /*
  * The request with the employee's name beside it.
@@ -274,6 +315,7 @@ function toRequestShape(row: RequestRow) {
     status: row.status,
     current_approver_id: row.current_approver_id,
     version: row.version,
+    debited_days: row.debited_days ?? [],
     employee_name: row.employee_name ?? null,
     employee_emp_no: row.employee_emp_no ?? null,
   };
@@ -342,6 +384,46 @@ export async function registerLeaveRoutes(
     return res.rows[0] as LeaveTypeRow | undefined;
   }
 
+  /**
+   * The dates inside [from, to] that a PAID leave request does not debit
+   * (D-012, sandwich rule, owner decision 2026-09-24): every Sunday, plus
+   * this employee's own effective holiday calendar for the range -- the same
+   * scope-precedence resolution payroll uses (`resolveEffectiveHolidays`),
+   * restricted to active holiday rows. Called only for `is_paid` types; an
+   * unpaid (LOP) request keeps charging every calendar day, so callers pass
+   * an empty set instead of calling this at all.
+   */
+  async function sandwichSkipDates(
+    db: Pick<Pool, "query">,
+    orgId: string,
+    employeeId: string,
+    from: string,
+    to: string,
+  ): Promise<Set<string>> {
+    const skip = new Set<string>();
+    for (let d = from; d <= to; d = addDays(d, 1)) {
+      if (isSundayDate(d)) skip.add(d);
+    }
+    const empRes = await db.query(
+      "SELECT site_id, village_id, mandal_id, district_id FROM employees WHERE id = $1::uuid AND org_id = $2",
+      [employeeId, orgId],
+    );
+    const emp = empRes.rows[0] as
+      | { site_id: string | null; village_id: string | null; mandal_id: string | null; district_id: string | null }
+      | undefined;
+    const holRes = await db.query(
+      `SELECT id, date::text AS date, name, type, scope_type, scope_id FROM holidays
+       WHERE org_id = $1 AND active = true AND date BETWEEN $2::date AND $3::date`,
+      [orgId, from, to],
+    );
+    const candidates = holRes.rows as HolidayCandidate[];
+    const effective = resolveEffectiveHolidays(candidates, [
+      emp?.site_id, emp?.village_id, emp?.mandal_id, emp?.district_id,
+    ]);
+    for (const h of effective) skip.add(h.date);
+    return skip;
+  }
+
   async function findRequest(
     orgId: string,
     id: string,
@@ -351,49 +433,6 @@ export async function registerLeaveRoutes(
       [id, orgId],
     );
     return res.rows[0] as RequestRow | undefined;
-  }
-
-  /** Step-1 candidate: linked user of the requester's `reports_to` manager. */
-  async function step1Approver(
-    orgId: string,
-    requesterEmployeeId: string,
-  ): Promise<string | null> {
-    const mgr = await opts.pool.query(
-      "SELECT reports_to FROM employees WHERE id = $1::uuid AND org_id = $2",
-      [requesterEmployeeId, orgId],
-    );
-    const reportsTo = (mgr.rows[0] as { reports_to: string | null } | undefined)
-      ?.reports_to;
-    if (!reportsTo) {
-      return null;
-    }
-    const linked = await opts.pool.query(
-      `SELECT u.id FROM users u
-       WHERE u.employee_id = $1::uuid AND u.org_id = $2 AND u.auth_status = 'ACTIVE'
-         AND EXISTS (
-           SELECT 1 FROM user_roles ur
-           JOIN role_permissions rp ON rp.role_id = ur.role_id
-           WHERE ur.user_id = u.id AND rp.permission_code = $3
-         )
-       LIMIT 1`,
-      [reportsTo, orgId, LEAVE_DECIDE],
-    );
-    return ((linked.rows[0] as { id: string } | undefined)?.id ?? null);
-  }
-
-  /** Step-2 candidate: first HR_MANAGER/ADMIN/SUPER_ADMIN user by created_at. */
-  async function step2Approver(orgId: string): Promise<string | null> {
-    const res = await opts.pool.query(
-      `SELECT u.id FROM users u
-       JOIN user_roles ur ON ur.user_id = u.id
-       JOIN roles r ON r.id = ur.role_id
-       WHERE u.org_id = $1 AND u.auth_status = 'ACTIVE'
-         AND r.code IN ('HR_MANAGER', 'ADMIN', 'SUPER_ADMIN')
-       ORDER BY u.created_at ASC, u.id ASC
-       LIMIT 1`,
-      [orgId],
-    );
-    return ((res.rows[0] as { id: string } | undefined)?.id ?? null);
   }
 
   // ------------------------------------------------ GET /leave/types
@@ -559,8 +598,187 @@ export async function registerLeaveRoutes(
       requestId: req.requestId,
     });
     return reply.status(created ? 201 : 200).send(body);
-  
+
 });});
+
+  // ------------------------------------------------ POST /leave-balances/open-year
+  //
+  // R5-008: bulk-opens next year's leave balances so a request that crosses
+  // into a not-yet-opened year does not 422 for lack of a row. Owner
+  // decision (2026-09-24): carry-forward is out of scope -- every row opens
+  // at the leave type's plain annual_entitlement, with nothing brought over
+  // from the year before. Unused balance simply lapses; there is no
+  // carry-forward or expiry rule to apply, because the leave-type schema
+  // does not define one. If the owner later wants unused CL/SL/EL to roll
+  // into the new year, that needs its own explicit field and its own change
+  // -- this endpoint must not silently start carrying balances forward.
+  const openYearQuerySchema = z.object({ dry_run: z.string().optional() });
+
+  app.post(
+    "/api/v1/leave-balances/open-year",
+    { preHandler: canAdmin },
+    async (req, reply) => {
+      return mutationRoute(opts.pool, req, reply, async (db, reply) => {
+        const parsedQuery = openYearQuerySchema.safeParse(req.query);
+        if (!parsedQuery.success) {
+          return sendError(reply, req.requestId, {
+            status: 422,
+            code: "VALIDATION_ERROR",
+            message: "Validation failed",
+            fieldErrors: toFieldErrors(parsedQuery.error),
+          });
+        }
+        const dryRun = isTrueFlag(parsedQuery.data.dry_run);
+        const parsed = leaveOpenYearSchema.safeParse(req.body ?? {});
+        if (!parsed.success) {
+          return sendError(reply, req.requestId, {
+            status: 422,
+            code: "VALIDATION_ERROR",
+            message: "Validation failed",
+            fieldErrors: toFieldErrors(parsed.error),
+          });
+        }
+        const user = req.authUser;
+        if (!user) {
+          return sendError(reply, req.requestId, {
+            status: 401,
+            code: "UNAUTHENTICATED",
+            message: "Authentication required",
+          });
+        }
+        const d = parsed.data;
+        // Fix round 1, item 5: the org's own timezone, not the fixed IST
+        // this file otherwise uses for the backdating rule.
+        const thisYear = await currentOrgYear(db, user.orgId);
+        // Fix round 1, item 5: `year` is optional -- default to next year
+        // (the common case) rather than making every caller compute it.
+        const targetYear = d.year ?? thisYear + 1;
+        if (targetYear !== thisYear && targetYear !== thisYear + 1) {
+          return sendRuleError(reply, req.requestId, {
+            status: 422,
+            code: "VALIDATION_ERROR",
+            message: `year must be the current (${thisYear}) or next (${thisYear + 1}) year`,
+            fieldErrors: [
+              { field: "year", message: `must be ${thisYear} or ${thisYear + 1}` },
+            ],
+          });
+        }
+
+        if (dryRun) {
+          const preview = await previewOpenYear(
+            db, user.orgId, targetYear, d.employee_ids, d.leave_type_ids,
+          );
+          return reply.status(200).send({ data: preview });
+        }
+
+        const outcome = await runOpenYear(db, {
+          orgId: user.orgId,
+          year: targetYear,
+          employeeIds: d.employee_ids,
+          leaveTypeIds: d.leave_type_ids,
+          actorId: user.id,
+          impersonatorId: user.impersonator?.id ?? null,
+          actorIp: req.ip,
+          actorUserAgent:
+            typeof req.headers["user-agent"] === "string"
+              ? (req.headers["user-agent"] as string)
+              : null,
+          requestId: req.requestId,
+          triggeredBy: "manual",
+        });
+        return reply.status(200).send({ data: outcome });
+      });
+    },
+  );
+
+  // ------------------------------------------------ GET /leave/preview
+  //
+  // Fix round 1, item 2: the web/mobile "N days" preview shown before
+  // filing used to be a client-side calendar-day count, which is wrong for
+  // paid leave under the sandwich rule (D-012) -- a request could show
+  // "4 days" and file for 3, or 0. This returns exactly what filing would
+  // charge, using filing's own day-counting function (`daysByYear` +
+  // `sandwichSkipDates`) so the two can never disagree, for the employee's
+  // own effective holiday scope.
+  const leavePreviewQuerySchema = z.object({
+    leave_type_id: z.string().uuid("leave_type_id must be a UUID"),
+    from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "from_date must be YYYY-MM-DD"),
+    to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "to_date must be YYYY-MM-DD"),
+    employee_id: z.string().uuid().optional(),
+  });
+
+  app.get("/api/v1/leave/preview", { preHandler: canRequest }, async (req, reply) => {
+    const parsed = leavePreviewQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return sendError(reply, req.requestId, {
+        status: 422,
+        code: "VALIDATION_ERROR",
+        message: "Validation failed",
+        fieldErrors: toFieldErrors(parsed.error),
+      });
+    }
+    const user = req.authUser;
+    if (!user) {
+      return sendError(reply, req.requestId, {
+        status: 401,
+        code: "UNAUTHENTICATED",
+        message: "Authentication required",
+      });
+    }
+    const q = parsed.data;
+    if (q.to_date < q.from_date) {
+      return sendRuleError(reply, req.requestId, {
+        status: 422,
+        code: "DATE_RANGE",
+        message: "to_date must be on or after from_date",
+        fieldErrors: [{ field: "to_date", message: "to_date must be on or after from_date" }],
+      });
+    }
+    const own = await linkedEmployeeId(user.id);
+    let employeeId: string;
+    if (q.employee_id && q.employee_id !== own) {
+      if (!user.permissions.includes(LEAVE_ADMIN)) {
+        return sendError(reply, req.requestId, {
+          status: 403,
+          code: "FORBIDDEN",
+          message:
+            `Previewing somebody else's leave needs the "leave.admin" permission. Leave employee_id out to preview your own.`,
+        });
+      }
+      employeeId = q.employee_id;
+    } else if (own) {
+      employeeId = own;
+    } else {
+      return sendError(reply, req.requestId, {
+        status: 404,
+        code: "NOT_FOUND",
+        message: "No employee record is linked to this account",
+      });
+    }
+    const type = await findType(user.orgId, q.leave_type_id);
+    if (!type) {
+      return sendError(reply, req.requestId, {
+        status: 404,
+        code: "NOT_FOUND",
+        message: "Leave type not found",
+      });
+    }
+    const skipDates = type.is_paid
+      ? await sandwichSkipDates(opts.pool, user.orgId, employeeId, q.from_date, q.to_date)
+      : new Set<string>();
+    const years = daysByYear(q.from_date, q.to_date, skipDates);
+    const totalDays = years.reduce((sum, y) => sum + y.days, 0);
+    return reply.status(200).send({
+      data: {
+        leave_type_id: type.id,
+        is_paid: type.is_paid,
+        from_date: q.from_date,
+        to_date: q.to_date,
+        total_days: totalDays,
+        years: years.map((y) => ({ year: y.year, days: y.days })),
+      },
+    });
+  });
 
   // ------------------------------------------------ POST /leave/requests
   app.post("/api/v1/leave/requests", { preHandler: canRequest }, async (req, reply) => {return mutationRoute(opts.pool,req,reply,async(db,reply)=>{
@@ -704,11 +922,33 @@ export async function registerLeaveRoutes(
         message: "Leave type not found",
       });
     }
-    const totalDays = inclusiveDays(d.from_date, d.to_date);
+    // D-012 sandwich rule: a paid request does not debit its Sundays/effective
+    // holidays; an unpaid (LOP) one keeps charging every calendar day.
+    const skipDates = type.is_paid
+      ? await sandwichSkipDates(db, user.orgId, employeeId, d.from_date, d.to_date)
+      : new Set<string>();
     // Rule 3: balance check for paid types that require a balance, once per
     // leave year the request touches, for that year's days only (D-011).
-    const years = daysByYear(d.from_date, d.to_date);
+    const years = daysByYear(d.from_date, d.to_date, skipDates);
+    const totalDays = years.reduce((sum, y) => sum + y.days, 0);
+    // Fix round 1, item 4: a paid range that the sandwich rule reduces to
+    // zero days (every day in it a Sunday or a holiday) is refused outright,
+    // rather than filed as a 0-day PENDING request nobody asked for.
+    if (type.is_paid && totalDays === 0) {
+      return sendRuleError(reply, req.requestId, {
+        status: 422,
+        code: "ALL_DAYS_EXCLUDED",
+        message:
+          "Every day in this range is a Sunday or a holiday; there is nothing to charge",
+      });
+    }
     if (type.requires_balance) for (const { year: periodYear, days } of years) {
+      // Fix round 1, item 1: a year this request touches for zero days (the
+      // sandwich rule ate all of it) gets no balance check and, critically,
+      // no self-healed row -- an empty `leave_balances` row for a year the
+      // employee was never actually charged in is indistinguishable from one
+      // open-year already opened, and open-year would then skip it forever.
+      if (days === 0) continue;
       const inYear = years.length > 1 ? ` in ${periodYear}` : "";
       await db.query(
         `INSERT INTO leave_balances (employee_id, leave_type_id, period_year)
@@ -799,8 +1039,8 @@ export async function registerLeaveRoutes(
       (requesterLink.rows[0] as { id: string } | undefined)?.id ?? null;
     const chain = assembleApprovalChain({
       requesterUserId,
-      step1UserId: await step1Approver(user.orgId, employeeId),
-      step2UserId: await step2Approver(user.orgId),
+      step1UserId: await step1Approver(db, user.orgId, employeeId),
+      step2UserId: await step2Approver(db, user.orgId, requesterUserId),
     });
     if (!chain) {
       return sendRuleError(reply, req.requestId, {
@@ -995,6 +1235,22 @@ export async function registerLeaveRoutes(
           message: "Leave request not found",
         });
       }
+      // Fix round 2/3, item 1: a stale current approver at *either* step
+      // (exited, disabled, or no longer eligible for that step) is
+      // re-resolved lazily on read, so a request does not sit stuck just
+      // because nobody has decided it since.
+      if (row.status === "PENDING" && row.current_approver_id) {
+        const reassignment = await reassignIfIneligible(opts.pool, row, {
+          actorId: null,
+          reason: "Approver no longer eligible (re-resolved on read)",
+          requestId: req.requestId,
+        });
+        if (reassignment.reassigned) {
+          row.current_approver_id = reassignment.approverId;
+          row.approval_chain = reassignment.chain;
+          row.version = row.version + 1;
+        }
+      }
       const own = await linkedEmployeeId(user.id);
       const canSee =
         row.employee_id === own ||
@@ -1054,13 +1310,39 @@ export async function registerLeaveRoutes(
     const lastStep = chain.filter((s) => s.status === "PENDING").length <= 1;
     if (!lastStep) return null;
     const type = (
-      await client.query("SELECT requires_balance FROM leave_types WHERE id = $1::uuid", [
+      await client.query("SELECT is_paid, requires_balance FROM leave_types WHERE id = $1::uuid", [
         cur.leave_type_id,
       ])
-    ).rows[0] as { requires_balance: boolean } | undefined;
-    if (!type?.requires_balance) return null;
+    ).rows[0] as { is_paid: boolean; requires_balance: boolean } | undefined;
+    if (!type) return null;
+    // D-012 sandwich rule, same as at filing.
+    const skipDates = type.is_paid
+      ? await sandwichSkipDates(client, cur.org_id, cur.employee_id, from, to)
+      : new Set<string>();
+    const years = daysByYear(from, to, skipDates);
+    /*
+     * Fix round 2, item 3: holidays can change between filing and
+     * approval. A paid request that was real days at filing can be
+     * reduced to zero by a holiday added since (the same sandwich rule,
+     * D-012, applied again here) -- refuse the approval outright, the
+     * same way filing itself refuses one (ALL_DAYS_EXCLUDED, fix round 1
+     * item 4), rather than approving a 0-day leave nobody asked for.
+     */
+    if (type.is_paid && years.every((y) => y.days === 0)) {
+      return {
+        status: 422,
+        code: "ALL_DAYS_EXCLUDED",
+        message:
+          "Every day in this range is now a Sunday or a holiday; there is nothing left to approve",
+      };
+    }
+    if (!type.requires_balance) return null;
     // Each leave year the request touches is checked for its own days (D-011).
-    for (const { year, days } of daysByYear(from, to)) {
+    for (const { year, days } of years) {
+      // Fix round 1, item 1: nothing to check, and no row to touch, for a
+      // year this request costs zero days in (holidays may have moved
+      // between filing and this approval -- recomputed fresh above).
+      if (days === 0) continue;
       const bal = await client.query(
         `SELECT (opening_balance + credits - consumed + adjustments) AS available
            FROM leave_balances
@@ -1105,7 +1387,7 @@ export async function registerLeaveRoutes(
       }
       user.scopes=await scopesForPermission(req,LEAVE_DECIDE);
       if(!user.permissions.includes(LEAVE_DECIDE))return sendError(reply,req.requestId,{status:403,code:'FORBIDDEN',message:'Insufficient permissions'});
-      const expectedVersion = parseIfMatch(req);
+      let expectedVersion = parseIfMatch(req);
       const { id } = req.params as { id: string };
       const scopedRequest=await findRequest(user.orgId,id);if(scopedRequest)await employeeAccess(opts.pool,req,scopedRequest.employee_id);
       const { decision, note } = parsed.data;
@@ -1126,6 +1408,34 @@ export async function registerLeaveRoutes(
           [id, user.orgId],
         );
         const cur = curRes.rows[0] as RequestRow | undefined;
+        // Fix round 2/3, item 1: re-resolve a stale approver (either step)
+        // before checking who may decide -- same transaction, same row lock
+        // (FOR UPDATE above), so a newly-eligible approver can act on
+        // this same request immediately rather than needing a prior read.
+        if (cur && cur.status === "PENDING" && cur.current_approver_id) {
+          const reassignment = await reassignIfIneligible(client, cur, {
+            actorId: null,
+            reason: "Approver no longer eligible (re-resolved on decision attempt)",
+            requestId: req.requestId,
+          });
+          if (reassignment.reassigned) {
+            const preReassignVersion = cur.version;
+            cur.current_approver_id = reassignment.approverId;
+            cur.approval_chain = reassignment.chain;
+            cur.version = cur.version + 1;
+            // The reassignment's own version bump is not the caller's to
+            // have known about -- a newly-eligible approver deciding
+            // straight off the version they last legitimately saw (e.g.
+            // from the step before theirs) must not 409 against a bump
+            // that happened because of them, in this same call. Only
+            // forgiven when they were otherwise caught up (their If-Match
+            // matches what the version was immediately before the
+            // reassignment); a genuinely stale version still 409s below.
+            if (expectedVersion === preReassignVersion) {
+              expectedVersion = cur.version;
+            }
+          }
+        }
         if (!cur) {
           failure = { status: 404, code: "NOT_FOUND", message: "Leave request not found" };
         } else if (cur.status !== "PENDING") {
@@ -1183,13 +1493,54 @@ export async function registerLeaveRoutes(
               nextApprover = null;
             }
           }
+
+          /*
+           * Fix round 1, item 3: total_days is one source of truth, not two
+           * that can drift. It was computed at filing under whatever
+           * holidays existed that day; final approval can happen weeks
+           * later, after a holiday was added or withdrawn in between, so
+           * the debit approvalBlocker just re-validated against (and is
+           * about to post below) can differ from the total_days stored at
+           * filing. On the step that finally approves, recompute the split
+           * fresh -- same as approvalBlocker just did -- and persist it as
+           * total_days/debited_days on the request itself, in the same
+           * UPDATE as the status change. Every reader (list, detail, web,
+           * mobile) then shows the figure that was actually charged.
+           */
+          let newTotalDays: number = cur.total_days;
+          let newDebitedDays: Array<{ year: number; days: number }> =
+            Array.isArray(cur.debited_days) ? (cur.debited_days as Array<{ year: number; days: number }>) : [];
+          let debitYears: Array<{ year: number; days: number }> = [];
+          let typeForDebit: { is_paid: boolean; requires_balance: boolean } | undefined;
+          if (nextStatus === "APPROVED") {
+            const type = await client.query(
+              "SELECT is_paid, requires_balance FROM leave_types WHERE id = $1::uuid",
+              [cur.leave_type_id],
+            );
+            typeForDebit = type.rows[0] as
+              | { is_paid: boolean; requires_balance: boolean }
+              | undefined;
+            const from = dateOnly(cur.from_date), to = dateOnly(cur.to_date);
+            const skipDates = typeForDebit?.is_paid
+              ? await sandwichSkipDates(client, cur.org_id, cur.employee_id, from, to)
+              : new Set<string>();
+            debitYears = daysByYear(from, to, skipDates);
+            newTotalDays = debitYears.reduce((sum, y) => sum + y.days, 0);
+            // debited_days reflects what actually posts to a balance below;
+            // a type that doesn't track one debits nothing to record.
+            newDebitedDays = typeForDebit?.requires_balance
+              ? debitYears.filter((y) => y.days > 0).map((y) => ({ year: y.year, days: y.days }))
+              : [];
+          }
+
           const upd = await client.query(
             `UPDATE leave_requests SET
                status = $2, approval_chain = $3, current_approver_id = $4::uuid,
+               total_days = $6, debited_days = $7::jsonb,
                updated_at = NOW(), version = version + 1
              WHERE id = $1::uuid AND version = $5
              RETURNING ${REQUEST_COLS}`,
-            [id, nextStatus, JSON.stringify(chain), nextApprover, expectedVersion],
+            [id, nextStatus, JSON.stringify(chain), nextApprover, expectedVersion, newTotalDays, JSON.stringify(newDebitedDays)],
           );
           finalRow = upd.rows[0] as RequestRow | undefined;
           if (!finalRow) {
@@ -1200,17 +1551,14 @@ export async function registerLeaveRoutes(
             };
           } else if (nextStatus === "APPROVED") {
             // Atomic ledger debit for paid types that track a balance
-            // (LOP skips the debit). Same transaction as the approval.
-            const type = await client.query(
-              "SELECT is_paid, requires_balance FROM leave_types WHERE id = $1::uuid",
-              [cur.leave_type_id],
-            );
-            const t = type.rows[0] as
-              | { is_paid: boolean; requires_balance: boolean }
-              | undefined;
-            if (t?.requires_balance) {
-              // Each leave year is debited for its own days (D-011).
-              for (const { year, days } of daysByYear(dateOnly(cur.from_date), dateOnly(cur.to_date))) {
+            // (LOP skips the debit). Same transaction as the approval, and
+            // the same `debitYears` split just persisted above -- one
+            // computation, not two that could disagree with each other.
+            if (typeForDebit?.requires_balance) {
+              for (const { year, days } of debitYears) {
+                // Fix round 1, item 1: no row, no debit, for a year this
+                // request costs zero days in.
+                if (days === 0) continue;
                 await client.query(
                   `INSERT INTO leave_balances
                      (employee_id, leave_type_id, period_year, consumed)

@@ -3,6 +3,7 @@ import {
   money, moneyShort, moneyIndian, day, percent,
   documentTypeLabel, documentHref, financialTone, slaState,
   utilisationWidth, categoryLabel, creditBlockLabel,
+  payableFlagTone, expenseClaimTone, raBillTone, requisitionTone, poTone, approvalTone,
 } from '../lib/finance';
 import { NAV_GROUPS, QUICK_CREATE } from '../lib/nav';
 import {
@@ -120,6 +121,71 @@ describe('financialTone', () => {
   it('stays neutral for a status it does not know', () => {
     expect(financialTone('WHATEVER')).toBe('neutral');
     expect(financialTone(null)).toBe('neutral');
+  });
+});
+
+describe('payableFlagTone (R5-002)', () => {
+  it('reads on_hold as more severe than disputed, from the shared map', () => {
+    expect(payableFlagTone('on_hold')).toBe('danger');
+    expect(payableFlagTone('disputed')).toBe('warning');
+  });
+});
+
+describe('expenseClaimTone (R5-003/004)', () => {
+  it('colours WITHDRAWN and DRAFT instead of falling through to financialTone\'s silent default', () => {
+    expect(expenseClaimTone('WITHDRAWN')).toBe('danger');
+    expect(expenseClaimTone('DRAFT')).toBe('info');
+  });
+
+  it('still gets the statuses financialTone already had right', () => {
+    expect(expenseClaimTone('APPROVED')).toBe('success');
+    expect(expenseClaimTone('REJECTED')).toBe('danger');
+    expect(expenseClaimTone('SUBMITTED')).toBe('warning');
+    expect(expenseClaimTone('REIMBURSED')).toBe('success');
+  });
+
+  it('stays neutral for a status it does not know', () => {
+    expect(expenseClaimTone('WHATEVER')).toBe('neutral');
+    expect(expenseClaimTone(null)).toBe('neutral');
+  });
+});
+
+describe('raBillTone (mobile-parity sweep, R5 item 4)', () => {
+  it('colours PAID and DRAFT instead of falling through to financialTone\'s silent default', () => {
+    expect(raBillTone('PAID')).toBe('success');
+    expect(raBillTone('DRAFT')).toBe('info');
+  });
+
+  it('still gets the statuses financialTone already had right', () => {
+    expect(raBillTone('CERTIFIED')).toBe('success');
+    expect(raBillTone('SUBMITTED')).toBe('warning');
+    expect(raBillTone('CANCELLED')).toBe('danger');
+  });
+
+  it('stays neutral for a status it does not know', () => {
+    expect(raBillTone('WHATEVER')).toBe('neutral');
+    expect(raBillTone(null)).toBe('neutral');
+  });
+});
+
+describe('requisitionTone / poTone (mobile-parity sweep, R5 item 4)', () => {
+  it('reads a raised-into-a-PO requisition as info, and an approved order as settled', () => {
+    expect(requisitionTone('CONVERTED')).toBe('info');
+    expect(poTone('APPROVED')).toBe('success');
+  });
+
+  it('reads FULLY_RECEIVED as success, closing a gap financialTone itself had', () => {
+    expect(poTone('FULLY_RECEIVED')).toBe('success');
+  });
+});
+
+describe('approvalTone (fix round 1, item 7)', () => {
+  it('reads RECALLED as danger, closing a gap financialTone itself had', () => {
+    expect(approvalTone('RECALLED')).toBe('danger');
+  });
+
+  it('reads SUPERSEDED as info, same as every other document type', () => {
+    expect(approvalTone('SUPERSEDED')).toBe('info');
   });
 });
 

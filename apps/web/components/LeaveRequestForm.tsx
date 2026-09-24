@@ -3,16 +3,16 @@
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   fileRequest,
   findBalanceForType,
   formatDays,
-  inclusiveDays,
   isUnpaidType,
   parseAttendanceConflictDates,
   parseInsufficientBalance,
   parseOverlapIds,
+  previewLeave,
   type FileRequestResult,
   type LeaveBalance,
   type LeaveType,
@@ -66,7 +66,21 @@ export function LeaveRequestForm({
   const selectedType = types.find((t) => t.id === leaveTypeId);
   const unpaidSelected = selectedType ? isUnpaidType(selectedType) : false;
   const balancePreview = findBalanceForType(balances, selectedType ?? null);
-  const dayCount = fromDate && toDate ? inclusiveDays(fromDate, toDate) : null;
+  const datesOrdered = !!fromDate && !!toDate && toDate >= fromDate;
+
+  /*
+   * Fix round 1, item 2: the "N days" preview used to count calendar days
+   * client-side, which overstated a paid request under the sandwich rule
+   * (D-012) -- a Fri-Mon range read "4 days" and was charged 3, or fewer.
+   * This asks the server for exactly what filing would charge, from
+   * filing's own day-counting function, instead of a second guess of it.
+   */
+  const previewQuery = useQuery({
+    queryKey: ['leave-preview', leaveTypeId, fromDate, toDate],
+    queryFn: () => previewLeave({ leave_type_id: leaveTypeId, from_date: fromDate, to_date: toDate }),
+    enabled: !!leaveTypeId && datesOrdered,
+    staleTime: 30_000,
+  });
 
   const mutation = useMutation({
     mutationFn: (v: LeaveRequestFormInput) =>
@@ -130,13 +144,24 @@ export function LeaveRequestForm({
 
       <div className="flex items-center gap-2 text-sm text-text-muted" aria-live="polite">
         <span>Total:</span>
-        {dayCount === null ? (
-          <span className="text-text-subtle">— pick valid dates</span>
-        ) : dayCount <= 0 ? (
+        {!leaveTypeId || !fromDate || !toDate ? (
+          <span className="text-text-subtle">— pick a leave type and valid dates</span>
+        ) : !datesOrdered ? (
           <span className="text-danger">To date must be on or after from date</span>
-        ) : (
-          <Badge tone="info">{formatDays(dayCount)} (inclusive)</Badge>
-        )}
+        ) : previewQuery.isLoading ? (
+          <span className="text-text-subtle">Checking…</span>
+        ) : previewQuery.isError ? (
+          <span className="text-danger">Could not preview this range</span>
+        ) : previewQuery.data ? (
+          previewQuery.data.total_days === 0 ? (
+            <span className="text-danger">Every day in this range is a Sunday or a holiday</span>
+          ) : (
+            <Badge tone="info">
+              {formatDays(previewQuery.data.total_days)}
+              {previewQuery.data.is_paid ? '' : ' (calendar days, unpaid)'}
+            </Badge>
+          )
+        ) : null}
       </div>
 
       <FormField label="Reason" htmlFor="leave-reason" error={errors.reason?.message}>

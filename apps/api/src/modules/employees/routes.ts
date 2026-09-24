@@ -53,6 +53,7 @@ import {
 import { parseIfMatch } from '../../common/ifMatch.js';
 import { orgTodaySql } from "../../common/orgTime.js";
 import { emitNotification } from "../s5/notify.js";
+import { reassignIfIneligible } from "../leave/approverResolution.js";
 
 export interface EmployeeRoutesOptions {
   pool: Pool;
@@ -1464,6 +1465,44 @@ export async function registerEmployeeRoutes(
         )
       ).rows.map((r: { id: string }) => r.id);
       /*
+       * Fix round 2/3, item 1(ii): pending leave *belonging to somebody
+       * else* that this person was the current approver on -- at either
+       * step -- is reassigned here, in the same transaction as the exit,
+       * not left pointing at an account that is DISABLED as of the write
+       * above. Their own leave (as the requester, not the approver) was
+       * withdrawn just above; this is the other direction.
+       * `reassignIfIneligible` decides the fallback for whichever step
+       * this person actually held (their own reporting manager first for
+       * a step-1 slot, HR-then-admin for a step-2 slot).
+       */
+      const reassignedApprovals: string[] = [];
+      if (accountIds.length > 0) {
+        const stuck = await db.query(
+          `SELECT id, org_id, employee_id, status, current_approver_id, approval_chain
+             FROM leave_requests
+            WHERE org_id = $1 AND status = 'PENDING' AND current_approver_id = ANY($2::uuid[])`,
+          [user.orgId, accountIds],
+        );
+        for (const stuckReq of stuck.rows as Array<{
+          id: string;
+          org_id: string;
+          employee_id: string;
+          status: string;
+          current_approver_id: string | null;
+          approval_chain: unknown;
+        }>) {
+          const result = await reassignIfIneligible(db, stuckReq, {
+            actorId: user.id,
+            impersonatorId: user.impersonator?.id ?? null,
+            actorIp: meta.ip,
+            actorUserAgent: meta.userAgent,
+            requestId: req.requestId,
+            reason: `Approver exited: ${reason}`,
+          });
+          if (result.reassigned) reassignedApprovals.push(stuckReq.id);
+        }
+      }
+      /*
        * Open tasks are unassigned, in the same transaction as the exit
        * (owner decision 2026-09-24 #1). The catalogue used to flag them and
        * leave them on the departing person (UT-WORK-06) -- deliberately, per
@@ -1589,6 +1628,7 @@ export async function registerEmployeeRoutes(
             cancelled_leave_request_ids: cancelledLeave,
             unassigned_task_ids: openTasks.map((t) => t.id),
             notified_project_manager_ids: notifiedManagers,
+            reassigned_approval_request_ids: reassignedApprovals,
           },
         },
         reason,
