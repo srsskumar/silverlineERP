@@ -1547,4 +1547,58 @@ describe("editing a project's manager and type (B-023)", () => {
     });
     expect(res.statusCode).toBe(404);
   });
+
+  it("refuses a disabled user as project_manager_id on create (404)", async () => {
+    const h = await adminHeaders();
+    const ws = await mkWorkspace(h);
+    const manager = await mkUser(["PROJECT_MANAGER"], "mgrDisabledCreate");
+    await pool.query("UPDATE users SET auth_status = 'DISABLED' WHERE id = $1", [manager.id]);
+    seq += 1;
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/projects",
+      headers: h,
+      payload: {
+        workspace_id: ws.id,
+        code: `S4PM${String(seq).padStart(5, "0")}`,
+        name: `Project PM ${seq}`,
+        project_manager_id: manager.id,
+      },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("refuses a disabled user as project_manager_id on PATCH (404)", async () => {
+    const h = await adminHeaders();
+    const project = await mkProject(h);
+    const manager = await mkUser(["PROJECT_MANAGER"], "mgrDisabledPatch");
+    await pool.query("UPDATE users SET auth_status = 'DISABLED' WHERE id = $1", [manager.id]);
+    const before = await pool.query("SELECT name FROM projects WHERE id = $1", [project.id]);
+    const name = (before.rows[0] as { name: string }).name;
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/projects/${project.id}`,
+      headers: { ...h, "if-match": String(project.version) },
+      payload: { name, project_manager_id: manager.id },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("refuses a project_manager_id whose linked employee is not ACTIVE (422 PROJECT_MANAGER_INACTIVE)", async () => {
+    const h = await adminHeaders();
+    const project = await mkProject(h);
+    const mgrUser = await mkUser(["PROJECT_MANAGER"], "mgrInactiveEmp");
+    const empId = await mkEmployee(h); // DRAFT, not ACTIVE
+    await linkUser(mgrUser.id, empId);
+    const before = await pool.query("SELECT name FROM projects WHERE id = $1", [project.id]);
+    const name = (before.rows[0] as { name: string }).name;
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/projects/${project.id}`,
+      headers: { ...h, "if-match": String(project.version) },
+      payload: { name, project_manager_id: mgrUser.id },
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { code: string }).code).toBe("PROJECT_MANAGER_INACTIVE");
+  });
 });
