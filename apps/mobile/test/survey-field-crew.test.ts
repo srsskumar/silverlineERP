@@ -221,13 +221,14 @@ describe("marking a stage complete from the village (SG-013)", () => {
     assert.equal(completionOffer({ ...village, stage_state: undefined }, true), null);
   });
 
-  it("sends the start date back, so completing does not blank it", () => {
+  it("does not send the start date it read earlier; the server keeps its own", () => {
+    // Fix round 1, item 3. After SG-015 an omitted start is kept, and the
+    // one the phone read may be stale by the time the op is sent.
     const r = buildStageCompletion(village, TODAY, null, "");
     assert.equal(r.ok, true);
     if (!r.ok) return;
     assert.deepEqual(r.body, {
-      stage_code: "GROUND_TRUTHING", state: "COMPLETED",
-      started_on: "2026-09-10", completed_on: TODAY,
+      stage_code: "GROUND_TRUTHING", state: "COMPLETED", completed_on: TODAY,
     });
   });
 

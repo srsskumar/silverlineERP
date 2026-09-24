@@ -203,7 +203,7 @@ export function completionOffer(
 
 export type StageCompletion =
   | { ok: true; body: {
-      stage_code: string; state: "COMPLETED"; started_on: string | null; completed_on: string;
+      stage_code: string; state: "COMPLETED"; completed_on: string;
       variance_reason?: string; variance_remarks?: string;
     } }
   | { ok: false; problem: string };
@@ -225,7 +225,9 @@ export function buildStageCompletion(
   const body: Extract<StageCompletion, { ok: true }>["body"] = {
     stage_code: village.stage_code,
     state: "COMPLETED",
-    started_on: village.stage_started_on ?? null,
+    // No started_on (fix round 1): the one read when the list loaded may be
+    // stale by the time the op is sent, and since SG-015 the server keeps
+    // the start it holds when none is sent.
     completed_on: workDate,
   };
   if (village.stage_code === "GROUND_TRUTHING" && gtReasonRequired({
