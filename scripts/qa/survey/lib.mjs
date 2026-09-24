@@ -68,8 +68,12 @@ export async function token(name) {
   }
   if (r.status !== 200) throw new Error(`login ${name}: ${r.status} ${JSON.stringify(r.body).slice(0, 200)}`);
   tokens.set(name, r.body.access_token);
+  sessionsFull.set(name, r.body);
   return r.body.access_token;
 }
+const sessionsFull = new Map();
+/** The whole login response (access + refresh token), for seeding a browser. */
+export async function session(name) { await token(name); return sessionsFull.get(name); }
 
 export async function as(name, method, path, body, extra) {
   return raw(method, path, body, await token(name), extra);
