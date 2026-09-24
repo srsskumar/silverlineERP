@@ -40,8 +40,9 @@ const PO_LINE_ID = '99999999-9999-9999-9999-999999999903';
 const INVOICE = {
   data: {
     id: INVOICE_ID, serial_number: 'INV-1', vendor_id: 'v1', vendor_name: 'Acme Cement',
-    purchase_order_id: PO_ID, match_status: 'UNMATCHED', lifecycle_status: 'ISSUED',
+    purchase_order_id: PO_ID, match_status: 'UNMATCHED', lifecycle_status: 'ISSUED', version: 1,
     subtotal: '40000.00', tax: '0.00', total: '40000.00',
+    lines_editable: true, lines_lock_reason: null,
     vendor_udyam_number: null, vendor_msme_category: null,
     lines: [{
       id: 'l1', item_id: null, po_line_id: PO_LINE_ID, description: 'Cement OPC 53',
