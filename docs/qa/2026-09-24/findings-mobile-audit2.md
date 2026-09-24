@@ -72,3 +72,14 @@ assets and survey all resolve to existing mobile routes.
 Not covered: no device or emulator, so the fixes are verified by unit tests,
 `tsc` and code review, not a live tap-through. Analytics and cycles live
 data had to be read as admin (no pm-scoped project has cycles or tasks).
+
+## Fix round 1
+
+| ID | Sev | Change | Status |
+|---|---|---|---|
+| MA-019 | P2 | `LoadError` never offered a retry and no screen had pull-to-refresh, so after a network error the user was stuck once react-query's single silent retry had run. `src/listState.ts` now has `canRetryLoad`/`retryAction`: a network failure (status 0 or a non-API error), 5xx, 408 or 429 offers Retry wired to the query's `refetch`, and 401/403/404/422 offers none. `LoadError` takes the query and shows the Retry button. One `src/ui/usePullRefresh.ts` hook, passed into `Screen`'s new `refresh` prop (a `RefreshControl`), covers the 14 list screens: documents, tenders, approvals, clients, pipeline, asset-movements, automation, planning, reports, inbox, employees, payroll, org-holidays and analytics. It refetches only the queries that are enabled for the current tab or project. Analytics' "Could not load" state now uses `LoadError` as well. | FIXED b9ba779 (test/retry-policy.test.ts) |
+| MA-020 | P3 | `packages/shared` `assetConditionLabel` fell back to the raw value's own casing, so free text stored as `good` (MA-002) read "good". It now title-cases the fallback ("Good", "Needs repair"). Web's duplicate local `label()` in `apps/web/app/assets/page.tsx` is removed in favour of the shared function. | FIXED 36940ff (assets.test.ts) |
+
+Verification (slot f, tar 14.4 MB): mobile 443/443 pass and tsc clean;
+shared vitest 1019/1019 pass; web tsc clean; `next build` exit 0. Not
+verified on a device.
