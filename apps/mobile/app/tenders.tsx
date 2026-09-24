@@ -1,5 +1,5 @@
 /**
- * Tenders (§8): bids in flight, by closing date — read-only on mobile.
+ * Tenders (§8): bids in flight, by closing date.
  *
  * The status machine (§8.2) is gated by its own permissions (tender.submit,
  * tender.award, tender.override) and an eligibility checklist that has to be
@@ -7,15 +7,20 @@
  * single call worth offering from a phone, so this screen is what a bid/
  * tender manager checks on the move — what closes next, what a tender is
  * worth, whether its checklist is complete — not where they run the bid.
+ * Task 5d (B-011 follow-on) adds the one cheap write: registering a new
+ * tender with just its number and type, the rest of the checklist-heavy
+ * workflow stays on the desktop.
  */
 import { router } from "expo-router";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Modal, ScrollView, View } from "react-native";
 import { TENDER_STATUSES } from "@silverline/shared";
 import { useAuth } from "../src/auth/AuthContext";
-import { getTender, getTenders, type TenderDetail } from "../src/api/endpoints";
-import { tenderStatusTone } from "../src/tendersFormat";
+import { getTender, getTenders, postTender, type TenderDetail } from "../src/api/endpoints";
+import { describeApiError } from "../src/errorFormat";
+import { canGoNewer, canGoOlder, newerOffset, olderOffset } from "../src/paging";
+import { TENDER_TYPES, tenderStatusTone, validateTenderCreate } from "../src/tendersFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
 import {
   BackHeader,
@@ -45,13 +50,18 @@ function money(v: number | string | undefined | null): string | null {
 function TendersScreen() {
   const { canDo } = useAuth();
   const canRead = canDo("tender.read");
+  const canManage = canDo("tender.manage");
+  const qc = useQueryClient();
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
+  const [offset, setOffset] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showNewTender, setShowNewTender] = useState(false);
 
   const tenders = useQuery({
-    queryKey: ["tenders", status, search],
-    queryFn: () => getTenders({ status: status || undefined, search: search.trim() || undefined }),
+    queryKey: ["tenders", status, search, offset],
+    queryFn: () =>
+      getTenders({ status: status || undefined, search: search.trim() || undefined, offset }),
     enabled: canRead,
   });
   const detail = useQuery({
@@ -64,7 +74,19 @@ function TendersScreen() {
 
   return (
     <Screen>
-      <BackHeader title="Tenders" onBack={() => router.back()} />
+      <BackHeader
+        title="Tenders"
+        onBack={() => router.back()}
+        right={
+          canManage ? (
+            <Button
+              title={showNewTender ? "Cancel" : "New tender"}
+              variant={showNewTender ? "secondary" : "primary"}
+              onPress={() => setShowNewTender((v) => !v)}
+            />
+          ) : undefined
+        }
+      />
       <Muted style={{ marginBottom: space.lg }}>Bids in flight, by closing date.</Muted>
 
       {!canRead ? (
@@ -75,10 +97,23 @@ function TendersScreen() {
         />
       ) : (
         <>
+          {showNewTender && canManage ? (
+            <NewTenderForm
+              onCreated={() => {
+                setShowNewTender(false);
+                setOffset(0);
+                void qc.invalidateQueries({ queryKey: ["tenders"] });
+              }}
+            />
+          ) : null}
+
           <Input
             placeholder="Search by tender no., reference or department"
             value={search}
-            onChangeText={setSearch}
+            onChangeText={(v) => {
+              setSearch(v);
+              setOffset(0);
+            }}
             autoCapitalize="none"
           />
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: space.md }}>
@@ -86,21 +121,27 @@ function TendersScreen() {
               <Button
                 title="All"
                 variant={status === "" ? "primary" : "secondary"}
-                onPress={() => setStatus("")}
+                onPress={() => {
+                  setStatus("");
+                  setOffset(0);
+                }}
               />
               {TENDER_STATUSES.map((s) => (
                 <Button
                   key={s}
                   title={s.replaceAll("_", " ")}
                   variant={status === s ? "primary" : "secondary"}
-                  onPress={() => setStatus(s)}
+                  onPress={() => {
+                    setStatus(s);
+                    setOffset(0);
+                  }}
                 />
               ))}
             </Row>
           </ScrollView>
 
           <Card>
-            {tenders.isLoading ? (
+            {tenders.isLoading && offset === 0 ? (
               <Loading />
             ) : rows.length === 0 ? (
               <EmptyState icon="document-lock-outline" title="No tenders found" />
@@ -121,6 +162,24 @@ function TendersScreen() {
               ))
             )}
           </Card>
+          {rows.length > 0 || offset > 0 ? (
+            <Row gap={space.sm} style={{ marginTop: space.md }}>
+              <Button
+                title="Newer"
+                variant="secondary"
+                disabled={!canGoNewer(offset)}
+                onPress={() => setOffset(newerOffset(offset))}
+                style={{ flex: 1 }}
+              />
+              <Button
+                title="Older"
+                variant="secondary"
+                disabled={!canGoOlder(tenders.data?.hasMore)}
+                onPress={() => setOffset(olderOffset(offset))}
+                style={{ flex: 1 }}
+              />
+            </Row>
+          ) : null}
         </>
       )}
 
@@ -142,6 +201,56 @@ function TendersScreen() {
         </Screen>
       </Modal>
     </Screen>
+  );
+}
+
+function NewTenderForm({ onCreated }: { onCreated: () => void }) {
+  const [tenderNo, setTenderNo] = useState(`TN-${Date.now().toString().slice(-8)}`);
+  const [tenderType, setTenderType] = useState<string>("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setError(null);
+    const v = validateTenderCreate({ tender_no: tenderNo, tender_type: tenderType });
+    if (!v.ok) {
+      setError(v.errors.map((e) => e.message).join("\n"));
+      return;
+    }
+    setBusy(true);
+    try {
+      await postTender({ tender_no: tenderNo.trim(), tender_type: tenderType });
+      onCreated();
+    } catch (e) {
+      setError(describeApiError(e, "Could not create this tender"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card title="New tender">
+      {error ? <Banner tone="danger" icon="alert-circle-outline" title={error} /> : null}
+      <Input label="Tender number" value={tenderNo} onChangeText={setTenderNo} maxLength={50} />
+      <Subtle style={{ marginBottom: space.xs }}>Type</Subtle>
+      <Row gap={space.sm} style={{ flexWrap: "wrap", marginBottom: space.md }}>
+        {TENDER_TYPES.map((tt) => (
+          <Button
+            key={tt}
+            title={tt.replaceAll("_", " ")}
+            variant={tenderType === tt ? "primary" : "secondary"}
+            onPress={() => setTenderType(tt)}
+          />
+        ))}
+      </Row>
+      <Button
+        title="Save tender"
+        icon="add-circle-outline"
+        loading={busy}
+        disabled={busy}
+        onPress={() => void submit()}
+      />
+    </Card>
   );
 }
 

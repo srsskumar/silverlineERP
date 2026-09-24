@@ -1,24 +1,32 @@
 /**
  * Clients (§6.3): the client master, looked up by name — reference data a
- * field or sales person checks before a visit or a call, not edited from a
- * phone. The desktop form carries the create/edit workflow (duplicate
- * detection, GST registration management across states); this is read-only.
+ * field or sales person checks before a visit or a call. The desktop form
+ * carries the full edit workflow (duplicate detection, GST registration
+ * management across states); this screen adds only the one cheap write
+ * worth carrying from a phone (Task 5d, B-011 follow-on) — a bare name +
+ * client_type, the same minimal shape as Pipeline's "New lead".
  */
 import { router } from "expo-router";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Modal, View } from "react-native";
 import { useAuth } from "../src/auth/AuthContext";
 import {
   getClient,
   getClientGstRegistrations,
   getClients,
+  postClient,
   type ClientRow,
 } from "../src/api/endpoints";
+import { CLIENT_TYPES, validateClientCreate } from "../src/clientsFormat";
+import { describeApiError } from "../src/errorFormat";
+import { canGoNewer, canGoOlder, newerOffset, olderOffset } from "../src/paging";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
 import {
   BackHeader,
   Badge,
+  Banner,
+  Button,
   Card,
   Divider,
   EmptyState,
@@ -42,12 +50,16 @@ function money(v: number | string | undefined | null): string | null {
 function ClientsScreen() {
   const { canDo } = useAuth();
   const canRead = canDo("client.read");
+  const canManage = canDo("client.manage");
+  const qc = useQueryClient();
   const [search, setSearch] = useState("");
+  const [offset, setOffset] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showNewClient, setShowNewClient] = useState(false);
 
   const clients = useQuery({
-    queryKey: ["clients", search],
-    queryFn: () => getClients(search.trim() ? { search: search.trim() } : undefined),
+    queryKey: ["clients", search, offset],
+    queryFn: () => getClients({ ...(search.trim() ? { search: search.trim() } : {}), offset }),
     enabled: canRead,
   });
   const detail = useQuery({
@@ -65,7 +77,19 @@ function ClientsScreen() {
 
   return (
     <Screen>
-      <BackHeader title="Clients" onBack={() => router.back()} />
+      <BackHeader
+        title="Clients"
+        onBack={() => router.back()}
+        right={
+          canManage ? (
+            <Button
+              title={showNewClient ? "Cancel" : "New client"}
+              variant={showNewClient ? "secondary" : "primary"}
+              onPress={() => setShowNewClient((v) => !v)}
+            />
+          ) : undefined
+        }
+      />
       <Muted style={{ marginBottom: space.lg }}>The client master — look up who they are before you call.</Muted>
 
       {!canRead ? (
@@ -76,9 +100,27 @@ function ClientsScreen() {
         />
       ) : (
         <>
-          <Input placeholder="Search by name or code" value={search} onChangeText={setSearch} autoCapitalize="none" />
+          {showNewClient && canManage ? (
+            <NewClientForm
+              onCreated={() => {
+                setShowNewClient(false);
+                setOffset(0);
+                void qc.invalidateQueries({ queryKey: ["clients"] });
+              }}
+            />
+          ) : null}
+
+          <Input
+            placeholder="Search by name or code"
+            value={search}
+            onChangeText={(v) => {
+              setSearch(v);
+              setOffset(0);
+            }}
+            autoCapitalize="none"
+          />
           <Card>
-            {clients.isLoading ? (
+            {clients.isLoading && offset === 0 ? (
               <Loading />
             ) : rows.length === 0 ? (
               <EmptyState icon="business-outline" title="No clients found" />
@@ -95,6 +137,24 @@ function ClientsScreen() {
               ))
             )}
           </Card>
+          {rows.length > 0 || offset > 0 ? (
+            <Row gap={space.sm} style={{ marginTop: space.md }}>
+              <Button
+                title="Newer"
+                variant="secondary"
+                disabled={!canGoNewer(offset)}
+                onPress={() => setOffset(newerOffset(offset))}
+                style={{ flex: 1 }}
+              />
+              <Button
+                title="Older"
+                variant="secondary"
+                disabled={!canGoOlder(clients.data?.hasMore)}
+                onPress={() => setOffset(olderOffset(offset))}
+                style={{ flex: 1 }}
+              />
+            </Row>
+          ) : null}
         </>
       )}
 
@@ -116,6 +176,59 @@ function ClientsScreen() {
         </Screen>
       </Modal>
     </Screen>
+  );
+}
+
+function NewClientForm({ onCreated }: { onCreated: () => void }) {
+  const [name, setName] = useState("");
+  const [clientType, setClientType] = useState<string>("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setError(null);
+    const v = validateClientCreate({ name, client_type: clientType });
+    if (!v.ok) {
+      setError(v.errors.map((e) => e.message).join("\n"));
+      return;
+    }
+    setBusy(true);
+    try {
+      await postClient({ name: name.trim(), client_type: clientType });
+      setName("");
+      setClientType("");
+      onCreated();
+    } catch (e) {
+      setError(describeApiError(e, "Could not create this client"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card title="New client">
+      {error ? <Banner tone="danger" icon="alert-circle-outline" title={error} /> : null}
+      <Input label="Name" placeholder="Organisation name" value={name} onChangeText={setName} />
+      <Subtle style={{ marginBottom: space.xs }}>Type</Subtle>
+      <Row gap={space.sm} style={{ marginBottom: space.md }}>
+        {CLIENT_TYPES.map((ct) => (
+          <Button
+            key={ct}
+            title={ct === "GOVERNMENT" ? "Government" : "Private"}
+            variant={clientType === ct ? "primary" : "secondary"}
+            onPress={() => setClientType(ct)}
+            style={{ flex: 1 }}
+          />
+        ))}
+      </Row>
+      <Button
+        title="Save client"
+        icon="add-circle-outline"
+        loading={busy}
+        disabled={busy}
+        onPress={() => void submit()}
+      />
+    </Card>
   );
 }
 
