@@ -1984,7 +1984,8 @@ export async function registerSurveyRoutes(
       const input = parse(roverBulkAllocationSchema, req.body);
       const out = await mutate(pool, req, 'survey.rover.allocate.bulk',
         'survey_rover_allocation', async db => {
-          await villageOr404(db, u.orgId, id, u);
+          const village = await villageOr404(db, u.orgId, id, u);
+          await requireStaffing(db, u, String(village.survey_project_id), 'allocate its instruments');
           const allocated: string[] = [];
           const clashes: Array<{ asset_id: string; asset_code: string; with_village: string }> = [];
 
@@ -2036,6 +2037,8 @@ export async function registerSurveyRoutes(
       const input = parse(roverAllocationEditSchema, req.body);
       return mutate(pool, req, 'survey.rover.update', 'survey_rover_allocation', async db => {
         const row = await inOrg(db, 'survey_rover_allocations', id, u.orgId, true);
+        const village = await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+        await requireStaffing(db, u, String(village.survey_project_id), 'correct its instruments');
         const allocatedOn = input.allocated_on ?? iso(row.allocated_on);
         const releasedOn = input.released_on === undefined
           ? iso(row.released_on) : input.released_on;
@@ -2075,8 +2078,12 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(villageMoveSchema, req.body);
       return mutate(pool, req, 'survey.villages.move', 'survey_project', async db => {
-        await projectOr404(db, u.orgId, id);
-        const target = await projectOr404(db, u.orgId, input.to_project_id);
+        await projectOr404(db, u.orgId, id, u);
+        const target = await projectOr404(db, u.orgId, input.to_project_id, u);
+        // Villages carry their crews and kit with them, so both programmes'
+        // staffing changes (SV-027).
+        await requireStaffing(db, u, id, 'move its villages');
+        await requireStaffing(db, u, input.to_project_id, 'take villages into it');
         if (input.to_project_id === id) {
           fail('VALIDATION_ERROR', 'That is the programme they are already in', 422);
         }
@@ -2323,7 +2330,8 @@ export async function registerSurveyRoutes(
       const input = parse(roverAllocationSchema, req.body);
       const row = await mutate(pool, req, 'survey.rover.allocate', 'survey_rover_allocation',
         async db => {
-          await villageOr404(db, u.orgId, id, u);
+          const village = await villageOr404(db, u.orgId, id, u);
+          await requireStaffing(db, u, String(village.survey_project_id), 'allocate its instruments');
           await inOrg(db, 'assets', input.asset_id, u.orgId);
           try {
             return (await db.query(
@@ -2364,9 +2372,11 @@ export async function registerSurveyRoutes(
         data: await mutate(pool, req, 'survey.rover.release', 'survey_rover_allocation',
           async db => {
             const row = (await db.query(
-              'SELECT * FROM survey_rover_allocations WHERE id = $1 AND org_id = $2',
+              'SELECT * FROM survey_rover_allocations WHERE id = $1 AND org_id = $2 FOR UPDATE',
               [id, u.orgId])).rows[0];
             if (!row) fail('NOT_FOUND', 'Not found', 404);
+            const village = await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+            await requireStaffing(db, u, String(village.survey_project_id), 'release its instruments');
             if (row.released_on) {
               fail('ALREADY_RETURNED', 'That allocation is already closed', 409);
             }
@@ -3554,7 +3564,8 @@ export async function registerSurveyRoutes(
 
       return {
         data: await mutate(pool, req, 'survey.rover.claim', 'survey_rover_allocation', async db => {
-          await villageOr404(db, u.orgId, id, u);
+          const village = await villageOr404(db, u.orgId, id, u);
+          await requireStaffing(db, u, String(village.survey_project_id), 'claim instruments for it');
           const on = input.on ?? today(u.orgId);
           const brought: string[] = [], refused: Array<{ asset_code: string; why: string }> = [];
           const arriving: Array<{ asset_code: string; on: string }> = [];

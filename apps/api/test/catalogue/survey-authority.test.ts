@@ -489,3 +489,91 @@ describe("SV-025 / SV-026 staffing through the bulk routes", () => {
     expect([403, 404]).toContain(crew.status);
   });
 });
+
+/*
+ * SV-027 (round 5): every write that changes who, or what kit, is on a
+ * programme applies the owner's staffing rule -- releasing a crew member,
+ * allocating, correcting, releasing or claiming a rover, and moving villages
+ * between programmes. Each was guarded by survey.manage alone, which another
+ * project's PM holds organisation-wide.
+ */
+describe("SV-027 the staffing rule on releases, rovers and moves", () => {
+  let village: string;
+  let crewRowId: string;
+  let asset: string;
+  let allocationId: string;
+  let target: string;
+
+  beforeAll(async () => {
+    village = String((await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`,
+      { village_name: uniq("Rel"), village_code: uniq("RL"), mandal_id: mandalId, total_extent_ac: 5 })).data.id);
+    const who = await person(["EMPLOYEE"]);
+    const c = await post(w.admin, `/api/v1/survey/villages/${village}/crew`,
+      { employee_id: who.employeeId, stage_code: "GROUND_TRUTHING" });
+    expect(c.status, JSON.stringify(c.body)).toBe(201);
+    crewRowId = String(c.data.id);
+    asset = String((await w.pool.query(
+      `INSERT INTO assets(org_id, asset_code, name, category, status, condition)
+       VALUES($1,$2,'Rule rover','SURVEY','AVAILABLE','GOOD') RETURNING id`,
+      [w.orgId, uniq("RR")])).rows[0].id);
+    const a = await post(w.admin, `/api/v1/survey/villages/${village}/rovers`,
+      { asset_id: asset, allocated_on: workDate() });
+    expect(a.status, JSON.stringify(a.body)).toBe(201);
+    allocationId = String(a.data.id);
+    target = String((await post(w.admin, "/api/v1/survey/projects",
+      { code: uniq("TGT"), name: "Move target", create_project: false })).data.id);
+  });
+
+  const crewRow = async () => (await w.pool.query(
+    "SELECT released_on FROM survey_crew WHERE id = $1", [crewRowId])).rows[0];
+  const allocation = async () => (await w.pool.query(
+    "SELECT allocated_on::text, released_on::text FROM survey_rover_allocations WHERE id = $1", [allocationId])).rows[0];
+
+  it("refuses another project's PM releasing a crew member, and changes nothing", async () => {
+    const r = await post(elsewherePm.headers, `/api/v1/survey/crew/${crewRowId}/release`, {});
+    expect(r.status, JSON.stringify(r.body)).toBe(403);
+    expect(r.body.code).toBe("NOT_ON_THIS_PROGRAMME");
+    expect((await crewRow()).released_on).toBeNull();
+  });
+
+  it("refuses another project's PM on every rover write", async () => {
+    const before = await allocation();
+    const h = elsewherePm.headers;
+    const other = String((await w.pool.query(
+      `INSERT INTO assets(org_id, asset_code, name, category, status, condition)
+       VALUES($1,$2,'Other rover','SURVEY','AVAILABLE','GOOD') RETURNING id`,
+      [w.orgId, uniq("OR")])).rows[0].id);
+    const tries = [
+      await post(h, `/api/v1/survey/villages/${village}/rovers`, { asset_id: other, allocated_on: workDate() }),
+      await post(h, `/api/v1/survey/villages/${village}/rovers/bulk`, { asset_ids: [other], allocated_on: workDate() }),
+      await post(h, `/api/v1/survey/villages/${village}/rovers/claim`, { asset_ids: [asset] }),
+      await send("PATCH", h, `/api/v1/survey/rovers/${allocationId}`, { released_on: workDate() }),
+      await post(h, `/api/v1/survey/rovers/${allocationId}/release`, {}),
+    ];
+    for (const r of tries) {
+      expect(r.status, JSON.stringify(r.body)).toBe(403);
+      expect(r.body.code).toBe("NOT_ON_THIS_PROGRAMME");
+    }
+    expect(await allocation()).toEqual(before);
+  });
+
+  it("refuses another project's PM moving villages out of the programme", async () => {
+    const r = await post(elsewherePm.headers, `/api/v1/survey/projects/${programmeId}/villages/move`,
+      { village_ids: [village], to_project_id: target });
+    expect(r.status, JSON.stringify(r.body)).toBe(403);
+    expect(r.body.code).toBe("NOT_ON_THIS_PROGRAMME");
+  });
+
+  it("lets the project's own PM release the crew member and the rover", async () => {
+    const rel = await post(ownPm.headers, `/api/v1/survey/crew/${crewRowId}/release`, {});
+    expect(rel.status, JSON.stringify(rel.body)).toBe(200);
+    expect((await crewRow()).released_on).not.toBeNull();
+    const rov = await post(ownPm.headers, `/api/v1/survey/rovers/${allocationId}/release`, {});
+    expect(rov.status, JSON.stringify(rov.body)).toBe(200);
+  });
+
+  it("is a 404 for another organisation", async () => {
+    expect((await post(w.other.admin, `/api/v1/survey/crew/${crewRowId}/release`, {})).status).toBe(404);
+    expect((await post(w.other.admin, `/api/v1/survey/rovers/${allocationId}/release`, {})).status).toBe(404);
+  });
+});
