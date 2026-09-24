@@ -343,5 +343,26 @@ Files: `apps/api/src/modules/documents/routes.ts`,
 
 ### Full apps/api suite (fix round 1)
 
-Re-run once, in the foreground under `nohup` on VM slot b, per instruction.
-Result: **[pending — see final status reply]**.
+Run once, in the foreground under `nohup` on VM slot b, per instruction.
+
+First run (commit 3a5eaeb, before this section's own test fixes) surfaced
+10 failures, all in test code — none in the four fix-round-1 changes
+themselves: two new item-4 tests misread `due-for-purge`'s flat response
+shape; the item-3 tests called a `post` helper this file never imports
+and the on_leave_today list check used `limit=200` (server caps at 100);
+the item-2 regression test called `/reimburse` without its required body;
+`document-seeds.test.ts`'s migration-vs-application cross-check did not
+know about 112's deliberate narrowing of AUDITOR's release grant; and
+`ut-work.test.ts`'s UT-WORK-06 test still asserted the pre-decision-1
+"stays assigned" behaviour decision 1 replaced. All ten fixed in commit
+b69b771 (see that commit message for the full breakdown).
+
+Second run (commit b69b771, everything above included): **Test Files: 1
+failed | 79 passed (80). Tests: 1 failed | 2164 passed (2165). Duration
+702.39s.** The one remaining failure is
+`test/catalogue/survey-operations.test.ts` ("raises a village past the
+date somebody committed to"), a day-arithmetic assertion ("5 days ago" vs
+"6 days ago") in the survey module — a file this batch never touches, and
+not connected to any of the five decisions or four fix-round-1 items. Left
+alone as pre-existing/out of scope; flagged for whoever owns the survey
+module.
