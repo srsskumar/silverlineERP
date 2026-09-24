@@ -2910,18 +2910,18 @@ export async function registerSurveyRoutes(
           await db.query('UPDATE org_units SET name = $2, updated_at = now() WHERE id = $1',
             [row.village_id, input.village_name]);
         }
+        // Only the fields sent, and a null sent is a null stored (SV-009):
+        // COALESCE made an extent or an old code impossible to clear.
+        const sets: string[] = [], values: unknown[] = [id];
+        for (const key of ['total_extent_ac', 'dgps_base', 'dgps_rovers', 'teams',
+          'vill_code_old'] as const) {
+          if (input[key] !== undefined) { values.push(input[key]); sets.push(`${key} = $${values.length}`); }
+        }
+        values.push(u.id);
         const updated = (await db.query(
-          `UPDATE survey_villages SET
-             total_extent_ac = COALESCE($2, total_extent_ac),
-             dgps_base = COALESCE($3, dgps_base),
-             dgps_rovers = COALESCE($4, dgps_rovers),
-             teams = COALESCE($5, teams),
-             vill_code_old = COALESCE($6, vill_code_old),
-             version = version + 1, updated_at = now(), updated_by = $7
-           WHERE id = $1 RETURNING *`,
-          [id, input.total_extent_ac ?? null, input.dgps_base ?? null,
-            input.dgps_rovers ?? null, input.teams ?? null,
-            input.vill_code_old ?? null, u.id])).rows[0];
+          `UPDATE survey_villages SET ${sets.map(x => `${x}, `).join('')}
+             version = version + 1, updated_at = now(), updated_by = $${values.length}
+           WHERE id = $1 RETURNING *`, values)).rows[0];
         return { ...updated, total_extent_ac: num(updated.total_extent_ac) };
       });
     });
