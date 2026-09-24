@@ -12,7 +12,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Modal, View } from "react-native";
 import { useAuth } from "../src/auth/AuthContext";
 import { getArAgeing, type ArClient } from "../src/api/endpoints";
-import { oldestBucket, partyTone, AGEING_BUCKET_LABELS } from "../src/ledgersFormat";
+import { oldestBucket, partyTone, payableFlagTone, AGEING_BUCKET_LABELS } from "../src/ledgersFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
 import {
   BackHeader,
@@ -168,7 +168,7 @@ function ClientDetail({ client, onClose }: { client: ArClient; onClose: () => vo
                 `${b.project_name ?? b.project_code ?? "—"}` +
                 (b.due_date ? ` · due ${day(b.due_date)}` : "")
               }
-              right={b.disputed ? <Badge text="DISPUTED" tone="danger" /> : undefined}
+              right={b.disputed ? <Badge text="DISPUTED" tone={payableFlagTone('disputed')} /> : undefined}
               last={i === arr.length - 1}
             />
           ))

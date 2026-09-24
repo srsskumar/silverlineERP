@@ -15,7 +15,7 @@ import { Badge } from '@/components/ui/Badge';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Field, Notice, RecordSheet, Section, StatusBadge, Stat } from '@/components/finance/Primitives';
-import { day, money, financialTone } from '@/lib/finance';
+import { day, money, financialTone, requisitionTone, poTone } from '@/lib/finance';
 import { NewRequisition } from '@/components/procurement/NewRequisitionForm';
 import { NewPurchaseOrder } from '@/components/procurement/NewPurchaseOrderForm';
 import { NewGrn } from '@/components/procurement/NewGrnForm';
@@ -197,7 +197,7 @@ export default function ProcurementPage() {
                           <TD tone="subtle">{r.project_code ?? '—'}</TD>
                           <TD tone="muted">{r.requested_by_username ?? '—'}</TD>
                           <TD align="right" className="text-text-muted">{money(r.estimated_value)}</TD>
-                          <TD><StatusBadge status={r.status} /></TD>
+                          <TD><StatusBadge status={r.status} tone={requisitionTone(r.status)} /></TD>
                         </>
                       ) : tab === 'orders' ? (
                         <>
@@ -212,7 +212,7 @@ export default function ProcurementPage() {
                             {day(r.promised_delivery_date ?? r.delivery_date)}
                           </TD>
                           <TD align="right" className="text-text-muted">{money(r.total_value)}</TD>
-                          <TD><StatusBadge status={r.status} /></TD>
+                          <TD><StatusBadge status={r.status} tone={poTone(r.status)} /></TD>
                         </>
                       ) : tab === 'rfqs' ? (
                         <>
@@ -347,7 +347,7 @@ function RequisitionDetail({
       ) : (
         <>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-4">
-            <Field label="Status" value={<StatusBadge status={r.status} size="md" />} />
+            <Field label="Status" value={<StatusBadge status={r.status} tone={requisitionTone(r.status)} size="md" />} />
             <Field label="Estimated" value={money(r.estimated_value)} />
             <Field label="Required by" value={day(r.required_by)} />
             <Field label="Project" value={r.project_code ?? '—'} />
@@ -398,7 +398,7 @@ function RequisitionDetail({
                     </a>
                     <span className="flex items-center gap-2">
                       <span className="text-text-muted">{money(o.total_value)}</span>
-                      <StatusBadge status={o.status} />
+                      <StatusBadge status={o.status} tone={poTone(o.status)} />
                     </span>
                   </li>
                 ))}
@@ -501,7 +501,7 @@ function OrderDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
       ) : (
         <>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-4">
-            <Field label="Status" value={<StatusBadge status={po.status} size="md" />} />
+            <Field label="Status" value={<StatusBadge status={po.status} tone={poTone(po.status)} size="md" />} />
             <Field label="Value" value={money(po.total_value)} />
             <Field label="Delivery" value={day(po.promised_delivery_date ?? po.delivery_date)} />
             <Field

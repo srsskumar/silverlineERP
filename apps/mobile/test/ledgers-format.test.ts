@@ -4,7 +4,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { AGEING_BUCKET_LABELS, oldestBucket, partyTone, paymentRunTone } from "../src/ledgersFormat";
+import { AGEING_BUCKET_LABELS, oldestBucket, partyTone, paymentRunTone, payableFlagTone } from "../src/ledgersFormat";
 
 const buckets = { NOT_DUE: 0, D1_30: 0, D31_60: 0, D61_90: 0, OVER_90: 0 };
 
@@ -54,5 +54,12 @@ describe("paymentRunTone (B-002)", () => {
   it("is neutral once cancelled and warning while still a draft", () => {
     assert.equal(paymentRunTone("CANCELLED"), "neutral");
     assert.equal(paymentRunTone("DRAFT"), "warning");
+  });
+});
+
+describe("payableFlagTone (R5-002)", () => {
+  it("reads on_hold as more severe than disputed, matching web (this screen had them swapped)", () => {
+    assert.equal(payableFlagTone("on_hold"), "danger");
+    assert.equal(payableFlagTone("disputed"), "warning");
   });
 });

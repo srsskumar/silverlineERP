@@ -6,7 +6,7 @@ import { Sheet, SheetContent, SheetHeader, SheetBody, SheetTitle } from '@/compo
 import { cn } from '@/lib/cn';
 import { InfoHint } from '@/components/ui/InfoHint';
 import { statusLabel } from '@/lib/board-visuals';
-import { financialTone } from '@/lib/finance';
+import { financialTone, type Tone } from '@/lib/finance';
 
 /**
  * The small pieces every finance screen repeats.
@@ -16,9 +16,23 @@ import { financialTone } from '@/lib/finance';
  * looks like, so they live here once.
  */
 
-export function StatusBadge({ status, size = 'sm' }: { status: string | null | undefined; size?: 'sm' | 'md' }) {
+export function StatusBadge({
+  status,
+  size = 'sm',
+  tone,
+}: {
+  status: string | null | undefined;
+  size?: 'sm' | 'md';
+  /**
+   * Override the generic `financialTone` lookup. Some statuses mean
+   * different things (and different colours) per entity -- an expense
+   * claim's DRAFT/WITHDRAWN reads `EXPENSE_CLAIM_STATUS_TONES` via
+   * `expenseClaimTone()` (R5-003/004) rather than the cross-entity default.
+   */
+  tone?: Tone;
+}) {
   if (!status) return <span className="text-2xs text-text-subtle">—</span>;
-  return <Badge tone={financialTone(status)} size={size}>{statusLabel(status)}</Badge>;
+  return <Badge tone={tone ?? financialTone(status)} size={size}>{statusLabel(status)}</Badge>;
 }
 
 /**

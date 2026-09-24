@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { addMoney, lineAmount } from './money-exact.js';
 import type { RoleCode } from './rbac.js';
-import { PAYMENT_MODES } from './financial-control.js';
+import { PAYMENT_MODES, type Tone } from './financial-control.js';
 
 /**
  * Expense management (§6.8, §16).
@@ -50,6 +50,22 @@ export const EXPENSE_CLAIM_STATUSES = [
   'DRAFT', 'SUBMITTED', 'APPROVED', 'REJECTED', 'WITHDRAWN', 'REIMBURSED',
 ] as const;
 export type ExpenseClaimStatus = (typeof EXPENSE_CLAIM_STATUSES)[number];
+
+/**
+ * Status-badge tone for an expense claim (R5-003/004), one map for web and
+ * mobile. WITHDRAWN and DRAFT used to fall through web's generic
+ * `financialTone`'s default case (grey) because that function never had a
+ * case for them, while mobile coloured them explicitly (danger/info) --
+ * mobile's values are the ones kept here.
+ */
+export const EXPENSE_CLAIM_STATUS_TONES: Record<ExpenseClaimStatus, Tone> = {
+  DRAFT: 'info',
+  SUBMITTED: 'warning',
+  APPROVED: 'success',
+  REJECTED: 'danger',
+  WITHDRAWN: 'danger',
+  REIMBURSED: 'success',
+};
 
 /**
  * WITHDRAWN exists because the specification's status set leaves an employee

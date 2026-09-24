@@ -5,6 +5,7 @@ import {
   PR_TRANSITIONS, PO_TRANSITIONS, PROCUREMENT_ROLE_GRANTS,
   compareQuotes, lowestQuote, checkAmendment,
   returnSchema, acknowledgementSchema, rfqSchema,
+  PR_STATUS_TONES, PR_STATUSES, PO_STATUS_TONES, PO_STATUSES,
   type MatchLine, type VendorQuote, type AmendmentLine,
   type OrderLineForMatch, type InvoiceLineForMatch,
 } from './procurement.js';
@@ -630,5 +631,24 @@ describe('return and acknowledgement schemas (§43.3, §43.4)', () => {
       ...rfq,
       vendor_ids: ['3f1a0c2e-0000-4000-8000-000000000001', '3f1a0c2e-0000-4000-8000-000000000002'],
     }).success).toBe(true);
+  });
+});
+
+describe('PR_STATUS_TONES / PO_STATUS_TONES (mobile-parity sweep, R5 item 4)', () => {
+  it('has an entry for every PR and PO status, so nothing falls through to a silent default', () => {
+    for (const status of PR_STATUSES) expect(PR_STATUS_TONES[status]).toBeTruthy();
+    for (const status of PO_STATUSES) expect(PO_STATUS_TONES[status]).toBeTruthy();
+  });
+
+  it('reads CONVERTED as info, not the success a raised-into-a-PO requisition used to show on mobile', () => {
+    expect(PR_STATUS_TONES.CONVERTED).toBe('info');
+  });
+
+  it('reads an APPROVED order as settled (success), not still-pending', () => {
+    expect(PO_STATUS_TONES.APPROVED).toBe('success');
+  });
+
+  it('reads FULLY_RECEIVED as success, closing a gap financialTone itself had', () => {
+    expect(PO_STATUS_TONES.FULLY_RECEIVED).toBe('success');
   });
 });

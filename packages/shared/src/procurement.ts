@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { dateStringSchema } from './s1.js';
 import type { RoleCode } from './rbac.js';
+import type { Tone } from './financial-control.js';
 
 /**
  * Procurement: requisition → order → receipt → invoice (§6.6, §13.2, §43).
@@ -366,6 +367,22 @@ export const PR_TRANSITIONS: Record<PrStatus, PrStatus[]> = {
   CANCELLED: [],
 };
 
+/**
+ * Status-badge tone for a purchase requisition (mobile-parity sweep, R5 item
+ * 4). Matches web's generic `financialTone` output for every PR_STATUSES
+ * value; mobile's own `requisitionStatusTone` had CONVERTED as success
+ * (should be info, financialTone's case for it) and DRAFT as info (should
+ * be neutral, financialTone's default).
+ */
+export const PR_STATUS_TONES: Record<PrStatus, Tone> = {
+  DRAFT: 'neutral',
+  SUBMITTED: 'warning',
+  APPROVED: 'success',
+  REJECTED: 'danger',
+  CONVERTED: 'info',
+  CANCELLED: 'danger',
+};
+
 export const PO_STATUSES = [
   'DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'SENT',
   'PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CLOSED', 'CANCELLED',
@@ -383,6 +400,25 @@ export const PO_TRANSITIONS: Record<PoStatus, PoStatus[]> = {
   FULLY_RECEIVED: ['CLOSED'],
   CLOSED: [],
   CANCELLED: [],
+};
+
+/**
+ * Status-badge tone for a purchase order (mobile-parity sweep, R5 item 4).
+ * Web's generic `financialTone` has no literal case for `FULLY_RECEIVED`
+ * (only `RECEIVED`), so it fell through to neutral there; mobile's own
+ * `poStatusTone` had that one right but disagreed with web on DRAFT,
+ * PENDING_APPROVAL, SENT and, most visibly, APPROVED (mobile showed an
+ * approved order as still-pending amber instead of green).
+ */
+export const PO_STATUS_TONES: Record<PoStatus, Tone> = {
+  DRAFT: 'neutral',
+  PENDING_APPROVAL: 'warning',
+  APPROVED: 'success',
+  SENT: 'info',
+  PARTIALLY_RECEIVED: 'warning',
+  FULLY_RECEIVED: 'success',
+  CLOSED: 'success',
+  CANCELLED: 'danger',
 };
 
 /* ---------------------------------------------------------------- schemas */

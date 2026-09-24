@@ -4,6 +4,7 @@ import {
   periodAllows, findPeriodOverlap, reconcileImport,
   FINANCE_ROLE_GRANTS, FINANCE_PERMISSIONS,
   paymentSchema, paymentAllocationSchema as allocationSchema, financialPeriodSchema, periodClosureSchema, disputeSchema,
+  PAYABLE_INVOICE_FLAG_TONES,
   type FinancialPeriod,
 } from './financial-control.js';
 
@@ -355,5 +356,14 @@ describe('schemas', () => {
   it('demands to know what is being disputed', () => {
     expect(disputeSchema.safeParse({ disputed: true }).success).toBe(false);
     expect(disputeSchema.safeParse({ disputed: false }).success).toBe(true);
+  });
+});
+
+describe('PAYABLE_INVOICE_FLAG_TONES (R5-002)', () => {
+  it('reads on_hold as more severe than disputed', () => {
+    // web and mobile used to disagree about which was worse; this is the
+    // one map both now read.
+    expect(PAYABLE_INVOICE_FLAG_TONES.on_hold).toBe('danger');
+    expect(PAYABLE_INVOICE_FLAG_TONES.disputed).toBe('warning');
   });
 });

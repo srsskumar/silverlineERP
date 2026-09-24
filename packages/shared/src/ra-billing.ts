@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { dateStringSchema } from './s1.js';
 import type { RoleCode } from './rbac.js';
+import type { Tone } from './financial-control.js';
 
 /**
  * Running-account billing for contract work.
@@ -371,6 +372,21 @@ export const RA_BILL_TRANSITIONS: Record<RaBillStatus, RaBillStatus[]> = {
   CERTIFIED: ['PAID', 'CANCELLED'],
   PAID: [],
   CANCELLED: [],
+};
+
+/**
+ * Status-badge tone for an RA bill (mobile-parity sweep, R5 item 4). Web's
+ * generic `financialTone` has no case for RA-bill-specific PAID or DRAFT, so
+ * both fell through to its silent neutral/grey default while mobile's
+ * `raBillStatusTone` coloured every one of them; mobile's values are kept
+ * here as the one map both now read.
+ */
+export const RA_BILL_STATUS_TONES: Record<RaBillStatus, Tone> = {
+  DRAFT: 'info',
+  SUBMITTED: 'warning',
+  CERTIFIED: 'success',
+  PAID: 'success',
+  CANCELLED: 'danger',
 };
 
 export const raBillSchema = z.object({

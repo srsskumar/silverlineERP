@@ -15,7 +15,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Modal } from "react-native";
 import { useAuth } from "../src/auth/AuthContext";
 import { getApAgeing, getPaymentRuns, type ApVendor } from "../src/api/endpoints";
-import { oldestBucket, partyTone, paymentRunTone, AGEING_BUCKET_LABELS } from "../src/ledgersFormat";
+import { oldestBucket, partyTone, paymentRunTone, payableFlagTone, AGEING_BUCKET_LABELS } from "../src/ledgersFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
 import {
   BackHeader,
@@ -189,8 +189,8 @@ function VendorDetail({ vendor, onClose }: { vendor: ApVendor; onClose: () => vo
               }
               right={
                 <Row gap={space.xs}>
-                  {inv.on_hold ? <Badge text="ON HOLD" tone="warning" /> : null}
-                  {inv.disputed ? <Badge text="DISPUTED" tone="danger" /> : null}
+                  {inv.on_hold ? <Badge text="ON HOLD" tone={payableFlagTone('on_hold')} /> : null}
+                  {inv.disputed ? <Badge text="DISPUTED" tone={payableFlagTone('disputed')} /> : null}
                 </Row>
               }
               last={i === arr.length - 1}

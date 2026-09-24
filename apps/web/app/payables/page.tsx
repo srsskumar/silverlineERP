@@ -16,7 +16,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Notice, Section, Stat } from '@/components/finance/Primitives';
 import { AgeingBar, AgeingBuckets, BucketCells, OutsideBuckets } from '@/components/finance/Ageing';
-import { day, money, businessToday } from '@/lib/finance';
+import { day, money, businessToday, payableFlagTone } from '@/lib/finance';
 import { AGEING_BUCKETS, BUCKET_LABELS, msmeNote, type AgeingSummary } from '@/lib/ledgers';
 import { ExecutePaymentRunForm } from '@/components/payables/ExecutePaymentRunForm';
 import { VendorInvoiceLines } from '@/components/procurement/VendorInvoiceLines';
@@ -303,8 +303,8 @@ function InvoiceDetail({
                 </TD>
                 <TD className="space-x-1">
                   {i.is_msme ? <Badge tone="info">MSME</Badge> : null}
-                  {i.disputed ? <Badge tone="warning">Disputed</Badge> : null}
-                  {i.on_hold ? <Badge tone="danger">On hold</Badge> : null}
+                  {i.disputed ? <Badge tone={payableFlagTone('disputed')}>Disputed</Badge> : null}
+                  {i.on_hold ? <Badge tone={payableFlagTone('on_hold')}>On hold</Badge> : null}
                   {i.match_status && i.match_status !== 'MATCHED' && i.match_status !== 'OVERRIDDEN' ? (
                     <Badge tone="warning">{String(i.match_status).toLowerCase()}</Badge>
                   ) : null}

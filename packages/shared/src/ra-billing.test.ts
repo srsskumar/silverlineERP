@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   raBillLine, computeRaBill, recoverAdvance, retentionReleaseStatus,
   raBillSchema, RA_BILL_TRANSITIONS, receivableDueDate, deductionPolicySchema,
+  RA_BILL_STATUS_TONES, RA_BILL_STATUSES,
   type RaBillLine,
 } from './ra-billing.js';
 
@@ -266,5 +267,18 @@ describe('receivableDueDate', () => {
     expect(deductionPolicySchema.parse({ payment_terms_days: null }).payment_terms_days).toBeNull();
     expect(deductionPolicySchema.safeParse({ payment_terms_days: -1 }).success).toBe(false);
     expect(deductionPolicySchema.safeParse({ payment_terms_days: 400 }).success).toBe(false);
+  });
+});
+
+describe('RA_BILL_STATUS_TONES (mobile-parity sweep, R5 item 4)', () => {
+  it('has an entry for every RA bill status, so nothing falls through to a silent default', () => {
+    for (const status of RA_BILL_STATUSES) {
+      expect(RA_BILL_STATUS_TONES[status]).toBeTruthy();
+    }
+  });
+
+  it('colours PAID and DRAFT the way mobile always did, not web\'s old silent grey default', () => {
+    expect(RA_BILL_STATUS_TONES.PAID).toBe('success');
+    expect(RA_BILL_STATUS_TONES.DRAFT).toBe('info');
   });
 });

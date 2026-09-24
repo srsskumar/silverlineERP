@@ -1,18 +1,18 @@
+import { RA_BILL_STATUS_TONES, type Tone } from "@silverline/shared";
+
 /**
  * Pure display helpers for the Project finance (RA bills) screen —
  * dependency-free, same reasoning as rbac.ts/validators.ts (see their
  * headers).
  */
 
-/** Mirrors RA_BILL_STATUSES (packages/shared/src/ra-billing.ts). */
-export function raBillStatusTone(
-  status: string,
-): "success" | "warning" | "danger" | "info" | "neutral" {
-  if (status === "CERTIFIED" || status === "PAID") return "success";
-  if (status === "SUBMITTED") return "warning";
-  if (status === "CANCELLED") return "danger";
-  if (status === "DRAFT") return "info";
-  return "neutral";
+/**
+ * Mirrors RA_BILL_STATUSES (packages/shared/src/ra-billing.ts). Reads the
+ * one shared tone map (mobile-parity sweep, R5 item 4) instead of a second
+ * copy that can drift from web's.
+ */
+export function raBillStatusTone(status: string): Tone {
+  return RA_BILL_STATUS_TONES[status as keyof typeof RA_BILL_STATUS_TONES] ?? "neutral";
 }
 
 /**

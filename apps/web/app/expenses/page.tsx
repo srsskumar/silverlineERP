@@ -19,7 +19,7 @@ import { Field, Notice, RecordSheet, Section, StatusBadge, Stat } from '@/compon
 import { DownloadButton } from '@/components/DownloadButton';
 import {
   categoryLabel, creditBlockLabel, day, money, percent, PAYMENT_MODES,
-  EXPENSE_CATEGORY_LABELS, businessToday } from '@/lib/finance';
+  EXPENSE_CATEGORY_LABELS, businessToday, expenseClaimTone } from '@/lib/finance';
 
 /** image/jpeg, image/png, application/pdf — matches ALLOWED_RECEIPT_EXTENSIONS. */
 const RECEIPT_ACCEPT = 'image/jpeg,image/png,application/pdf';
@@ -207,7 +207,7 @@ export default function ExpensesPage() {
                           ) : null}
                         </TD>
                         <TD>
-                          <StatusBadge status={c.status} />
+                          <StatusBadge status={c.status} tone={expenseClaimTone(c.status)} />
                           {c.status === 'APPROVED' && Number(c.reimbursed_amount ?? 0) > 0 ? (
                             <p className="text-2xs text-text-subtle">
                               {money(c.reimbursed_amount)} paid
@@ -341,7 +341,7 @@ function ClaimDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
       ) : (
         <>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-4">
-            <Field label="Status" value={<StatusBadge status={c.status} size="md" />} />
+            <Field label="Status" value={<StatusBadge status={c.status} tone={expenseClaimTone(c.status)} size="md" />} />
             <Field label="Claimed" value={money(c.total_claimed)} />
             <Field
               label="Allowed"

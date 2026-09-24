@@ -4,6 +4,7 @@ import {
   evaluateLine, evaluateClaim, entitlementAmount, receiptFingerprint, softDuplicateKey,
   canApproveClaim, reimbursementPosition, EXPENSE_ROLE_GRANTS, EXPENSE_PERMISSIONS,
   expensePolicySchema, expenseClaimSchema, type ExpensePolicy,
+  EXPENSE_CLAIM_STATUS_TONES, EXPENSE_CLAIM_STATUSES,
 } from './expenses.js';
 
 const UUID = '11111111-1111-4111-8111-111111111111';
@@ -402,5 +403,18 @@ describe('entitlementAmount rounding (D-010)', () => {
     expect(entitlementAmount(12.5, 4.35)).toBe(54.38);
     expect(entitlementAmount(0.5, 4.35)).toBe(2.18);
     expect(entitlementAmount(3, 1.1)).toBe(3.3);
+  });
+});
+
+describe('EXPENSE_CLAIM_STATUS_TONES (R5-003/004)', () => {
+  it('has an entry for every claim status, so nothing falls through to a silent default', () => {
+    for (const status of EXPENSE_CLAIM_STATUSES) {
+      expect(EXPENSE_CLAIM_STATUS_TONES[status]).toBeTruthy();
+    }
+  });
+
+  it('colours WITHDRAWN and DRAFT the way mobile always did, not web\'s old silent grey default', () => {
+    expect(EXPENSE_CLAIM_STATUS_TONES.WITHDRAWN).toBe('danger');
+    expect(EXPENSE_CLAIM_STATUS_TONES.DRAFT).toBe('info');
   });
 });
