@@ -339,17 +339,47 @@ describe('BankReconciliationManager reconcile', () => {
         bank_account: 'HDFC-001', reconciliation_status: 'UNMATCHED', version: 2,
       }],
     });
+    handlers['GET /api/v1/payments?limit=100'] = () => jsonResponse({
+      data: [{ id: 'pay-5', payment_no: 'PAY-5', amount: 50000, paid_on: '2026-09-20', version: 1 }],
+    });
 
     mount(<BankReconciliationManager />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Reconcile' }));
-    fireEvent.change(screen.getByPlaceholderText('Payment ID (UUID)'), { target: { value: 'pay-5' } });
+    // fix round 1 item 7: a payment picker (search by number/amount/date),
+    // not a raw UUID paste.
+    const picker = screen.getByPlaceholderText('Search payments…');
+    fireEvent.focus(picker);
+    fireEvent.click(await screen.findByRole('option', { name: /PAY-5/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
 
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]).toMatchObject({ path: '/api/v1/bank-transactions/bt-1/reconcile', method: 'POST' });
     expect(sent[0].body).toEqual({ payment_id: 'pay-5' });
     expect(sent[0].headers['x-record-version']).toBe('2');
+  });
+
+  it('fix round 1 item 7 — loads at most 100 candidate payments, and offers no raw-UUID box', async () => {
+    handlers['GET /api/v1/bank-transactions'] = () => jsonResponse({
+      data: [{
+        id: 'bt-1', statement_ref: 'TXN001', value_date: '2026-09-20', amount: 50000,
+        bank_account: 'HDFC-001', reconciliation_status: 'UNMATCHED', version: 2,
+      }],
+    });
+    let paymentsQueried: string | null = null;
+    handlers['GET /api/v1/payments?limit=100'] = (init) => {
+      paymentsQueried = 'limit=100';
+      return jsonResponse({ data: [{ id: 'pay-5', payment_no: 'PAY-5', amount: 50000, paid_on: '2026-09-20', version: 1 }] });
+    };
+
+    mount(<BankReconciliationManager />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconcile' }));
+    fireEvent.focus(screen.getByPlaceholderText('Search payments…'));
+    await screen.findByRole('option', { name: /PAY-5/ });
+
+    expect(paymentsQueried).toBe('limit=100');
+    expect(screen.queryByPlaceholderText('Payment ID (UUID)')).not.toBeInTheDocument();
   });
 });
 

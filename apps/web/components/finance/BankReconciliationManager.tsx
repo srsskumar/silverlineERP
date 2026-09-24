@@ -14,6 +14,7 @@ import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Tabl
 import { Badge } from '@/components/ui/Badge';
 import { day, money } from '@/lib/finance';
 import { BankImportForm } from './BankImportForm';
+import { PaymentPicker } from './PaymentPicker';
 
 const STATUS_TONE: Record<string, 'success' | 'warning' | 'danger' | 'neutral'> = {
   RECONCILED: 'success', PARTIALLY_MATCHED: 'warning', EXCEPTION: 'danger', UNMATCHED: 'neutral',
@@ -35,7 +36,9 @@ function ReconcileRow({ row, onDone }: { row: BankTransaction; onDone: () => voi
   return (
     <div className="flex flex-col items-end gap-1.5">
       <div className="flex items-center gap-1.5">
-        <input className="w-40 text-2xs" placeholder="Payment ID (UUID)" value={paymentId} onChange={(e) => setPaymentId(e.target.value)} />
+        <div className="w-56">
+          <PaymentPicker value={paymentId} onChange={setPaymentId} placeholder="Search payments…" />
+        </div>
         <input className="w-28 text-2xs" placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
         <Button variant="secondary" size="sm" onClick={() => setOpen(false)}>Cancel</Button>
         <Button size="sm" loading={reconcile.isPending} disabled={!paymentId.trim()} onClick={() => reconcile.mutate()}>
