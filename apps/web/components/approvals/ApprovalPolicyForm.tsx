@@ -141,7 +141,7 @@ export function ApprovalPolicyForm({
           action={
             <Button
               type="button" variant="secondary" size="sm"
-              onClick={() => append({ ...emptyLevel, sequence: fields.length + 1 })}
+              onClick={() => append({ ...emptyLevel, sequence: fields.length + 1 } as unknown as ApprovalPolicyFormInput['levels'][number])}
             >
               Add level
             </Button>
