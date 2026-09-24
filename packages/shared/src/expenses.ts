@@ -214,7 +214,9 @@ export interface LineEvaluation {
   credit: Creditability;
 }
 
-const round2 = (n: number): number => Math.round(n * 100) / 100;
+// Twelve significant digits first (D-010): 12.5 km x 4.35 is 54.37499999...
+// as a float, and a straight Math.round took the paisa away.
+const round2 = (n: number): number => Math.round(Number((n * 100).toPrecision(12))) / 100;
 
 /**
  * An entitlement's value: units × the rate the policy sets.

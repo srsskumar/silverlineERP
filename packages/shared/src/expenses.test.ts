@@ -395,3 +395,12 @@ describe('schemas', () => {
     }).success).toBe(false);
   });
 });
+
+describe('entitlementAmount rounding (D-010)', () => {
+  it('rounds a half paisa up rather than losing it to float noise', async () => {
+    const { entitlementAmount } = await import('./expenses.js');
+    expect(entitlementAmount(12.5, 4.35)).toBe(54.38);
+    expect(entitlementAmount(0.5, 4.35)).toBe(2.18);
+    expect(entitlementAmount(3, 1.1)).toBe(3.3);
+  });
+});
