@@ -147,3 +147,16 @@ describe("a control point's name is one name, whatever the case (SG-006)", () =>
     expect(r.status, JSON.stringify(r.body)).toBe(200);
   });
 });
+
+describe("the crew member's own stage, on their list (SG-013)", () => {
+  it("carries the state and start of the stage they are crewed on", async () => {
+    await post(w.admin, `/api/v1/survey/villages/${village}/stage`, {
+      stage_code: "GROUND_TRUTHING", state: "IN_PROGRESS", started_on: workDate(),
+      gt_govt_staff_allocated: 2, gt_crew_allocated: 3,
+    });
+    const r = await get(w.directUser, "/api/v1/survey/me/villages");
+    const row = r.data.find((x: any) => x.id === village);
+    expect(row.stage_state).toBe("IN_PROGRESS");
+    expect(row.stage_started_on).toBe(workDate());
+  });
+});

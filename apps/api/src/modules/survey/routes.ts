@@ -1612,6 +1612,18 @@ export async function registerSurveyRoutes(
               gt.state            AS gt_state,
               gt.variance_reason  AS gt_variance_reason,
               s.code AS stage_code, s.label AS stage_label,
+              /*
+               * Where the caller's own stage stands (SG-013).
+               *
+               * The phone offers "mark complete" only on the stage this person
+               * is crewed on, and only while it is open. The start date goes
+               * back with the completion, because the stage route writes
+               * whatever start it is given, blank included.
+               */
+              own.state AS stage_state,
+              own.started_on AS stage_started_on,
+              own.expected_end_on AS stage_expected_end_on,
+              own.variance_reason AS stage_variance_reason,
               EXISTS (SELECT 1 FROM survey_entries se
                       WHERE se.survey_village_id = sv.id
                         AND se.entry_date = $3::date) AS filed_today
@@ -1627,6 +1639,8 @@ export async function registerSurveyRoutes(
        LEFT JOIN survey_village_stages gt ON gt.survey_village_id = sv.id
          AND gt.stage_id = (SELECT id FROM survey_stages
                              WHERE org_id = sv.org_id AND code = 'GROUND_TRUTHING')
+       LEFT JOIN survey_village_stages own ON own.survey_village_id = sv.id
+         AND own.stage_id = c.stage_id
        WHERE c.org_id = $1 AND usr.id = $2
          AND c.released_on IS NULL
          AND p.status = 'ACTIVE'
@@ -1640,6 +1654,10 @@ export async function registerSurveyRoutes(
         gt_completed_on: iso(r.gt_completed_on),
         gt_state: r.gt_state ?? null,
         gt_variance_reason: r.gt_variance_reason ?? null,
+        stage_state: r.stage_state ?? 'NOT_STARTED',
+        stage_started_on: iso(r.stage_started_on),
+        stage_expected_end_on: iso(r.stage_expected_end_on),
+        stage_variance_reason: r.stage_variance_reason ?? null,
         filed_today: r.filed_today === true,
       })),
       // So the app can label the question it is about to ask.
