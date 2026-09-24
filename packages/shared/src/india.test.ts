@@ -8,6 +8,7 @@ import {
   contractValueBreakdown, amountInWords, businessDay,
   indianMobile, isIndianMobile, formatIndianMobile,
 } from './india.js';
+import { lineAmount } from './money-exact.js';
 
 /**
  * Build a GSTIN with a correct check digit, so the fixtures exercise the real
@@ -358,6 +359,36 @@ describe('GST invoice', () => {
     });
     expect(inv.taxTotal).toBe(0);
     expect(inv.total).toBe(1000);
+  });
+
+  it('prices a fractional line exactly rather than with a float round (fix round 2, item 2)', () => {
+    // round2(quantity * unitRate) rounds these down: the float product of
+    // 0.5 x 4.35 is 2.174999999999999822..., and of 3 x 1.005 is
+    // 3.0149999999999997, so a plain round2 gives 2.17 and 3.01 instead of
+    // the correct 2.18 and 3.02.
+    const inv = computeInvoice({
+      lines: [
+        { description: 'Half unit', hsnSac: '99999999', quantity: 0.5, unitRate: 4.35, gstRatePct: 0 },
+        { description: 'Three units', hsnSac: '99999999', quantity: 3, unitRate: 1.005, gstRatePct: 0 },
+      ],
+      supplierStateCode: '27', placeOfSupplyCode: '27',
+    });
+    expect(inv.lines[0].taxableValue).toBe(2.18);
+    expect(inv.lines[1].taxableValue).toBe(3.02);
+  });
+
+  it('totals a PO-prefilled invoice to exactly the PO line values (fix round 2, item 2)', () => {
+    // Vendor invoice lines prefilled from a PO carry the PO's own quantity
+    // and rate. The invoice must reconcile to exactly what the PO module
+    // itself would compute for that line (lineAmount, money-exact.ts,
+    // D-010) rather than a separately float-rounded figure.
+    const poLine = { quantity: 0.5, unitRate: 4.35 };
+    const inv = computeInvoice({
+      lines: [{ description: 'From PO', hsnSac: '99999999', ...poLine, gstRatePct: 0 }],
+      supplierStateCode: '27', placeOfSupplyCode: '27',
+    });
+    expect(inv.lines[0].taxableValue).toBe(lineAmount(poLine.quantity, poLine.unitRate));
+    expect(inv.total).toBe(lineAmount(poLine.quantity, poLine.unitRate));
   });
 });
 

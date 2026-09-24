@@ -16,6 +16,8 @@
  *    contract says, and interest accrues automatically when it is breached.
  */
 
+import { lineAmount, percentOf, addMoney } from './money-exact.js';
+
 /* ----------------------------------------------------------------- GSTIN */
 
 /**
@@ -222,7 +224,11 @@ export interface GstSplit {
  * reason rather than a customer id.
  */
 export function splitGst(taxableValue: number, ratePct: number, supplierStateCode: string, placeOfSupplyCode: string): GstSplit {
-  const total = Math.round(taxableValue * ratePct) / 100;
+  // percentOf, not a float round (fix round 2, item 2): taxableValue is read
+  // to the paisa and ratePct to 4 dp, and the product is rounded as an
+  // integer rather than through a float multiply that can land a hair either
+  // side of the paisa.
+  const total = percentOf(taxableValue, ratePct);
   const treatment: GstTreatment = supplierStateCode === placeOfSupplyCode ? 'INTRA_STATE' : 'INTER_STATE';
   if (treatment === 'INTER_STATE') {
     return { treatment, cgst: 0, sgst: 0, igst: round2(total), total: round2(total) };
@@ -387,7 +393,11 @@ export function computeInvoice(args: {
       throw new Error(`${line.gstRatePct}% is not a notified GST rate`);
     }
     const discount = line.discount ?? 0;
-    const taxableValue = round2(line.quantity * line.unitRate - discount);
+    // lineAmount, not round2(quantity * unitRate) (fix round 2, item 2): the
+    // float product rounds down cases like 0.5 x 4.35 (2.174999999999999822...
+    // in floating point) that lineAmount, working in integer paise, gets
+    // right. Matches how a PO line prices the same quantity and rate.
+    const taxableValue = addMoney(lineAmount(line.quantity, line.unitRate), -discount);
     const split = reverseCharge
       ? { treatment, cgst: 0, sgst: 0, igst: 0, total: 0 }
       : splitGst(taxableValue, line.gstRatePct, args.supplierStateCode, args.placeOfSupplyCode);
@@ -400,27 +410,31 @@ export function computeInvoice(args: {
       taxableValue,
       gstRatePct: line.gstRatePct,
       ...split,
-      lineTotal: round2(taxableValue + split.total),
+      lineTotal: addMoney(taxableValue, split.total),
     };
   });
 
-  const sum = (pick: (l: ComputedInvoiceLine) => number) => round2(lines.reduce((t, l) => t + pick(l), 0));
+  // addMoney, not a plain reduce + round2: each of these sums several
+  // already-exact 2 dp figures, and addMoney scales every term to integer
+  // paise before adding rather than letting a float sum drift and then
+  // rounding the drift away (fix round 2, item 2).
+  const sum = (pick: (l: ComputedInvoiceLine) => number) => addMoney(...lines.map(pick));
   const taxableValue = sum(l => l.taxableValue);
   const cgst = sum(l => l.cgst), sgst = sum(l => l.sgst), igst = sum(l => l.igst);
-  const taxTotal = round2(cgst + sgst + igst);
-  const gross = round2(taxableValue + taxTotal);
+  const taxTotal = addMoney(cgst, sgst, igst);
+  const gross = addMoney(taxableValue, taxTotal);
   // Invoices are commonly presented rounded to the rupee, with the difference
   // shown as its own line so the arithmetic still ties out.
   const rounded = args.roundToRupee ? Math.round(gross) : gross;
-  const roundOff = round2(rounded - gross);
+  const roundOff = addMoney(rounded, -gross);
 
   const summary = new Map<string, { hsnSac: string; gstRatePct: number; taxableValue: number; tax: number }>();
   for (const line of lines) {
     const key = `${line.hsnSac}:${line.gstRatePct}`;
     const entry = summary.get(key)
       ?? { hsnSac: line.hsnSac, gstRatePct: line.gstRatePct, taxableValue: 0, tax: 0 };
-    entry.taxableValue = round2(entry.taxableValue + line.taxableValue);
-    entry.tax = round2(entry.tax + line.total);
+    entry.taxableValue = addMoney(entry.taxableValue, line.taxableValue);
+    entry.tax = addMoney(entry.tax, line.total);
     summary.set(key, entry);
   }
 
