@@ -21,6 +21,8 @@ import {
   type BillingStatus, type GcpWarning,
 } from '@silverline/shared';
 import { ExportMenu } from '@/components/ui/ExportMenu';
+import { useAuth } from '@/components/AuthProvider';
+import { ReversePaymentDialog, mayReversePayments } from '@/components/survey/ReversePaymentDialog';
 
 type Row = Record<string, any>;
 
@@ -917,6 +919,9 @@ function Billing({
   const villageId = String(village.id);
   const qc = useQueryClient();
   const toast = useToast();
+  // Reversing a payment is an administrator's call, as the API has it (SV-019).
+  const { session } = useAuth();
+  const mayReverse = mayReversePayments(session?.roles);
   const [adding, setAdding] = React.useState(false);
   const [editing, setEditing] = React.useState<string | null>(null);
   const blank = {
@@ -1184,7 +1189,15 @@ function Billing({
                             * was to delete the claim and lose when it was
                             * submitted, which is the part that matters.
                             */}
-                          {status !== 'SUBMITTED' ? (
+                          {/*
+                            * A paid claim is closed (SV-011): no undo, no edit,
+                            * no removal. The one way back is an administrator
+                            * reversing the payment, with a reason (SV-019).
+                            */}
+                          {status === 'PAID' && mayReverse ? (
+                            <ReversePaymentDialog claim={c} onDone={refresh} />
+                          ) : null}
+                          {status !== 'SUBMITTED' && status !== 'PAID' ? (
                             <Button type="button" variant="ghost"
                               title="Undo the decision and leave it as submitted"
                               onClick={() => decide.mutate({
@@ -1192,6 +1205,7 @@ function Billing({
                                 status: 'SUBMITTED',
                               })}>Undo decision</Button>
                           ) : null}
+                          {status !== 'PAID' ? (<>
                           <Button type="button" variant="ghost"
                             onClick={() => setEditing(
                               editing === String(c.id) ? null : String(c.id))}>
@@ -1209,6 +1223,7 @@ function Billing({
                                 + 'It will have to be re-submitted and re-approved from scratch.',
                               )) remove.mutate(String(c.id));
                             }}>Remove</Button>
+                          </>) : null}
                         </div>
                       ) : null}
                     </TD>
