@@ -81,7 +81,12 @@ describe('organisation settings form', () => {
     expect(sent[0].body).toEqual({
       name: 'Silverline',
       // The timeout and retention go back exactly as they were, not as 30 and 365.
-      settings: { timezone: 'Asia/Kolkata', session_timeout_minutes: 720, retention_days: 3650 },
+      // match_tolerance always goes over explicit (item 5, final QA fix wave):
+      // all-null here is a no-op, since this organisation never had one set.
+      settings: {
+        timezone: 'Asia/Kolkata', session_timeout_minutes: 720, retention_days: 3650,
+        match_tolerance: { quantity_pct: null, rate_pct: null, value_absolute: null },
+      },
     });
   });
 });
