@@ -1386,6 +1386,85 @@ describe("D-012 sandwich rule: paid leave does not debit Sundays/holidays", () =
   });
 });
 
+describe("leave step-2 approver: HR manager preferred over admin (owner decision, 2026-09-24)", () => {
+  it("prefers the org's HR manager over admin when one exists", async () => {
+    const { emp, tl, eId, types } = await chainFixture();
+    const adminH = await adminHeaders();
+    const hr = await mkUser(["HR_MANAGER"], "hr");
+    const from = plusDays(30);
+    await setBalance(adminH, eId, types["CL"] as string, yr(from), 12);
+    const filed = await fileLeave(emp.headers, {
+      leave_type_id: types["CL"],
+      from_date: from,
+      to_date: from,
+    });
+    expect(filed.statusCode).toBe(201);
+    const reqId = (filed.json() as { id: string }).id;
+    const step1 = await app.inject({
+      method: "POST",
+      url: `/api/v1/leave/requests/${reqId}/decision`,
+      headers: { ...tl.headers, "If-Match": "1" },
+      payload: { decision: "APPROVE" },
+    });
+    expect(step1.statusCode).toBe(200);
+    expect((step1.json() as { current_approver_id: string }).current_approver_id).toBe(hr.id);
+  });
+
+  it("falls back to admin when no HR manager exists in the org", async () => {
+    const { emp, tl, adminId, eId, types } = await chainFixture();
+    const adminH = await adminHeaders();
+    const from = plusDays(30);
+    await setBalance(adminH, eId, types["CL"] as string, yr(from), 12);
+    const filed = await fileLeave(emp.headers, {
+      leave_type_id: types["CL"],
+      from_date: from,
+      to_date: from,
+    });
+    const reqId = (filed.json() as { id: string }).id;
+    const step1 = await app.inject({
+      method: "POST",
+      url: `/api/v1/leave/requests/${reqId}/decision`,
+      headers: { ...tl.headers, "If-Match": "1" },
+      payload: { decision: "APPROVE" },
+    });
+    expect((step1.json() as { current_approver_id: string }).current_approver_id).toBe(adminId);
+  });
+
+  it("skips the applicant's own HR-manager account for the next eligible HR manager, not admin", async () => {
+    const adminH = await adminHeaders();
+    const hrA = await mkUser(["HR_MANAGER"], "hrA");
+    const hrB = await mkUser(["HR_MANAGER"], "hrB");
+    // UUIDs are not creation-ordered; determine the actual lowest-id one so
+    // this deterministically exercises the applicant-exclusion path rather
+    // than happening to pass either way.
+    const ordered = (
+      await pool.query("SELECT id FROM users WHERE id = ANY($1::uuid[]) ORDER BY id ASC", [
+        [hrA.id, hrB.id],
+      ])
+    ).rows as Array<{ id: string }>;
+    const applicant = ordered[0]!.id === hrA.id ? hrA : hrB;
+    const expectedApprover = ordered[1]!.id;
+
+    const empId = await mkEmployee(adminH);
+    await activateEmployee(empId);
+    await linkUser(applicant.id, empId);
+    const types = await typeMap(adminH);
+    const from = plusDays(30);
+    await setBalance(adminH, empId, types["CL"] as string, yr(from), 12);
+
+    // No manager configured: single-step chain, the other HR manager decides directly.
+    const filed = await fileLeave(applicant.headers, {
+      leave_type_id: types["CL"],
+      from_date: from,
+      to_date: from,
+    });
+    expect(filed.statusCode).toBe(201);
+    const body = filed.json() as { current_approver_id: string };
+    expect(body.current_approver_id).toBe(expectedApprover);
+    expect(body.current_approver_id).not.toBe(applicant.id);
+  });
+});
+
 // ------------------------------------------------------------------ chain unit
 
 describe("assembleApprovalChain", () => {

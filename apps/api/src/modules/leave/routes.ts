@@ -476,18 +476,53 @@ export async function registerLeaveRoutes(
   }
 
   /** Step-2 candidate: first HR_MANAGER/ADMIN/SUPER_ADMIN user by created_at. */
-  async function step2Approver(orgId: string): Promise<string | null> {
-    const res = await opts.pool.query(
+  /**
+   * Step-2 candidate: the org's HR manager (owner decision, 2026-09-24).
+   *
+   * This used to pick whichever of HR_MANAGER/ADMIN/SUPER_ADMIN had the
+   * oldest account -- an ADMIN account older than the org's HR_MANAGER one
+   * silently won, so HR could go an entire deployment without ever seeing
+   * this step. An admin is now only a fallback for an org with no HR
+   * manager at all, never a substitute for one that exists.
+   *
+   * Deterministic by lowest user id (org settings carries no designated-HR
+   * override today; this is the ordering until one is added).
+   *
+   * `applicantUserId` is excluded from both queries -- the requester's own
+   * account is never picked as their own step-2 approver. Without this,
+   * the applicant being the org's only/lowest-id HR manager would resolve
+   * to themselves, and `assembleApprovalChain`'s self-approval check would
+   * then just drop the step rather than hand it to the next eligible
+   * person, exactly the outcome this decision requires.
+   */
+  async function step2Approver(
+    orgId: string,
+    applicantUserId: string | null,
+  ): Promise<string | null> {
+    const excluded = applicantUserId ?? "00000000-0000-0000-0000-000000000000";
+    const hr = await opts.pool.query(
       `SELECT u.id FROM users u
        JOIN user_roles ur ON ur.user_id = u.id
        JOIN roles r ON r.id = ur.role_id
-       WHERE u.org_id = $1 AND u.auth_status = 'ACTIVE'
-         AND r.code IN ('HR_MANAGER', 'ADMIN', 'SUPER_ADMIN')
-       ORDER BY u.created_at ASC, u.id ASC
+       WHERE u.org_id = $1 AND u.auth_status = 'ACTIVE' AND r.code = 'HR_MANAGER'
+         AND u.id != $2::uuid
+       ORDER BY u.id ASC
        LIMIT 1`,
-      [orgId],
+      [orgId, excluded],
     );
-    return ((res.rows[0] as { id: string } | undefined)?.id ?? null);
+    const hrId = (hr.rows[0] as { id: string } | undefined)?.id;
+    if (hrId) return hrId;
+    const admin = await opts.pool.query(
+      `SELECT u.id FROM users u
+       JOIN user_roles ur ON ur.user_id = u.id
+       JOIN roles r ON r.id = ur.role_id
+       WHERE u.org_id = $1 AND u.auth_status = 'ACTIVE' AND r.code IN ('ADMIN', 'SUPER_ADMIN')
+         AND u.id != $2::uuid
+       ORDER BY u.id ASC
+       LIMIT 1`,
+      [orgId, excluded],
+    );
+    return ((admin.rows[0] as { id: string } | undefined)?.id ?? null);
   }
 
   // ------------------------------------------------ GET /leave/types
@@ -1218,7 +1253,7 @@ export async function registerLeaveRoutes(
     const chain = assembleApprovalChain({
       requesterUserId,
       step1UserId: await step1Approver(user.orgId, employeeId),
-      step2UserId: await step2Approver(user.orgId),
+      step2UserId: await step2Approver(user.orgId, requesterUserId),
     });
     if (!chain) {
       return sendRuleError(reply, req.requestId, {
