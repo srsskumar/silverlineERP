@@ -36,7 +36,7 @@ import {
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { z } from 'zod';
 import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
-import { orgTodaySql, orgTimeZone, cachedOrgZone } from '../../common/orgTime.js';
+import { orgTodaySql, orgZoneSql, orgTimeZone, cachedOrgZone } from '../../common/orgTime.js';
 
 /**
  * Land survey progress (§59).
@@ -4738,7 +4738,7 @@ export async function registerSurveyRoutes(
       const rows = (await pool.query(
         `WITH punches AS (
            SELECT ae.survey_village_id,
-                  (ae.client_timestamp AT TIME ZONE 'Asia/Kolkata')::date AS work_date,
+                  (ae.client_timestamp AT TIME ZONE ${orgZoneSql('$4')})::date AS work_date,
                   ae.employee_id,
                   -- One person may punch more than once in a day; the reason
                   -- given at the last punch-out is the one that stands.
@@ -4750,7 +4750,7 @@ export async function registerSurveyRoutes(
                    FILTER (WHERE ae.progress_deferred_remarks IS NOT NULL))[1] AS remarks
            FROM attendance_events ae
            WHERE ae.survey_village_id IS NOT NULL
-             AND (ae.client_timestamp AT TIME ZONE 'Asia/Kolkata')::date
+             AND (ae.client_timestamp AT TIME ZONE ${orgZoneSql('$4')})::date
                  BETWEEN $2::date AND $3::date
            GROUP BY 1, 2, 3
          )
@@ -6454,7 +6454,7 @@ export async function registerSurveyRoutes(
            JOIN survey_stages s ON s.id = h.stage_id
            JOIN survey_villages sv ON sv.id = h.survey_village_id
            WHERE h.org_id = $1 AND sv.survey_project_id = $2
-             AND (h.changed_at AT TIME ZONE 'Asia/Kolkata')::date
+             AND (h.changed_at AT TIME ZONE ${orgZoneSql('$1')})::date
                  BETWEEN $3::date AND $4::date
            GROUP BY 1, 2, 3, s.display_order
            ORDER BY s.display_order`,

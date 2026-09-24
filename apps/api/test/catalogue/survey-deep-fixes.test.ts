@@ -592,3 +592,65 @@ describe("SV-017 the organisation's own day", () => {
     expect(String(r.data.released_on).slice(0, 10)).toBe(dayIn(zone));
   });
 });
+
+/*
+ * SV-024 (round 4): two SQL spots still read the day in IST after SV-017 --
+ * the unfiled-returns list's punch day and the period report's stage
+ * movements. One instant, 2026-09-10 20:00 UTC, is the 11th in India and the
+ * 10th in Pago Pago; the second tenant is put in Pago Pago and asked about
+ * the 10th.
+ */
+describe("SV-024 punch days and stage movements in the organisation's zone", () => {
+  const AT = "2026-09-10T20:00:00Z";
+  const DAY = "2026-09-10";
+  let programme: string;
+
+  beforeAll(async () => {
+    await w.pool.query(
+      `UPDATE organizations SET settings = settings || '{"timezone":"Pacific/Pago_Pago"}'::jsonb
+        WHERE id = $1`, [w.other.orgId]);
+    const stage = String((await w.pool.query(
+      `INSERT INTO survey_stages(org_id, code, label, display_order)
+       VALUES($1,'GROUND_TRUTHING','Ground truthing',10)
+       ON CONFLICT (org_id, code) DO UPDATE SET label = EXCLUDED.label RETURNING id`,
+      [w.other.orgId])).rows[0].id);
+    const mandal = String((await w.pool.query(
+      `INSERT INTO org_units(org_id,type,code,name,parent_id) VALUES($1,'mandal',$2,'Zone mandal',$3) RETURNING id`,
+      [w.other.orgId, uniq("ZM"), w.other.district])).rows[0].id);
+    const p = await post(w.other.admin, "/api/v1/survey/projects",
+      { code: uniq("ZN"), name: "Zone programme", create_project: false });
+    programme = String(p.data.id);
+    const v = await post(w.other.admin, `/api/v1/survey/projects/${programme}/villages`,
+      { village_name: "Zone village", village_code: uniq("ZV"), mandal_id: mandal, total_extent_ac: 10 });
+    const village = String(v.data.id);
+    await w.pool.query(
+      `INSERT INTO attendance_events(employee_id, event_type, client_timestamp,
+         server_timestamp, survey_village_id, idempotency_key)
+       VALUES($1,'CHECK_OUT',$2::timestamptz,$2::timestamptz,$3,$4)`,
+      [w.other.employee, AT, village, uniq("IDEM")]);
+    await w.pool.query(
+      `INSERT INTO survey_stage_history(org_id, survey_village_id, stage_id, from_state, to_state, changed_at)
+       VALUES($1,$2,$3,NULL,'IN_PROGRESS',$4::timestamptz)`,
+      [w.other.orgId, village, stage, AT]);
+  });
+
+  afterAll(async () => {
+    await w.pool.query(`UPDATE organizations SET settings = settings - 'timezone' WHERE id = $1`,
+      [w.other.orgId]);
+  });
+
+  it("lists the unfiled punch on the organisation's day", async () => {
+    const r = await send("GET", w.other.admin,
+      `/api/v1/survey/projects/${programme}/unfiled?from=${DAY}&to=${DAY}`);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect((r.data as any[]).map((x) => x.work_date)).toEqual([DAY]);
+  });
+
+  it("counts the stage movement in the organisation's day", async () => {
+    const r = await send("GET", w.other.admin,
+      `/api/v1/survey/projects/${programme}/report?from=${DAY}&to=${DAY}`);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(JSON.stringify(r.data.stage_movements ?? r.data)).toContain("GROUND_TRUTHING");
+    expect((r.data.stage_movements as any[]).length).toBe(1);
+  });
+});
