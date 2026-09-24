@@ -2518,6 +2518,11 @@ export async function registerSurveyRoutes(
           dgps_base: updated.dgps_base,
           dgps_rovers: updated.dgps_rovers,
           notes: updated.notes,
+          // Both sides of the trail carry attendance (SG-012). The before
+          // state had it and the after did not, so "who changed four
+          // government staff to nought" showed a four and then nothing.
+          govt_staff_present: updated.govt_staff_present,
+          crew_present: updated.crew_present,
           values: Object.fromEntries((await db.query(
             `SELECT mm.code, ev.quantity FROM survey_entry_values ev
                JOIN survey_measures mm ON mm.id = ev.measure_id

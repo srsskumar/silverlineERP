@@ -179,3 +179,22 @@ describe("starting ground truthing keeps what was said (SG-007)", () => {
     expect(after.data.stage_dates.GROUND_TRUTHING.remarks).toBe("VRO agreed two staff from Monday");
   });
 });
+
+describe("an amended return's trail carries both sides (SG-012)", () => {
+  it("records attendance in the after state as well as the before", async () => {
+    const e = await post(w.directUser, "/api/v1/survey/entries", {
+      survey_village_id: village, entry_date: workDate(),
+      values: { GOVT_LAND_EXTENT_AC: 5 }, govt_staff_present: 4, crew_present: 3,
+    });
+    expect(e.status, JSON.stringify(e.body)).toBe(201);
+    const r = await patch({ ...w.directUser, "if-match": String(e.data.version) },
+      `/api/v1/survey/entries/${e.data.id}`, { govt_staff_present: 0 });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const audit = (await w.pool.query(
+      `SELECT before_state, after_state FROM audit_events
+        WHERE action = 'survey.entry.amend' AND entity_id = $1`, [e.data.id])).rows[0];
+    expect(audit.before_state.govt_staff_present).toBe(4);
+    expect(audit.after_state.govt_staff_present).toBe(0);
+    expect(audit.after_state.crew_present).toBe(3);
+  });
+});
