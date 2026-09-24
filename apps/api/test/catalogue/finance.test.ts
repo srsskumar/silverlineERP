@@ -40,6 +40,27 @@ async function makeInvoice(total: number, dueDate?: string): Promise<string> {
   return String(r.rows[0].id);
 }
 
+/**
+ * A vendor invoice in a state that should refuse a payment allocation
+ * (fix round 2, item 6): cancelled, on hold, or disputed.
+ */
+async function makeUnpayableInvoice(
+  total: number, state: "CANCELLED" | "ON_HOLD" | "DISPUTED",
+): Promise<string> {
+  const id = await makeInvoice(total);
+  if (state === "CANCELLED") {
+    await w.pool.query(
+      `UPDATE invoices SET lifecycle_status = 'CANCELLED', cancelled_reason = 'test' WHERE id = $1`, [id]);
+  } else if (state === "ON_HOLD") {
+    await w.pool.query(
+      `UPDATE invoices SET on_hold = true, hold_reason = 'test hold' WHERE id = $1`, [id]);
+  } else {
+    await w.pool.query(
+      `UPDATE invoices SET disputed = true, dispute_reason = 'test dispute' WHERE id = $1`, [id]);
+  }
+  return id;
+}
+
 async function makePayment(amount: number, over: Record<string, unknown> = {}) {
   const res = await post(w.admin, "/api/v1/payments", {
     direction: "PAYABLE", payment_no: uniq("PAY"), paid_on: "2026-09-10",
@@ -143,6 +164,18 @@ describe("financial periods", () => {
 });
 
 describe("payment allocation", () => {
+  it("refuses to allocate a payment to a cancelled, held or disputed vendor invoice (fix round 2, item 6)", async () => {
+    for (const state of ["CANCELLED", "ON_HOLD", "DISPUTED"] as const) {
+      const invoice = await makeUnpayableInvoice(500, state);
+      const payment = await makePayment(500);
+      const alloc = await post(w.admin, `/api/v1/payments/${payment.id}/allocations`, {
+        document_type: "VENDOR_INVOICE", document_id: invoice, amount: 500,
+      });
+      expect(alloc.status, `${state}: ${JSON.stringify(alloc.body)}`).toBe(422);
+      expect(alloc.body.code, state).toBe("DOCUMENT_NOT_PAYABLE");
+    }
+  });
+
   it("settles one invoice from several payments", async () => {
     const invoice = await makeInvoice(1000);
     for (const amount of [400, 350, 250]) {

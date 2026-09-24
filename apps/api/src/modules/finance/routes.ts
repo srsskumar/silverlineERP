@@ -78,9 +78,21 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
     }
     if (type === 'VENDOR_INVOICE') {
       const row = (await db.query(
-        `SELECT total, due_date FROM invoices WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
+        `SELECT total, due_date, lifecycle_status, on_hold, hold_reason, disputed, dispute_reason
+           FROM invoices WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
       if (!row) fail('NOT_FOUND', 'Invoice not found', 404);
-      return { invoiced: Number(row.total), dueDate: row.due_date ? iso(row.due_date) : null };
+      // Cancelled, on hold or disputed each mean this invoice is not, right
+      // now, something a payment settles (fix round 2, item 6). Allocating
+      // against it anyway would settle a bill the vendor relationship itself
+      // says is not currently payable -- a cancelled invoice never owed
+      // anything, a held one is deliberately kept out of the payment run, and
+      // a disputed one may yet be revised or refused outright.
+      const notPayable =
+        String(row.lifecycle_status) === 'CANCELLED' ? 'This invoice is cancelled and cannot take a payment.'
+        : row.on_hold ? `This invoice is on hold${row.hold_reason ? ` (${row.hold_reason})` : ''} and cannot take a payment.`
+        : row.disputed ? `This invoice is disputed${row.dispute_reason ? ` (${row.dispute_reason})` : ''} and cannot take a payment.`
+        : undefined;
+      return { invoiced: Number(row.total), dueDate: row.due_date ? iso(row.due_date) : null, notPayable };
     }
     if (type === 'EXPENSE_CLAIM') {
       /*
