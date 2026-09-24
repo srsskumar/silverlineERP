@@ -37,13 +37,12 @@ CREATE INDEX IF NOT EXISTS ix_invoice_lines_po_line ON invoice_lines(po_line_id)
 -- them. Only an explicit false (a vendor whose registration has since
 -- lapsed) turns statutory MSME treatment off; the ordinary case is that a
 -- vendor with a category on file is registered, and the default says so.
+--
+-- Deliberately no CHECK tying this to msme_category being set. A vendor
+-- whose registration has lapsed keeps its udyam_number and msme_category on
+-- file -- that is the record of what it once was -- while msme_registered
+-- alone says whether the statutory treatment in payableDue still applies.
+-- Requiring the two to agree would make that state impossible to record.
 
 ALTER TABLE vendors
   ADD COLUMN IF NOT EXISTS msme_registered BOOLEAN NOT NULL DEFAULT TRUE;
-
-DO $$
-BEGIN
-  ALTER TABLE vendors ADD CONSTRAINT chk_vendors_msme_registered
-    CHECK (msme_category IS NULL OR msme_registered);
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
