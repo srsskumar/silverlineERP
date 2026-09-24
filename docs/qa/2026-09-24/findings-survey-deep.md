@@ -27,3 +27,12 @@ Not covered: web pages in a real browser (blocked: the public origin was refused
 | SV-018 | P3 | OPEN | /projects/:id/employees enrolment uses directory scope, so a PM gets 403 while start-gt and crew assignment don't. |
 
 Tests: api 2163/2164, with the one failure being SV-015, since fixed (survey-operations 136/136). The full suite wasn't re-run after that fix. api tsc clean; shared 1018; web tsc clean; web vitest 944/945 (the survey-tabs timeout passes when run alone); mobile 419 + tsc.
+
+## Fix round 1 (relayed by the controller)
+| ID | Sev | Status | What |
+|---|---|---|---|
+| SV-019 | Important | FIXED ad3d32d | Paid-claim reversal: `POST /survey/billing/:id/reverse` plus bulk `action: "REVERSE"`, PAID → APPROVED. Admin/SUPER_ADMIN only (403 ADMIN_ONLY), a reason of ≥5 characters (422), If-Match on the single route, bulk dry-run, and NOT_PAID skips. Audited as `survey.village.billing.reverse` with before/after/reason. Amounts are exact (49.99 → 50 / 123.4567 ac tested). The misleading message is fixed. No web UI yet. |
+| SV-021 | Minor | FIXED 79809d9 | Phones masked on crew-assets and projects/:id/employees for observer-role holders; a shared masksPhones() rule. |
+| SV-020 | Minor | FIXED ae68897 | GCP DELETE uses survey.enter plus the shared authority helper (crew, manager, TL, the project's PM, admin). A non-project PM holding survey.manage is now refused, matching create/edit. |
+| SV-015 | P3 | FIXED 925f678 | The alert test flake: the org-IST day, and "N days ago" read the way the job computes it. |
+| SV-022 | Minor | OPEN | Bulk DECIDE doesn't apply the SV-012 check (decision dated before submission). |
