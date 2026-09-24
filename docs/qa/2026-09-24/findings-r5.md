@@ -682,12 +682,19 @@ just sits — nobody eligible can see or decide it, and nothing re-resolves the 
 - `step1Approver`/`step2Approver` extracted from `routes.ts` unchanged (now reusable).
 - `isEligibleStep2Approver(db, orgId, userId, applicantUserId)` — ACTIVE + one of the three roles
   + not the applicant.
-- `reassignIfIneligible(db, req, ctx)` — re-resolves **only the last step in the chain** (step 2;
-  step 1 is a direct-report relationship that exit already unwinds via cancellation, not
-  reassignment). If the current approver is no longer eligible, resolves a fresh `step2Approver`
+- `reassignIfIneligible(db, req, ctx)` — re-resolves **only the last step in the chain** (step 2)
+  in this round. If the current approver is no longer eligible, resolves a fresh `step2Approver`
   and, if that's a different eligible user, `UPDATE`s `current_approver_id`/`approval_chain`
   (guarded by `WHERE current_approver_id = $old` for race safety) and writes a
   `leave.request.reassign_approver` audit event (`actor_id NULL`).
+
+  **Correction (round 3):** this round's write-up originally justified leaving step 1 unhandled as
+  "a direct-report relationship that exit already unwinds via cancellation, not reassignment." That
+  was wrong — the exit-flow cancellation covers only the *exiting employee's own* pending leave (as
+  requester); it does nothing for leave belonging to someone else that the exiting employee was the
+  current *approver* on, at whichever step. A stale step-1 approver was left exactly as stuck as a
+  stale step-2 one was before this round's fix. See §10 for the round-3 correction (controller
+  ruling), which extends re-resolution to every step.
 - Wired at two points in `routes.ts`: `GET /leave/requests/:id` (re-resolve on read, before
   returning) and the decision handler (re-resolve on the `FOR UPDATE` row right after fetching it,
   before the status/version checks). The decision handler's `expectedVersion` was changed from
@@ -785,5 +792,93 @@ Full API suite, VM slot `e`, `TEST_DATABASE_URL` → `test_slot_e`:
 
 Web `tsc` not run this round — no web files touched by any round-2 commit (`git status` checked
 clean of web changes before each commit).
+
+No new migrations this round.
+
+## 10. Fix round 3 (2026-09-25)
+
+One important gap, a controller ruling on round 2 item 1's fallback order. API-only, no new
+migrations.
+
+### Item 1 (important) — a stale step-1 approver was still stuck forever
+
+**Bug, exactly as reported.** `reassignIfIneligible` no-ops for any non-final chain step
+(`idx !== chain.length - 1`), so a **step-1** approver (normally the requester's reporting manager)
+who exits, is disabled, or loses `leave.decide` leaves the request stuck exactly the way a stale
+step-2 approver did before round 2 — the exit handler finds these rows (it queries
+`current_approver_id = ANY(accountIds)` regardless of step) but the reassign call itself silently
+does nothing for them. Round 2's write-up justified this scope as "step 1 is a direct-report
+relationship that exit already unwinds via cancellation" — wrong: that cancellation only ever
+covered the *exiting employee's own* leave as requester, never leave they were approving for
+someone else. See the correction in §8, item 1.
+
+**Fix (controller ruling on fallback order).** `apps/api/src/modules/leave/approverResolution.ts`:
+`reassignIfIneligible` now re-resolves *whichever* step is currently pending, not just the last
+one:
+- **Step 2** ineligible: unchanged cascade (org HR manager, then admin — round 2's behaviour).
+- **Step 1** ineligible: the ineligible approver's *own* reporting manager first (new
+  `step1FallbackCascade` — same `step1Approver` lookup step 1 assembly itself uses, just applied to
+  the stale approver's own employee record instead of the requester's), then falls through to the
+  same HR-manager-then-admin cascade step 2 uses (new `step2FallbackCascade`, generalized from
+  `step2Approver` to take an arbitrary exclusion set rather than just the applicant).
+- **Never the applicant**, at any tier, either step (unchanged rule, now applied uniformly).
+- **New: never duplicates the request's other step.** Every fallback tier now excludes whoever
+  holds the request's *other* step (`chain.filter((_, i) => i !== idx)`), in addition to the
+  applicant — a candidate that would put one person on both steps of the same request is skipped in
+  favour of the next one down the cascade (manager → HR → admin), all the way to "leave the stale
+  approver in place" if every tier is exhausted. This matters for either direction (a step-1
+  fallback landing on the existing step-2 approver, or vice versa), not only the step-1 case the
+  ruling called out.
+- New `isEligibleStep1Approver` (active + holds `leave.decide` + not applicant) mirrors
+  `isEligibleStep2Approver` for the step-1 case; new `firstEligibleByRole` factors the
+  role-membership query both cascades share.
+- CAS guard (`WHERE ... AND current_approver_id = $old`) and audit-once semantics
+  (`leave.request.reassign_approver`, one row per successful reassignment) are untouched — the
+  fallback-selection logic changed, not the write/audit path around it.
+
+Comments in `apps/api/src/modules/leave/routes.ts` (GET and decide handlers) and
+`apps/api/src/modules/employees/routes.ts` (exit flow) that described the old step-2-only scope
+were corrected in the same commit.
+
+**RED.** `apps/api/test/s3.test.ts`, `describe("leave step-1 approver: reassigned when it becomes
+stale (fix round 3, item 1, controller ruling)")`: run against the round-2 source (`git stash` of
+just the fix, keeping the new tests) before restoring the fix, all four failed for the intended
+reason — no reassignment happened at all, or it landed on the wrong tier:
+1. "reassigns to the exiting approver's own reporting manager" — a three-level chain (gm manages
+   tl, tl manages the applicant); tl exits; expects the exit's own audit to list the reassignment
+   and the new current approver to be gm, step 2's own approver left untouched.
+2. "falls back to the org's HR manager when the exited approver had no manager of their own" — tl
+   has no manager of their own; an HR manager is created *after* filing (so it's available for the
+   fallback but wasn't part of the original chain); tl is disabled; expects reassignment to the new
+   HR manager.
+3. "skips an HR manager who is themselves the applicant, falling back to admin" — the org's only HR
+   manager is the applicant; step 2 already fell back to *an* admin at filing (two admins exist in
+   this org); tl (step 1) is disabled; expects the reassignment to land on the *other* admin (never
+   the applicant, never the admin already on step 2).
+4. "skips a manager candidate that would duplicate the request's step-2 approver, falling further
+   down the cascade" — gm is deliberately *both* tl's own reporting manager *and* the org's only HR
+   manager, so gm is already this request's step-2 approver; tl (step 1) is disabled; the naive
+   "reassign to your manager" answer (gm) would duplicate step 2, so the fix must skip it (and skip
+   the HR tier too, gm being the org's only HR manager) and land on admin instead.
+
+**GREEN.** All four pass after restoring the fix; full `test/s3.test.ts` green (83/83), full
+`ut-lp.test.ts` + `ut-auth.test.ts` green (101/101) — the 6 tests carried over from round 2's
+step-2-only describe block are unaffected (same `reassignIfIneligible`, step-2 branch unchanged).
+
+**Files.** `apps/api/src/modules/leave/approverResolution.ts`, `apps/api/src/modules/leave/routes.ts`
+(comments only), `apps/api/src/modules/employees/routes.ts` (comment only),
+`apps/api/test/s3.test.ts`. Commit `e8043ef`.
+
+## 11. Fix round 3 — verification
+
+Targeted run first (`test/s3.test.ts`, `test/catalogue/ut-lp.test.ts`, `test/catalogue/ut-auth.test.ts`,
+VM slot `e`): **184/184 passed**.
+
+Full API suite, VM slot `e`, `TEST_DATABASE_URL` → `test_slot_e`: **79 passed / 1 failed
+(2182/2183 tests)**, 792s. The one remaining failure is the same pre-existing
+`test/catalogue/survey-operations.test.ts` "5 days ago" date-drift flake documented in §7/§9
+(unrelated module, confirmed pre-existing, not touched by this round's changes).
+
+Web `tsc` not run — no web files touched this round.
 
 No new migrations this round.
