@@ -15,6 +15,8 @@ import { useAuth } from "../../src/auth/AuthContext";
 import { getMyVillages, type MyVillage } from "../../src/api/endpoints";
 import { DailyReturn } from "../../src/survey/DailyReturn";
 import { ControlPointForm } from "../../src/survey/ControlPointForm";
+import { StageComplete } from "../../src/survey/StageComplete";
+import { completionOffer } from "../../src/survey/fieldCrew";
 import {
   Badge,
   Banner,
@@ -33,7 +35,7 @@ import {
 import { space, useTheme } from "../../src/theme";
 import { day } from "@silverline/shared";
 
-type Sheet = { village: MyVillage; kind: "return" | "point" } | null;
+type Sheet = { village: MyVillage; kind: "return" | "point" | "stage" } | null;
 
 function SurveyScreen() {
   const t = useTheme();
@@ -127,6 +129,27 @@ function SurveyScreen() {
             ))}
           </Card>
 
+          {/*
+            * Finishing a stage (SG-013): only the stage this person is crewed
+            * on, and only while it is running. Nobody else's stage is ever
+            * offered here.
+            */}
+          {villages.some(v => completionOffer(v, mayEnter)) ? (
+            <Card title="Finish your stage">
+              <View style={{ gap: space.xs }}>
+                {villages.filter(v => completionOffer(v, mayEnter)).map(v => (
+                  <Button
+                    key={v.id}
+                    title={`${v.village_name}: ${v.stage_label} complete`}
+                    variant="secondary"
+                    icon="checkmark-done-outline"
+                    onPress={() => setSheet({ village: v, kind: "stage" })}
+                  />
+                ))}
+              </View>
+            </Card>
+          ) : null}
+
           {mayEnter ? (
             <Card title="Control points">
               <Muted>
@@ -162,6 +185,8 @@ function SurveyScreen() {
             <DailyReturn village={sheet.village} workDate={workDate} onFiled={close} />
           ) : sheet?.kind === "point" ? (
             <ControlPointForm village={sheet.village} workDate={workDate} onRecorded={close} />
+          ) : sheet?.kind === "stage" ? (
+            <StageComplete village={sheet.village} workDate={workDate} onDone={close} />
           ) : null}
         </View>
       </Modal>
