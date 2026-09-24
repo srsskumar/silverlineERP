@@ -309,7 +309,12 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
      c.cgst.toFixed(2),c.sgst.toFixed(2),c.igst.toFixed(2),c.lineTotal.toFixed(2)]);
   }
  }
- app.post('/api/v1/invoices',{preHandler:guard('inventory.manage')},async(req,reply)=>{
+ // invoice.manage, not inventory.manage (owner decision 2026-09-24): every
+ // other write on a vendor invoice -- PATCH .../lines, .../status,
+ // .../dispute, .../match -- already gates on invoice.manage. Creating one
+ // gated on inventory.manage instead, so a role holding one but not the
+ // other saw an inconsistent 403/201 split across the same document.
+ app.post('/api/v1/invoices',{preHandler:guard('invoice.manage')},async(req,reply)=>{
   const i=parse(invoiceSchema,req.body),u=actor(req);
   const row=await mutate(pool,req,'invoice.create','invoice',async db=>{
    await inOrg(db,'vendors',i.vendor_id,u.orgId);

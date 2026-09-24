@@ -292,6 +292,13 @@ describe('finance grants', () => {
     expect(FINANCE_ROLE_GRANTS.PROJECT_MANAGER).toEqual(['payment.read', 'period.read', 'invoice.read']);
   });
 
+  it('gives the inventory manager invoice.manage, so creating one still matches every other invoice write (owner decision 2026-09-24)', () => {
+    // POST /api/v1/invoices moved from inventory.manage to invoice.manage to
+    // match PATCH .../lines, .../status, .../dispute and .../match. Without
+    // this grant the inventory manager would lose an ability it already had.
+    expect(FINANCE_ROLE_GRANTS.INVENTORY_MANAGER).toContain('invoice.manage');
+  });
+
   it('names every granted permission in the permission list', () => {
     const known = new Set<string>(FINANCE_PERMISSIONS);
     for (const perms of Object.values(FINANCE_ROLE_GRANTS)) {

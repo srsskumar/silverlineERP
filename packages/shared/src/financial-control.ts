@@ -327,7 +327,12 @@ export const FINANCE_ROLE_GRANTS: Record<RoleCode, string[]> = {
   GOVT_OBSERVER: [],
   AUDITOR: ['payment.read', 'period.read', 'bank.read', 'invoice.read'],
   TEAM_LEAD: [],
-  INVENTORY_MANAGER: ['invoice.read'],
+  // invoice.manage, not just invoice.read (owner decision 2026-09-24):
+  // POST /api/v1/invoices used to gate on inventory.manage, which this role
+  // holds; moving that route onto invoice.manage (matching every other
+  // vendor-invoice write) would otherwise have taken away its ability to
+  // create one.
+  INVENTORY_MANAGER: ['invoice.read', 'invoice.manage'],
   HR_MANAGER: [],
   EMPLOYEE: [],
   SALES_BD_EXECUTIVE: ['invoice.read'],

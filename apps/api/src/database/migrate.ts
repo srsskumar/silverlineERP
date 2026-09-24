@@ -107,6 +107,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "098_govt_observer_notification_read", file: "098_govt_observer_notification_read.sql" },
   { version: "100_sales_bid_notification_read", file: "100_sales_bid_notification_read.sql" },
   { version: "101_org_fallback_approval_policies", file: "101_org_fallback_approval_policies.sql" },
+  { version: "110_invoice_manage_grants", file: "110_invoice_manage_grants.sql" },
 ];
 
 /**

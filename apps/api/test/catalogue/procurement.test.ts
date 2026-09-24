@@ -537,11 +537,24 @@ describe("three-way match", () => {
     const { invoiceId } = await orderReceivedAndInvoiced({
       ordered: 100, rate: 400, received: 100, invoiced: 100, invoiceRate: 400,
     });
-    for (const role of ["AUDITOR", "INVENTORY_MANAGER", "PROJECT_MANAGER"] as const) {
+    // INVENTORY_MANAGER is not in this list any more: owner decision
+    // 2026-09-24 gave it invoice.manage (so creating a vendor invoice no
+    // longer depends on inventory.manage instead), and invoice.manage is the
+    // one permission every vendor-invoice write shares -- lines, status,
+    // dispute, and this match too. See the positive case below.
+    for (const role of ["AUDITOR", "PROJECT_MANAGER"] as const) {
       const res = await post(w.role[role], `/api/v1/invoices/${invoiceId}/match`, {});
       expect(res.status, role).toBe(403);
     }
     expect((await get(w.role.AUDITOR, `/api/v1/invoices/${invoiceId}/match`)).status).toBe(200);
+  });
+
+  it("lets the inventory manager record a match too, now that it holds invoice.manage (owner decision 2026-09-24)", async () => {
+    const { invoiceId } = await orderReceivedAndInvoiced({
+      ordered: 100, rate: 400, received: 100, invoiced: 100, invoiceRate: 400,
+    });
+    const res = await post(w.role.INVENTORY_MANAGER, `/api/v1/invoices/${invoiceId}/match`, {});
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
   });
 
   it("refuses the override to a role that raises orders", async () => {
@@ -1017,6 +1030,32 @@ describe("vendor invoice lines (finding B-004)", () => {
       lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 5, unit_rate: 400, gst_rate_pct: 0 }],
     });
     expect(res.status).toBe(403);
+  });
+
+  it("requires invoice.manage to create a vendor invoice, matching PATCH .../lines (owner decision 2026-09-24)", async () => {
+    const vendor = await makeVendor();
+    const payload = (): Record<string, unknown> => ({
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "1000", payment_mode: "BANK", reference: "test",
+    });
+
+    // Unchanged: AUDITOR and PROJECT_MANAGER hold invoice.read but never
+    // invoice.manage, on either route.
+    for (const role of ["AUDITOR", "PROJECT_MANAGER"] as const) {
+      const res = await post(w.role[role], "/api/v1/invoices", payload());
+      expect(res.status, role).toBe(403);
+    }
+
+    // INVENTORY_MANAGER created invoices only via inventory.manage before;
+    // that guard is gone, so it needs invoice.manage instead to keep doing
+    // what it already could.
+    const asInventoryManager = await post(w.role.INVENTORY_MANAGER, "/api/v1/invoices", payload());
+    expect(asInventoryManager.status, JSON.stringify(asInventoryManager.body)).toBe(201);
+
+    // PAYROLL_OFFICER already manages invoice status/dispute/lines; it can
+    // now create one too, the same permission covering the whole document.
+    const asPayrollOfficer = await post(w.role.PAYROLL_OFFICER, "/api/v1/invoices", payload());
+    expect(asPayrollOfficer.status, JSON.stringify(asPayrollOfficer.body)).toBe(201);
   });
 
   it("requires If-Match on PATCH /invoices/:id/lines, and refuses a stale version (fix round 1, item 3)", async () => {
