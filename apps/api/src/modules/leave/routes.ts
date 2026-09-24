@@ -27,6 +27,7 @@ import { sendError } from "../../common/httpErrors.js";
 import { emitNotification } from "../s5/notify.js";
 import { parseIfMatch } from '../../common/ifMatch.js';
 import { currentOrgYear, previewOpenYear, runOpenYear } from "./openYear.js";
+import { reassignIfIneligible, step1Approver, step2Approver } from "./approverResolution.js";
 
 export interface LeaveRoutesOptions {
   pool: Pool;
@@ -432,84 +433,6 @@ export async function registerLeaveRoutes(
       [id, orgId],
     );
     return res.rows[0] as RequestRow | undefined;
-  }
-
-  /** Step-1 candidate: linked user of the requester's `reports_to` manager. */
-  async function step1Approver(
-    orgId: string,
-    requesterEmployeeId: string,
-  ): Promise<string | null> {
-    const mgr = await opts.pool.query(
-      "SELECT reports_to FROM employees WHERE id = $1::uuid AND org_id = $2",
-      [requesterEmployeeId, orgId],
-    );
-    const reportsTo = (mgr.rows[0] as { reports_to: string | null } | undefined)
-      ?.reports_to;
-    if (!reportsTo) {
-      return null;
-    }
-    const linked = await opts.pool.query(
-      `SELECT u.id FROM users u
-       WHERE u.employee_id = $1::uuid AND u.org_id = $2 AND u.auth_status = 'ACTIVE'
-         AND EXISTS (
-           SELECT 1 FROM user_roles ur
-           JOIN role_permissions rp ON rp.role_id = ur.role_id
-           WHERE ur.user_id = u.id AND rp.permission_code = $3
-         )
-       LIMIT 1`,
-      [reportsTo, orgId, LEAVE_DECIDE],
-    );
-    return ((linked.rows[0] as { id: string } | undefined)?.id ?? null);
-  }
-
-  /** Step-2 candidate: first HR_MANAGER/ADMIN/SUPER_ADMIN user by created_at. */
-  /**
-   * Step-2 candidate: the org's HR manager (owner decision, 2026-09-24).
-   *
-   * This used to pick whichever of HR_MANAGER/ADMIN/SUPER_ADMIN had the
-   * oldest account -- an ADMIN account older than the org's HR_MANAGER one
-   * silently won, so HR could go an entire deployment without ever seeing
-   * this step. An admin is now only a fallback for an org with no HR
-   * manager at all, never a substitute for one that exists.
-   *
-   * Deterministic by lowest user id (org settings carries no designated-HR
-   * override today; this is the ordering until one is added).
-   *
-   * `applicantUserId` is excluded from both queries -- the requester's own
-   * account is never picked as their own step-2 approver. Without this,
-   * the applicant being the org's only/lowest-id HR manager would resolve
-   * to themselves, and `assembleApprovalChain`'s self-approval check would
-   * then just drop the step rather than hand it to the next eligible
-   * person, exactly the outcome this decision requires.
-   */
-  async function step2Approver(
-    orgId: string,
-    applicantUserId: string | null,
-  ): Promise<string | null> {
-    const excluded = applicantUserId ?? "00000000-0000-0000-0000-000000000000";
-    const hr = await opts.pool.query(
-      `SELECT u.id FROM users u
-       JOIN user_roles ur ON ur.user_id = u.id
-       JOIN roles r ON r.id = ur.role_id
-       WHERE u.org_id = $1 AND u.auth_status = 'ACTIVE' AND r.code = 'HR_MANAGER'
-         AND u.id != $2::uuid
-       ORDER BY u.id ASC
-       LIMIT 1`,
-      [orgId, excluded],
-    );
-    const hrId = (hr.rows[0] as { id: string } | undefined)?.id;
-    if (hrId) return hrId;
-    const admin = await opts.pool.query(
-      `SELECT u.id FROM users u
-       JOIN user_roles ur ON ur.user_id = u.id
-       JOIN roles r ON r.id = ur.role_id
-       WHERE u.org_id = $1 AND u.auth_status = 'ACTIVE' AND r.code IN ('ADMIN', 'SUPER_ADMIN')
-         AND u.id != $2::uuid
-       ORDER BY u.id ASC
-       LIMIT 1`,
-      [orgId, excluded],
-    );
-    return ((admin.rows[0] as { id: string } | undefined)?.id ?? null);
   }
 
   // ------------------------------------------------ GET /leave/types
@@ -1116,8 +1039,8 @@ export async function registerLeaveRoutes(
       (requesterLink.rows[0] as { id: string } | undefined)?.id ?? null;
     const chain = assembleApprovalChain({
       requesterUserId,
-      step1UserId: await step1Approver(user.orgId, employeeId),
-      step2UserId: await step2Approver(user.orgId, requesterUserId),
+      step1UserId: await step1Approver(db, user.orgId, employeeId),
+      step2UserId: await step2Approver(db, user.orgId, requesterUserId),
     });
     if (!chain) {
       return sendRuleError(reply, req.requestId, {
@@ -1312,6 +1235,21 @@ export async function registerLeaveRoutes(
           message: "Leave request not found",
         });
       }
+      // Fix round 2, item 1: a stale step-2 approver (exited, disabled, or
+      // no longer HR/admin) is re-resolved lazily on read, so a request
+      // does not sit stuck just because nobody has decided it since.
+      if (row.status === "PENDING" && row.current_approver_id) {
+        const reassignment = await reassignIfIneligible(opts.pool, row, {
+          actorId: null,
+          reason: "Approver no longer eligible (re-resolved on read)",
+          requestId: req.requestId,
+        });
+        if (reassignment.reassigned) {
+          row.current_approver_id = reassignment.approverId;
+          row.approval_chain = reassignment.chain;
+          row.version = row.version + 1;
+        }
+      }
       const own = await linkedEmployeeId(user.id);
       const canSee =
         row.employee_id === own ||
@@ -1375,13 +1313,31 @@ export async function registerLeaveRoutes(
         cur.leave_type_id,
       ])
     ).rows[0] as { is_paid: boolean; requires_balance: boolean } | undefined;
-    if (!type?.requires_balance) return null;
+    if (!type) return null;
     // D-012 sandwich rule, same as at filing.
     const skipDates = type.is_paid
       ? await sandwichSkipDates(client, cur.org_id, cur.employee_id, from, to)
       : new Set<string>();
+    const years = daysByYear(from, to, skipDates);
+    /*
+     * Fix round 2, item 3: holidays can change between filing and
+     * approval. A paid request that was real days at filing can be
+     * reduced to zero by a holiday added since (the same sandwich rule,
+     * D-012, applied again here) -- refuse the approval outright, the
+     * same way filing itself refuses one (ALL_DAYS_EXCLUDED, fix round 1
+     * item 4), rather than approving a 0-day leave nobody asked for.
+     */
+    if (type.is_paid && years.every((y) => y.days === 0)) {
+      return {
+        status: 422,
+        code: "ALL_DAYS_EXCLUDED",
+        message:
+          "Every day in this range is now a Sunday or a holiday; there is nothing left to approve",
+      };
+    }
+    if (!type.requires_balance) return null;
     // Each leave year the request touches is checked for its own days (D-011).
-    for (const { year, days } of daysByYear(from, to, skipDates)) {
+    for (const { year, days } of years) {
       // Fix round 1, item 1: nothing to check, and no row to touch, for a
       // year this request costs zero days in (holidays may have moved
       // between filing and this approval -- recomputed fresh above).
@@ -1430,7 +1386,7 @@ export async function registerLeaveRoutes(
       }
       user.scopes=await scopesForPermission(req,LEAVE_DECIDE);
       if(!user.permissions.includes(LEAVE_DECIDE))return sendError(reply,req.requestId,{status:403,code:'FORBIDDEN',message:'Insufficient permissions'});
-      const expectedVersion = parseIfMatch(req);
+      let expectedVersion = parseIfMatch(req);
       const { id } = req.params as { id: string };
       const scopedRequest=await findRequest(user.orgId,id);if(scopedRequest)await employeeAccess(opts.pool,req,scopedRequest.employee_id);
       const { decision, note } = parsed.data;
@@ -1451,6 +1407,34 @@ export async function registerLeaveRoutes(
           [id, user.orgId],
         );
         const cur = curRes.rows[0] as RequestRow | undefined;
+        // Fix round 2, item 1: re-resolve a stale step-2 approver before
+        // checking who may decide -- same transaction, same row lock
+        // (FOR UPDATE above), so a newly-eligible approver can act on
+        // this same request immediately rather than needing a prior read.
+        if (cur && cur.status === "PENDING" && cur.current_approver_id) {
+          const reassignment = await reassignIfIneligible(client, cur, {
+            actorId: null,
+            reason: "Approver no longer eligible (re-resolved on decision attempt)",
+            requestId: req.requestId,
+          });
+          if (reassignment.reassigned) {
+            const preReassignVersion = cur.version;
+            cur.current_approver_id = reassignment.approverId;
+            cur.approval_chain = reassignment.chain;
+            cur.version = cur.version + 1;
+            // The reassignment's own version bump is not the caller's to
+            // have known about -- a newly-eligible approver deciding
+            // straight off the version they last legitimately saw (e.g.
+            // from the step before theirs) must not 409 against a bump
+            // that happened because of them, in this same call. Only
+            // forgiven when they were otherwise caught up (their If-Match
+            // matches what the version was immediately before the
+            // reassignment); a genuinely stale version still 409s below.
+            if (expectedVersion === preReassignVersion) {
+              expectedVersion = cur.version;
+            }
+          }
+        }
         if (!cur) {
           failure = { status: 404, code: "NOT_FOUND", message: "Leave request not found" };
         } else if (cur.status !== "PENDING") {

@@ -52,6 +52,7 @@ import {
 } from "../../common/idempotency.js";
 import { parseIfMatch } from '../../common/ifMatch.js';
 import { orgTodaySql } from "../../common/orgTime.js";
+import { reassignIfIneligible } from "../leave/approverResolution.js";
 
 export interface EmployeeRoutesOptions {
   pool: Pool;
@@ -1443,6 +1444,43 @@ export async function registerEmployeeRoutes(
         )
       ).rows.map((r: { id: string }) => r.id);
       /*
+       * Fix round 2, item 1(ii): pending leave *belonging to somebody else*
+       * that this person was the current approver on is reassigned here, in
+       * the same transaction as the exit -- not left pointing at an
+       * account that is DISABLED as of the write above. Their own leave
+       * (as the requester, not the approver) was withdrawn just above;
+       * this is the other direction. Only reassigns a step-2 (HR/admin)
+       * slot, same scope as reassignIfIneligible everywhere else -- a
+       * step-1 (manager) slot this person held is not re-derived here.
+       */
+      const reassignedApprovals: string[] = [];
+      if (accountIds.length > 0) {
+        const stuck = await db.query(
+          `SELECT id, org_id, employee_id, status, current_approver_id, approval_chain
+             FROM leave_requests
+            WHERE org_id = $1 AND status = 'PENDING' AND current_approver_id = ANY($2::uuid[])`,
+          [user.orgId, accountIds],
+        );
+        for (const stuckReq of stuck.rows as Array<{
+          id: string;
+          org_id: string;
+          employee_id: string;
+          status: string;
+          current_approver_id: string | null;
+          approval_chain: unknown;
+        }>) {
+          const result = await reassignIfIneligible(db, stuckReq, {
+            actorId: user.id,
+            impersonatorId: user.impersonator?.id ?? null,
+            actorIp: meta.ip,
+            actorUserAgent: meta.userAgent,
+            requestId: req.requestId,
+            reason: `Approver exited: ${reason}`,
+          });
+          if (result.reassigned) reassignedApprovals.push(stuckReq.id);
+        }
+      }
+      /*
        * Open tasks stay on the person, and each is flagged on its own audit
        * trail. The catalogue is explicit (UT-WORK-06): work held by a
        * departing employee is neither silently reassigned nor deleted -- it
@@ -1497,6 +1535,7 @@ export async function registerEmployeeRoutes(
           offboarding: {
             disabled_user_ids: disabled,
             cancelled_leave_request_ids: cancelledLeave,
+            reassigned_approval_request_ids: reassignedApprovals,
             open_task_ids_needing_reassignment: openTasks.map((t) => t.id),
           },
         },
