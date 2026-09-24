@@ -226,9 +226,9 @@ describe('fix round 1 item 6 — only the clicked row shows a loading state whil
         { id: 'policy-2', document_type: 'ADVANCE', name: 'Advance DoA', mode: 'CUMULATIVE', project_id: null, active: true, version: 1, levels: [] },
       ],
     });
-    let resolveDeactivate: (() => void) | null = null;
+    const resolver: { fn: (() => void) | null } = { fn: null };
     handlers['POST /api/v1/approval-policies/policy-1/deactivate'] = () => new Promise((resolve) => {
-      resolveDeactivate = () => resolve(jsonResponse({ data: { id: 'policy-1', version: 2, active: false } }));
+      resolver.fn = () => resolve(jsonResponse({ data: { id: 'policy-1', version: 2, active: false } }));
     });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
 
@@ -242,7 +242,7 @@ describe('fix round 1 item 6 — only the clicked row shows a loading state whil
     expect(deactivateButtons[1]).not.toHaveAttribute('aria-busy', 'true');
     expect(deactivateButtons[1]).not.toBeDisabled();
 
-    resolveDeactivate?.();
+    resolver.fn?.();
     await waitFor(() => expect(deactivateButtons[0]).not.toHaveAttribute('aria-busy', 'true'));
   });
 });
