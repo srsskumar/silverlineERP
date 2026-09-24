@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -20,6 +20,15 @@ interface DueRow {
   owner_type: string;
   retain_until: string | null;
 }
+
+interface DuePage {
+  data: DueRow[];
+  total: number;
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
+const PAGE_LIMIT = 100;
 
 /**
  * What purge actually does, said plainly everywhere the action is offered
@@ -43,10 +52,17 @@ export function DueForPurgePanel() {
   const qc = useQueryClient();
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [reason, setReason] = React.useState('');
+  const [skippedNotice, setSkippedNotice] = React.useState<number | null>(null);
 
-  const query = useQuery({
+  const query = useInfiniteQuery({
     queryKey: ['documents', 'due-for-purge'],
-    queryFn: async () => (await apiRequestRaw('/api/v1/documents/due-for-purge')).body as { data: DueRow[] },
+    queryFn: async ({ pageParam }) => {
+      const q = new URLSearchParams({ limit: String(PAGE_LIMIT) });
+      if (pageParam) q.set('cursor', pageParam as string);
+      return (await apiRequestRaw(`/api/v1/documents/due-for-purge?${q}`)).body as DuePage;
+    },
+    initialPageParam: undefined as unknown as string | undefined,
+    getNextPageParam: (last) => (last.has_more && last.next_cursor ? last.next_cursor : undefined),
   });
 
   const purge = useMutation({
@@ -55,18 +71,24 @@ export function DueForPurgePanel() {
         method: 'POST',
         body: { ids: Array.from(selected), reason: reason.trim() },
       }),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      const skippedCount = (res.data as { skipped_count?: number } | undefined)?.skipped_count ?? 0;
+      // A clean no-op (fix round 1, item 4): some of what was selected had
+      // already gone (purged from another tab, or by someone else) by the
+      // time this ran. Said plainly rather than left for the reader to
+      // notice the count came back short.
+      setSkippedNotice(skippedCount > 0 ? skippedCount : null);
       setSelected(new Set());
       setReason('');
       qc.invalidateQueries({ queryKey: ['documents'] });
-      query.refetch();
     },
   });
 
   if (query.isLoading) return <Skeleton className="h-64" />;
   if (query.isError) return <ErrorCard error={query.error} onRetry={() => query.refetch()} />;
 
-  const items = query.data?.data ?? [];
+  const items = query.data?.pages.flatMap((p) => p.data) ?? [];
+  const total = query.data?.pages[0]?.total ?? items.length;
   const allChosen = items.length > 0 && items.every((d) => selected.has(d.id));
 
   function toggle(id: string) {
@@ -91,7 +113,7 @@ export function DueForPurgePanel() {
           description="Every document is either still inside its retention period, under legal hold, or superseded by a later revision that still needs it."
         />
       ) : (
-        <Section title={`${items.length} document(s) past retention`}>
+        <Section title={`${total} document(s) past retention`}>
           <TableWrap>
             <Table>
               <THead>
@@ -126,8 +148,22 @@ export function DueForPurgePanel() {
               </TBody>
             </Table>
           </TableWrap>
+          {query.hasNextPage ? (
+            <Button
+              type="button" variant="secondary" loading={query.isFetchingNextPage}
+              onClick={() => query.fetchNextPage()}
+            >
+              Load more
+            </Button>
+          ) : null}
         </Section>
       )}
+
+      {skippedNotice ? (
+        <p className="text-xs text-text-subtle">
+          {skippedNotice} of the selected document(s) had already been purged and {skippedNotice === 1 ? 'was' : 'were'} skipped.
+        </p>
+      ) : null}
 
       {items.length > 0 ? (
         <Card className="space-y-3 p-4">

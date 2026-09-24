@@ -39,7 +39,7 @@ const DUE = {
     { id: 'doc-2', title: 'Old GST registration', type_label: 'GST registration', category: 'STATUTORY',
       owner_type: 'organization', retain_until: '2023-06-01' },
   ],
-  as_of: '2026-09-24', total: 2,
+  as_of: '2026-09-24', total: 2, has_more: false, next_cursor: null,
 };
 
 function jsonResponse(body: unknown, status = 200) {
@@ -61,15 +61,24 @@ beforeEach(() => {
   setTokens('admin-access', 'admin-refresh');
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     const path = stripOrigin(url);
+    // Query strings (e.g. ?limit=100&cursor=...) are stripped before
+    // routing the mock, since due-for-purge is now paginated (fix round 1,
+    // item 4) and always calls with a limit at least.
+    const pathname = path.split('?')[0];
     const method = init?.method ?? 'GET';
-    if (path === '/api/v1/auth/me') return jsonResponse(ME);
-    const key = `${method} ${path}`;
+    if (pathname === '/api/v1/auth/me') return jsonResponse(ME);
+    const key = `${method} ${pathname}`;
     if (handlers[key]) return handlers[key](init);
-    if (path === '/api/v1/documents/due-for-purge') return jsonResponse(DUE);
-    if (path === '/api/v1/documents/purge') {
+    if (pathname === '/api/v1/documents/due-for-purge') return jsonResponse(DUE);
+    if (pathname === '/api/v1/documents/purge') {
       const body = init?.body ? JSON.parse(String(init.body)) : null;
       sent.push({ path, method, body });
-      return jsonResponse({ data: { purged: [], reason: body?.reason, purged_count: (body?.ids ?? []).length } });
+      return jsonResponse({
+        data: {
+          purged: [], skipped: [], reason: body?.reason,
+          purged_count: (body?.ids ?? []).length, skipped_count: 0,
+        },
+      });
     }
     return jsonResponse({ data: [] });
   }));
@@ -154,8 +163,28 @@ describe('DueForPurgePanel', () => {
   });
 
   it('shows nothing to purge when the report is empty', async () => {
-    handlers['GET /api/v1/documents/due-for-purge'] = () => jsonResponse({ data: [], as_of: '2026-09-24', total: 0 });
+    handlers['GET /api/v1/documents/due-for-purge'] = () =>
+      jsonResponse({ data: [], as_of: '2026-09-24', total: 0, has_more: false, next_cursor: null });
     mount(<DueForPurgePanel />);
     expect(await screen.findByText('Nothing is due for purge')).toBeInTheDocument();
+  });
+
+  it('offers Load more when there is another page, and shows the skipped count after a partial no-op purge (fix round 1, item 4)', async () => {
+    handlers['GET /api/v1/documents/due-for-purge'] = () =>
+      jsonResponse({ ...DUE, has_more: true, next_cursor: 'CURSOR1' });
+    handlers['POST /api/v1/documents/purge'] = () => jsonResponse({
+      data: { purged: [{ id: 'doc-1' }], skipped: [{ id: 'doc-2', reason: 'Already purged' }],
+        purged_count: 1, skipped_count: 1, reason: 'Sweep' },
+    });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mount(<DueForPurgePanel />);
+
+    expect(await screen.findByRole('button', { name: 'Load more' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select Old labour licence' }));
+    fireEvent.change(screen.getByLabelText(/Reason for purging/), { target: { value: 'Sweep' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Purge selected' }));
+
+    expect(await screen.findByText(/1 of the selected document\(s\) had already been purged/)).toBeInTheDocument();
   });
 });

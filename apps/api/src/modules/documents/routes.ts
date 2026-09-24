@@ -8,8 +8,10 @@ import {
   type DocumentOwner,
   businessDay,
   ApiError,
+  cursorPageQuerySchema, encodeCursor, decodeCursor,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
+import { orgTodaySql } from '../../common/orgTime.js';
 import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
 
 /**
@@ -34,6 +36,19 @@ export async function registerDocumentRoutes(
   const today = () => businessDay();
   const iso = (v: unknown) =>
     v instanceof Date ? v.toISOString().slice(0, 10) : v ? String(v).slice(0, 10) : null;
+
+  /**
+   * "Today", in this organisation's own configured timezone -- not
+   * businessDay()'s hardcoded Asia/Kolkata default (policy batch fix round
+   * 1, item 4). Purge is the one place in this file where getting the day
+   * wrong crosses the line from cosmetic to destructive: a document
+   * treated as due a day early is a document deleted a day early.
+   */
+  async function orgToday(db: Pool | PoolClient, orgId: string): Promise<string> {
+    const r = await db.query(
+      `SELECT to_char(${orgTodaySql('$1')}, 'YYYY-MM-DD') AS today`, [orgId]);
+    return String(r.rows[0].today);
+  }
 
   /**
    * The register row as the application sees it.
@@ -482,7 +497,9 @@ export async function registerDocumentRoutes(
    * this list and confirmed.
    */
   app.get('/api/v1/documents/due-for-purge', { preHandler: guard('document.delete') }, async req => {
-    const u = actor(req), asOf = today();
+    const u = actor(req);
+    const { limit, cursor } = parse(cursorPageQuerySchema, req.query);
+    const asOf = await orgToday(pool, u.orgId);
     const rows = (await pool.query(`${SELECT} WHERE d.org_id = $1`, [u.orgId])).rows;
     const due = rows
       .map(r => ({
@@ -496,7 +513,7 @@ export async function registerDocumentRoutes(
       }))
       .filter(d => d.retention.deletable && !d.hasSuccessor)
       .map(d => ({
-        id: d.row.id,
+        id: String(d.row.id),
         title: d.row.title,
         type_code: d.row.type_code,
         type_label: d.row.type_label,
@@ -508,8 +525,37 @@ export async function registerDocumentRoutes(
         expires_on: iso(d.row.expires_on),
         retain_until: d.retention.retainUntil ?? null,
       }))
-      .sort((a, b) => String(a.retain_until).localeCompare(String(b.retain_until)));
-    return { data: due, as_of: asOf, total: due.length };
+      .sort((a, b) => {
+        const byDate = String(a.retain_until).localeCompare(String(b.retain_until));
+        return byDate !== 0 ? byDate : a.id.localeCompare(b.id);
+      });
+
+    // Cursor pagination (fix round 1, item 4): an org whose statutory
+    // documents span years of retained licences could hand back thousands
+    // of rows in one response otherwise. Cursor, not offset, so a purge
+    // between page loads cannot shift the page boundary under the reader.
+    let page = due;
+    if (cursor) {
+      const decoded = decodeCursor<{ retain_until: string; id: string }>(cursor);
+      if (decoded) {
+        page = due.filter(d => {
+          const cmp = String(d.retain_until).localeCompare(decoded.retain_until);
+          return cmp > 0 || (cmp === 0 && d.id > decoded.id);
+        });
+      }
+    }
+    const hasMore = page.length > limit;
+    const items = page.slice(0, limit);
+    const last = items[items.length - 1];
+    return {
+      data: items,
+      as_of: asOf,
+      total: due.length,
+      has_more: hasMore,
+      next_cursor: hasMore && last
+        ? encodeCursor({ retain_until: String(last.retain_until), id: last.id })
+        : null,
+    };
   });
 
   /**
@@ -536,11 +582,25 @@ export async function registerDocumentRoutes(
           WHERE d.id = ANY($1::uuid[]) AND d.org_id = $2 FOR UPDATE OF d`,
         [ids, u.orgId])).rows;
 
+      const asOf = await orgToday(db, u.orgId);
       const foundIds = new Set(rows.map(r => String(r.id)));
-      const refused: Array<{ field: string; message: string }> = ids
+      /*
+       * An id this org's register does not currently hold -- already
+       * purged, never existed, or (indistinguishably, on purpose) another
+       * organisation's -- is a clean no-op, not a reason to refuse ids in
+       * the same request that DO qualify (fix round 1, item 4): retrying a
+       * purge that partly landed, or a stale selection with one row someone
+       * else already purged, should not have to be refused and reattempted
+       * by hand. It is still reported, with a reason, never silently.
+       */
+      const skipped: Array<{ id: string; reason: string }> = ids
         .filter(id => !foundIds.has(id))
-        .map(id => ({ field: id, message: 'Not found' }));
+        .map(id => ({ id, reason: 'Not found -- already purged, or never on this register' }));
 
+      // Legal hold, not-yet-due and superseded stay all-or-nothing: those
+      // are live business refusals the admin needs to see and act on, not
+      // ids that can be quietly dropped from the batch.
+      const refused: Array<{ field: string; message: string }> = [];
       for (const row of rows) {
         if (row.successor_id) {
           refused.push({
@@ -552,7 +612,7 @@ export async function registerDocumentRoutes(
         const check = canDelete({
           issuedOn: iso(row.issued_on), expiresOn: iso(row.expires_on),
           retentionYears: Number(row.retention_years), legalHold: Boolean(row.legal_hold),
-          asOf: today(),
+          asOf,
         });
         if (!check.deletable) {
           refused.push({ field: String(row.id), message: check.reason ?? 'Not yet due for purge' });
@@ -586,8 +646,13 @@ export async function registerDocumentRoutes(
         basis: r.basis ?? null,
         retain_until: r.retain_until ?? null,
       }));
-      await db.query('DELETE FROM documents WHERE id = ANY($1::uuid[])', [ids]);
-      return { purged, reason: input.reason, purged_by: u.id, purged_count: purged.length };
+      if (purged.length > 0) {
+        await db.query('DELETE FROM documents WHERE id = ANY($1::uuid[])', [rows.map(r => r.id)]);
+      }
+      return {
+        purged, skipped, reason: input.reason, purged_by: u.id,
+        purged_count: purged.length, skipped_count: skipped.length,
+      };
     });
     return { data: result };
   });

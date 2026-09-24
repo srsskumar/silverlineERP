@@ -506,6 +506,104 @@ describe("due-for-purge report and explicit purge (owner decision 2026-09-24 #3)
       { ids: [due.id], reason: "Should be refused" });
     expect(purge.status).toBe(403);
   });
+
+  it("computes 'today' in the organisation's own timezone, not a fixed default (fix round 1, item 4)", async () => {
+    // Same D-006/orgTodaySql pattern audit-filters.test.ts uses to pin this
+    // down: the route has to read organizations.settings->>'timezone' for
+    // *this* org, not fall back to a hardcoded Asia/Kolkata default the way
+    // businessDay() (with no timezone argument) silently did.
+    await w.pool.query(
+      `UPDATE organizations SET settings = settings || '{"timezone":"Pacific/Kiritimati"}'::jsonb WHERE id = $1`,
+      [w.orgId],
+    );
+    try {
+      const expected = (await w.pool.query(
+        `SELECT to_char((now() AT TIME ZONE 'Pacific/Kiritimati')::date, 'YYYY-MM-DD') AS today`,
+      )).rows[0].today;
+      const r = await get(w.admin, "/api/v1/documents/due-for-purge");
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.data.as_of).toBe(expected);
+    } finally {
+      await w.pool.query(
+        `UPDATE organizations SET settings = settings || '{"timezone":"Asia/Kolkata"}'::jsonb WHERE id = $1`,
+        [w.orgId],
+      );
+    }
+  });
+
+  it("paginates with a cursor, at most `limit` rows a page (fix round 1, item 4)", async () => {
+    // Earlier tests in this file leave their own never-purged "due" rows
+    // behind on purpose (a refused batch purges nothing), so the org's due
+    // list is already longer than 2 by the time this runs -- walking every
+    // page with limit=1 until exhausted proves real pagination regardless
+    // of exactly how many rows that turns out to be, rather than assuming
+    // only these two documents exist.
+    const first = await orgDoc({ expires_on: dayOffset(-365 * 4), title: `Purge page A ${uniq()}` });
+    const second = await orgDoc({ expires_on: dayOffset(-365 * 4), title: `Purge page B ${uniq()}` });
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    for (let guard = 0; guard < 200; guard += 1) {
+      const url = "/api/v1/documents/due-for-purge?limit=1"
+        + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
+      const page = await get(w.admin, url);
+      expect(page.status, JSON.stringify(page.body)).toBe(200);
+      expect(page.data.data.length).toBeLessThanOrEqual(1);
+      pages += 1;
+      for (const d of page.data.data) seen.push(d.id);
+      if (!page.data.has_more) break;
+      cursor = page.data.next_cursor;
+      expect(typeof cursor).toBe("string");
+    }
+    expect(pages).toBeGreaterThan(1);
+    expect(new Set(seen).size).toBe(seen.length); // no id repeated across pages
+    expect(seen).toContain(first.id);
+    expect(seen).toContain(second.id);
+  });
+
+  it("refuses a limit over 100", async () => {
+    const r = await get(w.admin, "/api/v1/documents/due-for-purge?limit=101");
+    expect(r.status).toBe(422);
+  });
+
+  it("treats a second purge of an already-purged id as a clean no-op, not a 409 for the whole batch (fix round 1, item 4)", async () => {
+    const already = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const first = await post(w.admin, "/api/v1/documents/purge",
+      { ids: [already.id], reason: "First purge" });
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+
+    const next = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const second = await post(w.admin, "/api/v1/documents/purge",
+      { ids: [already.id, next.id], reason: "Retry with one already gone" });
+    expect(second.status, JSON.stringify(second.body)).toBe(200);
+    expect(second.data.purged_count).toBe(1);
+    expect(second.data.purged[0].id).toBe(next.id);
+    expect(second.data.skipped).toHaveLength(1);
+    expect(second.data.skipped[0]).toMatchObject({ id: already.id });
+    expect(second.data.skipped[0].reason).toBeTruthy();
+
+    expect((await get(w.admin, `/api/v1/documents/${next.id}`)).status).toBe(404);
+  });
+
+  it("never touches, or blocks a batch on, another organisation's document id (fix round 1, item 4)", async () => {
+    const otherDoc = await post(w.other.admin, "/api/v1/documents", {
+      type_code: "LABOUR_LICENCE", owner_type: "organization",
+      title: `Other org licence ${uniq()}`, expires_on: dayOffset(-365 * 4),
+    });
+    expect(otherDoc.status, JSON.stringify(otherDoc.body)).toBe(201);
+    const own = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+
+    const r = await post(w.admin, "/api/v1/documents/purge",
+      { ids: [own.id, otherDoc.data.id], reason: "Cross-org id in the batch" });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.purged_count).toBe(1);
+    expect(r.data.purged[0].id).toBe(own.id);
+    expect(r.data.skipped.map((s: any) => s.id)).toContain(otherDoc.data.id);
+
+    const stillThere = await get(w.other.admin, `/api/v1/documents/${otherDoc.data.id}`);
+    expect(stillThere.status).toBe(200);
+  });
 });
 
 describe("§46.6.3 confidentiality", () => {
