@@ -29,6 +29,13 @@ interface PreviewRow {
   error: string | null;
 }
 
+/** The date column exactly as typed or pasted, not reformatted — this is a
+ *  preview of what the row says, not a value read back from the API, so it
+ *  is not what day()/dayTime() are for. */
+function typedValueDate(row: PreviewRow): string {
+  return row.raw.value_date || '—';
+}
+
 /**
  * Bank statement CSV import (§45.4).
  *
@@ -167,7 +174,7 @@ export function BankImportForm({ onImported }: { onImported?: (summary: BankImpo
                     <TR key={r.rowNumber}>
                       <TD mono tone="muted">{r.rowNumber}</TD>
                       <TD mono>{r.raw.statement_ref || '—'}</TD>
-                      <TD tone="muted">{r.raw.value_date || '—'}</TD>
+                      <TD tone="muted">{typedValueDate(r)}</TD>
                       <TD className="text-right tabular-nums">{r.raw.amount || '—'}</TD>
                       <TD tone="muted">{r.raw.narration || '—'}</TD>
                       <TD tone="muted">{r.raw.bank_account || '—'}</TD>
