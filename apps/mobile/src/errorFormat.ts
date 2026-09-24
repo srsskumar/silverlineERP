@@ -11,6 +11,16 @@
  * date or left a required field blank saw "Validation failed" and nothing
  * else, with no way to tell what to fix.
  *
+ * Task 5d: this used to be two copies — this one, and src/sync/queueCore.ts's
+ * own `describeRequestError` — which had drifted: the queue's version also
+ * prefixed the raw `code` ("DATE_RANGE: ...") and every field message with
+ * its snake_case field name ("to_date: to_date must be on or after
+ * from_date"), stuttering over field_errors' messages, which are already
+ * humanised server-side ("Title is required", not "must provide title").
+ * Both the five direct-call screens and the offline-queue's sync screen
+ * (app/(tabs)/more.tsx, showing a FAILED row's `error` column verbatim) now
+ * go through this one helper.
+ *
  * Dependency-free like validators.ts/rbac.ts — takes a structural shape
  * rather than importing the ApiError class, so this stays importable from
  * plain node:test with no Expo/RN runtime.
@@ -32,12 +42,10 @@ function isApiErrorLike(e: unknown): e is ApiErrorLike {
 export function describeApiError(e: unknown, fallback: string): string {
   if (isApiErrorLike(e)) {
     if (e.fieldErrors && e.fieldErrors.length > 0) {
-      return e.fieldErrors
-        .map((f) => (f.field ? `${f.field}: ${f.message}` : f.message))
-        .join("\n");
+      const messages = e.fieldErrors.map((f) => f.message).filter((m) => m.trim().length > 0);
+      if (messages.length > 0) return messages.join("\n");
     }
     return e.message || fallback;
   }
-  if (e instanceof Error) return e.message;
   return fallback;
 }

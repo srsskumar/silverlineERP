@@ -18,6 +18,7 @@
 
 import { classifySyncResponse, resolveOutcome } from "../api/sync";
 import { nextAttemptDelayMs } from "../api/retryAfter";
+import { describeApiError } from "../errorFormat";
 import {
   computeBackoffMs,
   dedupeKey,
@@ -65,18 +66,6 @@ export interface QueueDatabase {
  runAsync(sql:string,params:(string|number|null)[]):Promise<unknown>;
 }
 type RequestError=Error&{status:number;retryable:boolean;code:string;retryAfterMs?:number|null;fieldErrors?:{field:string;message:string}[]};
-
-/**
- * What the server said, in the words it said it. The code alone
- * ("VALIDATION_ERROR") told a person at a leave form nothing about which date
- * was wrong; the field errors are where that is.
- */
-export function describeRequestError(err: RequestError): string {
-  const fields = (err.fieldErrors ?? [])
-    .map((f) => `${f.field}: ${f.message}`)
-    .join("; ");
-  return fields ? `${err.code}: ${err.message} (${fields})` : `${err.code}: ${err.message}`;
-}
 
 /**
  * The server's review verdict on a delivered operation, kept on the row.
@@ -296,18 +285,13 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
     } catch (err) {
       if (isApiError(err) && !err.retryable && err.status !== 401) {
         result.failed += 1;
-        await update(op.client_uuid, { state: "FAILED", decision: err.status === 409 ? "CONFLICT" : "REJECTED", error: describeRequestError(err) });
+        await update(op.client_uuid, { state: "FAILED", decision: err.status === 409 ? "CONFLICT" : "REJECTED", error: describeApiError(err, err.message) });
         continue;
       }
       // Transport failure (network down, timeout) or a server that asked us
       // to wait (429, 503): back off, keep op.
       const retryCount = op.retry_count + 1;
-      const message =
-        isApiError(err)
-          ? describeRequestError(err)
-          : err instanceof Error
-            ? err.message
-            : "unknown error";
+      const message = describeApiError(err, "unknown error");
       if (maxRetriesExceeded(retryCount, MAX_QUEUE_RETRIES)) {
         result.failed += 1;
         await update(op.client_uuid, {

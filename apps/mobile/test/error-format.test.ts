@@ -23,7 +23,7 @@ function apiError(fields: Partial<ApiErrorLike> & { message: string }): ApiError
  * any mobile form saw only "Validation failed", never which field or why.
  */
 
-test("describeApiError prefers field errors over the generic top-level message", () => {
+test("describeApiError prefers field errors over the generic top-level message, without a snake_case field prefix", () => {
   const e = apiError({
     message: "Validation failed",
     fieldErrors: [
@@ -33,7 +33,7 @@ test("describeApiError prefers field errors over the generic top-level message",
   });
   assert.equal(
     describeApiError(e, "Quick-add failed"),
-    "project_id: project_id must be a UUID\ntitle: Title is required",
+    "project_id must be a UUID\nTitle is required",
   );
 });
 
@@ -57,4 +57,12 @@ test("describeApiError skips a blank field name instead of printing 'undefined: 
     fieldErrors: [{ field: "", message: "Idempotency-Key header with a valid UUID is required" }],
   });
   assert.equal(describeApiError(e, "fallback"), "Idempotency-Key header with a valid UUID is required");
+});
+
+test("describeApiError joins several field messages without any error code prefix", () => {
+  const e = apiError({
+    message: "Validation failed",
+    fieldErrors: [{ field: "to_date", message: "to_date must be on or after from_date" }],
+  });
+  assert.equal(describeApiError(e, "fallback"), "to_date must be on or after from_date");
 });

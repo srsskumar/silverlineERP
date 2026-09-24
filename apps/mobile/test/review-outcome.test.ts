@@ -17,11 +17,11 @@ import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import {
   createQueue,
-  describeRequestError,
   reviewMessage,
   reviewNote,
   type QueueDatabase,
 } from "../src/sync/queueCore";
+import { describeApiError } from "../src/errorFormat";
 import { SCHEMA_SQL } from "../src/sync/schema";
 
 type RequestError = Error & {
@@ -161,17 +161,17 @@ describe("a refused operation", () => {
     const saved = row(op.client_uuid);
     assert.equal(saved.state, "FAILED");
     assert.equal(saved.decision, "REJECTED");
-    assert.equal(
-      saved.error,
-      "DATE_RANGE: from_date must be on or before to_date (to_date: to_date must be on or after from_date)",
-    );
+    assert.equal(saved.error, "to_date must be on or after from_date");
     db.close();
   });
 
   it("says only what it has when there are no field errors", () => {
     assert.equal(
-      describeRequestError(requestError({ status: 404, code: "NOT_FOUND", message: "Leave type not found", retryable: false })),
-      "NOT_FOUND: Leave type not found",
+      describeApiError(
+        requestError({ status: 404, code: "NOT_FOUND", message: "Leave type not found", retryable: false }),
+        "Request failed",
+      ),
+      "Leave type not found",
     );
   });
 });
