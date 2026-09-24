@@ -49,3 +49,13 @@ export function oldestBucket(buckets: AgeingBucketsLike): keyof AgeingBucketsLik
   }
   return null;
 }
+
+/**
+ * Colour a payment run's own status badge (B-002). Mirrors PAYMENT_RUN_STATES
+ * (packages/shared/src/ledgers.ts): DRAFT/APPROVED/PAID/CANCELLED.
+ */
+export function paymentRunTone(status: string): "success" | "warning" | "neutral" {
+  if (status === "PAID" || status === "APPROVED") return "success";
+  if (status === "CANCELLED") return "neutral";
+  return "warning";
+}

@@ -1010,3 +1010,15 @@ export const advanceSchema = z.object({
   remarks: optionalText(1000),
 });
 export type AdvanceFormInput = z.infer<typeof advanceSchema>;
+
+/** POST /api/v1/payment-runs/:id/execute (B-002) — mirrors paymentRunExecuteSchema. */
+export const paymentRunExecuteSchema = z.object({
+  paid_on: dateString('Paid-on date must be YYYY-MM-DD'),
+  bank_reference: z
+    .string()
+    .trim()
+    .min(1, 'Enter the bank reference (UTR/cheque number)')
+    .max(100, 'Bank reference must be at most 100 characters'),
+  note: optionalText(1000),
+});
+export type PaymentRunExecuteFormInput = z.infer<typeof paymentRunExecuteSchema>;

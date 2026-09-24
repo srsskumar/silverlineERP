@@ -1009,6 +1009,45 @@ export async function postExpenseClaimWithdraw(
   return asItem<ExpenseClaim>(data, "data");
 }
 
+/** One uploaded receipt's own row (B-003) — bytes are fetched separately. */
+export interface ExpenseReceipt {
+  id: string;
+  file_name: string;
+  file_size: number;
+  mime_type?: string | null;
+  checksum: string;
+  created_at: string;
+}
+
+export async function getExpenseReceipts(claimId: string): Promise<ExpenseReceipt[]> {
+  const { data } = await cachedRead(`expense-receipts:${claimId}`, () =>
+    apiFetch<{ data?: ExpenseReceipt[] }>(`/api/v1/expense-claims/${claimId}/receipts`));
+  return asList<ExpenseReceipt>(data);
+}
+
+export async function postExpenseReceipt(
+  claimId: string,
+  input: { file_name: string; content_base64: string },
+  idempotencyKey?: string,
+): Promise<ExpenseReceipt> {
+  const { data } = await apiFetch(`/api/v1/expense-claims/${claimId}/receipts`, {
+    method: "POST",
+    idempotencyKey,
+    body: input,
+  });
+  return asItem<ExpenseReceipt>(data, "data");
+}
+
+export async function deleteExpenseReceipt(claimId: string, receiptId: string): Promise<void> {
+  await apiFetch(`/api/v1/expense-claims/${claimId}/receipts/${receiptId}`, { method: "DELETE" });
+}
+
+/** Raw bytes for View/Save (api/client.ts unwraps image/pdf content types). */
+export async function getExpenseReceiptFile(claimId: string, receiptId: string): Promise<Uint8Array> {
+  const { data } = await apiFetch<Uint8Array>(`/api/v1/expense-claims/${claimId}/receipts/${receiptId}/download`);
+  return data;
+}
+
 // --- Inventory (§0 stock ledger) ----------------------------------------------
 
 export interface InventoryItem {
@@ -1574,6 +1613,38 @@ export async function getApAgeing(params?: { as_of?: string }): Promise<ApAgeing
   const { data } = await cachedRead(`getApAgeing:${suffix}`, () =>
     apiFetch<{ data?: ApAgeing }>(`/api/v1/ap/ageing${suffix}`));
   return asItem<ApAgeing>(data, "data");
+}
+
+/**
+ * A payment run's own header — release status and, once PAID (B-002), the
+ * bank reference and date it settled on. Mobile is read-only here: executing
+ * a run is a desk job with the full ledger in front of it, not a phone
+ * lookup, and the web payables page is where "Execute payment" lives.
+ */
+export interface PaymentRun {
+  id: string;
+  run_no: string;
+  run_date: string;
+  due_through: string;
+  status: "DRAFT" | "APPROVED" | "PAID" | "CANCELLED" | string;
+  total_amount: number | string;
+  line_count?: number;
+  approved_by_username?: string | null;
+  paid_on?: string | null;
+  bank_reference?: string | null;
+  version: number;
+  [k: string]: unknown;
+}
+
+export async function getPaymentRuns(
+  params?: { status?: string },
+): Promise<{ items: PaymentRun[]; hasMore: boolean }> {
+  const q = new URLSearchParams({ limit: "50" });
+  if (params?.status) q.set("status", params.status);
+  const { data } = await cachedRead(`getPaymentRuns:${q.toString()}`, () =>
+    apiFetch<{ data?: PaymentRun[]; has_more?: boolean }>(`/api/v1/payment-runs?${q.toString()}`));
+  const body = data as { data?: PaymentRun[]; has_more?: boolean } | null;
+  return { items: body?.data ?? [], hasMore: body?.has_more ?? false };
 }
 
 // --- Procurement (§6.6, §13.2, §43) ------------------------------------------

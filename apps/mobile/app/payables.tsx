@@ -4,16 +4,18 @@
  * Reads the same ageing summary the web page does, led by the vendor list
  * with each vendor's invoices embedded in the same response. MSME interest —
  * a real, non-deductible liability whether or not anyone records it — gets
- * its own line, same as the web. Read-only: releasing a payment run is a desk
- * job with the full ledger in front of it, not a phone lookup.
+ * its own line, same as the web. Read-only: building and releasing a payment
+ * run stay a desk job with the full ledger in front of it, not a phone
+ * lookup — and so does executing one (B-002): this screen only shows a run's
+ * status, and once PAID, the bank reference and date it settled on.
  */
 import { router } from "expo-router";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Modal } from "react-native";
 import { useAuth } from "../src/auth/AuthContext";
-import { getApAgeing, type ApVendor } from "../src/api/endpoints";
-import { oldestBucket, partyTone, AGEING_BUCKET_LABELS } from "../src/ledgersFormat";
+import { getApAgeing, getPaymentRuns, type ApVendor } from "../src/api/endpoints";
+import { oldestBucket, partyTone, paymentRunTone, AGEING_BUCKET_LABELS } from "../src/ledgersFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
 import {
   BackHeader,
@@ -42,6 +44,7 @@ function money(v: number | string | undefined | null): string {
 function PayablesScreen() {
   const { canDo } = useAuth();
   const canRead = canDo("ap.read");
+  const canReadRuns = canDo("paymentrun.read");
   const [selected, setSelected] = useState<ApVendor | null>(null);
 
   const ageing = useQuery({
@@ -50,8 +53,15 @@ function PayablesScreen() {
     enabled: canRead,
   });
 
+  const runs = useQuery({
+    queryKey: ["payment-runs"],
+    queryFn: () => getPaymentRuns(),
+    enabled: canReadRuns,
+  });
+
   const data = ageing.data;
   const vendors = data?.vendors ?? [];
+  const paymentRuns = runs.data?.items ?? [];
 
   return (
     <Screen>
@@ -103,6 +113,33 @@ function PayablesScreen() {
               })
             )}
           </Card>
+
+          {canReadRuns ? (
+            <>
+              <SectionLabel>Payment runs</SectionLabel>
+              <Card>
+                {runs.isLoading ? (
+                  <Loading />
+                ) : paymentRuns.length === 0 ? (
+                  <EmptyState icon="card-outline" title="No payment runs yet" />
+                ) : (
+                  paymentRuns.map((r, i, arr) => (
+                    <ListRow
+                      key={r.id}
+                      title={`${r.run_no} · ${money(r.total_amount)}`}
+                      subtitle={
+                        r.status === "PAID" && r.paid_on
+                          ? `Paid ${day(r.paid_on)}${r.bank_reference ? ` · ${r.bank_reference}` : ""}`
+                          : `Run date ${day(r.run_date)}`
+                      }
+                      right={<Badge text={r.status} tone={paymentRunTone(r.status)} />}
+                      last={i === arr.length - 1}
+                    />
+                  ))
+                )}
+              </Card>
+            </>
+          ) : null}
         </>
       )}
 

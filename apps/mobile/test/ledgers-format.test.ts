@@ -4,7 +4,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { AGEING_BUCKET_LABELS, oldestBucket, partyTone } from "../src/ledgersFormat";
+import { AGEING_BUCKET_LABELS, oldestBucket, partyTone, paymentRunTone } from "../src/ledgersFormat";
 
 const buckets = { NOT_DUE: 0, D1_30: 0, D31_60: 0, D61_90: 0, OVER_90: 0 };
 
@@ -42,5 +42,17 @@ describe("AGEING_BUCKET_LABELS", () => {
     for (const key of Object.keys(buckets)) {
       assert.equal(typeof AGEING_BUCKET_LABELS[key as keyof typeof buckets], "string");
     }
+  });
+});
+
+describe("paymentRunTone (B-002)", () => {
+  it("reads PAID the same as APPROVED — both mean the money is settled", () => {
+    assert.equal(paymentRunTone("PAID"), "success");
+    assert.equal(paymentRunTone("APPROVED"), "success");
+  });
+
+  it("is neutral once cancelled and warning while still a draft", () => {
+    assert.equal(paymentRunTone("CANCELLED"), "neutral");
+    assert.equal(paymentRunTone("DRAFT"), "warning");
   });
 });

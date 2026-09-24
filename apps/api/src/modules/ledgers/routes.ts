@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import {
-  paymentRunSchema, runDecisionSchema, payableHoldSchema,
+  paymentRunSchema, runDecisionSchema, payableHoldSchema, paymentRunExecuteSchema,
   ageOutstanding, payableDue, msmeInterestOn, creditExposure, daysSalesOutstanding,
   selectForRun, matchAllowsPayment, PAYMENT_RUN_TRANSITIONS,
   type PayableCandidate, type PaymentRunState, type AgeingItem,
@@ -569,6 +569,69 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
           `UPDATE payment_runs SET status='APPROVED', approved_at=now(), approved_by=$2,
              version=version+1, updated_at=now(), updated_by=$2 WHERE id=$1 RETURNING *`,
           [id, u.id])).rows[0];
+      }),
+    };
+  });
+
+  /**
+   * Execute an approved run (§58.3.4, B-002): the bank was told to pay it,
+   * and every line settles the same way a manual receipt against a payable
+   * already does — one `payments` row and one `payment_allocations` row per
+   * line, not a second ledger invented for this one path.
+   *
+   * Re-runs the same staleness check APPROVE does, locked again: a run built
+   * one day and approved the next can still have had an invoice disputed,
+   * held, or part-paid by hand in between, and paying it as it stood would
+   * pay it wrong. Refused whole, inside the same transaction as every
+   * allocation below, so a problem found on line three leaves not one of
+   * them written.
+   */
+  app.post('/api/v1/payment-runs/:id/execute', { preHandler: guard('paymentrun.approve') }, async req => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const input = parse(paymentRunExecuteSchema, req.body);
+    return {
+      data: await mutate(pool, req, 'paymentrun.execute', 'payment_run', async db => {
+        const run = await inOrg(db, 'payment_runs', id, u.orgId, true);
+        version(req, run as { version: number });
+        if (!(PAYMENT_RUN_TRANSITIONS[run.status as PaymentRunState] ?? []).includes('PAID')) {
+          fail('INVALID_TRANSITION', `A ${String(run.status).toLowerCase()} run cannot be executed`);
+        }
+        if (String(run.created_by) === u.id) {
+          // Same rule as release, restated: building a batch and paying it
+          // single-handed is how money reaches an unintended account.
+          fail('SELF_APPROVAL', 'The person who built a run cannot also execute it', 403);
+        }
+        const problems = await staleLines(db, u.orgId, run);
+        if (problems.length) {
+          fail('RUN_OUT_OF_DATE',
+            `This run no longer matches the ledger: ${problems.map(p => p.reason).join('; ')}. Cancel it and build a new one.`,
+            409);
+        }
+
+        const lines = (await db.query(
+          'SELECT * FROM payment_run_lines WHERE run_id = $1 ORDER BY id', [id])).rows;
+        let seq = 0;
+        for (const line of lines) {
+          seq += 1;
+          const paymentNo = `PR-${String(run.id).slice(0, 8)}-${seq}`;
+          const payment = (await db.query(
+            `INSERT INTO payments(org_id, created_by, payment_no, direction, paid_on, amount, mode,
+               reference, party_type, party_id, bank_account, notes)
+             VALUES($1,$2,$3,'PAYABLE',$4,$5,'NEFT',$6,'VENDOR',$7,$8,$9) RETURNING id`,
+            [u.orgId, u.id, paymentNo, input.paid_on, line.amount, input.bank_reference,
+             line.party_id, run.bank_account ?? null, input.note ?? null])).rows[0];
+          await db.query(
+            `INSERT INTO payment_allocations(org_id, created_by, payment_id, document_type, document_id, amount)
+             VALUES($1,$2,$3,$4,$5,$6)`,
+            [u.orgId, u.id, payment.id, line.document_type, line.document_id, line.amount]);
+          await db.query('UPDATE payment_run_lines SET payment_id = $2 WHERE id = $1', [line.id, payment.id]);
+        }
+
+        return (await db.query(
+          `UPDATE payment_runs SET status='PAID', paid_on=$2, bank_reference=$3, execution_note=$4,
+             executed_at=now(), executed_by=$5, version=version+1, updated_at=now(), updated_by=$5
+           WHERE id=$1 RETURNING *`,
+          [id, input.paid_on, input.bank_reference, input.note ?? null, u.id])).rows[0];
       }),
     };
   });

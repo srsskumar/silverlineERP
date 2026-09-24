@@ -482,3 +482,14 @@ export const payableHoldSchema = z.object({
     });
   }
 });
+
+/**
+ * Execute an approved run (§58.3.4, B-002): moves it from APPROVED to PAID
+ * and settles every line. The bank reference is the one fact worth recording
+ * that the run itself could not know before the money actually left.
+ */
+export const paymentRunExecuteSchema = z.object({
+  paid_on: dateString,
+  bank_reference: text.max(100),
+  note: z.string().trim().max(1000).optional(),
+});

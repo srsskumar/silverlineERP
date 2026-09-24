@@ -63,6 +63,18 @@ async function receipt(billId: string, amount: number, paidOn: string) {
   expect(alloc.status, JSON.stringify(alloc.body)).toBe(201);
 }
 
+/** A manual payment settling a vendor invoice, outside any payment run. */
+async function payInvoiceByHand(invoiceId: string, amount: number, paidOn: string) {
+  const payment = await post(w.admin, "/api/v1/payments", {
+    direction: "PAYABLE", payment_no: uniq("PAY"), paid_on: paidOn, amount, mode: "NEFT",
+  });
+  expect(payment.status, JSON.stringify(payment.body)).toBe(201);
+  const alloc = await post(w.admin, `/api/v1/payments/${payment.data.id}/allocations`, {
+    document_type: "VENDOR_INVOICE", document_id: invoiceId, amount,
+  });
+  expect(alloc.status, JSON.stringify(alloc.body)).toBe(201);
+}
+
 async function ver(table: string, id: string): Promise<Headers> {
   const r = await w.pool.query(`SELECT version FROM ${table} WHERE id = $1`, [id]);
   return { "if-match": String(r.rows[0].version) };
@@ -243,6 +255,142 @@ describe("payment run", () => {
       { ...w.role.PAYROLL_OFFICER, ...(await ver("payment_runs", runs.data[0].id)) },
       `/api/v1/payment-runs/${runs.data[0].id}/decision`, { action: "APPROVE" });
     expect(res.status).toBe(403);
+  });
+});
+
+describe("execute a payment run (B-002)", () => {
+  it("settles the invoice, posts the payment and writes the audit", async () => {
+    const inv = await invoice({ total: 55500, due_date: "2026-01-01" });
+    const built = await buildRun(w.role.PAYROLL_OFFICER);
+    expect(built.ids).toContain(inv.id);
+
+    const approve = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/decision`, { action: "APPROVE" });
+    expect(approve.status, JSON.stringify(approve.body)).toBe(200);
+
+    const exec = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/execute`,
+      { paid_on: "2026-09-16", bank_reference: "UTR12345678" });
+    expect(exec.status, JSON.stringify(exec.body)).toBe(200);
+    expect(exec.data.status).toBe("PAID");
+    expect(exec.data.paid_on).toBe("2026-09-16");
+    expect(exec.data.bank_reference).toBe("UTR12345678");
+
+    const settlement = await get(w.admin, `/api/v1/documents/vendor_invoice/${inv.id}/settlement`);
+    expect(settlement.status, JSON.stringify(settlement.body)).toBe(200);
+    expect(settlement.data.outstanding).toBeLessThanOrEqual(0.005);
+
+    const line = await w.pool.query(
+      "SELECT payment_id FROM payment_run_lines WHERE run_id = $1 AND document_id = $2",
+      [built.run.id, inv.id]);
+    expect(line.rows[0].payment_id).toBeTruthy();
+
+    const audit = await w.pool.query(
+      "SELECT count(*)::int AS n FROM audit_events WHERE action = 'paymentrun.execute' AND entity_id = $1",
+      [built.run.id]);
+    expect(audit.rows[0].n).toBe(1);
+  });
+
+  it("refuses a run that is still a draft", async () => {
+    const built = await buildRun(w.role.PAYROLL_OFFICER);
+    const res = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/execute`,
+      { paid_on: "2026-09-16", bank_reference: "UTR-DRAFT" });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("INVALID_TRANSITION");
+  });
+
+  it("refuses a cancelled run", async () => {
+    const built = await buildRun(w.role.PAYROLL_OFFICER);
+    const cancel = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/decision`, { action: "CANCEL", reason: "Superseded" });
+    expect(cancel.status, JSON.stringify(cancel.body)).toBe(200);
+    const res = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/execute`,
+      { paid_on: "2026-09-16", bank_reference: "UTR-CANCELLED" });
+    expect(res.status).toBe(422);
+  });
+
+  it("refuses to execute an already-paid run a second time", async () => {
+    const built = await buildRun(w.role.PAYROLL_OFFICER);
+    await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/decision`, { action: "APPROVE" });
+    const first = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/execute`,
+      { paid_on: "2026-09-16", bank_reference: "UTR-FIRST" });
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    const second = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/execute`,
+      { paid_on: "2026-09-17", bank_reference: "UTR-SECOND" });
+    expect(second.status).toBe(422);
+  });
+
+  it("will not let the person who built a run execute it", async () => {
+    const run = await post(w.role.ADMIN, "/api/v1/payment-runs", {
+      run_no: uniq("PR"), run_date: "2026-09-15", due_through: "2026-09-15",
+    });
+    expect(run.status, JSON.stringify(run.body)).toBe(201);
+    const approve = await post({ ...w.admin, ...(await ver("payment_runs", run.data.id)) },
+      `/api/v1/payment-runs/${run.data.id}/decision`, { action: "APPROVE" });
+    expect(approve.status, JSON.stringify(approve.body)).toBe(200);
+    const res = await post({ ...w.role.ADMIN, ...(await ver("payment_runs", run.data.id)) },
+      `/api/v1/payment-runs/${run.data.id}/execute`,
+      { paid_on: "2026-09-16", bank_reference: "UTR-SELF" });
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("SELF_APPROVAL");
+  });
+
+  it("has one effect on a repeated Idempotency-Key", async () => {
+    const built = await buildRun(w.role.PAYROLL_OFFICER);
+    await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/decision`, { action: "APPROVE" });
+    const headers = {
+      ...w.admin, ...(await ver("payment_runs", built.run.id)), "idempotency-key": uniq("IDEM"),
+    };
+    const payload = { paid_on: "2026-09-16", bank_reference: "UTR-IDEM" };
+    const res1 = await w.app.inject({
+      method: "POST", url: `/api/v1/payment-runs/${built.run.id}/execute`, headers, payload,
+    });
+    expect(res1.statusCode, res1.body).toBe(200);
+    const res2 = await w.app.inject({
+      method: "POST", url: `/api/v1/payment-runs/${built.run.id}/execute`, headers, payload,
+    });
+    expect(res2.statusCode, res2.body).toBe(200);
+    const lines = await w.pool.query(
+      "SELECT payment_id FROM payment_run_lines WHERE run_id = $1", [built.run.id]);
+    const paymentIds = new Set(lines.rows.map((r) => String(r.payment_id)));
+    const count = await w.pool.query(
+      "SELECT count(*)::int AS n FROM payments WHERE id = ANY($1::uuid[])", [[...paymentIds]]);
+    // Exactly one payment per line was ever created — the replay returned
+    // the cached response rather than running the loop again.
+    expect(count.rows[0].n).toBe(paymentIds.size);
+  });
+
+  it("refuses an invoice that was already paid elsewhere, leaving no partial effect", async () => {
+    const inv = await invoice({ total: 12000, due_date: "2026-01-01" });
+    const built = await buildRun(w.role.PAYROLL_OFFICER);
+    expect(built.ids).toContain(inv.id);
+    const approve = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/decision`, { action: "APPROVE" });
+    expect(approve.status, JSON.stringify(approve.body)).toBe(200);
+
+    // Settled by hand, outside the run, after it was approved.
+    await payInvoiceByHand(inv.id, 12000, "2026-09-15");
+
+    const before = await w.pool.query(
+      "SELECT count(*)::int AS n FROM payments WHERE org_id = $1", [w.orgId]);
+    const res = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/execute`,
+      { paid_on: "2026-09-16", bank_reference: "UTR-STALE" });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("RUN_OUT_OF_DATE");
+
+    // No line settled — not even the ones on the run ahead of the stale one.
+    const after = await w.pool.query(
+      "SELECT count(*)::int AS n FROM payments WHERE org_id = $1", [w.orgId]);
+    expect(after.rows[0].n).toBe(before.rows[0].n);
+    const run = await get(w.admin, `/api/v1/payment-runs/${built.run.id}`);
+    expect(run.data.status).toBe("APPROVED");
   });
 });
 

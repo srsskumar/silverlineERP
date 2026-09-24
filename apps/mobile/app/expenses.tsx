@@ -11,18 +11,27 @@ import { router } from "expo-router";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Modal, View } from "react-native";
+import { File, Paths } from "expo-file-system";
+import * as Sharing from "expo-sharing";
+import { randomUUID } from "expo-crypto";
 import { ApiError } from "../src/api/client";
 import { useAuth } from "../src/auth/AuthContext";
 import {
   getExpenseClaim,
   getExpenseClaims,
+  getExpenseReceipts,
+  getExpenseReceiptFile,
+  deleteExpenseReceipt,
   postExpenseClaim,
   postExpenseClaimSubmit,
   postExpenseClaimWithdraw,
   type ExpenseClaim,
+  type ExpenseReceipt,
 } from "../src/api/endpoints";
 import { EXPENSE_CATEGORIES, validateExpenseClaim } from "../src/validators";
 import { categoryLabel, expenseClaimActions, expenseStatusTone } from "../src/expensesFormat";
+import { claimTakesReceipts, formatReceiptSize, receiptIcon } from "../src/expenseReceiptsFormat";
+import { ReceiptCapture } from "../src/device/ReceiptCapture";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
 import {
   BackHeader,
@@ -317,9 +326,56 @@ function ExpenseDetail({
   onWithdraw: () => void;
 }) {
   const t = useTheme();
+  const qc = useQueryClient();
   const actions = expenseClaimActions(claim.status);
   const canResubmit = canManage && actions.canSubmit;
   const canWithdraw = canManage && actions.canWithdraw;
+  const canAttach = canManage && claimTakesReceipts(claim.status);
+
+  const [showCapture, setShowCapture] = useState(false);
+  const [receiptError, setReceiptError] = useState<string | null>(null);
+  const [viewingId, setViewingId] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+
+  const receipts = useQuery({
+    queryKey: ["expense-receipts", claim.id],
+    queryFn: () => getExpenseReceipts(claim.id),
+  });
+
+  const refreshReceipts = () => void qc.invalidateQueries({ queryKey: ["expense-receipts", claim.id] });
+
+  const view = async (r: ExpenseReceipt) => {
+    setReceiptError(null);
+    setViewingId(r.id);
+    let file: File | undefined;
+    try {
+      if (!(await Sharing.isAvailableAsync())) throw new Error("Viewing files is unavailable on this device.");
+      const bytes = await getExpenseReceiptFile(claim.id, r.id);
+      const ext = r.mime_type === "application/pdf" ? "pdf" : r.mime_type === "image/png" ? "png" : "jpg";
+      file = new File(Paths.cache, `receipt-${randomUUID()}.${ext}`);
+      file.create();
+      file.write(bytes);
+      await Sharing.shareAsync(file.uri, { mimeType: r.mime_type ?? undefined, dialogTitle: r.file_name });
+    } catch (e) {
+      setReceiptError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Could not open this receipt");
+    } finally {
+      if (file?.exists) file.delete();
+      setViewingId(null);
+    }
+  };
+
+  const remove = async (r: ExpenseReceipt) => {
+    setReceiptError(null);
+    setRemovingId(r.id);
+    try {
+      await deleteExpenseReceipt(claim.id, r.id);
+      refreshReceipts();
+    } catch (e) {
+      setReceiptError(e instanceof ApiError ? e.message : "Could not remove this receipt");
+    } finally {
+      setRemovingId(null);
+    }
+  };
 
   return (
     <View>
@@ -353,6 +409,56 @@ function ExpenseDetail({
           />
         ))}
       </Card>
+
+      <SectionLabel>Receipts</SectionLabel>
+      <Card>
+        {receipts.isLoading ? (
+          <Loading />
+        ) : (receipts.data ?? []).length === 0 ? (
+          <EmptyState icon="receipt-outline" title="No receipts attached" />
+        ) : (
+          (receipts.data ?? []).map((r, i, arr) => (
+            <ListRow
+              key={r.id}
+              icon={receiptIcon(r.mime_type)}
+              title={r.file_name}
+              subtitle={formatReceiptSize(r.file_size)}
+              onPress={() => void view(r)}
+              right={
+                viewingId === r.id ? (
+                  <Subtle>Opening…</Subtle>
+                ) : canAttach ? (
+                  <Button
+                    title="Remove"
+                    variant="ghost"
+                    tone="danger"
+                    loading={removingId === r.id}
+                    onPress={() => void remove(r)}
+                  />
+                ) : undefined
+              }
+              last={i === arr.length - 1}
+            />
+          ))
+        )}
+      </Card>
+      {canAttach ? (
+        <Button
+          title="Add receipt"
+          icon="camera-outline"
+          variant="secondary"
+          style={{ marginTop: space.sm }}
+          onPress={() => setShowCapture(true)}
+        />
+      ) : null}
+      {receiptError ? <Banner tone="danger" icon="alert-circle-outline" title={receiptError} /> : null}
+      {showCapture ? (
+        <ReceiptCapture
+          claimId={claim.id}
+          onClose={() => setShowCapture(false)}
+          onSaved={() => { setShowCapture(false); refreshReceipts(); }}
+        />
+      ) : null}
 
       {actionError ? <Banner tone="danger" icon="alert-circle-outline" title={actionError} /> : null}
 
