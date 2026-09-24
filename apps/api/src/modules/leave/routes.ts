@@ -632,9 +632,14 @@ export async function registerLeaveRoutes(
      * request filed on behalf of somebody who had left was answered with
      * "insufficient balance", which sent HR to top up a balance for a person
      * who no longer had one to keep.
+     *
+     * Locked (D-002): the overlap and balance rules below read, then insert.
+     * Two requests for the same days filed at the same moment each saw the
+     * other as not there yet, and both stood. Holding the employee row makes
+     * the second wait, then find the first.
      */
     const employment = (
-      await db.query("SELECT status FROM employees WHERE id = $1::uuid AND org_id = $2", [employeeId, user.orgId])
+      await db.query("SELECT status FROM employees WHERE id = $1::uuid AND org_id = $2 FOR UPDATE", [employeeId, user.orgId])
     ).rows[0] as { status: string } | undefined;
     if (employment && employment.status !== "ACTIVE") {
       return sendRuleError(reply, req.requestId, {
