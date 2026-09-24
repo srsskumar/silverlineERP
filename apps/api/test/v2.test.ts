@@ -73,6 +73,20 @@ describe('inventory integrity',()=>{
   const v=(await pool.query("INSERT INTO vendors(org_id,code,name) VALUES($1,'X','Foreign') RETURNING id",[other])).rows[0].id;
   expect((await call('POST','inventory/items',{code:'X',name:'X',unit:'u',vendor_id:v})).statusCode).toBe(404);
  });
+ it("does not silently reactivate an item on an unrelated PATCH — B-024",async()=>{
+  // The web edit form (apps/web/app/inventory/page.tsx's itemFields) never
+  // sends `status` -- it only has code/name/unit/low_stock_threshold/
+  // unit_cost/vendor_id. The generic PATCH route (inventory/routes.ts)
+  // parses PATCH bodies with the same schema used for POST create, which
+  // defaults status to ACTIVE, so any edit that omits status resets it.
+  const item=(await call('POST','inventory/items',{code:'REACT-1',name:'Reactivation bait',unit:'unit'})).json();
+  const deactivated=await call('PATCH',`inventory/items/${item.id}`,{code:item.code,name:item.name,unit:item.unit,low_stock_threshold:item.low_stock_threshold,unit_cost:item.unit_cost,status:'INACTIVE'},{'if-match':String(item.version)});
+  expect(deactivated.statusCode,JSON.stringify(deactivated.json())).toBe(200);
+  expect(deactivated.json().status).toBe('INACTIVE');
+  const edited=await call('PATCH',`inventory/items/${item.id}`,{code:item.code,name:item.name+' v2',unit:item.unit,low_stock_threshold:item.low_stock_threshold,unit_cost:item.unit_cost},{'if-match':String(deactivated.json().version)});
+  expect(edited.statusCode,JSON.stringify(edited.json())).toBe(200);
+  expect(edited.json().status).toBe('INACTIVE');
+ });
 });
 describe('assets',()=>{
  it('rejects exited employee assignments and enforces lifecycle versions',async()=>{
