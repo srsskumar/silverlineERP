@@ -471,6 +471,21 @@ export const legalHoldSchema = z.object({
   path: ['reason'],
 });
 
+/**
+ * POST /api/v1/documents/purge (owner decision 2026-09-24 #3).
+ *
+ * No auto-purge exists anywhere: this is the one and only way a document is
+ * ever deleted for retention, and it always carries a reason -- the confirm
+ * is the request itself, made explicitly by an admin who has seen the "due
+ * for purge" report first.
+ */
+export const documentPurgeSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1, 'Select at least one document').max(100),
+  reason: z.string().min(3, 'Say why these are being purged').max(500),
+});
+
+export type DocumentPurgeInput = z.infer<typeof documentPurgeSchema>;
+
 /* ----------------------------------------------------------- permissions */
 
 export const DOCUMENT_PERMISSIONS = [

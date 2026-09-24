@@ -2,10 +2,12 @@ import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import {
   documentCreateSchema, documentPatchSchema, documentRenewSchema, legalHoldSchema,
+  documentPurgeSchema,
   DOCUMENT_IMMUTABLE_DATES,
   documentState, renewalQueue, summarise, canDelete, typeAllowsOwner,
   type DocumentOwner,
   businessDay,
+  ApiError,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
@@ -466,5 +468,108 @@ export async function registerDocumentRoutes(
         return { id, deleted: true };
       }),
     };
+  });
+
+  /**
+   * Due for purge (owner decision 2026-09-24 #3): past retention, not under
+   * legal hold, and not superseded by a later revision (that refusal
+   * belongs to the later revision, which still needs this one kept).
+   *
+   * No scheduled deletion exists anywhere in this codebase, and this route
+   * does not add one -- it only answers the question an admin has to see
+   * answered before purging anything. Nothing here deletes a row; only
+   * POST /documents/purge does that, and only once an admin has picked from
+   * this list and confirmed.
+   */
+  app.get('/api/v1/documents/due-for-purge', { preHandler: guard('document.delete') }, async req => {
+    const u = actor(req), asOf = today();
+    const rows = (await pool.query(`${SELECT} WHERE d.org_id = $1`, [u.orgId])).rows;
+    const due = rows
+      .map(r => ({
+        row: r,
+        retention: canDelete({
+          issuedOn: iso(r.issued_on), expiresOn: iso(r.expires_on),
+          retentionYears: Number(r.retention_years), legalHold: Boolean(r.legal_hold),
+          asOf,
+        }),
+        hasSuccessor: Boolean(r.superseded_by_id),
+      }))
+      .filter(d => d.retention.deletable && !d.hasSuccessor)
+      .map(d => ({
+        id: d.row.id,
+        title: d.row.title,
+        type_code: d.row.type_code,
+        type_label: d.row.type_label,
+        category: d.row.category,
+        owner_type: d.row.owner_type,
+        owner_id: d.row.owner_id,
+        legal_hold: false,
+        issued_on: iso(d.row.issued_on),
+        expires_on: iso(d.row.expires_on),
+        retain_until: d.retention.retainUntil ?? null,
+      }))
+      .sort((a, b) => String(a.retain_until).localeCompare(String(b.retain_until)));
+    return { data: due, as_of: asOf, total: due.length };
+  });
+
+  /**
+   * Purge, explicitly (owner decision 2026-09-24 #3).
+   *
+   * The confirm is the request itself: an admin selects rows off the
+   * due-for-purge report above and sends this with a reason, which is
+   * required and is what makes the batch's audit row explain itself later.
+   * Refuses the whole selection -- nothing is deleted -- the moment any one
+   * of the chosen documents is on legal hold, not yet past retention, or
+   * superseded, so a mixed selection cannot half-succeed and leave the
+   * admin unsure what was actually destroyed.
+   */
+  app.post('/api/v1/documents/purge', { preHandler: guard('document.delete') }, async req => {
+    const u = actor(req), input = parse(documentPurgeSchema, req.body);
+    const result = await mutate(pool, req, 'document.purge', 'document_purge', async db => {
+      const ids = [...new Set(input.ids)];
+      const rows = (await db.query(
+        `SELECT d.id, d.title, d.legal_hold, d.issued_on, d.expires_on,
+                t.retention_years, t.code AS type_code,
+                (SELECT id FROM documents s WHERE s.supersedes_id = d.id) AS successor_id
+           FROM documents d JOIN document_types t ON t.id = d.type_id
+          WHERE d.id = ANY($1::uuid[]) AND d.org_id = $2 FOR UPDATE OF d`,
+        [ids, u.orgId])).rows;
+
+      const foundIds = new Set(rows.map(r => String(r.id)));
+      const refused: Array<{ field: string; message: string }> = ids
+        .filter(id => !foundIds.has(id))
+        .map(id => ({ field: id, message: 'Not found' }));
+
+      for (const row of rows) {
+        if (row.successor_id) {
+          refused.push({
+            field: String(row.id),
+            message: 'A later revision refers to this one. Purge the later revision first.',
+          });
+          continue;
+        }
+        const check = canDelete({
+          issuedOn: iso(row.issued_on), expiresOn: iso(row.expires_on),
+          retentionYears: Number(row.retention_years), legalHold: Boolean(row.legal_hold),
+          asOf: today(),
+        });
+        if (!check.deletable) {
+          refused.push({ field: String(row.id), message: check.reason ?? 'Not yet due for purge' });
+        }
+      }
+      if (refused.length > 0) {
+        throw new ApiError({
+          status: 409,
+          code: 'PURGE_REFUSED',
+          message: `${refused.length} of ${ids.length} selected document(s) cannot be purged`,
+          fieldErrors: refused,
+        });
+      }
+
+      const purged = rows.map(r => ({ id: String(r.id), title: r.title, type_code: r.type_code }));
+      await db.query('DELETE FROM documents WHERE id = ANY($1::uuid[])', [ids]);
+      return { purged, reason: input.reason, purged_by: u.id, purged_count: purged.length };
+    });
+    return { data: result };
   });
 }

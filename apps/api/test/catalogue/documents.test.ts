@@ -365,6 +365,99 @@ describe("§46.6 retention and legal hold", () => {
   });
 });
 
+describe("due-for-purge report and explicit purge (owner decision 2026-09-24 #3)", () => {
+  it("lists what is past retention, excluding legal hold and anything not yet due", async () => {
+    const due = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const notDue = await orgDoc({ expires_on: dayOffset(-10) });
+    const held = await orgDoc({ expires_on: dayOffset(-365 * 20) });
+    await post({ ...w.admin, ...(await ver(held.id)) }, `/api/v1/documents/${held.id}/legal-hold`,
+      { legal_hold: true, reason: "Ongoing dispute" });
+
+    const r = await get(w.admin, "/api/v1/documents/due-for-purge");
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const ids = r.data.map((d: any) => d.id);
+    expect(ids).toContain(due.id);
+    expect(ids).not.toContain(notDue.id);
+    expect(ids).not.toContain(held.id);
+    const row = r.data.find((d: any) => d.id === due.id);
+    expect(row.retain_until).toBeTruthy();
+  });
+
+  it("excludes a revision a later one still refers to", async () => {
+    const old = await orgDoc({ expires_on: dayOffset(-365 * 20) });
+    await post(w.admin, `/api/v1/documents/${old.id}/renew`, { expires_on: dayOffset(400) });
+    const r = await get(w.admin, "/api/v1/documents/due-for-purge");
+    expect(r.data.map((d: any) => d.id)).not.toContain(old.id);
+  });
+
+  it("refuses the whole batch when one selected document is on legal hold", async () => {
+    const due = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const held = await orgDoc({ expires_on: dayOffset(-365 * 20) });
+    await post({ ...w.admin, ...(await ver(held.id)) }, `/api/v1/documents/${held.id}/legal-hold`,
+      { legal_hold: true, reason: "Ongoing dispute" });
+
+    const r = await post(w.admin, "/api/v1/documents/purge",
+      { ids: [due.id, held.id], reason: "Year-end retention sweep" });
+    expect(r.status, JSON.stringify(r.body)).toBe(409);
+    expect(r.body.code).toBe("PURGE_REFUSED");
+
+    // Nothing was deleted -- not even the one that qualified on its own.
+    expect((await get(w.admin, `/api/v1/documents/${due.id}`)).status).toBe(200);
+    expect((await get(w.admin, `/api/v1/documents/${held.id}`)).status).toBe(200);
+  });
+
+  it("refuses the whole batch when one selected document is not yet due", async () => {
+    const due = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const notDue = await orgDoc({ expires_on: dayOffset(-10) });
+
+    const r = await post(w.admin, "/api/v1/documents/purge",
+      { ids: [due.id, notDue.id], reason: "Year-end retention sweep" });
+    expect(r.status, JSON.stringify(r.body)).toBe(409);
+    expect(r.body.code).toBe("PURGE_REFUSED");
+    expect((await get(w.admin, `/api/v1/documents/${due.id}`)).status).toBe(200);
+    expect((await get(w.admin, `/api/v1/documents/${notDue.id}`)).status).toBe(200);
+  });
+
+  it("purges the selection once every item qualifies, fully audited with the reason", async () => {
+    const first = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const second = await orgDoc({ expires_on: dayOffset(-365 * 5) });
+
+    const r = await post(w.admin, "/api/v1/documents/purge",
+      { ids: [first.id, second.id], reason: "Year-end retention sweep, batch 2026-09" });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.purged_count).toBe(2);
+
+    expect((await get(w.admin, `/api/v1/documents/${first.id}`)).status).toBe(404);
+    expect((await get(w.admin, `/api/v1/documents/${second.id}`)).status).toBe(404);
+
+    const audit = await w.pool.query(
+      `SELECT after_state, actor_id FROM audit_events
+        WHERE action = 'document.purge' AND entity_type = 'document_purge' AND org_id = $1
+        ORDER BY created_at DESC LIMIT 1`,
+      [w.orgId],
+    );
+    expect(audit.rows).toHaveLength(1);
+    const state = audit.rows[0].after_state;
+    expect(state.reason).toBe("Year-end retention sweep, batch 2026-09");
+    expect(state.purged.map((p: any) => p.id).sort()).toEqual([first.id, second.id].sort());
+  });
+
+  it("refuses a purge with no reason", async () => {
+    const due = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const r = await post(w.admin, "/api/v1/documents/purge", { ids: [due.id] });
+    expect(r.status).toBe(422);
+  });
+
+  it("keeps the report and the purge action to document.delete holders", async () => {
+    const due = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const list = await get(w.role.PROJECT_MANAGER, "/api/v1/documents/due-for-purge");
+    expect(list.status).toBe(403);
+    const purge = await post(w.role.PROJECT_MANAGER, "/api/v1/documents/purge",
+      { ids: [due.id], reason: "Should be refused" });
+    expect(purge.status).toBe(403);
+  });
+});
+
 describe("§46.6.3 confidentiality", () => {
   it("withholds the detail of a confidential document but still lists it", async () => {
     // Hiding the row outright would leave a lapsed medical certificate
