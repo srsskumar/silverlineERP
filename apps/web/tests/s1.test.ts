@@ -66,6 +66,17 @@ describe('employeeCreateSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('accepts a blank status column (a CSV cell left empty, not the string "undefined")', () => {
+    // A blank CSV "status" column comes through parseEmployeeCsv as the empty
+    // string, not an absent key. Before this field used optionalEnum(), a
+    // bare z.enum(...).optional() rejected '' (only an absent key counts as
+    // "not set" to zod), so every bulk-import row with no status column
+    // value got a spurious "Invalid status" warning even though status is
+    // optional.
+    const result = employeeCreateSchema.safeParse({ ...VALID_EMPLOYEE, status: '' });
+    expect(result.success).toBe(true);
+  });
+
   it('employeeUpdateSchema accepts a partial patch', () => {
     expect(employeeUpdateSchema.safeParse({ designation: 'Supervisor' }).success).toBe(true);
     expect(employeeUpdateSchema.safeParse({ phone: 'bad' }).success).toBe(false);
@@ -109,11 +120,31 @@ describe('orgUnit + holiday schemas', () => {
   });
 
   it('accepts a valid holiday and rejects scope_id without scope_type', () => {
-    expect(holidaySchema.safeParse({ date: '2026-01-26', name: 'Republic Day', type: 'PUBLIC' }).success).toBe(true);
+    expect(holidaySchema.safeParse({ date: '2026-01-26', name: 'Republic Day', type: 'national' }).success).toBe(true);
     expect(
-      holidaySchema.safeParse({ date: '2026-01-26', name: 'Local Fest', type: 'FESTIVAL', scope_id: 'd1' }).success,
+      holidaySchema.safeParse({ date: '2026-01-26', name: 'Local Fest', type: 'national', scope_id: 'd1' }).success,
     ).toBe(false);
   });
+
+  it('rejects a holiday type the API does not accept (A-007: the create form let anyone type PUBLIC/FESTIVAL, which the server always 422s)', () => {
+    // The API's holidayTypeSchema (packages/shared/src/s1.ts) only accepts
+    // national/regional/local/weekly_off/manual, but the old placeholder text
+    // on the Type field ("PUBLIC / FESTIVAL / REGIONAL…") suggested uppercase
+    // words that were never valid — every one of them 422s server-side.
+    expect(holidaySchema.safeParse({ date: '2026-01-26', name: 'Republic Day', type: 'PUBLIC' }).success).toBe(false);
+    expect(holidaySchema.safeParse({ date: '2026-01-26', name: 'Local Fest', type: 'FESTIVAL' }).success).toBe(false);
+  });
+
+  it(
+    'accepts scope_type left on its blank "Org-wide" option (A-009: the create dialog\'s ' +
+      '<select id="hol-scope-type"> defaults to "", which z.enum(...).optional() alone rejects)',
+    () => {
+      expect(
+        holidaySchema.safeParse({ date: '2026-01-26', name: 'Republic Day', type: 'national', scope_type: '' })
+          .success,
+      ).toBe(true);
+    },
+  );
 
   it('importRowSchema requires the identity quartet', () => {
     expect(importRowSchema.safeParse(VALID_EMPLOYEE).success).toBe(true);

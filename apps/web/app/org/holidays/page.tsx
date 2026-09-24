@@ -1,17 +1,14 @@
 'use client';
 
 import * as React from 'react';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { AppShell } from '@/components/AppShell';
 import { RequirePermission } from '@/components/RequirePermission';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission, PERMISSIONS } from '@/lib/permissions';
-import { createHoliday, listHolidays } from '@/lib/holidays';
+import { listHolidays, type Holiday } from '@/lib/holidays';
 import { queryKeys } from '@/lib/query-keys';
-import { holidaySchema, ORG_UNIT_TYPES, type HolidayInput } from '@/lib/validation';
-import { applyFieldErrors } from '@/lib/form-errors';
+import { CreateHolidayDialog, EditHolidayDialog, HolidayStatusDialog } from '@/components/HolidayDialogs';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
@@ -22,94 +19,21 @@ import { day } from '@/lib/finance';
 
 export const dynamic = 'force-static';
 
-function CreateHolidayDialog({ open, year, onClose }: { open: boolean; year: number; onClose: () => void }) {
-  const queryClient = useQueryClient();
-  const [submitError, setSubmitError] = React.useState<unknown>(null);
-  const {
-    register,
-    handleSubmit,
-    reset,
-    setError,
-    formState: { errors, isSubmitting },
-  } = useForm<HolidayInput>({
-    resolver: zodResolver(holidaySchema),
-    defaultValues: { date: `${year}-01-01`, name: '', type: 'PUBLIC' },
-  });
-
-  React.useEffect(() => {
-    if (open) {
-      reset({ date: `${year}-01-01`, name: '', type: 'PUBLIC' });
-      setSubmitError(null);
-    }
-  }, [open, year, reset]);
-
-  const mutation = useMutation({
-    mutationFn: (v: HolidayInput) =>
-      createHoliday({ date: v.date, name: v.name, type: v.type, scope_type: v.scope_type, scope_id: v.scope_id || null }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.holidays.all });
-      onClose();
-    },
-    onError: (err) => {
-      const mapped = applyFieldErrors(err, (f, e) => setError(f as keyof HolidayInput, e));
-      if (!mapped) setSubmitError(err);
-    },
-  });
-
-  if (!open) return null;
-  return (
-    <div role="dialog" aria-modal="true" aria-label="Create holiday" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-      <div className="w-full max-w-md rounded-lg bg-surface p-6 shadow-lg">
-        <h2 className="text-base font-semibold text-text">New holiday</h2>
-        <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="mt-4 flex flex-col gap-4" noValidate>
-          <FormField label="Date *" htmlFor="hol-date" error={errors.date?.message}>
-            <Input id="hol-date" type="date" invalid={!!errors.date} {...register('date')} />
-          </FormField>
-          <FormField label="Name *" htmlFor="hol-name" error={errors.name?.message}>
-            <Input id="hol-name" invalid={!!errors.name} {...register('name')} />
-          </FormField>
-          <FormField label="Type *" htmlFor="hol-type" error={errors.type?.message}>
-            <Input id="hol-type" placeholder="PUBLIC / FESTIVAL / REGIONAL…" {...register('type')} />
-          </FormField>
-          <div className="grid grid-cols-2 gap-3">
-            <FormField label="Scope type" htmlFor="hol-scope-type" error={errors.scope_type?.message}>
-              <select id="hol-scope-type" className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm" {...register('scope_type')}>
-                <option value="">Org-wide</option>
-                {ORG_UNIT_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            </FormField>
-            <FormField label="Scope ID" htmlFor="hol-scope-id" error={errors.scope_id?.message}>
-              <Input id="hol-scope-id" placeholder="optional" {...register('scope_id')} />
-            </FormField>
-          </div>
-          {submitError ? <ErrorCard title="Could not create holiday" error={submitError} /> : null}
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="secondary" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button type="submit" loading={isSubmitting || mutation.isPending}>
-              Create
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
 function HolidaysManager() {
   const { session } = useAuth();
   const canManage = hasPermission({ permissions: session?.permissions }, PERMISSIONS.HOLIDAY_MANAGE);
   const [year, setYear] = React.useState(new Date().getFullYear());
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [editing, setEditing] = React.useState<Holiday | null>(null);
+  const [statusChange, setStatusChange] = React.useState<{ holiday: Holiday; targetActive: boolean } | null>(null);
+  // Retired holidays are excluded by default (matches the calendar's own
+  // "what applies now" view); a manager can look for one to reactivate.
+  const [showRetired, setShowRetired] = React.useState(false);
+  const includeInactive = canManage && showRetired;
 
   const holidaysQuery = useQuery({
-    queryKey: queryKeys.holidays.list({ year }),
-    queryFn: () => listHolidays({ year }),
+    queryKey: queryKeys.holidays.list({ year, includeInactive }),
+    queryFn: () => listHolidays({ year, includeInactive }),
     staleTime: 60_000,
   });
 
@@ -129,6 +53,12 @@ function HolidaysManager() {
             />
           </FormField>
         </div>
+        {canManage && (
+          <label className="flex items-center gap-2 pb-2 text-sm text-text-muted">
+            <input type="checkbox" checked={showRetired} onChange={(e) => setShowRetired(e.target.checked)} />
+            Show retired holidays
+          </label>
+        )}
         <div className="ml-auto">{canManage && <Button onClick={() => setCreateOpen(true)}>New holiday</Button>}</div>
       </div>
       {holidaysQuery.isLoading ? (
@@ -146,6 +76,8 @@ function HolidaysManager() {
                 <th className="px-3 py-2 text-left font-medium text-text-muted">Name</th>
                 <th className="px-3 py-2 text-left font-medium text-text-muted">Type</th>
                 <th className="px-3 py-2 text-left font-medium text-text-muted">Scope</th>
+                {includeInactive && <th className="px-3 py-2 text-left font-medium text-text-muted">Status</th>}
+                {canManage && <th className="px-3 py-2 text-left font-medium text-text-muted">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -161,6 +93,28 @@ function HolidaysManager() {
                       </span>
                     ) : 'Org-wide'}
                   </td>
+                  {includeInactive && (
+                    <td className="px-3 py-2">
+                      {h.active === false ? <span className="text-text-muted">Retired</span> : 'Active'}
+                    </td>
+                  )}
+                  {canManage && (
+                    <td className="px-3 py-2">
+                      <div className="flex gap-2">
+                        {h.active !== false && (
+                          <Button variant="secondary" onClick={() => setEditing(h)}>
+                            Edit
+                          </Button>
+                        )}
+                        <Button
+                          variant="secondary"
+                          onClick={() => setStatusChange({ holiday: h, targetActive: h.active === false })}
+                        >
+                          {h.active === false ? 'Reactivate' : 'Deactivate'}
+                        </Button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -168,6 +122,13 @@ function HolidaysManager() {
         </div>
       )}
       <CreateHolidayDialog open={createOpen} year={year} onClose={() => setCreateOpen(false)} />
+      <EditHolidayDialog open={!!editing} holiday={editing} onClose={() => setEditing(null)} />
+      <HolidayStatusDialog
+        open={!!statusChange}
+        holiday={statusChange?.holiday ?? null}
+        targetActive={statusChange?.targetActive ?? false}
+        onClose={() => setStatusChange(null)}
+      />
     </div>
   );
 }

@@ -19,6 +19,8 @@ import { DocumentList } from '@/components/DocumentList';
 import { EmployeeAssignments } from '@/components/EmployeeAssignments';
 import { ExitDialog } from '@/components/ExitDialog';
 import { ReactivateDialog } from '@/components/ReactivateDialog';
+import { ActivateDialog } from '@/components/ActivateDialog';
+import { SuspendDialog } from '@/components/SuspendDialog';
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -41,6 +43,8 @@ export function EmployeeDetailView({ id }: { id: string }) {
   const queryClient = useQueryClient();
   const [exitOpen, setExitOpen] = React.useState(false);
   const [reactivateOpen, setReactivateOpen] = React.useState(false);
+  const [activateOpen, setActivateOpen] = React.useState(false);
+  const [suspendOpen, setSuspendOpen] = React.useState(false);
   const [editing, setEditing] = React.useState(false);
   const [savedTick, setSavedTick] = React.useState(0);
 
@@ -60,6 +64,9 @@ export function EmployeeDetailView({ id }: { id: string }) {
   const emp = detailQuery.data;
   if (!emp) return <EmptyState title="Employee not found" />;
   const exited = emp.status === 'EXITED' || emp.status === 'TERMINATED';
+  // A-010: reactivate accepts EXITED or SUSPENDED server-side (not just
+  // "exited"), so the button must offer both.
+  const reactivatable = exited || emp.status === 'SUSPENDED';
 
   return (
     <AppShell>
@@ -82,12 +89,22 @@ export function EmployeeDetailView({ id }: { id: string }) {
                     {editing ? 'Cancel edit' : 'Edit'}
                   </Button>
                 )}
+                {emp.status === 'DRAFT' && canReactivate && (
+                  <Button variant="secondary" onClick={() => setActivateOpen(true)}>
+                    Activate
+                  </Button>
+                )}
                 {!exited && canExit && (
                   <Button variant="danger" onClick={() => setExitOpen(true)}>
                     Exit
                   </Button>
                 )}
-                {exited && canReactivate && (
+                {emp.status === 'ACTIVE' && canExit && (
+                  <Button variant="secondary" onClick={() => setSuspendOpen(true)}>
+                    Suspend
+                  </Button>
+                )}
+                {reactivatable && canReactivate && (
                   <Button variant="secondary" onClick={() => setReactivateOpen(true)}>
                     Reactivate
                   </Button>
@@ -157,6 +174,20 @@ export function EmployeeDetailView({ id }: { id: string }) {
             employeeName={displayEmployeeName(emp)}
             open={reactivateOpen}
             onClose={() => setReactivateOpen(false)}
+            onSuccess={refetchAll}
+          />
+          <ActivateDialog
+            employeeId={id}
+            employeeName={displayEmployeeName(emp)}
+            open={activateOpen}
+            onClose={() => setActivateOpen(false)}
+            onSuccess={refetchAll}
+          />
+          <SuspendDialog
+            employeeId={id}
+            employeeName={displayEmployeeName(emp)}
+            open={suspendOpen}
+            onClose={() => setSuspendOpen(false)}
             onSuccess={refetchAll}
           />
         </div>

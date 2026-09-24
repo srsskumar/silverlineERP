@@ -97,6 +97,23 @@ const optionalMoneyField = (message = 'Enter an amount of 0 or more, with at mos
 const positiveMoneyField = (message = 'Enter an amount greater than 0, with at most 2 decimal places') =>
   moneyField(message).refine((v) => v > 0, message);
 
+/**
+ * An optional enum backed by a `<select>` (A-008/A-009).
+ *
+ * `z.enum(values).optional()` only treats `undefined` as "not set" — the
+ * `""` a native `<select>`'s blank first option submits fails enum
+ * validation instead of being treated as unset, which blocks the whole form
+ * (not just that field) the moment the picker is left on its placeholder.
+ * Every other optional field in this file already tolerates `""` this way;
+ * enum fields need the same treatment.
+ */
+const optionalEnum = <T extends [string, ...string[]]>(values: T) =>
+  z
+    .enum(values)
+    .optional()
+    .or(z.literal('').transform(() => undefined))
+    .pipe(z.enum(values).optional());
+
 export const GENDERS = ['MALE', 'FEMALE', 'OTHER'] as const;
 export const EMPLOYEE_STATUSES = ['DRAFT', 'ACTIVE', 'ON_LEAVE', 'EXITED', 'TERMINATED'] as const;
 export const ORG_UNIT_TYPES = ['district', 'division', 'mandal', 'village', 'site'] as const;
@@ -108,7 +125,7 @@ const employeeBaseFields = {
   last_name: optionalText(100),
   father_name: optionalText(200),
   date_of_birth: optionalDate,
-  gender: z.enum(GENDERS).optional(),
+  gender: optionalEnum(GENDERS),
   phone: z.string().trim().regex(PHONE_RE, 'Enter a valid phone number'),
   phone_secondary: optionalPhone,
   email: optionalEmail,
@@ -172,7 +189,7 @@ const employeeBaseFields = {
   education: optionalText(500),
   skills: z.union([z.array(z.string().trim().min(1)).max(50), z.string().trim().max(2000)]).optional(),
   experience_years: z.coerce.number().min(0).max(60).optional(),
-  status: z.enum(EMPLOYEE_STATUSES).optional(),
+  status: optionalEnum(EMPLOYEE_STATUSES),
 };
 
 function checkDobVsDoj<T extends { date_of_birth?: string; date_of_joining?: string }>(
@@ -216,6 +233,18 @@ export const employeeReactivateSchema = z.object({
 });
 export type EmployeeReactivateInput = z.infer<typeof employeeReactivateSchema>;
 
+// Same shape as reactivate — mirrors the API's employeeActivateSchema /
+// employeeSuspendSchema (packages/shared/src/s1.ts), both `{ reason }` only.
+export const employeeActivateSchema = z.object({
+  reason: z.string().trim().min(1, 'Reason is required').max(500),
+});
+export type EmployeeActivateInput = z.infer<typeof employeeActivateSchema>;
+
+export const employeeSuspendSchema = z.object({
+  reason: z.string().trim().min(1, 'Reason is required').max(500),
+});
+export type EmployeeSuspendInput = z.infer<typeof employeeSuspendSchema>;
+
 /** One CSV/API import row: required identity fields, everything else optional. */
 export const importRowSchema = z
   .object(employeeBaseFields)
@@ -238,12 +267,28 @@ export const orgUnitUpdateSchema = z.object({
 });
 export type OrgUnitUpdateInput = z.infer<typeof orgUnitUpdateSchema>;
 
+// Must mirror the API's holidayTypeSchema (packages/shared/src/s1.ts) exactly —
+// a client that accepts a value the server doesn't (e.g. the old free-text
+// "PUBLIC"/"FESTIVAL" placeholder) turns every such submission into a
+// guaranteed 422 (A-007).
+export const HOLIDAY_TYPES = ['national', 'regional', 'local', 'weekly_off', 'manual'] as const;
+
+// Humanised labels for the Type picker. The submitted value is still the raw
+// server enum member above — only the text shown in the <option> changes.
+export const HOLIDAY_TYPE_LABELS: Record<(typeof HOLIDAY_TYPES)[number], string> = {
+  national: 'National',
+  regional: 'Regional',
+  local: 'Local',
+  weekly_off: 'Weekly off',
+  manual: 'Manual',
+};
+
 export const holidaySchema = z
   .object({
     date: dateString('Holiday date must be YYYY-MM-DD'),
     name: z.string().trim().min(1, 'Name is required').max(255),
-    type: z.string().trim().min(1, 'Type is required').max(50),
-    scope_type: z.enum(ORG_UNIT_TYPES).optional(),
+    type: z.enum(HOLIDAY_TYPES, { errorMap: () => ({ message: 'Pick a holiday type' }) }),
+    scope_type: optionalEnum(ORG_UNIT_TYPES),
     scope_id: z.string().trim().min(1).max(100).optional(),
   })
   .superRefine((v, ctx) => {
@@ -1022,3 +1067,24 @@ export const paymentRunExecuteSchema = z.object({
   note: optionalText(1000),
 });
 export type PaymentRunExecuteFormInput = z.infer<typeof paymentRunExecuteSchema>;
+
+// ---------------------------------------------------------------------------
+// A-012: editing and deactivating/reactivating a holiday. Mirrors the API's
+// holidayPatchSchema (packages/shared/src/s1.ts) exactly — date/name/type,
+// plus a reason the server requires on every PATCH. scope is not patchable
+// server-side, so it is not offered here either.
+// ---------------------------------------------------------------------------
+
+export const holidayEditSchema = z.object({
+  date: dateString('Holiday date must be YYYY-MM-DD'),
+  name: z.string().trim().min(1, 'Name is required').max(255),
+  type: z.enum(HOLIDAY_TYPES, { errorMap: () => ({ message: 'Pick a holiday type' }) }),
+  reason: z.string().trim().min(1, 'Say why the holiday is being changed').max(2000),
+});
+export type HolidayEditInput = z.infer<typeof holidayEditSchema>;
+
+/** Deactivate/reactivate: only `active` changes, but the API still requires a reason. */
+export const holidayStatusChangeSchema = z.object({
+  reason: z.string().trim().min(1, 'Say why the holiday is being changed').max(2000),
+});
+export type HolidayStatusChangeInput = z.infer<typeof holidayStatusChangeSchema>;

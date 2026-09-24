@@ -1088,4 +1088,173 @@ describe("holidays", () => {
     });
     expect(forbidden.statusCode).toBe(403);
   });
+
+  // A-012: PATCH date/name/type/active always existed; nothing on web ever
+  // called it. include_inactive is new here -- without it, a deactivated
+  // holiday could never be found again to reactivate.
+  it("corrects a holiday, deactivates it, and finds it again to reactivate", async () => {
+    const admin = await adminHeaders();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/holidays",
+      headers: admin,
+      payload: { date: "2026-05-01", name: "Labour Day", type: "national" },
+    });
+    expect(created.statusCode).toBe(201);
+    const id = (created.json() as { id: string }).id;
+
+    const noReason = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/holidays/${id}`,
+      headers: admin,
+      payload: { name: "Labor Day" },
+    });
+    expect(noReason.statusCode).toBe(422);
+
+    const corrected = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/holidays/${id}`,
+      headers: admin,
+      payload: { name: "Labor Day", reason: "Fixed the spelling" },
+    });
+    expect(corrected.statusCode, JSON.stringify(corrected.json())).toBe(200);
+    const correctedBody = corrected.json() as { name: string; date: string; active: boolean };
+    expect(correctedBody.name).toBe("Labor Day");
+    expect(correctedBody.date).toBe("2026-05-01");
+    expect(correctedBody.active).toBe(true);
+
+    const deactivated = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/holidays/${id}`,
+      headers: admin,
+      payload: { active: false, reason: "Observed on a different date this year" },
+    });
+    expect(deactivated.statusCode).toBe(200);
+    expect((deactivated.json() as { active: boolean }).active).toBe(false);
+
+    // Gone from the default (active-only) list...
+    const defaultList = await app.inject({
+      method: "GET",
+      url: "/api/v1/holidays?year=2026",
+      headers: admin,
+    });
+    expect((defaultList.json() as { data: Array<{ id: string }> }).data.some((h) => h.id === id)).toBe(false);
+
+    // ...but findable with include_inactive, and marked as such.
+    const allList = await app.inject({
+      method: "GET",
+      url: "/api/v1/holidays?year=2026&include_inactive=true",
+      headers: admin,
+    });
+    const found = (allList.json() as { data: Array<{ id: string; active: boolean }> }).data.find((h) => h.id === id);
+    expect(found?.active).toBe(false);
+
+    const reactivated = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/holidays/${id}`,
+      headers: admin,
+      payload: { active: true, reason: "Restored — was withdrawn in error" },
+    });
+    expect(reactivated.statusCode).toBe(200);
+    const backInList = await app.inject({
+      method: "GET",
+      url: "/api/v1/holidays?year=2026",
+      headers: admin,
+    });
+    expect((backInList.json() as { data: Array<{ id: string }> }).data.some((h) => h.id === id)).toBe(true);
+  });
+
+  it("requires holiday.manage to PATCH", async () => {
+    const admin = await adminHeaders();
+    const tlH = await roleHeaders("TEAM_LEAD");
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/holidays",
+      headers: admin,
+      payload: { date: "2026-06-01", name: "Founders Day", type: "manual" },
+    });
+    const id = (created.json() as { id: string }).id;
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/holidays/${id}`,
+      headers: tlH,
+      payload: { name: "X", reason: "Trying anyway" },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  // Review finding, Task 5e fix round 1: include_inactive was honoured for
+  // any holiday.read holder, so a plain reader could see retired holidays
+  // by calling the API directly even though only the web UI's "Show
+  // retired holidays" toggle checked holiday.manage. No built-in role
+  // splits holiday.read from holiday.manage (only SUPER_ADMIN/ADMIN/
+  // HR_MANAGER hold either, and HR_MANAGER holds both), so this needs a
+  // custom role -- exactly the case RBAC exists to allow, and the one the
+  // server, not the UI, has to defend.
+  it("keeps include_inactive to holiday.manage holders, even with only holiday.read", async () => {
+    const admin = await adminHeaders();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/holidays",
+      headers: admin,
+      payload: { date: "2026-07-01", name: "Reader Test Day", type: "manual" },
+    });
+    const id = (created.json() as { id: string }).id;
+    const withdrawn = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/holidays/${id}`,
+      headers: admin,
+      payload: { active: false, reason: "Withdrawn for the read-only filter test" },
+    });
+    expect(withdrawn.statusCode).toBe(200);
+
+    const roleCode = `HOLREADER${Date.now()}`;
+    const role = await pool.query(
+      "INSERT INTO roles (org_id, code, name, is_system_role) VALUES ($1,$2,$3,false) RETURNING id",
+      [orgId, roleCode, "Holiday Reader"],
+    );
+    const roleId = (role.rows[0] as { id: string }).id;
+    await pool.query(
+      "INSERT INTO role_permissions (role_id, permission_code) VALUES ($1,'holiday.read')",
+      [roleId],
+    );
+    const readerUsername = `u_holreader_${Date.now()}`;
+    const hash = await bcrypt.hash("Pass1234!", 4);
+    const userRes = await pool.query(
+      "INSERT INTO users (org_id, username, password_hash, auth_status) VALUES ($1,$2,$3,'ACTIVE') RETURNING id",
+      [orgId, readerUsername, hash],
+    );
+    await pool.query("INSERT INTO user_roles (user_id, role_id) VALUES ($1,$2)", [
+      (userRes.rows[0] as { id: string }).id,
+      roleId,
+    ]);
+    const reader = await headersFor(readerUsername, "Pass1234!");
+
+    const asReader = await app.inject({
+      method: "GET",
+      url: "/api/v1/holidays?year=2026&include_inactive=true",
+      headers: reader,
+    });
+    expect(asReader.statusCode).toBe(403);
+    expect((asReader.json() as { code: string }).code).toBe("FORBIDDEN");
+
+    // Plain read (no include_inactive) still works for a mere reader.
+    const plain = await app.inject({
+      method: "GET",
+      url: "/api/v1/holidays?year=2026",
+      headers: reader,
+    });
+    expect(plain.statusCode).toBe(200);
+
+    // A manager still gets the inactive rows.
+    const asManager = await app.inject({
+      method: "GET",
+      url: "/api/v1/holidays?year=2026&include_inactive=true",
+      headers: admin,
+    });
+    expect(asManager.statusCode).toBe(200);
+    expect(
+      (asManager.json() as { data: Array<{ id: string }> }).data.some((h) => h.id === id),
+    ).toBe(true);
+  });
 });

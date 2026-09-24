@@ -134,6 +134,7 @@ Findings ledgers: `docs/qa/2026-09-24/findings-a.md` (Lane A modules), `findings
 | Holiday form: date/name/type/scope `<Input>`s, submit | org/holidays/page.tsx:66-94 | create form gated by `canManage = hasPermission(..., HOLIDAY_MANAGE)` (line 106) |
 | "New holiday" `<Button>` | org/holidays/page.tsx:132 | `canManage` |
 | Year filter `<Input>`, scope `<span title=...>` tooltip | org/holidays/page.tsx:121,159 | — |
+| No Edit or Deactivate control anywhere on the page (A-012, found round 3, OPEN) — `PATCH /holidays/:id` (date/name/type/active) exists server-side with no caller on web | — | — |
 | Page gate | org/holidays/page.tsx:178 | `RequirePermission code={PERMISSIONS.HOLIDAY_READ}` |
 | Location create form (code/name, required) | org/locations/page.tsx:127-165 | `canManage = hasPermission(..., ORG_UNITS_MANAGE)` (line 177) |
 | Tab switch, search `<Input>`, "New {tab}" `<Button>` | org/locations/page.tsx:216,225-226 | `canManage` for create |
@@ -154,7 +155,8 @@ Findings ledgers: `docs/qa/2026-09-24/findings-a.md` (Lane A modules), `findings
 | POST /org/units | org:193 | `org.units.manage` |
 | PATCH /org/units/:id | org:339 | `org.units.manage` |
 
-**Parity**: ⚠ Holidays — web has full create/edit (`holiday.manage`), mobile is read-only by omission (no code path checks `holiday.manage` at all on mobile — not even a hidden button). If a holiday-manage-only field user needs to add a holiday, they must use web. Locations: correctly N/A per owner ruling — confirm `canSeeModule`/launcher never surfaces `org-locations` even when an admin explicitly enables it in module-visibility (the exclusion is a hardcoded array, not driven by the visibility table, so an admin toggling it "on" server-side would have no mobile effect — expected, but worth one negative test).
+**Parity**: ⚠ Holidays — web has create only in practice (A-012, round 3: no edit/deactivate UI
+exists despite the API supporting both), mobile is read-only by omission (no code path checks `holiday.manage` at all on mobile — not even a hidden button). If a holiday-manage-only field user needs to add a holiday, they must use web. Locations: correctly N/A per owner ruling — confirm `canSeeModule`/launcher never surfaces `org-locations` even when an admin explicitly enables it in module-visibility (the exclusion is a hardcoded array, not driven by the visibility table, so an admin toggling it "on" server-side would have no mobile effect — expected, but worth one negative test).
 
 ---
 
@@ -172,8 +174,10 @@ Findings ledgers: `docs/qa/2026-09-24/findings-a.md` (Lane A modules), `findings
 | Import: "Validate" `<Button disabled={!parsed.rows.length}>`, "Import" `<Button disabled={mutation.isPending||!report.validated}>` | import/page.tsx:84-90,129 | `RequirePermission code={PERMISSIONS.EMPLOYEE_IMPORT}` |
 | Detail page gate | DetailClient.tsx:66 | `RequirePermission code={PERMISSIONS.EMPLOYEE_READ}` |
 | "Edit" `<Button>` | DetailClient.tsx:81 | `canUpdate` (local var; confirm exact permission string when walking — likely `EMPLOYEE_CREATE`, see API note below) |
+| "Activate" `<Button>`, shown `{status==='DRAFT' && canReactivate}` (A-010, added round 3) | DetailClient.tsx | `canReactivate` → `employee.reactivate` |
 | "Exit" `<Button variant="danger">`, shown `{!exited && canExit}` | DetailClient.tsx:86 | `canExit` → `employee.exit` |
-| "Reactivate" `<Button>`, shown `{exited && canReactivate}` | DetailClient.tsx:91 | `canReactivate` → `employee.reactivate` |
+| "Suspend" `<Button>`, shown `{status==='ACTIVE' && canExit}` (A-010, added round 3) | DetailClient.tsx | `canExit` → `employee.exit` |
+| "Reactivate" `<Button>`, shown `{(exited \|\| status==='SUSPENDED') && canReactivate}` (A-010 round 3: widened from `exited` alone) | DetailClient.tsx:91 | `canReactivate` → `employee.reactivate` |
 
 **Mobile** — `apps/mobile/app/employees.tsx` (155 lines; module `employees`, gate `employee.read`). Search `TextInput` (line 68), row-select `onPress` (line 85). **Read-only** — no create/exit/reactivate/import action found in the file.
 
