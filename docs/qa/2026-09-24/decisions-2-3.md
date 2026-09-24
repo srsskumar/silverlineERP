@@ -482,3 +482,121 @@ exactly); verified with `tsc --noEmit`.
   clean, `next build` clean, full `npx vitest run` — 947 passed, 0 failed
   across 77 files, verified at the I4 commit and unchanged since.
 - No migrations run against the live DB. No leave-module files touched.
+
+---
+
+# Fix round 2
+
+Same worktree and branch. TDD throughout, one commit per item, same trailer.
+
+## Item 1 — C1 gap: count TDS/advance as settled
+
+**Current behaviour found.** `raBillLiveAllocated` (C1, fix round 1) summed
+only `payment_allocations.amount`, while
+`settlementPosition`/`checkAllocation`
+(`packages/shared/src/financial-control.ts`) count
+`amount + tds_amount + advance_adjusted` as settled (not
+`retention_amount` or `other_deduction`, which stay outstanding). A row
+carrying non-zero `tds_amount`/`advance_adjusted` against an RA bill would
+under-count what is already closed out, letting certification land below
+the true settled figure.
+
+**(a) Verification.** APAR-2 (`paymentAllocationSchema`'s `superRefine`,
+already refusing `tds_amount`/`advance_adjusted` on an RA_BILL allocation)
+is checked unconditionally on the one path that writes
+`payment_allocations` with caller-controlled fields: `POST
+/payments/:id/allocations`. The other write path
+(`apps/api/src/modules/ledgers/routes.ts`'s payment-run execute — the
+"bulk" path) never asks for a document type at all —
+`payment_run_lines` is hard-wired to `VENDOR_INVOICE` when a run is built,
+and its `INSERT` into `payment_allocations` names only `amount`, leaving
+`tds_amount`/`advance_adjusted` at their column defaults. No gap found;
+confirmed end to end rather than by reading the code alone.
+
+**(b) Change.** `raBillLiveAllocated` now sums
+`amount + tds_amount + advance_adjusted`, matching
+`settlementPosition`/`checkAllocation` exactly — defence in depth against
+any future path that bypasses the schema.
+
+**RED/GREEN.** `apps/api/test/catalogue/ledgers.test.ts`: a bulk-executed
+payment run's allocations are confirmed `VENDOR_INVOICE` with zero
+TDS/advance (already true; not a RED/GREEN pair, a verification test).
+`apps/api/test/catalogue/ra-billing.test.ts`: RED showed certifying at
+440,000 succeeding despite 400,000 cash + 50,000 TDS (written directly,
+bypassing the schema) already settling 450,000; GREEN showed it refused
+`RA_BILL_OVER_ALLOCATED`, and certifying at 450,000 succeeding.
+
+**Files.** `apps/api/src/modules/billing/routes.ts`,
+`apps/api/test/catalogue/ledgers.test.ts`,
+`apps/api/test/catalogue/ra-billing.test.ts`.
+
+**Migration.** None.
+
+**Commit.** `d326d1e fix(billing): count TDS/advance as settled in the over-allocation guard`
+
+---
+
+## Item 2 — I3 policy caveat: unresolvable ladders
+
+**Current behaviour found.** Segregation of duties (I3) correctly refuses
+the same physical person a second level of an instance, but nothing
+stopped a ladder from naming that same only-possible person at two levels
+in the first place — the same named approver twice, or a role with at
+most one holder in the organisation, at two levels. Every instance under
+such a policy would 422 forever, with no way to ever clear it, and the
+inbox showed it as if it were actionable.
+
+**(a) Save-time validation.** `POST /api/v1/approval-policies` now refuses
+(`LADDER_UNRESOLVABLE`, 422) a ladder where the same `approver_user_id`
+appears at two levels (always the same person), or the same
+`approver_role` appears at two levels while the organisation currently has
+at most one holder of it (a live count against `user_roles`). A role held
+by two or more people is left alone — who holds it can change, and
+different people legitimately clearing each level is exactly how the
+ladder is meant to work. The web form (`ApprovalPolicyForm` via
+`approvalPolicySchema`) catches the named-approver duplicate client-side,
+before the round trip; the role-holder-count case needs a database lookup
+the form does not have and is left to the API's 422.
+
+**(b) Runtime message.** The `SEGREGATION_OF_DUTIES` 422 now names the
+policy and tells the user to ask an administrator to change it, since no
+amount of resubmitting fixes a policy design problem.
+
+**(c) Inbox filtering.** `GET /approvals/inbox` now runs each candidate
+through `canAct()` itself instead of a separate, narrower
+"is it sequentially next" check, so sequence, delegation and segregation
+of duties (I2/I3) all filter the list exactly as they would refuse the
+decision — an item only a policy fix could ever clear no longer looks
+actionable and 422s on click.
+
+**RED/GREEN.** `apps/api/test/catalogue/approvals.test.ts`: RED showed the
+named-duplicate and single-holder-role ladders saving successfully (201),
+the runtime message missing "administrator", and a segregation-blocked
+item still listed in the blocked user's inbox; GREEN showed all four
+fixed, plus that a second holder or two different people/roles save fine,
+and the real approver's inbox still lists the item.
+`apps/web/tests-dom/approval-policies.test.tsx`: RED/GREEN on the
+client-side named-duplicate refusal.
+
+**Files.** `apps/api/src/modules/approvals/routes.ts`,
+`apps/api/test/catalogue/approvals.test.ts`,
+`apps/web/lib/validation.ts`,
+`apps/web/tests-dom/approval-policies.test.tsx`.
+
+**Migration.** None.
+
+**Commit.** `4f79abe feat(approvals): refuse unresolvable ladders, name the policy, filter the inbox`
+
+---
+
+## Fix round 2 — final verification
+
+- Full `apps/api` suite (`npx vitest run` under `nohup`, VM slot g, HEAD
+  `4f79abe`): **2165 passed, 1 failed, 2166 total** (79/80 files). Duration
+  1058s. The one failure is the same pre-existing
+  `test/catalogue/survey-operations.test.ts` date-rollover flake noted in
+  both earlier batches; still no survey file touched by any commit on this
+  branch. Not a regression from fix round 2.
+- Web (touched in item 2): `tsc --noEmit` clean, `next build` clean, full
+  `npx vitest run` — **948 passed, 0 failed** across 77 files.
+- No migrations run against the live DB. No leave-module files touched.
