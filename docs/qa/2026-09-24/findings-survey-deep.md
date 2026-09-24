@@ -35,4 +35,14 @@ Tests: api 2163/2164, with the one failure being SV-015, since fixed (survey-ope
 | SV-021 | Minor | FIXED 79809d9 | Phones masked on crew-assets and projects/:id/employees for observer-role holders; a shared masksPhones() rule. |
 | SV-020 | Minor | FIXED ae68897 | GCP DELETE uses survey.enter plus the shared authority helper (crew, manager, TL, the project's PM, admin). A non-project PM holding survey.manage is now refused, matching create/edit. |
 | SV-015 | P3 | FIXED 925f678 | The alert test flake: the org-IST day, and "N days ago" read the way the job computes it. |
-| SV-022 | Minor | OPEN | Bulk DECIDE doesn't apply the SV-012 check (decision dated before submission). |
+| SV-022 | Minor | FIXED in round 2 (007b0cc) | Bulk DECIDE doesn't apply the SV-012 check (decision dated before submission). |
+
+Full apps/api suite after fix round 1 (slot d, `/tmp/svd-lane1-full.log`): **82 files, 2174 passed, 13 skipped, 0 failed**. Web tsc clean.
+
+## Round 2 (relayed by the controller)
+| ID | Sev | Status | What |
+|---|---|---|---|
+| SV-022 | Minor | FIXED 007b0cc | Bulk DECIDE now applies the SV-012 rule row by row. A village whose claim was submitted after the decision date is skipped and named `DECIDED_BEFORE_SUBMITTED` (same in the dry run); the rest of the batch goes ahead. |
+| SV-019b | Minor | FIXED 1251f84 | Bulk REVERSE reports `updated` as the reversals actually made under the lock, not the eligible count taken from the preview read. The race itself can't be forced in a test; the count is pinned. |
+| SV-023 | Important (regression from SV-011) | FIXED b2975ce | The transition table left out APPROVED → SUBMITTED, so the web's existing "Undo decision" on a mistaken approval got 409. Allowed again; only PAID is closed. |
+| SV-019 UI | — | DONE 91d063f | Web: "Reverse payment" on PAID claims in the village billing table, for ADMIN/SUPER_ADMIN only (`mayReversePayments`, matching the API gate). A confirm dialog requires a reason of ≥5 characters and sends If-Match. Undo, Edit and Remove are hidden on paid claims (the server refuses them). The bulk bar has a REVERSE option for admins, with a reason field, dry-run preview first. Component: `components/survey/ReversePaymentDialog.tsx`; tests: `tests-dom/survey-billing-reversal.test.tsx` (exact requests). The DOM tests were written alongside the new component, so their RED was a missing module rather than a failing assertion. |
