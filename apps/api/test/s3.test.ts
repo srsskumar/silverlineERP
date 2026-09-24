@@ -578,10 +578,14 @@ describe("leave balances: open-year (R5-008)", () => {
     const nextYear = currentTestYear() + 1;
     const res = await openYear(adminH, { year: nextYear }, "?dry_run=1");
     expect(res.statusCode).toBe(200);
-    const body = (res.json() as { data: { created: number; total: number; dry_run: boolean } }).data;
+    const body = (res.json() as { data: { created: number; filled: number; total: number; dry_run: boolean } }).data;
     expect(body.dry_run).toBe(true);
     expect(body.total).toBe(6);
-    expect(body.created).toBe(0);
+    // Fix round 1: dry-run now reports the real would-be classification
+    // counts (created/filled/skipped), not a placeholder 0 the UI had to
+    // derive total-skipped from -- 6 fresh pairs would all be created.
+    expect(body.created).toBe(6);
+    expect(body.filled).toBe(0);
     const rows = await pool.query(
       "SELECT count(*)::int AS n FROM leave_balances WHERE employee_id = $1::uuid AND period_year = $2",
       [eId, nextYear],

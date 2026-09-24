@@ -372,8 +372,8 @@ describe("UT-AUTH-06 evaluate self-approval", () => {
       payload: {
         employee_id: employeeId,
         leave_type_id: await casualLeaveTypeId(),
-        from_date: futureDate(10),
-        to_date: futureDate(10),
+        from_date: nonSundayFutureDate(10),
+        to_date: nonSundayFutureDate(10),
         reason: "Catalogue self-approval probe",
       },
     });
@@ -493,8 +493,13 @@ describe("UT-AUTH-06 evaluate self-approval", () => {
     expect(created.statusCode).toBe(201);
     const request = created.json() as { id: string; current_approver_id: string };
 
-    // HR_MANAGER holds leave.decide but is not this request's named approver.
-    const bystander = w.role.HR_MANAGER;
+    // PROJECT_MANAGER holds leave.decide but is not this request's named
+    // approver -- and, unlike HR_MANAGER, never can be: they hold no
+    // reports_to relationship to this employee (step 1) and are not the
+    // org's HR manager or an admin (step 2, owner decision 2026-09-24 --
+    // HR_MANAGER is now step 2's preferred candidate, so it can no longer
+    // stand in as a guaranteed bystander here).
+    const bystander = w.role.PROJECT_MANAGER;
     const decision = await w.app.inject({
       method: "POST",
       url: `/api/v1/leave/requests/${request.id}/decision`,
@@ -514,6 +519,25 @@ function futureDate(daysAhead: number): string {
   const base = new Date(`${workDate()}T00:00:00Z`);
   base.setUTCDate(base.getUTCDate() + daysAhead);
   return base.toISOString().slice(0, 10);
+}
+
+/**
+ * A future date guaranteed not to be a Sunday, nudged forward a day at a
+ * time until it isn't. These UT-AUTH-06 probes file a single-day *paid*
+ * leave request purely to exercise approval routing, not day-counting; a
+ * single Sunday is now correctly refused outright (422 ALL_DAYS_EXCLUDED,
+ * D-012's sandwich rule -- there is nothing to charge), which would fail
+ * the request before routing was ever reached. `futureDate(10)` landing on
+ * a Sunday under one particular run's calendar is exactly that trap.
+ */
+function nonSundayFutureDate(daysAhead: number): string {
+  let d = daysAhead;
+  let date = futureDate(d);
+  while (new Date(`${date}T00:00:00Z`).getUTCDay() === 0) {
+    d += 1;
+    date = futureDate(d);
+  }
+  return date;
 }
 
 describe("UT-AUTH-07 mask Aadhaar PAN bank and phone data", () => {
