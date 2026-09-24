@@ -56,8 +56,12 @@ export async function buildApp(
   const config = getConfig(options);
   const pool = transactionPool(options.pool ?? createPool(config.databaseUrl));
 
-  // 8 MiB: large enough for the S1 5 MiB document cap to be enforced by
-  // the route (422) instead of the framework (413).
+  // 15 MiB: large enough for the biggest base64 body any route decodes —
+  // B-003's 10 MiB receipt cap, which base64 expands to ~13.3 MiB before the
+  // route ever sees it — to be enforced by the route (422, naming the limit)
+  // rather than the framework (a bare 413). The S1/S4 5 MiB document/evidence
+  // caps (~6.7 MiB encoded) fit the same way under the old 8 MiB ceiling;
+  // raising it only widens the margin for them.
   const logger = config.nodeEnv === "test"
     ? false
     : {
@@ -73,7 +77,7 @@ export async function buildApp(
     // We emit a smaller, stable request/response pair below. This also avoids
     // Fastify's deprecated top-level disableRequestLogging option.
     logController: new LogController({ disableRequestLogging: true }),
-    bodyLimit: 8 * 1024 * 1024,
+    bodyLimit: 15 * 1024 * 1024,
     // Who may say where a request came from: see ApiConfig.trustProxy. Every
     // per-address limit and every audit row's actor_ip depends on it.
     trustProxy: config.trustProxy,
