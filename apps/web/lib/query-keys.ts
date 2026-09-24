@@ -144,7 +144,7 @@ export const queryKeys = {
     requests: (filters?: Record<string, unknown>) =>
       [...queryKeys.leave.all, 'requests', filters ?? {}] as const,
     request: (id: string) => [...queryKeys.leave.all, 'request', id] as const,
-    openYearPreview: (year: number) =>
+    openYearPreview: (year: number | 'next') =>
       [...queryKeys.leave.all, 'open-year-preview', year] as const,
   },
   /**

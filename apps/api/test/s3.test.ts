@@ -594,6 +594,45 @@ describe("leave balances: open-year (R5-008)", () => {
     expect(res.statusCode).toBe(422);
   });
 
+  it("fix round 1, item 5: resolves 'current year' from the org's own timezone, not a fixed IST", async () => {
+    const { adminH } = await chainFixture();
+    // Any valid IANA zone that is not Asia/Kolkata -- this only has to prove
+    // the query actually reads organizations.settings->>'timezone' instead
+    // of a hardcoded one, not that the year value itself differs today.
+    await pool.query(
+      "UPDATE organizations SET settings = jsonb_set(settings, '{timezone}', '\"Pacific/Kiritimati\"') WHERE id = $1",
+      [orgId],
+    );
+    const expectedYear = Number(
+      (
+        await pool.query(
+          "SELECT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Pacific/Kiritimati'))::int AS y",
+        )
+      ).rows[0].y,
+    );
+    const outOfRange = await openYear(adminH, { year: expectedYear + 5 });
+    expect(outOfRange.statusCode).toBe(422);
+    expect((outOfRange.json() as { message: string }).message).toContain(String(expectedYear));
+  });
+
+  it("fix round 1, item 5: defaults the omitted year to the org's own next year", async () => {
+    const { adminH } = await chainFixture();
+    await pool.query(
+      "UPDATE organizations SET settings = jsonb_set(settings, '{timezone}', '\"Pacific/Kiritimati\"') WHERE id = $1",
+      [orgId],
+    );
+    const expectedYear = Number(
+      (
+        await pool.query(
+          "SELECT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Pacific/Kiritimati'))::int AS y",
+        )
+      ).rows[0].y,
+    );
+    const res = await openYear(adminH, {}, "?dry_run=1");
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { data: { year: number } }).data.year).toBe(expectedYear + 1);
+  });
+
   it("requires leave.admin, not just leave.read (403)", async () => {
     const { emp } = await chainFixture();
     const res = await openYear(emp.headers, { year: currentTestYear() + 1 });
@@ -628,6 +667,110 @@ describe("leave balances: open-year (R5-008)", () => {
     );
     expect((otherRows.rows[0] as { n: number }).n).toBe(0);
     void eId;
+  });
+});
+
+describe("R5-008 fix round 1, item 1: a year touched for zero days gets no empty row", () => {
+  it("files no row for a year a paid request costs nothing in, and open-year opens it properly afterward", async () => {
+    const { adminH, emp, eId, types } = await chainFixture();
+    await pool.query("UPDATE employees SET reports_to = NULL WHERE id = $1::uuid", [eId]);
+    const y = currentTestYear();
+    // Two holidays, not an incidental Sunday, so this reproduces regardless
+    // of what weekday 31 Dec happens to fall on in the year the suite runs.
+    await mkHoliday(adminH, `${y + 1}-01-01`, "New Year");
+    await mkHoliday(adminH, `${y + 1}-01-02`, "Bank holiday");
+    await setBalance(adminH, eId, types["CL"] as string, y, 10);
+
+    const filed = await fileLeave(emp.headers, {
+      leave_type_id: types["CL"],
+      from_date: `${y}-12-31`,
+      to_date: `${y + 1}-01-02`,
+      reason: "year-end zero-share check",
+    });
+    expect(filed.statusCode).toBe(201);
+    // Only 31 Dec counts; both days of y+1 are holidays.
+    expect((filed.json() as { total_days: number }).total_days).toBe(1);
+    const reqId = (filed.json() as { id: string }).id;
+
+    const noRowYet = await pool.query(
+      "SELECT 1 FROM leave_balances WHERE employee_id = $1::uuid AND leave_type_id = $2::uuid AND period_year = $3",
+      [eId, types["CL"], y + 1],
+    );
+    expect(noRowYet.rowCount).toBe(0);
+
+    const decided = await app.inject({
+      method: "POST",
+      url: `/api/v1/leave/requests/${reqId}/decision`,
+      headers: { ...adminH, "If-Match": "1" },
+      payload: { decision: "APPROVE" },
+    });
+    expect(decided.statusCode).toBe(200);
+
+    // Still no row for y+1 after approval -- the debit loop skips a
+    // zero-day year too, not just the balance-check loop at filing.
+    const stillNoRow = await pool.query(
+      "SELECT 1 FROM leave_balances WHERE employee_id = $1::uuid AND leave_type_id = $2::uuid AND period_year = $3",
+      [eId, types["CL"], y + 1],
+    );
+    expect(stillNoRow.rowCount).toBe(0);
+
+    // Open-year for y+1 creates a fresh row at full entitlement -- it must
+    // not find a leftover empty row and skip it as "already open".
+    const opened = await openYear(adminH, {
+      year: y + 1,
+      employee_ids: [eId],
+      leave_type_ids: [types["CL"] as string],
+    });
+    expect(opened.statusCode).toBe(200);
+    const openedBody = (opened.json() as { data: { created: number; filled: number; skipped: number } }).data;
+    expect(openedBody).toMatchObject({ created: 1, filled: 0, skipped: 0 });
+
+    const finalBal = await pool.query(
+      "SELECT opening_balance FROM leave_balances WHERE employee_id = $1::uuid AND leave_type_id = $2::uuid AND period_year = $3",
+      [eId, types["CL"], y + 1],
+    );
+    expect(Number((finalBal.rows[0] as { opening_balance: number }).opening_balance)).toBe(12);
+  });
+
+  it("open-year fills a leftover self-healed empty row instead of skipping it, but never touches a manually-set 0", async () => {
+    const { adminH, eId, types } = await chainFixture();
+    const y = currentTestYear() + 1;
+    // Simulate the historical bug (or any other path) leaving a genuinely
+    // empty, untouched row behind for one employee...
+    const selfHealed = await pool.query(
+      `INSERT INTO leave_balances (employee_id, leave_type_id, period_year)
+       VALUES ($1::uuid, $2::uuid, $3) RETURNING id`,
+      [eId, types["CL"], y],
+    );
+    const selfHealedId = (selfHealed.rows[0] as { id: string }).id;
+
+    // ...and a second employee whose row is *also* all-zero, but was set
+    // that way deliberately through the manual adjust dialog.
+    const other = await mkEmployee(adminH);
+    await activateEmployee(other);
+    await setBalance(adminH, other, types["CL"] as string, y, 0);
+
+    const opened = await openYear(adminH, { year: y });
+    expect(opened.statusCode).toBe(200);
+    const body = (opened.json() as { data: { created: number; filled: number; skipped: number; total: number } }).data;
+    expect(body.filled).toBe(1);
+    // The manually-set-to-0 row must count as already open, not fillable.
+    expect(body.skipped).toBeGreaterThanOrEqual(1);
+
+    const healedNow = await pool.query("SELECT opening_balance FROM leave_balances WHERE id = $1::uuid", [
+      selfHealedId,
+    ]);
+    expect(Number((healedNow.rows[0] as { opening_balance: number }).opening_balance)).toBe(12);
+
+    const manualStillZero = await pool.query(
+      "SELECT opening_balance FROM leave_balances WHERE employee_id = $1::uuid AND leave_type_id = $2::uuid AND period_year = $3",
+      [other, types["CL"], y],
+    );
+    expect(Number((manualStillZero.rows[0] as { opening_balance: number }).opening_balance)).toBe(0);
+
+    // Running it again does not re-fill the now-legitimately-open row.
+    const again = await openYear(adminH, { year: y });
+    expect((again.json() as { data: { filled: number } }).data.filled).toBe(0);
   });
 });
 
@@ -958,6 +1101,127 @@ async function mkHoliday(
   return (res.json() as { id: string }).id;
 }
 
+function previewLeave(
+  headers: Record<string, string>,
+  params: { leave_type_id: string; from_date: string; to_date: string; employee_id?: string },
+) {
+  const q = new URLSearchParams({
+    leave_type_id: params.leave_type_id,
+    from_date: params.from_date,
+    to_date: params.to_date,
+    ...(params.employee_id ? { employee_id: params.employee_id } : {}),
+  });
+  return app.inject({
+    method: "GET",
+    url: `/api/v1/leave/preview?${q.toString()}`,
+    headers,
+  });
+}
+
+describe("GET /leave/preview (fix round 1, item 2)", () => {
+  it("returns exactly what filing would charge, matching daysByYear + the sandwich rule", async () => {
+    const { emp, types } = await chainFixture();
+    const friday = nextWeekday(plusDays(60), 5);
+    const monday = isoDay(new Date(new Date(`${friday}T00:00:00Z`).getTime() + 3 * 86_400_000));
+    const res = await previewLeave(emp.headers, {
+      leave_type_id: types["CL"] as string,
+      from_date: friday,
+      to_date: monday,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = (res.json() as {
+      data: { total_days: number; is_paid: boolean; years: Array<{ year: number; days: number }> };
+    }).data;
+    expect(body.is_paid).toBe(true);
+    expect(body.total_days).toBe(3);
+    expect(body.years).toEqual([{ year: yr(friday), days: 3 }]);
+  });
+
+  it("matches what filing actually charges for the same range (no separate opinion)", async () => {
+    const { adminH, emp, eId, types } = await chainFixture();
+    const friday = nextWeekday(plusDays(60), 5);
+    const monday = isoDay(new Date(new Date(`${friday}T00:00:00Z`).getTime() + 3 * 86_400_000));
+    await setBalance(adminH, eId, types["CL"] as string, yr(friday), 10);
+    const preview = await previewLeave(emp.headers, {
+      leave_type_id: types["CL"] as string,
+      from_date: friday,
+      to_date: monday,
+    });
+    const filed = await fileLeave(emp.headers, {
+      leave_type_id: types["CL"],
+      from_date: friday,
+      to_date: monday,
+    });
+    expect((preview.json() as { data: { total_days: number } }).data.total_days).toBe(
+      (filed.json() as { total_days: number }).total_days,
+    );
+  });
+
+  it("counts every calendar day for an unpaid type, ignoring holidays", async () => {
+    const { emp, types } = await chainFixture();
+    const friday = nextWeekday(plusDays(60), 5);
+    const monday = isoDay(new Date(new Date(`${friday}T00:00:00Z`).getTime() + 3 * 86_400_000));
+    const res = await previewLeave(emp.headers, {
+      leave_type_id: types["LOP"] as string,
+      from_date: friday,
+      to_date: monday,
+    });
+    expect((res.json() as { data: { total_days: number; is_paid: boolean } }).data).toMatchObject({
+      total_days: 4,
+      is_paid: false,
+    });
+  });
+
+  it("requires auth (401 anon)", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/v1/leave/preview" });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("rejects to_date before from_date (422 DATE_RANGE)", async () => {
+    const { emp, types } = await chainFixture();
+    const res = await previewLeave(emp.headers, {
+      leave_type_id: types["CL"] as string,
+      from_date: plusDays(34),
+      to_date: plusDays(30),
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { code: string }).code).toBe("DATE_RANGE");
+  });
+
+  it("404s an unknown leave type", async () => {
+    const { emp } = await chainFixture();
+    const res = await previewLeave(emp.headers, {
+      leave_type_id: randomUUID(),
+      from_date: plusDays(30),
+      to_date: plusDays(31),
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("blocks previewing somebody else's leave without leave.admin (403)", async () => {
+    const { emp, types } = await chainFixture();
+    const otherEmp = await mkEmployee(await adminHeaders());
+    const res = await previewLeave(emp.headers, {
+      leave_type_id: types["CL"] as string,
+      from_date: plusDays(30),
+      to_date: plusDays(31),
+      employee_id: otherEmp,
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("lets leave.admin preview on behalf of someone else, using their holiday scope", async () => {
+    const { adminH, eId, types } = await chainFixture();
+    const res = await previewLeave(adminH, {
+      leave_type_id: types["CL"] as string,
+      from_date: plusDays(30),
+      to_date: plusDays(31),
+      employee_id: eId,
+    });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
 describe("D-012 sandwich rule: paid leave does not debit Sundays/holidays", () => {
   it("excludes only the Sunday from a Fri-Mon paid range with no holiday configured (3 of 4 days)", async () => {
     const { adminH, emp, eId, types } = await chainFixture();
@@ -1098,6 +1362,27 @@ describe("D-012 sandwich rule: paid leave does not debit Sundays/holidays", () =
     // proves nothing: 4 calendar days in Dec, 3 in Jan, 7 total, and any
     // 7-day span has exactly one Sunday.
     expect(decDays + janDays).toBe(6);
+  });
+
+  it("fix round 1, item 4: a paid range that is entirely Sundays/holidays is refused, not filed as 0 days", async () => {
+    const { adminH, emp, eId, types } = await chainFixture();
+    await pool.query("UPDATE employees SET reports_to = NULL WHERE id = $1::uuid", [eId]);
+    const saturday = nextWeekday(plusDays(60), 6);
+    const sunday = isoDay(new Date(new Date(`${saturday}T00:00:00Z`).getTime() + 86_400_000));
+    await mkHoliday(adminH, saturday);
+    await setBalance(adminH, eId, types["CL"] as string, yr(saturday), 10);
+    const res = await fileLeave(emp.headers, {
+      leave_type_id: types["CL"],
+      from_date: saturday,
+      to_date: sunday,
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { code: string }).code).toBe("ALL_DAYS_EXCLUDED");
+    const count = await pool.query(
+      "SELECT count(*)::int AS n FROM leave_requests WHERE employee_id = $1::uuid",
+      [eId],
+    );
+    expect((count.rows[0] as { n: number }).n).toBe(0);
   });
 });
 
@@ -1370,6 +1655,57 @@ describe("leave decisions", () => {
       [eId],
     );
     expect((rows.rows[0] as { n: number }).n).toBe(0);
+  });
+
+  it("fix round 1, item 3: recomputes total_days/debited_days at approval when a holiday was added since filing", async () => {
+    const { adminH, emp, eId, types } = await chainFixture();
+    await pool.query("UPDATE employees SET reports_to = NULL WHERE id = $1::uuid", [eId]);
+    const friday = nextWeekday(plusDays(60), 5);
+    const saturday = isoDay(new Date(new Date(`${friday}T00:00:00Z`).getTime() + 86_400_000));
+    const monday = isoDay(new Date(new Date(`${friday}T00:00:00Z`).getTime() + 3 * 86_400_000));
+    await setBalance(adminH, eId, types["CL"] as string, yr(friday), 10);
+
+    // Filed before any holiday exists: only the Sunday is excluded (3 of 4).
+    const filed = await fileLeave(emp.headers, {
+      leave_type_id: types["CL"],
+      from_date: friday,
+      to_date: monday,
+    });
+    expect(filed.statusCode).toBe(201);
+    expect((filed.json() as { total_days: number }).total_days).toBe(3);
+    expect((filed.json() as { debited_days: unknown }).debited_days).toEqual([]);
+    const reqId = (filed.json() as { id: string }).id;
+
+    // A holiday lands on the Saturday before anyone gets to approve it.
+    await mkHoliday(adminH, saturday);
+
+    const decided = await app.inject({
+      method: "POST",
+      url: `/api/v1/leave/requests/${reqId}/decision`,
+      headers: { ...adminH, "If-Match": "1" },
+      payload: { decision: "APPROVE" },
+    });
+    expect(decided.statusCode).toBe(200);
+    const decidedBody = decided.json() as { total_days: number; debited_days: Array<{ year: number; days: number }> };
+    // total_days is now 2 (Fri+Mon), not the 3 stored at filing -- one
+    // source of truth, matching what was actually debited.
+    expect(decidedBody.total_days).toBe(2);
+    expect(decidedBody.debited_days).toEqual([{ year: yr(friday), days: 2 }]);
+
+    const bal = await pool.query(
+      "SELECT consumed FROM leave_balances WHERE employee_id = $1::uuid AND period_year = $2",
+      [eId, yr(friday)],
+    );
+    expect(Number((bal.rows[0] as { consumed: string }).consumed)).toBe(2);
+
+    // The detail view shows the same, corrected figure -- not the one
+    // originally quoted at filing.
+    const got = await app.inject({
+      method: "GET",
+      url: `/api/v1/leave/requests/${reqId}`,
+      headers: adminH,
+    });
+    expect((got.json() as { total_days: number }).total_days).toBe(2);
   });
 });
 

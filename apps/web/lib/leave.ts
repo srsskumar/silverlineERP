@@ -145,6 +145,45 @@ export function normalizeLeaveRequest(body: unknown): LeaveRequest {
   throw new Error('Unrecognized leave-request shape');
 }
 
+/**
+ * GET /api/v1/leave/preview result (fix round 1, item 2): exactly what
+ * filing this range would charge, from the same day-counting function
+ * filing itself uses -- the client never computes this on its own.
+ */
+export interface LeavePreviewResult {
+  leave_type_id: string;
+  is_paid: boolean;
+  from_date: string;
+  to_date: string;
+  total_days: number;
+  years: Array<{ year: number; days: number }>;
+}
+
+export function buildPreviewQuery(params: {
+  leave_type_id: string;
+  from_date: string;
+  to_date: string;
+  employee_id?: string;
+}): string {
+  const search = new URLSearchParams({
+    leave_type_id: params.leave_type_id,
+    from_date: params.from_date,
+    to_date: params.to_date,
+  });
+  if (params.employee_id) search.set('employee_id', params.employee_id);
+  return `/api/v1/leave/preview?${search.toString()}`;
+}
+
+export async function previewLeave(params: {
+  leave_type_id: string;
+  from_date: string;
+  to_date: string;
+  employee_id?: string;
+}): Promise<LeavePreviewResult> {
+  const { data } = await apiRequest<LeavePreviewResult>(buildPreviewQuery(params), { method: 'GET' });
+  return data;
+}
+
 export async function listTypes(): Promise<LeaveType[]> {
   const { data } = await apiRequest<unknown>('/api/v1/leave/types', { method: 'GET' });
   return normalizeLeaveTypes(data);
@@ -187,6 +226,14 @@ export async function upsertBalance(input: {
 export interface OpenYearResult {
   year: number;
   created: number;
+  /**
+   * Rows that already existed but had never actually been opened -- a
+   * balance row self-healed empty by filing a leave request whose share of
+   * that year was zero days under the sandwich rule, with no manual
+   * adjustment on top -- backfilled to the entitlement rather than left
+   * stuck at 0 forever (fix round 1, item 1).
+   */
+  filled: number;
   skipped: number;
   total: number;
   dry_run: boolean;
@@ -197,15 +244,21 @@ export interface OpenYearResult {
  * matching employee x balance-requiring type opens at the type's plain
  * annual entitlement (owner decision, 2026-09-24: unused balance lapses).
  * `dry_run: true` reports the counts without writing anything.
+ *
+ * `year` is optional: leave it out and the server resolves it to the org's
+ * own current-year-plus-one, in the org's timezone, and echoes it back in
+ * the result (fix round 1, item 5) -- the caller does not have to guess
+ * "next year" from the browser clock.
  */
 export async function openYearBalances(input: {
-  year: number;
+  year?: number;
   leave_type_ids?: string[];
   employee_ids?: string[];
   dry_run?: boolean;
 }): Promise<OpenYearResult> {
   const qs = input.dry_run ? '?dry_run=1' : '';
-  const body: Record<string, unknown> = { year: input.year };
+  const body: Record<string, unknown> = {};
+  if (input.year !== undefined) body.year = input.year;
   if (input.leave_type_ids?.length) body.leave_type_ids = input.leave_type_ids;
   if (input.employee_ids?.length) body.employee_ids = input.employee_ids;
   const { data } = await apiRequest<OpenYearResult>(`/api/v1/leave-balances/open-year${qs}`, {

@@ -186,7 +186,13 @@ export type LeaveBalanceUpsertInput = z.infer<typeof leaveBalanceUpsertSchema>;
  * the same natural key `leave_balances` already enforces).
  */
 export const leaveOpenYearSchema = z.object({
-  year: z.number().int().min(2000).max(2100),
+  /**
+   * Optional (fix round 1, item 5): omit it and the server resolves "next
+   * year" itself, in the organisation's own timezone, rather than the
+   * caller guessing it from a browser clock that might be skewed or in a
+   * different zone. The resolved year is echoed back in the response.
+   */
+  year: z.number().int().min(2000).max(2100).optional(),
   leave_type_ids: z.array(z.string().uuid("leave_type_ids must be UUIDs")).optional(),
   employee_ids: z.array(z.string().uuid("employee_ids must be UUIDs")).optional(),
 });

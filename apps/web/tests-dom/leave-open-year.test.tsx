@@ -5,7 +5,8 @@
  * counts) then writes for real on confirm, plus a December-onward banner
  * nudging admins who have not opened next year's balances yet — otherwise a
  * request crossing into January 422s for lack of a row, not for lack of
- * entitlement.
+ * entitlement. Fix round 1, item 5: "next year" is resolved from the server
+ * (a dry-run with no `year`), not the browser clock.
  */
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -65,7 +66,9 @@ beforeEach(() => {
   ME = ME_ADMIN;
   isDecember = true;
   openYearBalances.mockReset();
-  openYearBalances.mockResolvedValue({ year: 2027, created: 0, skipped: 3, total: 10, dry_run: true });
+  // The one query that resolves "next year" (no `year` in the call). Dry-run
+  // now reports real would-be classification counts, not a placeholder 0.
+  openYearBalances.mockResolvedValue({ year: 2027, created: 7, filled: 0, skipped: 3, total: 10, dry_run: true });
   window.localStorage.clear();
   __resetAuthStateForTests();
   setTokens('admin-access', 'admin-refresh');
@@ -90,31 +93,46 @@ function mount() {
 }
 
 describe('R5-008 open-year button', () => {
-  it('shows "Open 2027 balances" to a leave.admin session and previews via dry-run before writing', async () => {
+  it('resolves "next year" from the server, not the browser clock, then shows and uses it', async () => {
     // Outside the December-banner scenario (tested separately below), so the
     // toolbar button's accessible name is unambiguous.
     isDecember = false;
     mount();
+    // The label-resolving query asks with no year at all.
+    await waitFor(() => expect(openYearBalances).toHaveBeenCalledWith({ dry_run: true }));
     fireEvent.click(await screen.findByRole('button', { name: 'Open 2027 balances' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Open 2027 balances' });
+    // The dialog's own preview then asks for that resolved year specifically.
     await waitFor(() => expect(openYearBalances).toHaveBeenCalledWith({ year: 2027, dry_run: true }));
-    expect(await within(dialog).findByText(/Would create/)).toHaveTextContent('Would create 7 of 10');
+    expect(await within(dialog).findByText(/Would create/)).toHaveTextContent('Would create 7 and fill 0 of 10');
 
-    openYearBalances.mockResolvedValueOnce({ year: 2027, created: 7, skipped: 3, total: 10, dry_run: false });
+    openYearBalances.mockResolvedValueOnce({ year: 2027, created: 7, filled: 0, skipped: 3, total: 10, dry_run: false });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Open 2027 balances' }));
 
     await waitFor(() =>
       expect(openYearBalances).toHaveBeenCalledWith({ year: 2027 }),
     );
-    expect(await within(dialog).findByText(/Opened 2027: 7 created, 3 already existed/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/Opened 2027: 7 created/)).toHaveTextContent(
+      'Opened 2027: 7 created, 0 filled, 3 already open',
+    );
+  });
+
+  it('shows the filled count once the server reports leftover empty rows', async () => {
+    isDecember = false;
+    openYearBalances.mockResolvedValue({ year: 2027, created: 5, filled: 2, skipped: 3, total: 10, dry_run: true });
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Open 2027 balances' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Open 2027 balances' });
+    expect(await within(dialog).findByText(/Would create/)).toHaveTextContent('Would create 5 and fill 2 of 10');
   });
 
   it('hides the button from a session without leave.admin', async () => {
     ME = ME_NO_ADMIN;
     mount();
     await screen.findByLabelText('Employee');
-    expect(screen.queryByRole('button', { name: 'Open 2027 balances' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Open \d+ balances/ })).not.toBeInTheDocument();
+    expect(openYearBalances).not.toHaveBeenCalled();
   });
 });
 
@@ -124,18 +142,18 @@ describe('R5-008 December rollover banner', () => {
     expect(await screen.findByText(/not open yet/)).toHaveTextContent('7 employee x type balances for 2027 are not open yet');
   });
 
-  it('says nothing before December', async () => {
+  it('still resolves the button label before December, but says nothing in the banner', async () => {
     isDecember = false;
     mount();
     await screen.findByLabelText('Employee');
+    await waitFor(() => expect(openYearBalances).toHaveBeenCalledWith({ dry_run: true }));
     expect(screen.queryByText(/not open yet/)).not.toBeInTheDocument();
-    expect(openYearBalances).not.toHaveBeenCalled();
   });
 
   it('says nothing once next year is already fully open', async () => {
-    openYearBalances.mockResolvedValue({ year: 2027, created: 0, skipped: 10, total: 10, dry_run: true });
+    openYearBalances.mockResolvedValue({ year: 2027, created: 0, filled: 0, skipped: 10, total: 10, dry_run: true });
     mount();
-    await waitFor(() => expect(openYearBalances).toHaveBeenCalledWith({ year: 2027, dry_run: true }));
+    await waitFor(() => expect(openYearBalances).toHaveBeenCalledWith({ dry_run: true }));
     expect(screen.queryByText(/not open yet/)).not.toBeInTheDocument();
   });
 

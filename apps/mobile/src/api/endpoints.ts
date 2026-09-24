@@ -599,6 +599,36 @@ export interface LeaveRequest {
   [k: string]: unknown;
 }
 
+export interface LeavePreviewResult {
+  leave_type_id: string;
+  is_paid: boolean;
+  from_date: string;
+  to_date: string;
+  total_days: number;
+  years: Array<{ year: number; days: number }>;
+}
+
+/**
+ * Exactly what filing this range would charge (fix round 1, item 2) --
+ * reads the same day-counting function `postLeaveRequest` triggers
+ * server-side, so this screen and the request it submits can never
+ * disagree about the day count the way a client-side calendar-day guess
+ * could for a paid request under the sandwich rule (D-012).
+ */
+export async function getLeavePreview(params: {
+  leave_type_id: string;
+  from_date: string;
+  to_date: string;
+}): Promise<LeavePreviewResult> {
+  const q = new URLSearchParams({
+    leave_type_id: params.leave_type_id,
+    from_date: params.from_date,
+    to_date: params.to_date,
+  });
+  const { data } = await apiFetch(`/api/v1/leave/preview?${q.toString()}`);
+  return asItem<LeavePreviewResult>(data, "data");
+}
+
 export async function postLeaveRequest(input: {
   leave_type_id: string;
   from_date: string;

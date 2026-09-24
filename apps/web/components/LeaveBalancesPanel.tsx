@@ -185,20 +185,22 @@ function OpenYearDialog({
 
   if (!open) return null;
   const preview = previewQuery.data;
-  const toCreate = preview ? preview.total - preview.skipped : null;
+  const toAct = preview ? preview.created + preview.filled : null;
   return (
     <div role="dialog" aria-modal="true" aria-label={`Open ${year} balances`} className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
       <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-surface p-6 shadow-lg">
         <h2 className="text-base font-semibold text-text">Open {year} balances</h2>
         <p className="mt-1 text-sm text-text-muted">
           Creates a {year} balance row, at the standard annual entitlement, for every active employee
-          and balance-tracked leave type that does not already have one. No carry-forward — unused{' '}
-          {year - 1} balance is not brought over.
+          and balance-tracked leave type that does not already have one -- and backfills one that was
+          left empty by a leave request whose share of {year} came to zero days, rather than leaving it
+          stuck at 0 forever. No carry-forward — unused {year - 1} balance is not brought over.
         </p>
         {result ? (
           <div className="mt-4 flex flex-col gap-3">
             <div role="status" className="rounded-md border border-success/30 bg-success-subtle px-3 py-2 text-sm text-success">
-              Opened {year}: {result.created} created, {result.skipped} already existed (of {result.total}).
+              Opened {year}: {result.created} created, {result.filled} filled, {result.skipped} already
+              open (of {result.total}).
             </div>
             <div className="flex justify-end">
               <Button variant="secondary" onClick={onClose}>Close</Button>
@@ -212,8 +214,8 @@ function OpenYearDialog({
               <ErrorCard title="Could not preview" error={previewQuery.error} onRetry={() => previewQuery.refetch()} />
             ) : preview ? (
               <div role="status" className="rounded-md border border-border bg-surface-muted px-3 py-2 text-sm text-text">
-                Would create <strong>{toCreate}</strong> of {preview.total} employee x type rows
-                ({preview.skipped} already open).
+                Would create <strong>{preview.created}</strong> and fill <strong>{preview.filled}</strong>{' '}
+                of {preview.total} employee x type rows ({preview.skipped} already open).
               </div>
             ) : null}
             {confirmMutation.isError ? (
@@ -224,9 +226,9 @@ function OpenYearDialog({
               <Button
                 onClick={() => confirmMutation.mutate()}
                 loading={confirmMutation.isPending}
-                disabled={!preview || toCreate === 0}
+                disabled={!preview || toAct === 0}
               >
-                {preview && toCreate === 0 ? 'Already fully open' : `Open ${year} balances`}
+                {preview && toAct === 0 ? 'Already fully open' : `Open ${year} balances`}
               </Button>
             </div>
           </div>
@@ -242,7 +244,6 @@ export function LeaveBalancesPanel() {
   const canAdmin = hasPermission({ permissions: session?.permissions }, PERMISSIONS.LEAVE_ADMIN);
 
   const currentYear = new Date().getFullYear();
-  const nextYear = currentYear + 1;
   const [year, setYear] = React.useState(String(currentYear));
   const [employeeInput, setEmployeeInput] = React.useState('');
   const [employeeId, setEmployeeId] = React.useState<string | null>(null);
@@ -254,18 +255,29 @@ export function LeaveBalancesPanel() {
   const yearNum = Number(year);
   const yearValid = Number.isInteger(yearNum) && yearNum >= 2000 && yearNum <= 2100;
 
-  // From 1 December (org/IST time), nudge admins if next year's balances
+  /*
+   * "Next year" comes from the server (fix round 1, item 5), not the
+   * browser clock -- a dry-run with no `year` in the body resolves to the
+   * org's own current-year-plus-one (org timezone) and echoes it back.
+   * Driving the button label, the banner and the dialog's default from this
+   * one query means a browser with a skewed clock, or a viewer in another
+   * timezone, cannot ask to open the wrong year.
+   */
+  const nextYearQuery = useQuery({
+    queryKey: queryKeys.leave.openYearPreview('next'),
+    queryFn: () => openYearBalances({ dry_run: true }),
+    enabled: canAdmin,
+    staleTime: 5 * 60_000,
+  });
+  // A guess to render before the query resolves; corrected the moment it does.
+  const nextYear = nextYearQuery.data?.year ?? currentYear + 1;
+
+  // From 1 December (org timezone), nudge admins if next year's balances
   // are not yet open (R5-008) -- otherwise a request crossing into January
   // 422s for lack of a row, not for lack of entitlement.
   const isDecemberOrLater = businessToday().slice(5, 7) === '12';
-  const rolloverBannerQuery = useQuery({
-    queryKey: queryKeys.leave.openYearPreview(nextYear),
-    queryFn: () => openYearBalances({ year: nextYear, dry_run: true }),
-    enabled: canAdmin && isDecemberOrLater,
-    staleTime: 5 * 60_000,
-  });
-  const rolloverOutstanding = rolloverBannerQuery.data
-    ? rolloverBannerQuery.data.total - rolloverBannerQuery.data.skipped
+  const rolloverOutstanding = nextYearQuery.data
+    ? nextYearQuery.data.total - nextYearQuery.data.skipped
     : 0;
 
   const balancesQuery = useQuery({
@@ -376,6 +388,7 @@ export function LeaveBalancesPanel() {
         onOpened={() => {
           queryClient.invalidateQueries({ queryKey: queryKeys.leave.balances() });
           queryClient.invalidateQueries({ queryKey: queryKeys.leave.openYearPreview(nextYear) });
+          queryClient.invalidateQueries({ queryKey: queryKeys.leave.openYearPreview('next') });
         }}
       />
     </div>
