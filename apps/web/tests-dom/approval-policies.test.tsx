@@ -96,7 +96,7 @@ describe('ApprovalPolicyForm', () => {
     fireEvent.change(screen.getByLabelText(/^Tolerance/), { target: { value: '5' } });
     fireEvent.change(screen.getByPlaceholderText('Min amount'), { target: { value: '0' } });
     fireEvent.change(screen.getByPlaceholderText('Max amount (blank = and above)'), { target: { value: '' } });
-    fireEvent.change(screen.getByPlaceholderText('Approver role'), { target: { value: 'PROJECT_MANAGER' } });
+    fireEvent.change(screen.getByLabelText('Approver role for level 1'), { target: { value: 'PROJECT_MANAGER' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Save policy' }));
 
@@ -132,11 +132,25 @@ describe('ApprovalPolicyForm', () => {
 
     fireEvent.change(await screen.findByLabelText(/^Name/), { target: { value: 'Dup' } });
     fireEvent.change(screen.getByPlaceholderText('Min amount'), { target: { value: '0' } });
-    fireEvent.change(screen.getByPlaceholderText('Approver role'), { target: { value: 'ADMIN' } });
+    fireEvent.change(screen.getByLabelText('Approver role for level 1'), { target: { value: 'ADMIN' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Save policy' }));
 
     expect(await screen.findByText('A policy with that name already exists')).toBeInTheDocument();
+  });
+
+  it('fix round 1 item 4 — offers a select of real role codes for the approver role, not free text', async () => {
+    mount(<ApprovalPolicyForm onClose={vi.fn()} onSaved={vi.fn()} />);
+
+    const field = await screen.findByLabelText('Approver role for level 1');
+    expect(field.tagName).toBe('SELECT');
+    const options = Array.from((field as HTMLSelectElement).options).map((o) => o.value);
+    expect(options).toContain('PROJECT_MANAGER');
+    expect(options).toContain('SUPER_ADMIN');
+    expect(options).toContain('ADMIN');
+    // Every option is either the blank placeholder or a real SCREAMING_CASE
+    // role code — never free text.
+    expect(options.every((v) => v === '' || /^[A-Z][A-Z_]*$/.test(v))).toBe(true);
   });
 });
 

@@ -15,6 +15,15 @@ import {
   approvalPolicySchema, APPROVAL_DOCUMENT_TYPES, type ApprovalPolicyFormInput,
 } from '@/lib/validation';
 import { DOCUMENT_TYPE_LABELS } from '@/lib/finance';
+import { ROLE_CODES } from '@silverline/shared';
+
+/** "PROJECT_MANAGER" -> "Project manager" — the code is what the API stores
+ *  and what canAct() matches a session's roles against, so the option
+ *  value stays the code; this only softens how it reads. */
+function roleLabel(code: string): string {
+  const words = code.split('_').map((w) => w.toLowerCase());
+  return words[0].charAt(0).toUpperCase() + words[0].slice(1) + (words.length > 1 ? ' ' + words.slice(1).join(' ') : '');
+}
 
 type Row = Record<string, any>;
 
@@ -154,7 +163,12 @@ export function ApprovalPolicyForm({
                   <input type="number" min="1" max="20" placeholder="Sequence" {...register(`levels.${i}.sequence`)} />
                   <input type="number" min="0" step="any" placeholder="Min amount" {...register(`levels.${i}.min_amount`)} />
                   <input type="number" min="0" step="any" placeholder="Max amount (blank = and above)" {...register(`levels.${i}.max_amount`)} />
-                  <input placeholder="Approver role" maxLength={50} {...register(`levels.${i}.approver_role`)} />
+                  <select aria-label={`Approver role for level ${i + 1}`} {...register(`levels.${i}.approver_role`)}>
+                    <option value="">No role — use a specific approver instead</option>
+                    {ROLE_CODES.map((code) => (
+                      <option key={code} value={code}>{roleLabel(code)}</option>
+                    ))}
+                  </select>
                   <input placeholder="Approver user ID (optional)" {...register(`levels.${i}.approver_user_id`)} />
                   <input type="number" min="1" max="8760" placeholder="SLA hours (optional)" {...register(`levels.${i}.sla_hours`)} />
                 </div>
