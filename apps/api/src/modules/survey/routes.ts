@@ -1361,9 +1361,19 @@ export async function registerSurveyRoutes(
              updated_by)
            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
            ON CONFLICT (survey_village_id, stage_id)
-           DO UPDATE SET state = EXCLUDED.state, started_on = EXCLUDED.started_on,
+           /*
+            * A field the call did not mention is kept (SG-015). Completing a
+            * stage with only its completion date used to blank the start
+            * date and the remarks agreed at start-gt. An explicit null still
+            * clears: that is somebody saying so.
+            */
+           DO UPDATE SET state = EXCLUDED.state,
+                         started_on = CASE WHEN $13 THEN EXCLUDED.started_on
+                                           ELSE survey_village_stages.started_on END,
+                         -- Always what was sent: a reopened stage is not finished.
                          completed_on = EXCLUDED.completed_on,
-                         remarks = EXCLUDED.remarks,
+                         remarks = CASE WHEN $14 THEN EXCLUDED.remarks
+                                        ELSE survey_village_stages.remarks END,
                          expected_start_on = COALESCE(
                            EXCLUDED.expected_start_on, survey_village_stages.expected_start_on),
                          expected_end_on = COALESCE(
@@ -1379,7 +1389,8 @@ export async function registerSurveyRoutes(
             input.remarks ?? null,
             input.expected_start_on ?? null, input.expected_end_on ?? null,
             input.variance_reason ?? null, input.variance_remarks ?? null,
-            u.id])).rows[0];
+            u.id,
+            input.started_on !== undefined, input.remarks !== undefined])).rows[0];
 
         // Reported back with the row, so the screen that just wrote it can
         // say "eight days late" without asking again.

@@ -198,3 +198,44 @@ describe("an amended return's trail carries both sides (SG-012)", () => {
     expect(audit.after_state.crew_present).toBe(3);
   });
 });
+
+describe("moving a stage keeps what the call did not mention (SG-015)", () => {
+  it("does not blank the start date or the remarks when completing", async () => {
+    const mandal = String((await w.pool.query(
+      "SELECT id FROM org_units WHERE org_id=$1 AND type='mandal' LIMIT 1", [w.orgId])).rows[0].id);
+    const v = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Keep stage fields", village_code: uniq("KSF"), mandal_id: mandal,
+      total_extent_ac: 40,
+    });
+    const start = "2026-01-05";
+    await post(w.admin, `/api/v1/survey/villages/${v.data.id}/start-gt`, {
+      started_on: start, expected_end_on: "2099-01-01",
+      employee_ids: [w.siteEmployee], govt_staff_allocated: 1, crew_allocated: 1,
+      remarks: "Agreed with the MRO",
+    });
+    const done = await post(w.admin, `/api/v1/survey/villages/${v.data.id}/stage`, {
+      stage_code: "GROUND_TRUTHING", state: "COMPLETED", completed_on: workDate(),
+    });
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
+    expect(done.data.started_on).toBe(start);
+    expect(done.data.remarks).toBe("Agreed with the MRO");
+  });
+
+  it("still clears them when the caller says null", async () => {
+    const mandal = String((await w.pool.query(
+      "SELECT id FROM org_units WHERE org_id=$1 AND type='mandal' LIMIT 1", [w.orgId])).rows[0].id);
+    const v = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Clear stage fields", village_code: uniq("CSF"), mandal_id: mandal,
+    });
+    await post(w.admin, `/api/v1/survey/villages/${v.data.id}/stage`, {
+      stage_code: "GROUND_TRUTHING", state: "IN_PROGRESS", started_on: "2026-01-05",
+      remarks: "x", gt_govt_staff_allocated: 1, gt_crew_allocated: 1,
+    });
+    const r = await post(w.admin, `/api/v1/survey/villages/${v.data.id}/stage`, {
+      stage_code: "GROUND_TRUTHING", state: "NOT_STARTED", started_on: null, remarks: null,
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.started_on).toBeNull();
+    expect(r.data.remarks).toBeNull();
+  });
+});
