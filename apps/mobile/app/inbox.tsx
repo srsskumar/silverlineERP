@@ -15,6 +15,7 @@ import {
   postNotificationsReadAll,
   type AppNotification,
 } from "../src/api/endpoints";
+import { mobileDeepLink } from "../src/deepLinks";
 import { distinctTypes, formatNotificationType, isUnread } from "../src/inboxFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
 import {
@@ -41,6 +42,9 @@ function InboxScreen() {
   const [markingAll, setMarkingAll] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** A-001: set when a row has no mobile screen to open — the row is still
+   * marked read, but there is nowhere on the phone to send the user. */
+  const [webOnlyNote, setWebOnlyNote] = useState<string | null>(null);
 
   const list = useQuery({
     queryKey: ["notifications", unreadOnly],
@@ -55,7 +59,16 @@ function InboxScreen() {
     void qc.invalidateQueries({ queryKey: ["notifications"] });
   };
 
+  /**
+   * A-001: the whole row is the action, mirroring web's InboxList (§note
+   * 14) — opening it marks it read AND takes you to the thing it is about,
+   * using the server-resolved `href` (src/deepLinks.ts maps it to a mobile
+   * route). A destination with no mobile screen — organisation admin, or
+   * anything an older API has not learned to route yet — still marks the
+   * row read; it just has nowhere on the phone to send you.
+   */
   const openRow = async (item: AppNotification) => {
+    setWebOnlyNote(null);
     if (isUnread(item)) {
       try {
         await patchNotificationRead(item.id);
@@ -63,6 +76,12 @@ function InboxScreen() {
       } catch {
         // Best-effort: the row still shows; the next refresh will retry the read state.
       }
+    }
+    const link = mobileDeepLink(item);
+    if (link) {
+      router.push(link);
+    } else {
+      setWebOnlyNote("There is no screen for this on the phone yet — open it on the web app.");
     }
   };
 
@@ -115,6 +134,7 @@ function InboxScreen() {
 
       {note ? <Banner tone="success" icon="checkmark-circle-outline" title={note} /> : null}
       {error ? <Banner tone="danger" icon="alert-circle-outline" title={error} /> : null}
+      {webOnlyNote ? <Banner tone="info" icon="open-outline" title={webOnlyNote} /> : null}
 
       <Card>
         {list.isLoading ? (

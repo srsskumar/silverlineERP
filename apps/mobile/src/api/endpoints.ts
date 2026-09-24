@@ -648,6 +648,10 @@ export interface AppNotification {
   type?: string;
   entity_type?: string;
   entity_id?: string;
+  /** Where clicking it should lead, resolved server-side. Null when the
+   * referenced thing was deleted or the type has nowhere sensible to go
+   * (apps/api/src/modules/s5/routes.ts's NOTIF_COLS). See src/deepLinks.ts. */
+  href?: string | null;
   read_at?: string | null;
   created_at?: string;
   [k: string]: unknown;
