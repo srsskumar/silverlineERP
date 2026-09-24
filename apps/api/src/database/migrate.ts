@@ -101,6 +101,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "092_expense_receipts", file: "092_expense_receipts.sql" },
   { version: "094_vendor_invoice_lines_match", file: "094_vendor_invoice_lines_match.sql" },
   { version: "095_drop_msme_registered_check", file: "095_drop_msme_registered_check.sql" },
+  { version: "096_invoice_version", file: "096_invoice_version.sql" },
 ];
 
 /**

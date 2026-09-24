@@ -116,7 +116,9 @@ export function VendorInvoiceLines({ invoiceId, onClose }: { invoiceId: string; 
 
   const save = useMutation({
     mutationFn: (v: InvoiceLinesUpdateFormInput) =>
-      apiRequest(`/api/v1/invoices/${invoiceId}/lines`, { method: 'PATCH', body: v }),
+      apiRequest(`/api/v1/invoices/${invoiceId}/lines`, {
+        method: 'PATCH', headers: { 'If-Match': String(invoice?.version) }, body: v,
+      }),
     onSuccess: () => {
       toast.success('Lines saved', 'The invoice was re-priced from its lines.');
       setSubmitError(null);

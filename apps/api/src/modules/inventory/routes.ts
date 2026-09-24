@@ -326,6 +326,7 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
   const u=actor(req),id=(req.params as {id:string}).id,input=parse(invoiceLinesUpdateSchema,req.body);
   return {data:await mutate(pool,req,'invoice.lines.update','invoice',async db=>{
    const invoice=await inOrg(db,'invoices',id,u.orgId,true);
+   version(req,invoice as {version:number});
    await assertInvoiceLinesEditable(db,id,invoice);
 
    const purchaseOrderId=invoice.purchase_order_id?String(invoice.purchase_order_id):null;
@@ -342,7 +343,7 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    // rather than leaving a stale verdict standing over lines that changed
    // under it.
    const updated=(await db.query(
-    "UPDATE invoices SET subtotal=$2,tax=$3,total=$4,match_status='UNMATCHED' WHERE id=$1 RETURNING *",
+    "UPDATE invoices SET subtotal=$2,tax=$3,total=$4,match_status='UNMATCHED',version=version+1 WHERE id=$1 RETURNING *",
     [id,computed.taxableValue.toFixed(2),computed.taxTotal.toFixed(2),computed.total.toFixed(2)])).rows[0];
    const lines=(await db.query('SELECT * FROM invoice_lines WHERE invoice_id=$1 ORDER BY line_no',[id])).rows;
    return {...updated,lines};

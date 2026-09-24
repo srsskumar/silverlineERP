@@ -25,6 +25,10 @@ async function send(method: "POST" | "GET" | "PATCH", headers: Headers, url: str
 const post = (h: Headers, u: string, p?: unknown) => send("POST", h, u, p);
 const get = (h: Headers, u: string) => send("GET", h, u);
 const patch = (h: Headers, u: string, p?: unknown) => send("PATCH", h, u, p);
+/** PATCH .../invoices/:id/lines, with the current If-Match version merged in. */
+async function patchInvoiceLines(headers: Headers, id: string, body: unknown) {
+  return patch({ ...headers, ...(await ver("invoices", id)) }, `/api/v1/invoices/${id}/lines`, body);
+}
 
 async function ver(table: string, id: string): Promise<Headers> {
   const r = await w.pool.query(`SELECT version FROM ${table} WHERE id = $1`, [id]);
@@ -754,7 +758,7 @@ describe("vendor invoice lines (finding B-004)", () => {
       purchase_order_id: po.id,
       lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 100, unit_rate: 400, gst_rate_pct: 0 }],
     });
-    const res = await patch(w.admin, `/api/v1/invoices/${inv.data.id}/lines`, {
+    const res = await patchInvoiceLines(w.admin, inv.data.id, {
       lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 80, unit_rate: 400, gst_rate_pct: 0 }],
     });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
@@ -774,7 +778,7 @@ describe("vendor invoice lines (finding B-004)", () => {
       lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 100, unit_rate: 400, gst_rate_pct: 0 }],
     });
     await post(w.admin, `/api/v1/invoices/${inv.data.id}/match`, {});
-    const res = await patch(w.admin, `/api/v1/invoices/${inv.data.id}/lines`, {
+    const res = await patchInvoiceLines(w.admin, inv.data.id, {
       lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 50, unit_rate: 400, gst_rate_pct: 0 }],
     });
     expect(res.status).toBe(409);
@@ -799,7 +803,7 @@ describe("vendor invoice lines (finding B-004)", () => {
     expect(afterMatch.rows[0].match_status).toBe("EXCEPTION");
 
     // Correct the line to what was actually received, and save.
-    const res = await patch(w.admin, `/api/v1/invoices/${inv.data.id}/lines`, {
+    const res = await patchInvoiceLines(w.admin, inv.data.id, {
       lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 60, unit_rate: 400, gst_rate_pct: 0 }],
     });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
@@ -833,7 +837,7 @@ describe("vendor invoice lines (finding B-004)", () => {
     const status = await w.pool.query("SELECT match_status FROM invoices WHERE id=$1", [inv.data.id]);
     expect(status.rows[0].match_status).toBe("OVERRIDDEN");
 
-    const res = await patch(w.admin, `/api/v1/invoices/${inv.data.id}/lines`, {
+    const res = await patchInvoiceLines(w.admin, inv.data.id, {
       lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 60, unit_rate: 400, gst_rate_pct: 0 }],
     });
     expect(res.status).toBe(409);
@@ -851,7 +855,7 @@ describe("vendor invoice lines (finding B-004)", () => {
       lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 10, unit_rate: 400, gst_rate_pct: 0 }],
     });
     await w.pool.query("UPDATE invoices SET lifecycle_status='APPROVED' WHERE id=$1", [inv.data.id]);
-    const res = await patch(w.admin, `/api/v1/invoices/${inv.data.id}/lines`, {
+    const res = await patchInvoiceLines(w.admin, inv.data.id, {
       lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 5, unit_rate: 400, gst_rate_pct: 0 }],
     });
     expect(res.status).toBe(409);
@@ -877,7 +881,7 @@ describe("vendor invoice lines (finding B-004)", () => {
        VALUES($1,$2,'VENDOR_INVOICE',$3,500,$4)`,
       [w.orgId, payment.rows[0].id, inv.data.id, w.adminId]);
 
-    const res = await patch(w.admin, `/api/v1/invoices/${inv.data.id}/lines`, {
+    const res = await patchInvoiceLines(w.admin, inv.data.id, {
       lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 5, unit_rate: 400, gst_rate_pct: 0 }],
     });
     expect(res.status).toBe(409);
@@ -903,7 +907,7 @@ describe("vendor invoice lines (finding B-004)", () => {
        VALUES($1,$2,'VENDOR_INVOICE',$3,$4,4000)`,
       [w.orgId, run.rows[0].id, inv.data.id, vendor.id]);
 
-    const res = await patch(w.admin, `/api/v1/invoices/${inv.data.id}/lines`, {
+    const res = await patchInvoiceLines(w.admin, inv.data.id, {
       lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 5, unit_rate: 400, gst_rate_pct: 0 }],
     });
     expect(res.status).toBe(409);
@@ -924,6 +928,38 @@ describe("vendor invoice lines (finding B-004)", () => {
       lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 5, unit_rate: 400, gst_rate_pct: 0 }],
     });
     expect(res.status).toBe(403);
+  });
+
+  it("requires If-Match on PATCH /invoices/:id/lines, and refuses a stale version (fix round 1, item 3)", async () => {
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 10, rate: 400 },
+    ]);
+    const inv = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 10, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    const body = {
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 5, unit_rate: 400, gst_rate_pct: 0 }],
+    };
+
+    const noHeader = await patch(w.admin, `/api/v1/invoices/${inv.data.id}/lines`, body);
+    expect(noHeader.status).toBe(422);
+    expect(noHeader.body.code).toBe("VERSION_REQUIRED");
+
+    const stale = await patch({ ...w.admin, "if-match": "999" }, `/api/v1/invoices/${inv.data.id}/lines`, body);
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe("VERSION_CONFLICT");
+
+    // The version starts at 1 and bumps with every successful edit, exactly
+    // as every other versioned mutation in this codebase does.
+    const first = await patchInvoiceLines(w.admin, inv.data.id, body);
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    expect(first.data.version).toBe(2);
+    const second = await patchInvoiceLines(w.admin, inv.data.id, body);
+    expect(second.status, JSON.stringify(second.body)).toBe(200);
+    expect(second.data.version).toBe(3);
   });
 });
 
