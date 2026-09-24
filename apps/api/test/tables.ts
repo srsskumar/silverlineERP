@@ -51,6 +51,6 @@ export const VOLATILE_TABLES = `
   geo_fence_employee_assignments, device_registrations, audit_events, sessions, user_roles,
   idempotency_keys, users, employee_documents, employees, designations, org_units, holidays,
   attendance_exceptions, attendance_records, attendance_events, geo_fences, leave_requests,
-  leave_balances, leave_types, mentions, comments, task_evidence, task_dependencies, tasks,
+  leave_balances, leave_year_open_runs, leave_types, mentions, comments, task_evidence, task_dependencies, tasks,
   projects, project_workflows, project_types, workspaces, notifications, task_labels,
   labels, saved_filters, board_columns, boards, payslips, payroll_runs, payroll_policies`.trim().replace(/\s+/g, ' ');

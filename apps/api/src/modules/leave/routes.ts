@@ -26,7 +26,7 @@ import { writeAudit } from "../../common/audit.js";
 import { sendError } from "../../common/httpErrors.js";
 import { emitNotification } from "../s5/notify.js";
 import { parseIfMatch } from '../../common/ifMatch.js';
-import { orgTodaySql } from "../../common/orgTime.js";
+import { currentOrgYear, previewOpenYear, runOpenYear } from "./openYear.js";
 
 export interface LeaveRoutesOptions {
   pool: Pool;
@@ -59,19 +59,6 @@ function currentIstYear(): number {
   return Number(istDayString(new Date()).slice(0, 4));
 }
 
-/**
- * The organisation's current calendar year, in its own timezone (fix round
- * 1, item 5) -- `organizations.timezone` (default Asia/Kolkata), the same
- * source D-006/D-013 read via `orgTodaySql`, not the fixed IST used
- * elsewhere in this file for the per-request backdating rule.
- */
-async function currentOrgYear(db: Pick<Pool, "query">, orgId: string): Promise<number> {
-  const res = await db.query(
-    `SELECT EXTRACT(YEAR FROM ${orgTodaySql("$1")})::int AS year`,
-    [orgId],
-  );
-  return Number((res.rows[0] as { year: number }).year);
-}
 
 /** Inclusive calendar days between two YYYY-MM-DD dates (to >= from). */
 function inclusiveDays(from: string, to: string): number {
@@ -754,152 +741,29 @@ export async function registerLeaveRoutes(
           });
         }
 
-        const values: unknown[] = [user.orgId, targetYear];
-        let empFilter = "";
-        if (d.employee_ids?.length) {
-          values.push(d.employee_ids);
-          empFilter = ` AND e.id = ANY($${values.length}::uuid[])`;
-        }
-        let typeFilter = "";
-        if (d.leave_type_ids?.length) {
-          values.push(d.leave_type_ids);
-          typeFilter = ` AND t.id = ANY($${values.length}::uuid[])`;
-        }
-
-        // Every (active employee) x (balance-requiring leave type) pair in
-        // scope, left-joined to that year's row if one exists -- computed
-        // once so dry-run and the real write agree on the same counts.
-        const pairsRes = await db.query(
-          `SELECT e.id AS employee_id, t.id AS leave_type_id, t.annual_entitlement,
-                  b.id AS balance_id, b.opening_balance, b.credits, b.consumed, b.adjustments
-           FROM employees e
-           CROSS JOIN leave_types t
-           LEFT JOIN leave_balances b
-             ON b.employee_id = e.id AND b.leave_type_id = t.id AND b.period_year = $2
-           WHERE e.org_id = $1 AND e.status = 'ACTIVE'
-             AND t.org_id = $1 AND t.active = true AND t.requires_balance = true
-             ${empFilter}${typeFilter}`,
-          values,
-        );
-        type Pair = {
-          employee_id: string;
-          leave_type_id: string;
-          annual_entitlement: string | number;
-          balance_id: string | null;
-          opening_balance: string | number | null;
-          credits: string | number | null;
-          consumed: string | number | null;
-          adjustments: string | number | null;
-        };
-        const rows = pairsRes.rows as Pair[];
-
-        /*
-         * Fix round 1, item 1: filing self-heals a `leave_balances` row for
-         * any year a request touches, even a year the sandwich rule leaves
-         * it 0 days in -- an empty row indistinguishable, to a plain
-         * existence check, from one this action already opened. Left
-         * alone, that employee starts the year with nothing.
-         *
-         * "Empty and never actually opened" = every ledger term at 0 AND no
-         * `leave.balance.upsert` audit entry for that row -- an admin who
-         * deliberately set the opening balance to 0 gets the same all-zero
-         * row, and that one must not be silently overwritten. The audit
-         * trail is the only way to tell the two apart.
-         */
-        const isEmptyRow = (r: Pair): boolean =>
-          r.balance_id !== null &&
-          Number(r.opening_balance) === 0 &&
-          Number(r.credits) === 0 &&
-          Number(r.consumed) === 0 &&
-          Number(r.adjustments) === 0;
-
-        const toCreate = rows.filter((r) => r.balance_id === null);
-        const emptyRows = rows.filter(isEmptyRow);
-        let manuallyTouched = new Set<string>();
-        if (emptyRows.length) {
-          const auditRes = await db.query(
-            `SELECT DISTINCT entity_id FROM audit_events
-             WHERE entity_type = 'leave_balance' AND action = 'leave.balance.upsert'
-               AND entity_id = ANY($1::uuid[])`,
-            [emptyRows.map((r) => r.balance_id as string)],
-          );
-          manuallyTouched = new Set(
-            (auditRes.rows as Array<{ entity_id: string }>).map((r) => r.entity_id),
-          );
-        }
-        const toFill = emptyRows.filter((r) => !manuallyTouched.has(r.balance_id as string));
-        const toFillIds = new Set(toFill.map((r) => r.balance_id));
-        const toSkip = rows.filter((r) => r.balance_id !== null && !toFillIds.has(r.balance_id));
-
         if (dryRun) {
-          return reply.status(200).send({
-            data: {
-              year: targetYear,
-              created: toCreate.length,
-              filled: toFill.length,
-              skipped: toSkip.length,
-              total: rows.length,
-              dry_run: true,
-            },
-          });
+          const preview = await previewOpenYear(
+            db, user.orgId, targetYear, d.employee_ids, d.leave_type_ids,
+          );
+          return reply.status(200).send({ data: preview });
         }
 
-        let created = 0;
-        for (const r of toCreate) {
-          const ins = await db.query(
-            `INSERT INTO leave_balances (employee_id, leave_type_id, period_year, opening_balance)
-             VALUES ($1::uuid, $2::uuid, $3, $4)
-             ON CONFLICT (employee_id, leave_type_id, period_year) DO NOTHING
-             RETURNING id`,
-            [r.employee_id, r.leave_type_id, targetYear, r.annual_entitlement],
-          );
-          if ((ins.rowCount ?? 0) > 0) created += 1;
-        }
-        let filled = 0;
-        for (const r of toFill) {
-          // Re-checked in the WHERE, not just the SELECT above: still empty
-          // right now, under this same transaction.
-          const upd = await db.query(
-            `UPDATE leave_balances SET opening_balance = $2, updated_at = NOW()
-             WHERE id = $1::uuid AND opening_balance = 0 AND credits = 0
-               AND consumed = 0 AND adjustments = 0`,
-            [r.balance_id, r.annual_entitlement],
-          );
-          if ((upd.rowCount ?? 0) > 0) {
-            filled += 1;
-            await writeAudit(db, {
-              orgId: user.orgId,
-              actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
-              actorIp: req.ip,
-              actorUserAgent:
-                typeof req.headers["user-agent"] === "string"
-                  ? (req.headers["user-agent"] as string)
-                  : null,
-              action: "leave.balance.open_year_fill",
-              entityType: "leave_balance",
-              entityId: r.balance_id,
-              afterState: { opening_balance: Number(r.annual_entitlement), year: targetYear },
-              requestId: req.requestId,
-            });
-          }
-        }
-        const skipped = rows.length - created - filled;
-        const body = { year: targetYear, created, filled, skipped, total: rows.length, dry_run: false };
-        await writeAudit(db, {
+        const outcome = await runOpenYear(db, {
           orgId: user.orgId,
-          actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
+          year: targetYear,
+          employeeIds: d.employee_ids,
+          leaveTypeIds: d.leave_type_ids,
+          actorId: user.id,
+          impersonatorId: user.impersonator?.id ?? null,
           actorIp: req.ip,
           actorUserAgent:
             typeof req.headers["user-agent"] === "string"
               ? (req.headers["user-agent"] as string)
               : null,
-          action: "leave.balance.open_year",
-          entityType: "leave_balance",
-          entityId: null,
-          afterState: body,
           requestId: req.requestId,
+          triggeredBy: "manual",
         });
-        return reply.status(200).send({ data: body });
+        return reply.status(200).send({ data: outcome });
       });
     },
   );

@@ -109,6 +109,8 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   // 101 is reserved for a concurrently developed migration (qa/gaps4 board
   // idempotency work); this one is 102 so the two cannot collide.
   { version: "102_leave_request_debited_days", file: "102_leave_request_debited_days.sql" },
+  // 103-110 are reserved for concurrently developed migrations.
+  { version: "111_leave_year_open_runs", file: "111_leave_year_open_runs.sql" },
 ];
 
 /**

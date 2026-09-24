@@ -13,6 +13,7 @@ import {
   ADMIN_USERNAME,
   seedDatabase,
 } from "../src/database/seed.js";
+import { runLeaveYearOpen } from "../src/modules/jobs/leaveYearOpen.js";
 
 const TEST_DB = testDatabaseUrl();
 const JWT_SECRET = "test-secret-change-me";
@@ -1462,6 +1463,137 @@ describe("leave step-2 approver: HR manager preferred over admin (owner decision
     const body = filed.json() as { current_approver_id: string };
     expect(body.current_approver_id).toBe(expectedApprover);
     expect(body.current_approver_id).not.toBe(applicant.id);
+  });
+});
+
+describe("automatic leave year-open (owner decision, 2026-09-24, item (b))", () => {
+  it("opens the org's current year automatically, calling the same logic the manual button uses", async () => {
+    const { eId, types } = await chainFixture();
+    const result = await runLeaveYearOpen(pool);
+    expect(result.orgsOpened).toBeGreaterThanOrEqual(1);
+
+    const y = currentTestYear();
+    const runRow = await pool.query(
+      "SELECT created, filled, skipped, total FROM leave_year_open_runs WHERE org_id = $1 AND year = $2",
+      [orgId, y],
+    );
+    expect(runRow.rowCount).toBe(1);
+
+    const bal = await pool.query(
+      "SELECT opening_balance FROM leave_balances WHERE employee_id = $1::uuid AND leave_type_id = $2::uuid AND period_year = $3",
+      [eId, types["CL"], y],
+    );
+    expect(Number((bal.rows[0] as { opening_balance: number }).opening_balance)).toBe(12);
+
+    // Audited as a system actor, not a human -- distinguishable from a
+    // manual run in the trail.
+    const audit = await pool.query(
+      `SELECT actor_id, after_state FROM audit_events
+       WHERE org_id = $1 AND action = 'leave.balance.open_year'
+       ORDER BY created_at DESC LIMIT 1`,
+      [orgId],
+    );
+    expect((audit.rows[0] as { actor_id: string | null }).actor_id).toBeNull();
+    expect((audit.rows[0] as { after_state: { triggered_by: string } }).after_state.triggered_by).toBe(
+      "scheduled_job",
+    );
+  });
+
+  it("does not re-run for an org/year it has already opened", async () => {
+    await chainFixture();
+    const first = await runLeaveYearOpen(pool);
+    expect(first.orgsOpened).toBeGreaterThanOrEqual(1);
+    const y = currentTestYear();
+    const countBefore = (
+      await pool.query("SELECT count(*)::int AS n FROM leave_balances WHERE period_year = $1", [y])
+    ).rows[0] as { n: number };
+
+    const second = await runLeaveYearOpen(pool);
+    // This org (and every other already-opened one) is not processed again.
+    const countAfter = (
+      await pool.query("SELECT count(*)::int AS n FROM leave_balances WHERE period_year = $1", [y])
+    ).rows[0] as { n: number };
+    expect(countAfter.n).toBe(countBefore.n);
+    void second;
+
+    const runRows = await pool.query(
+      "SELECT count(*)::int AS n FROM leave_year_open_runs WHERE org_id = $1 AND year = $2",
+      [orgId, y],
+    );
+    expect((runRows.rows[0] as { n: number }).n).toBe(1);
+  });
+
+  it("opens every active org independently, each with its own tracking row", async () => {
+    const { eId, types } = await chainFixture();
+    const other = await pool.query(
+      "INSERT INTO organizations (name) VALUES ('Leave year-open job: other org') RETURNING id",
+    );
+    const otherOrgId = (other.rows[0] as { id: string }).id;
+    const otherEmp = await pool.query(
+      `INSERT INTO employees (org_id, emp_no, first_name, phone, date_of_joining, status)
+       VALUES ($1, 'JOBE001', 'Other', '+911234500000', '2024-01-01', 'ACTIVE') RETURNING id`,
+      [otherOrgId],
+    );
+    const otherEmpId = (otherEmp.rows[0] as { id: string }).id;
+    const otherType = await pool.query(
+      `INSERT INTO leave_types (org_id, code, name, is_paid, annual_entitlement, requires_balance, active)
+       VALUES ($1, 'CL', 'Casual Leave', true, 12, true, true) RETURNING id`,
+      [otherOrgId],
+    );
+    const otherTypeId = (otherType.rows[0] as { id: string }).id;
+
+    const result = await runLeaveYearOpen(pool);
+    expect(result.orgsOpened).toBeGreaterThanOrEqual(2);
+
+    const y = currentTestYear();
+    const mainBal = await pool.query(
+      "SELECT opening_balance FROM leave_balances WHERE employee_id = $1::uuid AND leave_type_id = $2::uuid AND period_year = $3",
+      [eId, types["CL"], y],
+    );
+    expect(Number((mainBal.rows[0] as { opening_balance: number }).opening_balance)).toBe(12);
+    const otherBal = await pool.query(
+      "SELECT opening_balance FROM leave_balances WHERE employee_id = $1::uuid AND leave_type_id = $2::uuid AND period_year = $3",
+      [otherEmpId, otherTypeId, y],
+    );
+    expect(Number((otherBal.rows[0] as { opening_balance: number }).opening_balance)).toBe(12);
+
+    const runs = await pool.query(
+      "SELECT org_id FROM leave_year_open_runs WHERE year = $1 AND org_id = ANY($2::uuid[])",
+      [y, [orgId, otherOrgId]],
+    );
+    expect(runs.rowCount).toBe(2);
+  });
+
+  it("targets only the org's current year -- a prior year already marked open does not block this year", async () => {
+    // The real date gate ("only on/after 1 January for the new year") is
+    // implicit in currentOrgYear: a year value only ever becomes an org's
+    // "current year" once its calendar reaches 1 January of it, so there is
+    // no separate before/after-the-boundary state to force in a test that
+    // cannot fake the database's clock. What is directly testable, and
+    // tested here, is that the per-(org, year) tracking is exactly that --
+    // per year, not a one-time-ever flag -- so a year already marked open
+    // never blocks a *different* year, and the job never reaches past the
+    // org's own current year into a different one.
+    const { eId } = await chainFixture();
+    const y = currentTestYear();
+    await pool.query(
+      "INSERT INTO leave_year_open_runs (org_id, year, created, filled, skipped, total) VALUES ($1, $2, 0, 0, 0, 0)",
+      [orgId, y - 1],
+    );
+    const result = await runLeaveYearOpen(pool);
+    expect(result.orgsOpened).toBeGreaterThanOrEqual(1);
+
+    const thisYearRow = await pool.query(
+      "SELECT 1 FROM leave_year_open_runs WHERE org_id = $1 AND year = $2",
+      [orgId, y],
+    );
+    expect(thisYearRow.rowCount).toBe(1);
+
+    const nextYearBal = await pool.query(
+      "SELECT count(*)::int AS n FROM leave_balances WHERE employee_id = $1::uuid AND period_year = $2",
+      [eId, y + 1],
+    );
+    expect((nextYearBal.rows[0] as { n: number }).n).toBe(0);
   });
 });
 
