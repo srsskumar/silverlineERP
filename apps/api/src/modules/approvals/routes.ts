@@ -58,6 +58,26 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
       return;
     }
     if (instance.document_type === 'PURCHASE_ORDER') {
+      // §43.2: an amendment that sent an already-issued order (SENT,
+      // PARTIALLY_RECEIVED, ...) back through the ladder must land it back
+      // there, not at the fresh-order defaults below. The amendment that
+      // requested this instance is the one row that knows what to restore.
+      const amendment = (await db.query(
+        `SELECT id, pre_status FROM po_amendments WHERE approval_id = $1`,
+        [instance.id])).rows[0];
+      if (amendment?.pre_status) {
+        await db.query(
+          `UPDATE purchase_orders SET status = $2, version = version + 1,
+             updated_at = now(), updated_by = $3
+           WHERE id = $1 AND approval_id = $4 AND status = 'PENDING_APPROVAL'`,
+          [instance.document_id, amendment.pre_status, actorId, instance.id]);
+        if (outcome === 'REJECTED') {
+          // Flagged rather than reverted: the line changes it made stay in
+          // place, but it is marked as not having taken effect.
+          await db.query(`UPDATE po_amendments SET rejected_at = now() WHERE id = $1`, [amendment.id]);
+        }
+        return;
+      }
       const next = outcome === 'APPROVED' ? 'APPROVED' : 'DRAFT';
       await db.query(
         `UPDATE purchase_orders SET status = $2, version = version + 1,

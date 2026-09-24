@@ -804,6 +804,68 @@ describe("PO amendment (§43.2)", () => {
     expect(res.status).toBe(422);
     expect(res.body.code).toBe("PO_NOT_AMENDABLE");
   });
+
+  /**
+   * Item 2 (final QA fix wave): reflectOnDocument used to give every order
+   * the same two outcomes regardless of what it was doing when the amendment
+   * re-routed it — APPROVED on approval, DRAFT on rejection. That silently
+   * un-shipped a SENT order the moment its amendment cleared, and un-issued a
+   * PARTIALLY_RECEIVED order the moment its amendment was rejected, even
+   * though nothing about the vendor relationship or the goods already
+   * received changed.
+   */
+  it("restores SENT (not APPROVED) once an amendment on a SENT order clears the ladder", async () => {
+    const { po, line } = await approvedOrder(100, 400);
+    const amend = await post({ ...w.admin, ...(await ver("purchase_orders", po.id)) },
+      `/api/v1/purchase-orders/${po.id}/amend`, {
+        reason: "Site scope increased", lines: [{ po_line_id: line.id, quantity: 200 }],
+      });
+    expect(amend.status, JSON.stringify(amend.body)).toBe(201);
+
+    const pending = await w.pool.query("SELECT approval_id, status FROM purchase_orders WHERE id=$1", [po.id]);
+    expect(pending.rows[0].status).toBe("PENDING_APPROVAL");
+    const approvalId = pending.rows[0].approval_id;
+
+    const decision = await post(
+      { ...w.role.PROJECT_MANAGER, ...(await ver("approval_instances", approvalId)) },
+      `/api/v1/approvals/${approvalId}/decision`, { decision: "APPROVE" });
+    expect(decision.status, JSON.stringify(decision.body)).toBe(200);
+
+    const after = await w.pool.query("SELECT status FROM purchase_orders WHERE id=$1", [po.id]);
+    expect(after.rows[0].status).toBe("SENT");
+  });
+
+  it("restores PARTIALLY_RECEIVED (not DRAFT) and flags the amendment when it is rejected", async () => {
+    const { po, line } = await approvedOrder(100, 400);
+    await post(w.admin, "/api/v1/grns", {
+      grn_no: uniq("GRN"), purchase_order_id: po.id, received_date: "2026-09-16",
+      lines: [{ po_line_id: line.id, received_quantity: 20, accepted_quantity: 20 }],
+    });
+    await w.pool.query("UPDATE purchase_orders SET status='PARTIALLY_RECEIVED' WHERE id=$1", [po.id]);
+
+    const amend = await post({ ...w.admin, ...(await ver("purchase_orders", po.id)) },
+      `/api/v1/purchase-orders/${po.id}/amend`, {
+        reason: "Delivery schedule change", lines: [{ po_line_id: line.id, quantity: 150 }],
+      });
+    expect(amend.status, JSON.stringify(amend.body)).toBe(201);
+
+    const pending = await w.pool.query("SELECT approval_id, status FROM purchase_orders WHERE id=$1", [po.id]);
+    expect(pending.rows[0].status).toBe("PENDING_APPROVAL");
+    const approvalId = pending.rows[0].approval_id;
+
+    const decision = await post(
+      { ...w.role.PROJECT_MANAGER, ...(await ver("approval_instances", approvalId)) },
+      `/api/v1/approvals/${approvalId}/decision`, { decision: "REJECT", comments: "Not agreed with vendor" });
+    expect(decision.status, JSON.stringify(decision.body)).toBe(200);
+
+    const after = await w.pool.query("SELECT status FROM purchase_orders WHERE id=$1", [po.id]);
+    expect(after.rows[0].status).toBe("PARTIALLY_RECEIVED");
+    const amendmentRow = await w.pool.query(
+      "SELECT rejected_at, pre_status FROM po_amendments WHERE purchase_order_id=$1 ORDER BY revision DESC LIMIT 1",
+      [po.id]);
+    expect(amendmentRow.rows[0].pre_status).toBe("PARTIALLY_RECEIVED");
+    expect(amendmentRow.rows[0].rejected_at).toBeTruthy();
+  });
 });
 
 describe("acknowledgement and returns (§43.3, §43.4)", () => {

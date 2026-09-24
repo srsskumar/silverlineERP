@@ -803,7 +803,13 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
             `UPDATE purchase_orders SET approval_id=$2, status='PENDING_APPROVAL',
                version=version+1, updated_at=now(), updated_by=$3 WHERE id=$1`,
             [id, freshId, u.id]);
-          await db.query('UPDATE po_amendments SET approval_id=$2 WHERE id=$1', [amendment.id, freshId]);
+          // §41 x §43.2: the order's status before this amendment sent it back
+          // through approval (SENT, PARTIALLY_RECEIVED, ...), so the ladder's
+          // decision can restore it instead of falling back to reflectOnDocument's
+          // fresh-order defaults (APPROVED / DRAFT), which would silently
+          // un-ship or un-issue an order nothing else changed about.
+          await db.query('UPDATE po_amendments SET approval_id=$2, pre_status=$3 WHERE id=$1',
+            [amendment.id, freshId, po.status]);
         }
       }
       return { ...amendment, reapproval };
