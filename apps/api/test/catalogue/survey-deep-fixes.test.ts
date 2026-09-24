@@ -260,3 +260,116 @@ describe("SV-011 / SV-012 / SV-013 billing claims", () => {
     expect(JSON.stringify(r.data.skipped)).toContain("CLAIM_CLOSED");
   });
 });
+
+/*
+ * Fix round 1, item 1: a paid claim is closed to ordinary edits (SV-011), so
+ * a mistaken "paid" needs a way back. An administrator reverses it, with a
+ * reason, under If-Match; the claim returns to APPROVED (it was accepted, the
+ * payment is what is being withdrawn) and is editable again from there.
+ */
+describe("SV-019 reversing a paid claim", () => {
+  let v: string;
+  const claims = async () => (await send("GET", w.admin, `/api/v1/survey/villages/${v}/billing`));
+  const claim = async (m: number) => ((await claims()).data as any[]).find((c) => c.milestone === m);
+  const reverse = async (h: Headers, m: number, body: Record<string, unknown>, version?: number) => {
+    const c = await claim(m);
+    return send("POST", h, `/api/v1/survey/billing/${c.id}/reverse`, body,
+      { "if-match": String(version ?? c.version) });
+  };
+
+  beforeAll(async () => {
+    v = await village("Reversal village");
+    expect((await startGt(v, [await employee()], day(-8))).status).toBe(201);
+    let n = -7;
+    for (const code of ["GROUND_TRUTHING", "GT_QC"]) {
+      await post(w.admin, `/api/v1/survey/villages/${v}/stage`, { stage_code: code, state: "IN_PROGRESS", started_on: day(n) });
+      const b = await post(w.admin, `/api/v1/survey/villages/${v}/stage`, { stage_code: code, state: "COMPLETED", started_on: day(n), completed_on: day(n + 1) });
+      expect(b.status, JSON.stringify(b.body)).toBe(200);
+      n += 1;
+    }
+    expect((await post(w.admin, `/api/v1/survey/villages/${v}/billing`,
+      { milestone: 1, percent: 49.99, submitted_on: day(-2), status: "PAID", decided_on: day(-1) })).status).toBe(201);
+  });
+
+  it("points the refusal at the reversal rather than at an impossible new claim", async () => {
+    const c = await claim(1);
+    const r = await send("PATCH", w.admin, `/api/v1/survey/billing/${c.id}`, { percent: 10 },
+      { "if-match": String(c.version) });
+    expect(r.status).toBe(409);
+    expect(r.body.message).not.toMatch(/new claim/i);
+    expect(r.body.message).toMatch(/revers/i);
+  });
+
+  it("is refused to a project manager", async () => {
+    const r = await reverse(w.role.PROJECT_MANAGER, 1, { reason: "Marked paid by mistake" });
+    expect(r.status, JSON.stringify(r.body)).toBe(403);
+  });
+
+  it("needs a reason", async () => {
+    for (const body of [{}, { reason: "" }, { reason: "  " }]) {
+      const r = await reverse(w.admin, 1, body);
+      expect(r.status, JSON.stringify(r.body)).toBe(422);
+    }
+  });
+
+  it("needs the current version", async () => {
+    const c = await claim(1);
+    const r = await reverse(w.admin, 1, { reason: "Marked paid by mistake" }, c.version + 5);
+    expect(r.status, JSON.stringify(r.body)).toBe(409);
+  });
+
+  it("returns the claim to approved, audited with before, after and the reason", async () => {
+    const r = await reverse(w.admin, 1, { reason: "Marked paid by mistake in the batch" });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.status).toBe("APPROVED");
+    const audit = (await w.pool.query(
+      `SELECT before_state, after_state, reason FROM audit_events
+        WHERE action = 'survey.village.billing.reverse' AND entity_id = $1`, [r.data.id])).rows;
+    expect(audit.length).toBe(1);
+    expect(audit[0].before_state.status).toBe("PAID");
+    expect(audit[0].after_state.status).toBe("APPROVED");
+    expect(audit[0].reason).toBe("Marked paid by mistake in the batch");
+    // Nothing about the money moved.
+    const b = await claims();
+    expect((b.data as any[])[0].percent).toBe(49.99);
+    expect(b.body.meta.claimed_percent).toBe(49.99);
+  });
+
+  it("lets the milestone be corrected and paid again, to the paisa", async () => {
+    const c = await claim(1);
+    const fix = await send("PATCH", w.admin, `/api/v1/survey/billing/${c.id}`,
+      { percent: 50, extent_ac: 123.4567 }, { "if-match": String(c.version) });
+    expect(fix.status, JSON.stringify(fix.body)).toBe(200);
+    const c2 = await claim(1);
+    const paid = await send("PATCH", w.admin, `/api/v1/survey/billing/${c2.id}`,
+      { status: "PAID", decided_on: day(0) }, { "if-match": String(c2.version) });
+    expect(paid.status, JSON.stringify(paid.body)).toBe(200);
+    const b = await claims();
+    expect(b.body.meta.claimed_percent).toBe(50);
+    expect((b.data as any[])[0].extent_ac).toBe(123.4567);
+  });
+
+  it("reverses in bulk too, admin only, reason required, with a dry run first", async () => {
+    const base = { survey_village_ids: [v], action: "REVERSE", milestone: 1 };
+    expect((await post(w.admin, "/api/v1/survey/billing/bulk", { ...base, dry_run: true })).status).toBe(422);
+    const pm = await post(w.role.PROJECT_MANAGER, "/api/v1/survey/billing/bulk",
+      { ...base, reason: "Batch marked paid by mistake", dry_run: false });
+    expect(pm.status, JSON.stringify(pm.body)).toBe(403);
+    const dry = await post(w.admin, "/api/v1/survey/billing/bulk",
+      { ...base, reason: "Batch marked paid by mistake", dry_run: true });
+    expect(dry.status, JSON.stringify(dry.body)).toBe(200);
+    expect(dry.data.would_change).toBe(1);
+    const real = await post(w.admin, "/api/v1/survey/billing/bulk",
+      { ...base, reason: "Batch marked paid by mistake", dry_run: false });
+    expect(real.status, JSON.stringify(real.body)).toBe(200);
+    expect(real.data.updated).toBe(1);
+    expect((await claim(1)).status).toBe("APPROVED");
+    const again = await post(w.admin, "/api/v1/survey/billing/bulk",
+      { ...base, reason: "Batch marked paid by mistake", dry_run: true });
+    expect(JSON.stringify(again.data.skipped)).toContain("NOT_PAID");
+    const audit = (await w.pool.query(
+      `SELECT count(*)::int AS n FROM audit_events WHERE action = 'survey.village.billing.reverse'
+         AND entity_id = $1`, [(await claim(1)).id])).rows[0].n;
+    expect(audit).toBe(2);
+  });
+});

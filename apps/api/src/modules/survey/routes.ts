@@ -25,6 +25,7 @@ import {
   villageStatusSchema, villagePlanSchema, delayReasonLabel, DELAY_REASONS,
   villageBillingSchema, villageBillingPatchSchema, MILESTONE_PERCENT,
   billingDecisionRequired, billingTransitionAllowed, claimedPercent, type BillingStatus,
+  billingReversalSchema, BILLING_REVERSAL_TARGET,
   villageBillingBulkSchema,
   summariseStaffing, stageTracksStaffing, priorRange, type StaffingDay,
   milestoneEarned, MILESTONE_REQUIRES, villageFinalsSchema,
@@ -3765,6 +3766,70 @@ export async function registerSurveyRoutes(
       return { data };
     });
 
+  /*
+   * A paid claim is closed (SV-011) and its milestone row is unique, so a
+   * payment recorded by mistake is undone by reversing it -- never by a
+   * "new claim", which the UNIQUE (village, milestone) constraint forbids.
+   */
+  const PAID_CLAIM_HINT =
+    ' If the payment was recorded by mistake, an administrator can reverse it with a '
+    + 'reason; the claim then returns to approved and can be corrected.';
+  const isAdmin = (u: { roles?: string[] }) =>
+    (u.roles ?? []).some(r => r === 'ADMIN' || r === 'SUPER_ADMIN');
+
+  /** Reverse one paid claim, with its own audit row carrying both states. */
+  async function reverseClaim(
+    db: PoolClient, req: FastifyRequest, u: { orgId: string; id: string },
+    row: Record<string, any>, reason: string,
+  ) {
+    const updated = (await db.query(
+      `UPDATE survey_village_billing
+          SET status = $2, version = version + 1, updated_at = now(), updated_by = $3
+        WHERE id = $1 RETURNING *`, [row.id, BILLING_REVERSAL_TARGET, u.id])).rows[0];
+    const state = (r: Record<string, any>) => ({
+      status: r.status, milestone: Number(r.milestone), percent: num(r.percent),
+      extent_ac: num(r.extent_ac), submitted_on: iso(r.submitted_on),
+      decided_on: iso(r.decided_on), reference_no: r.reference_no ?? null,
+    });
+    await db.query(
+      `INSERT INTO audit_events(org_id, actor_id, action, entity_type, entity_id,
+         before_state, after_state, reason, request_id)
+       VALUES($1,$2,'survey.village.billing.reverse','survey_village_billing',$3,$4,$5,$6,$7)`,
+      [u.orgId, u.id, row.id, JSON.stringify(state(row)), JSON.stringify(state(updated)),
+        reason, req.requestId]);
+    return updated;
+  }
+
+  /**
+   * Reverse a payment recorded by mistake (SV-019).
+   *
+   * Administrators only, with a reason and the claim's current version. The
+   * claim returns to APPROVED: the department accepted it, and only the
+   * payment is being withdrawn. Nothing about its percent or extent moves.
+   */
+  app.post('/api/v1/survey/billing/:id/reverse', { preHandler: guard('survey.manage') },
+    async req => {
+      const u = actor(req), id = (req.params as { id: string }).id;
+      if (!isAdmin(u)) {
+        fail('ADMIN_ONLY', 'Only an administrator can reverse a recorded payment.', 403);
+      }
+      const input = parse(billingReversalSchema, req.body ?? {});
+      return {
+        data: await mutate(pool, req, 'survey.village.billing.update', 'survey_village_billing',
+          async db => {
+            const row = await inOrg(db, 'survey_village_billing', id, u.orgId, true);
+            await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+            version(req, row as { version: number });
+            if (row.status !== 'PAID') {
+              fail('NOT_PAID', `This claim is ${String(row.status).toLowerCase()}, not paid; `
+                + 'there is no payment to reverse.', 409);
+            }
+            const updated = await reverseClaim(db, req, u, row, input.reason);
+            return { ...updated, percent: num(updated.percent), extent_ac: num(updated.extent_ac) };
+          }),
+      };
+    });
+
   app.patch('/api/v1/survey/billing/:id', { preHandler: guard('survey.manage') },
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
@@ -3788,12 +3853,13 @@ export async function registerSurveyRoutes(
           if (!billingTransitionAllowed(from, status)) {
             fail('CLAIM_TRANSITION_REFUSED',
               `A ${from.toLowerCase()} claim cannot be recorded as ${status.toLowerCase()}.`
-              + (from === 'PAID' ? ' It has been paid; record a correction as a new claim.' : ''), 409);
+              + (from === 'PAID' ? PAID_CLAIM_HINT : ''), 409);
           }
           if (from === 'PAID' && (['percent', 'submitted_on', 'decided_on', 'extent_ac'] as const)
             .some(k => input[k] !== undefined)) {
             fail('CLAIM_TRANSITION_REFUSED',
-              'This claim has been paid. Only its reference number and remarks can still be corrected.', 409);
+              'This claim has been paid. Only its reference number and remarks can still be '
+              + 'corrected.' + PAID_CLAIM_HINT, 409);
           }
           // SV-012: a decision cannot come before the claim went in.
           const submittedOn = input.submitted_on ?? iso(row.submitted_on);
@@ -3958,6 +4024,9 @@ export async function registerSurveyRoutes(
       const u = actor(req);
       const input = parse(villageBillingBulkSchema, req.body);
       const ids = [...new Set(input.survey_village_ids)];
+      if (input.action === 'REVERSE' && !isAdmin(u)) {
+        fail('ADMIN_ONLY', 'Only an administrator can reverse recorded payments.', 403);
+      }
 
       return {
         data: await mutate(pool, req, 'survey.village.billing.bulk',
@@ -4064,6 +4133,11 @@ export async function registerSurveyRoutes(
                   skipped.push({ village_name: String(r.village_name), reason: 'CLAIMED_OVER_100' });
                   continue;
                 }
+              } else if (input.action === 'REVERSE') {
+                if (!r.claim_id || String(r.claim_status) !== 'PAID') {
+                  skipped.push({ village_name: String(r.village_name), reason: 'NOT_PAID' });
+                  continue;
+                }
               } else {
                 if (!r.claim_id) {
                   skipped.push({ village_name: String(r.village_name), reason: 'NOTHING_TO_DECIDE' });
@@ -4140,6 +4214,13 @@ export async function registerSurveyRoutes(
                     input.submitted_on ?? today(), input.reference_no ?? null,
                     input.use_village_extent ? r.total_extent_ac : null,
                     input.remarks ?? null, u.id]);
+              }
+            } else if (input.action === 'REVERSE') {
+              const locked = (await db.query(
+                `SELECT * FROM survey_village_billing WHERE id = ANY($1::uuid[])
+                  ORDER BY id FOR UPDATE`, [eligible.map(r => r.claim_id)])).rows;
+              for (const row of locked) {
+                if (row.status === 'PAID') await reverseClaim(db, req, u, row, input.reason!.trim());
               }
             } else {
               await db.query(
