@@ -609,8 +609,16 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
         }
         // Same rule the manual payment path enforces (finance/routes.ts's
         // POST /payments): a closed month means closed, whichever route the
-        // money goes through (fix round 1, B-002 review).
+        // money goes through (fix round 1, B-002 review). Checked ahead of
+        // the future-date guard below: a date inside a closed period should
+        // always explain itself as PERIOD_CLOSED, whether or not it also
+        // happens to be in the future.
         await guardPeriod(db, req, input.paid_on);
+        // Money cannot leave the bank before the date it is said to: the run
+        // would be recording a payment that has not happened yet.
+        if (input.paid_on > today()) {
+          fail('FUTURE_DATE', 'The payment date cannot be in the future', 422);
+        }
 
         const lines = (await db.query(
           'SELECT * FROM payment_run_lines WHERE run_id = $1 ORDER BY id', [id])).rows;
@@ -628,8 +636,8 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
             payment = (await db.query(
               `INSERT INTO payments(org_id, created_by, payment_no, direction, paid_on, amount, mode,
                  reference, party_type, party_id, bank_account, notes)
-               VALUES($1,$2,$3,'PAYABLE',$4,$5,'NEFT',$6,'VENDOR',$7,$8,$9) RETURNING id`,
-              [u.orgId, u.id, paymentNo, input.paid_on, line.amount, input.bank_reference,
+               VALUES($1,$2,$3,'PAYABLE',$4,$5,$6,$7,'VENDOR',$8,$9,$10) RETURNING id`,
+              [u.orgId, u.id, paymentNo, input.paid_on, line.amount, input.payment_mode, input.bank_reference,
                line.party_id, run.bank_account ?? null, input.note ?? null])).rows[0];
           } catch (e) {
             if ((e as { code?: string }).code === '23505') {

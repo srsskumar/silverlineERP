@@ -72,7 +72,7 @@ function mount(node: React.ReactElement) {
 }
 
 describe('ExecutePaymentRunForm (B-002)', () => {
-  it('sends paid_on, bank_reference and the If-Match version to POST .../execute', async () => {
+  it('sends paid_on, bank_reference, payment_mode and the If-Match version to POST .../execute', async () => {
     const onDone = vi.fn();
     mount(
       <ExecutePaymentRunForm runId="99999999-9999-9999-9999-999999999999" version={3} onClose={vi.fn()} onDone={onDone} />,
@@ -92,6 +92,7 @@ describe('ExecutePaymentRunForm (B-002)', () => {
     expect(sent[0].body).toEqual({
       paid_on: '2026-09-20',
       bank_reference: 'UTR998877',
+      payment_mode: 'NEFT',
       note: 'Batch cleared by RTGS',
     });
     // apiClient sends the version as X-Record-Version, not If-Match — a CDN
@@ -101,6 +102,35 @@ describe('ExecutePaymentRunForm (B-002)', () => {
     // object, whose .entries() always lower-cases per the Fetch spec.
     expect(sent[0].headers['x-record-version']).toBe('3');
     await waitFor(() => expect(onDone).toHaveBeenCalled());
+  });
+
+  it('sends the payment mode the user picks, item 3 (final QA fix wave)', async () => {
+    mount(
+      <ExecutePaymentRunForm runId="99999999-9999-9999-9999-999999999999" version={3} onClose={vi.fn()} onDone={vi.fn()} />,
+    );
+
+    fireEvent.change(await screen.findByLabelText(/Paid on/), { target: { value: '2026-09-20' } });
+    fireEvent.change(screen.getByLabelText(/Bank reference/), { target: { value: 'UTR998877' } });
+    fireEvent.change(screen.getByLabelText(/Payment mode/), { target: { value: 'RTGS' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Execute payment' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0].body).toMatchObject({ payment_mode: 'RTGS' });
+  });
+
+  it('refuses a paid-on date in the future before it ever reaches the server', async () => {
+    mount(
+      <ExecutePaymentRunForm runId="99999999-9999-9999-9999-999999999999" version={3} onClose={vi.fn()} onDone={vi.fn()} />,
+    );
+    const future = new Date(Date.now() + 5 * 86400_000).toISOString().slice(0, 10);
+
+    fireEvent.change(await screen.findByLabelText(/Paid on/), { target: { value: future } });
+    fireEvent.change(screen.getByLabelText(/Bank reference/), { target: { value: 'UTR998877' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Execute payment' }));
+
+    expect(await screen.findByText(/cannot be in the future/)).toBeInTheDocument();
+    expect(sent).toHaveLength(0);
   });
 
   it('renders a 409 error rather than pretending the run executed', async () => {

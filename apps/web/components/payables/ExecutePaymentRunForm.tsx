@@ -12,6 +12,7 @@ import { businessToday } from '@/lib/finance';
 import { useToast } from '@/components/ui/Toast';
 import { applyFieldErrors } from '@/lib/form-errors';
 import { paymentRunExecuteSchema, type PaymentRunExecuteFormInput } from '@/lib/validation';
+import { PAYMENT_MODES } from '@/lib/finance';
 
 /**
  * Execute an approved payment run (B-002).
@@ -34,6 +35,7 @@ export function ExecutePaymentRunForm({
   const defaults: PaymentRunExecuteFormInput = {
     paid_on: businessToday(),
     bank_reference: '',
+    payment_mode: 'NEFT',
     note: undefined,
   };
 
@@ -49,7 +51,10 @@ export function ExecutePaymentRunForm({
       apiRequest(`/api/v1/payment-runs/${runId}/execute`, {
         method: 'POST',
         headers: { 'If-Match': String(version) },
-        body: { paid_on: v.paid_on, bank_reference: v.bank_reference, note: v.note },
+        body: {
+          paid_on: v.paid_on, bank_reference: v.bank_reference,
+          payment_mode: v.payment_mode, note: v.note,
+        },
       }),
     onSuccess: () => {
       toast.success('Payment run executed', 'The run is now paid, and every line has been settled.');
@@ -79,6 +84,13 @@ export function ExecutePaymentRunForm({
             Bank reference
             <input className="mt-1 w-full" placeholder="UTR / cheque number" {...register('bank_reference')} />
             <FieldError message={errors.bank_reference?.message} />
+          </label>
+          <label className="text-xs text-text-muted">
+            Payment mode
+            <select className="mt-1 w-full" {...register('payment_mode')}>
+              {PAYMENT_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <FieldError message={errors.payment_mode?.message} />
           </label>
           <label className="text-xs text-text-muted sm:col-span-2">
             Note (optional)

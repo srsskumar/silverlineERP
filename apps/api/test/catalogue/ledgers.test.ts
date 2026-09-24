@@ -432,6 +432,63 @@ describe("execute a payment run (B-002)", () => {
     expect(run.data.status).toBe("APPROVED");
   });
 
+  it("takes a payment mode, defaulting to NEFT (item 3, final QA fix wave)", async () => {
+    const inv = await invoice({ total: 7000, due_date: "2026-01-01" });
+    const built = await buildRun(w.role.PAYROLL_OFFICER);
+    expect(built.ids).toContain(inv.id);
+    const approve = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/decision`, { action: "APPROVE" });
+    expect(approve.status, JSON.stringify(approve.body)).toBe(200);
+
+    const exec = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/execute`,
+      { paid_on: "2026-09-16", bank_reference: "UTR-MODE", payment_mode: "RTGS" });
+    expect(exec.status, JSON.stringify(exec.body)).toBe(200);
+
+    const line = await w.pool.query(
+      "SELECT payment_id FROM payment_run_lines WHERE run_id = $1 AND document_id = $2",
+      [built.run.id, inv.id]);
+    const payment = await w.pool.query("SELECT mode FROM payments WHERE id = $1", [line.rows[0].payment_id]);
+    expect(payment.rows[0].mode).toBe("RTGS");
+  });
+
+  it("defaults the payment mode to NEFT when omitted", async () => {
+    const inv = await invoice({ total: 7000, due_date: "2026-01-01" });
+    const built = await buildRun(w.role.PAYROLL_OFFICER);
+    expect(built.ids).toContain(inv.id);
+    await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/decision`, { action: "APPROVE" });
+
+    const exec = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/execute`,
+      { paid_on: "2026-09-16", bank_reference: "UTR-DEFAULT" });
+    expect(exec.status, JSON.stringify(exec.body)).toBe(200);
+
+    const line = await w.pool.query(
+      "SELECT payment_id FROM payment_run_lines WHERE run_id = $1 AND document_id = $2",
+      [built.run.id, inv.id]);
+    const payment = await w.pool.query("SELECT mode FROM payments WHERE id = $1", [line.rows[0].payment_id]);
+    expect(payment.rows[0].mode).toBe("NEFT");
+  });
+
+  it("refuses a paid_on date in the future", async () => {
+    const inv = await invoice({ total: 7000, due_date: "2026-01-01" });
+    const built = await buildRun(w.role.PAYROLL_OFFICER);
+    expect(built.ids).toContain(inv.id);
+    await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/decision`, { action: "APPROVE" });
+
+    const future = new Date(Date.now() + 5 * 86400_000).toISOString().slice(0, 10);
+    const res = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/execute`,
+      { paid_on: future, bank_reference: "UTR-FUTURE" });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("FUTURE_DATE");
+
+    const run = await get(w.admin, `/api/v1/payment-runs/${built.run.id}`);
+    expect(run.data.status).toBe("APPROVED");
+  });
+
   it("refuses to execute into a closed accounting period, with no effect (fix round 1)", async () => {
     // The manual payment path (finance/routes.ts) already calls guardPeriod;
     // execute() bypassed it entirely, so a closed month could be posted into

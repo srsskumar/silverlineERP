@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { RoleCode } from './rbac.js';
 import { msmeDueDate, msmeDelayInterest } from './india.js';
+import { PAYMENT_MODES } from './financial-control.js';
 
 /**
  * Accounts payable and receivable (§58).
@@ -492,4 +493,8 @@ export const paymentRunExecuteSchema = z.object({
   paid_on: dateString,
   bank_reference: text.max(100),
   note: z.string().trim().max(1000).optional(),
+  // Same instrument list a manual payment uses (financial-control.ts) —
+  // one list rather than a second that drifts. NEFT by default: it is what
+  // every run executed before this field existed was hard-coded to.
+  payment_mode: z.enum(PAYMENT_MODES).default('NEFT'),
 });

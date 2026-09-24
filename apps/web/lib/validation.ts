@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PAYMENT_MODES, businessToday } from '@/lib/finance';
 
 export const loginSchema = z.object({
   // A username or a mobile number (§34). Still called `username` because
@@ -1058,12 +1059,17 @@ export type AdvanceFormInput = z.infer<typeof advanceSchema>;
 
 /** POST /api/v1/payment-runs/:id/execute (B-002) — mirrors paymentRunExecuteSchema. */
 export const paymentRunExecuteSchema = z.object({
-  paid_on: dateString('Paid-on date must be YYYY-MM-DD'),
+  paid_on: dateString('Paid-on date must be YYYY-MM-DD')
+    .refine((v) => v <= businessToday(), 'The payment date cannot be in the future'),
   bank_reference: z
     .string()
     .trim()
     .min(1, 'Enter the bank reference (UTR/cheque number)')
     .max(100, 'Bank reference must be at most 100 characters'),
+  // Same instrument list the expense reimbursement mode picker uses
+  // (PAYMENT_MODES, lib/finance.ts) — one list rather than a second that
+  // drifts. NEFT by default, matching the server (ledgers.ts).
+  payment_mode: z.enum(PAYMENT_MODES).default('NEFT'),
   note: optionalText(1000),
 });
 export type PaymentRunExecuteFormInput = z.infer<typeof paymentRunExecuteSchema>;
