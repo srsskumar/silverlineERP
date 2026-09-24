@@ -326,7 +326,9 @@ export async function registerStockRoutes(app: FastifyInstance, opts: { pool: Po
   app.post('/api/v1/stock-reservations', { preHandler: guard('reservation.manage') }, async (req, reply) => {
     const u = actor(req), input = parse(reservationSchema, req.body);
     const row = await mutate(pool, req, 'reservation.create', 'stock_reservation', async db => {
-      const item = await inOrg(db, 'inventory_items', input.item_id, u.orgId);
+      // Locked, like every issue: two reservations read the same free
+      // quantity otherwise, and both promise it (D-001).
+      const item = await inOrg(db, 'inventory_items', input.item_id, u.orgId, true);
       await inOrg(db, 'stock_locations', input.location_id, u.orgId);
       const position = await positionAt(db, item, input.location_id);
       // Reserving stock that is not free would promise the same bags twice.
