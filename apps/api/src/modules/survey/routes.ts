@@ -1959,6 +1959,8 @@ export async function registerSurveyRoutes(
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(z.object({ released_on: z.string().optional() }), req.body ?? {});
+      // A typed date, checked here: handed raw to $n::date it was a 500 (SV-004).
+      const releasedOn = dateParam(req, input.released_on, 'released_on', today());
       return {
         data: await mutate(pool, req, 'survey.crew.release', 'survey_crew', async db => {
           const row = (await db.query(
@@ -1972,12 +1974,12 @@ export async function registerSurveyRoutes(
            */
           const returned = await releaseKitFromVillage(
             db, u.orgId, String(row.survey_village_id), String(row.employee_id),
-            input.released_on ?? null);
+            releasedOn);
           // Released rather than deleted, so who surveyed a village last
           // season is still answerable.
           const released = (await db.query(
             `UPDATE survey_crew SET released_on = $2::date
-             WHERE id = $1 RETURNING *`, [id, input.released_on ?? today()])).rows[0];
+             WHERE id = $1 RETURNING *`, [id, releasedOn])).rows[0];
           return { ...released, rovers_released: returned };
         }),
       };
@@ -2187,6 +2189,8 @@ export async function registerSurveyRoutes(
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(z.object({ released_on: z.string().optional() }), req.body ?? {});
+      // A typed date, checked here: handed raw to $n::date it was a 500 (SV-004).
+      const releasedOn = dateParam(req, input.released_on, 'released_on', today());
       return {
         data: await mutate(pool, req, 'survey.rover.release', 'survey_rover_allocation',
           async db => {
@@ -2200,7 +2204,7 @@ export async function registerSurveyRoutes(
             return (await db.query(
               `UPDATE survey_rover_allocations
                SET released_on = $2::date
-               WHERE id = $1 RETURNING *`, [id, input.released_on ?? today()])).rows[0];
+               WHERE id = $1 RETURNING *`, [id, releasedOn])).rows[0];
           }),
       };
     });
