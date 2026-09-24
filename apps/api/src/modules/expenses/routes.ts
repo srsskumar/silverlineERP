@@ -249,7 +249,7 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
     const rows = (await pool.query(
       `SELECT e.*, h.code AS cost_head_code, h.name AS cost_head_name
        FROM project_cost_entries e JOIN cost_heads h ON h.id = e.cost_head_id
-       WHERE ${where} ORDER BY e.entry_date DESC, e.created_at DESC LIMIT $3 OFFSET $4`, values)).rows;
+       WHERE ${where} ORDER BY e.entry_date DESC, e.created_at DESC, e.id DESC LIMIT $3 OFFSET $4`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 
@@ -345,7 +345,7 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
        FROM expense_claims c
        LEFT JOIN users u ON u.id = c.claimant_user_id
        LEFT JOIN projects p ON p.id = c.project_id
-       WHERE ${where} ORDER BY c.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY c.created_at DESC, c.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 

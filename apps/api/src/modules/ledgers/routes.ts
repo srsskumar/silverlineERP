@@ -400,7 +400,7 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
       `SELECT r.*, a.username AS approved_by_username,
               (SELECT count(*)::int FROM payment_run_lines l WHERE l.run_id = r.id) AS line_count
        FROM payment_runs r LEFT JOIN users a ON a.id = r.approved_by
-       WHERE ${where} ORDER BY r.run_date DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY r.run_date DESC, r.created_at DESC, r.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 

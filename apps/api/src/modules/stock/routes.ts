@@ -224,7 +224,7 @@ export async function registerStockRoutes(app: FastifyInstance, opts: { pool: Po
        LEFT JOIN stock_locations f ON f.id = t.from_location_id
        LEFT JOIN stock_locations tl ON tl.id = t.to_location_id
        LEFT JOIN users u ON u.id = t.created_by
-       WHERE ${where} ORDER BY t.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY t.created_at DESC, t.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 
@@ -387,7 +387,7 @@ export async function registerStockRoutes(app: FastifyInstance, opts: { pool: Po
        FROM stock_counts c
        JOIN stock_locations l ON l.id = c.location_id
        LEFT JOIN users a ON a.id = c.approved_by
-       WHERE ${where} ORDER BY c.counted_on DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY c.counted_on DESC, c.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 

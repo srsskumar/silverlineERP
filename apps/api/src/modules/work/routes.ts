@@ -1010,7 +1010,7 @@ export async function registerWorkRoutes(
        FROM users u
        LEFT JOIN employees e ON e.id = u.employee_id AND e.org_id = u.org_id
        WHERE u.org_id = $1 AND u.auth_status = 'ACTIVE'
-       ORDER BY COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), u.username)
+       ORDER BY COALESCE(NULLIF(trim(concat_ws(' ', e.first_name, e.last_name)), ''), u.username), u.id
        LIMIT $2 OFFSET $3`,
       [user.orgId, limit + 1, offset],
     )).rows;

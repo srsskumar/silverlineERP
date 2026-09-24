@@ -162,7 +162,7 @@ export async function registerPlanningRoutes(app:FastifyInstance,opts:{pool:Pool
   // The id is matched against a uuid column and a text payload field, so it
   // is passed twice with a type each: one parameter cannot be both, and
   // asking Postgres to compare text with uuid was a 500 on every project.
-  return {data:(await pool.query("SELECT id,type,entity_type,entity_id,actor_id,created_at FROM domain_events WHERE org_id=$1 AND (entity_id=$2::uuid OR payload->>'project_id'=$3::text) ORDER BY created_at DESC LIMIT $4 OFFSET $5",[actor(req).orgId,id,id,limit,offset])).rows};
+  return {data:(await pool.query("SELECT id,type,entity_type,entity_id,actor_id,created_at FROM domain_events WHERE org_id=$1 AND (entity_id=$2::uuid OR payload->>'project_id'=$3::text) ORDER BY created_at DESC, id DESC LIMIT $4 OFFSET $5",[actor(req).orgId,id,id,limit,offset])).rows};
  });
  app.get('/api/v1/tasks/:id/activity',{preHandler:guard('task.read')},async req=>{const id=(req.params as {id:string}).id;await taskAccess(req,id);return {data:(await pool.query('SELECT id,type,actor_id,created_at FROM domain_events WHERE org_id=$1 AND entity_id=$2 ORDER BY created_at DESC LIMIT 100',[actor(req).orgId,id])).rows};});
  // Bulk actions reuse the same authenticated mutation routes and return each outcome.

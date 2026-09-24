@@ -169,7 +169,7 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
                         WHERE a.payment_id = p.id AND a.reversed_at IS NULL), 0) AS allocated
        FROM payments p
        LEFT JOIN projects pr ON pr.id = p.project_id
-       WHERE ${where} ORDER BY p.paid_on DESC, p.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY p.paid_on DESC, p.created_at DESC, p.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return {
       data: rows.slice(0, limit).map(r => ({
         ...r,
@@ -333,7 +333,7 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
     if (q.bank_account) { values.push(q.bank_account); where += ` AND bank_account = $${values.length}`; }
     const rows = (await pool.query(
       `SELECT * FROM bank_transactions WHERE ${where}
-       ORDER BY value_date DESC, created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+       ORDER BY value_date DESC, created_at DESC, id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 

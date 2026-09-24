@@ -57,7 +57,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
        FROM purchase_requisitions r
        LEFT JOIN users u ON u.id = r.requested_by
        LEFT JOIN projects p ON p.id = r.project_id
-       WHERE ${where} ORDER BY r.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY r.created_at DESC, r.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 
@@ -132,7 +132,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
     const rows = (await pool.query(
       `SELECT o.*, v.name AS vendor_name FROM purchase_orders o
        JOIN vendors v ON v.id = o.vendor_id
-       WHERE ${where} ORDER BY o.po_date DESC, o.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY o.po_date DESC, o.created_at DESC, o.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 
@@ -510,7 +510,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
               (SELECT count(*)::int FROM rfq_vendors iv WHERE iv.rfq_id = r.id) AS invited_count,
               (SELECT count(*)::int FROM vendor_quotes vq WHERE vq.rfq_id = r.id) AS quote_count
        FROM rfqs r LEFT JOIN vendors v ON v.id = r.selected_vendor_id
-       WHERE ${where} ORDER BY r.due_date DESC, r.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY r.due_date DESC, r.created_at DESC, r.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 
@@ -938,7 +938,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
     const rows = (await pool.query(
       `SELECT r.*, g.grn_no FROM vendor_returns r
        JOIN goods_receipt_notes g ON g.id = r.grn_id
-       WHERE ${where} ORDER BY r.return_date DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY r.return_date DESC, r.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 }

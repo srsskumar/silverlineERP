@@ -166,7 +166,7 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
     const rows = (await pool.query(
       `SELECT a.*, p.code AS project_code, p.name AS project_name
        FROM project_advances a JOIN projects p ON p.id = a.project_id
-       WHERE ${where} ORDER BY a.paid_on DESC, a.created_at DESC LIMIT $2 OFFSET $3`, values)).rows;
+       WHERE ${where} ORDER BY a.paid_on DESC, a.created_at DESC, a.id DESC LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit };
   });
 
