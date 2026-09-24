@@ -108,7 +108,7 @@ beforeEach(() => {
   }));
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 function mount(node: React.ReactElement) {
   return render(<AuthProvider>{node}</AuthProvider>);
@@ -147,5 +147,29 @@ describe('VendorInvoiceLines (task 5c, finding B-004)', () => {
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]).toMatchObject({ path: `/api/v1/invoices/${INVOICE_ID}/match`, method: 'POST' });
     expect(await screen.findByText(/over the receipt/)).toBeInTheDocument();
+  });
+
+  it('counts MSME overdue days from the organisation\'s calendar day, not UTC\'s (D-013, fix round 2, item 4)', async () => {
+    // 45 days (written agreement) from acceptance on 2026-08-01 is a
+    // statutory due date of 2026-09-15. At 20:00 UTC on 2026-09-24, IST
+    // (UTC+5:30) has already rolled over to 2026-09-25 -- one day ahead of
+    // UTC's date. Recomputing "today" from new Date().toISOString() instead
+    // of the org timezone would count 9 days overdue instead of the correct
+    // 10.
+    const dueId = '99999999-9999-9999-9999-999999999905';
+    handlers[`GET /api/v1/invoices/${dueId}`] = () => jsonResponse({
+      data: {
+        ...INVOICE.data, id: dueId, serial_number: 'INV-MSME', purchase_order_id: null,
+        vendor_udyam_number: 'UDYAM-XY-00-1234567', vendor_msme_category: 'MICRO',
+        vendor_has_written_agreement: true, vendor_msme_registered: true,
+        accepted_on: '2026-08-01', invoice_date: '2026-08-01', due_date: null,
+        lines: [],
+      },
+    });
+    handlers[`GET /api/v1/invoices/${dueId}/match`] = () => jsonResponse(NO_MATCH);
+    vi.setSystemTime(new Date('2026-09-24T20:00:00Z'));
+
+    mount(<VendorInvoiceLines invoiceId={dueId} onClose={vi.fn()} />);
+    expect(await screen.findByText(/10 days overdue/)).toBeInTheDocument();
   });
 });

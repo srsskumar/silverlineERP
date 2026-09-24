@@ -15,7 +15,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { useToast } from '@/components/ui/Toast';
 import { applyFieldErrors } from '@/lib/form-errors';
-import { money, day } from '@/lib/finance';
+import { money, day, businessToday } from '@/lib/finance';
 import { invoiceLinesUpdateSchema, type InvoiceLinesUpdateFormInput } from '@/lib/validation';
 
 type Row = Record<string, any>;
@@ -152,7 +152,10 @@ export function VendorInvoiceLines({ invoiceId, onClose }: { invoiceId: string; 
         },
         acceptanceDate: invoice.accepted_on ?? invoice.invoice_date ?? null,
         contractualDueDate: invoice.due_date ?? null,
-        asOf: new Date().toISOString().slice(0, 10),
+        // The organisation's calendar day, not UTC's (D-013, fix round 2,
+        // item 4): before 05:30 IST, `new Date().toISOString()` is still
+        // yesterday and would understate days overdue.
+        asOf: businessToday(),
       })
     : null;
 
