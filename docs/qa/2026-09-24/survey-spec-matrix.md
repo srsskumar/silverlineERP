@@ -15,13 +15,13 @@ Paths: `R` = `apps/api/src/modules/survey/routes.ts`, `S` =
 
 | | total | yes | partial | no |
 |---|---|---|---|---|
-| Before (0649788) | 42 | 31 | 9 | 2 |
-| After (this branch) | 42 | 37 | 4 | 1 |
+| Before (0649788) | 42 | 33 | 9 | 0 |
+| After (this branch) | 42 | 39 | 3 | 0 |
 
 "After" counts only gaps closed by commits on this branch; the table below
-says which ones. The two rows that are out of scope by design (59.8, the
-parts that are not superseded) count as "yes" when the code stays out of
-them.
+says which ones. The out-of-scope rows (59.8) count as "yes" when the code
+stays out of them. 59.8(c) is superseded by 59.10.7 and also counts as
+"yes".
 
 ## Matrix
 
@@ -53,10 +53,10 @@ them.
 | 59.8 (a) | Out of scope: reading DGPS output directly | yes (not built) | quantities entered | — | — |
 | 59.8 (b) | Out of scope: storing/rendering cadastral geometry | yes (not built) | GCPs are points, not parcels | — | — |
 | 59.8 (c) | Out of scope: billing against survey output | superseded | Billing was built later (`R:3511-3970`, milestones `S:2155`), and 59.10.7 now depends on it | survey-billing, village-billing | The spec contradicts itself: 59.8 is stale against 59.10.7. Doc fix only |
-| 59.9.1 | Day's return filed on the phone by the crew; web kept for amend/back-fill | partial → **yes** | `M/app/(tabs)/survey.tsx`, `M/src/survey/DailyReturn.tsx`; web `W/app/survey/entry` | mobile survey.test.ts | Before: a crew member who had filed could not correct the day from the phone. Re-filing was refused 409 and dropped by the outbox (SG-003). A second crew member could not file at all when marking a rover they don't carry: 403, whole day dropped (SG-001). Both closed |
+| 59.9.1 | Day's return filed on the phone by the crew; web kept for amend/back-fill | partial → **yes** | `M/app/(tabs)/survey.tsx`, `M/src/survey/DailyReturn.tsx`; web `W/app/survey/entry` | mobile survey.test.ts | Before: **no return or control point could be filed from the phone at all since 21 Sep** (SG-014, P0: the forms got the display date "24-Sep-2026"). A filed day could not be corrected: 409, dropped by the outbox (SG-003). Marking a rover someone else carries got the whole day refused: 403 (SG-001). All closed |
 | 59.9.2 | Returns and control points queued, sent when there is signal | yes | `M/src/sync/engine.ts:131,148`; outbox `queueCore.ts:141` | mobile queue tests; live replay (SG-005) | A second filing queued offline for the same village-day used to land as 409 and be discarded. Closed by SG-003 |
 | 59.9.3 | Every server rule applied on the device first; threshold sent | partial → **yes** | `M/src/survey/returnForm.ts` runs `surveyEntrySchema`, `checkLowProgress`, `checkRoverDay`, `gtReasonRequired`; `R:1598` sends threshold | mobile survey.test.ts | Before: two server rules had no device-side counterpart. Rover ownership (`R:2196`, SG-001) and one-return-per-day (SG-003) |
-| 59.9.4 | GCP by whoever establishes it (`survey.enter`); delete stays `survey.manage` | yes | `R:3075` POST (`survey.enter` + `requireOwnCrew`), `R:3172` DELETE (`survey.manage`) | village-gcp "who may record a control point"; live: mob POST 201, DELETE 403 | Point codes are unique only case-sensitively (SG-006, fixed) |
+| 59.9.4 | GCP by whoever establishes it (`survey.enter`); delete stays `survey.manage` | yes | `R:3075` POST (`survey.enter` + `requireOwnCrew`), `R:3172` DELETE (`survey.manage`) | village-gcp "who may record a control point"; live: mob POST 201, DELETE 403 | Point codes were unique only case-sensitively (SG-006, fixed) |
 | 59.9.5 | Phone fix fills coordinates as a starting position and says so | partial → **yes** | `M/src/survey/ControlPointForm.tsx:54-66` caption with accuracy | mobile survey.test.ts "control point" | Before: the caption disappeared on filing, so an untouched phone fix could be filed as a control point with no second look. The sanity warnings (swapped, (0,0), outside India) were set and then the sheet closed, so nobody saw them (SG-004). Closed: the phone asks for confirmation first |
 | 59.10.1 | Exactly one of eleven (now thirteen) positions | yes | `S:234` `VILLAGE_LADDER`, `S:331` `villagePosition()` | survey-ladder "thirteen rungs" | — |
 | 59.10.2 | Position derived from stage rows, furthest stage touched | partial | `S:331` reads backwards. Internal screens resolve a task-linked stage from its task (`R:309`). The department dashboard reads `survey_village_stages.state` raw (`R:4960`) | survey-ladder "the dashboard" | **SG-009 (P1)**: on task-linked programmes the two disagree. Live RESURVEY-2026: dashboard 6 not started vs progress 25; VECTORIZATION_COMPLETED 0 vs 22. Left open: needs a DECISION on which source governs a linked stage (SG-D3) |
@@ -68,7 +68,7 @@ them.
 | 59.11.1 | Module has its own dashboard and opens on it | yes | `W/app/survey/page.tsx:117` default tab `dashboard` | W tests/survey-tabs.test.tsx | — |
 | 59.11.2 | Positions with date range, filters district/mandal/position, drill-down | partial | `R:4895` `/dashboard?from&to&district&mandal&position`; `W/components/survey/Dashboard.tsx:556,635` drill | survey-ladder | The date range bounds acres done, but positions are always "now" (`R:5004` `asOf = today()`), whatever `to` says. SG-010, P2, open. Needs stage history as at a date |
 | 59.11.3 | Handed to the department: no money, names or equipment; its own query | yes | `R:4895` separate query; `holder_names` dropped for observers; `R:469` `readsAsObserver` | survey-ladder "what an observer may see", survey-adversarial | — |
-| 59.11.4 | `survey.dashboard` own permission; GOVT_OBSERVER holds only it; observer sees dashboard and nothing else | partial → **yes** | `S:1300` grants; `W/app/survey/page.tsx:104,226` observer page | W tests/rbac-navigation.test.ts | Before: the nav item `/survey` needed `survey.read` (`W/lib/nav.ts:145`). An observer had no link to the one screen they're allowed, and sign-in sent them to `/security` (SG-011). Closed |
+| 59.11.4 | `survey.dashboard` own permission; GOVT_OBSERVER holds only it; observer sees dashboard and nothing else | partial → **yes** | `S:1300` grants; `W/app/survey/page.tsx:104,226` observer page | W tests/rbac-navigation.test.ts | Before: the nav item `/survey` needed `survey.read` (`W/lib/nav.ts:145`). An observer had no link to the one screen they're allowed (SG-011). Closed |
 
 ## Not numbered, decided elsewhere
 
@@ -76,10 +76,11 @@ them.
 |---|---|---|---|
 | SUR-5: CLIENT_VIEWER gets the observer view | yes | `R:463` `clientOnly()`, `R:430` no staff programmes; live: client reads V1 → 404 | — |
 | Stage completion: only the assigned employee, their reporting manager, a team lead, the PM or an admin (owner, 2026-09-24) | decided. Lane 1 implements the API | `R:1222` today: any `survey.enter` holder on the programme (live: qa-mob-employee reaches V2's handler, a village they are not crewed on) | Mobile side (this branch): "Mark complete" is offered only for the stage and village the person is crewed on (SG-013) |
-| Crew membership gates GCP creation | yes | `R:563` `requireOwnCrew` | Returns had no such gate (SG-002, fixed) |
+| Crew membership gates GCP creation | yes | `R:563` `requireOwnCrew` | Returns and reads have no such gate (**DECISION SG-D1**) |
 
 ## Remaining gaps
 
+0. Mobile completion is offered only on the person's own stage (SG-013). The API side of the owner's rule is lane 1's.
 1. **59.10.2 / SG-009**: the department dashboard and the internal screens resolve task-linked stages differently. Open, needs DECISION SG-D3.
 2. **59.11.2 / SG-010**: the dashboard's positions ignore the period end. Open.
 3. **59.7.1 / SG-D2**: no separate amendment permission. DECISION.
