@@ -177,6 +177,15 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    return 'This invoice has already been matched or overridden. Reverse the match before changing its lines.';
   if(['APPROVED','CANCELLED'].includes(String(invoice.lifecycle_status)))
    return `An invoice at ${invoice.lifecycle_status} cannot have its lines changed`;
+  // Fix round 2: on_hold and disputed were missing here entirely, so a held
+  // or disputed invoice's lines could be edited silently -- the hold/dispute
+  // is a decision about the invoice as it stands, and changing its lines
+  // under either invalidates that decision the same way changing them under
+  // a recorded match would.
+  if(invoice.on_hold)
+   return `This invoice is on hold${invoice.hold_reason?` (${invoice.hold_reason})`:''}. Release the hold before changing its lines.`;
+  if(invoice.disputed)
+   return `This invoice is disputed${invoice.dispute_reason?` (${invoice.dispute_reason})`:''}. Resolve the dispute before changing its lines.`;
   const status=(await db.query(
    `SELECT
       COALESCE((SELECT sum(a.amount + a.tds_amount + a.advance_adjusted)

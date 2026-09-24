@@ -480,7 +480,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
          overridden ? new Date() : null, u.id])).rows[0];
 
       await db.query(
-        'UPDATE invoices SET match_status = $2 WHERE id = $1',
+        'UPDATE invoices SET match_status = $2, version = version + 1 WHERE id = $1',
         [id, result.matched ? 'MATCHED' : overridden ? 'OVERRIDDEN' : 'EXCEPTION']);
 
       return { ...record, ...result };

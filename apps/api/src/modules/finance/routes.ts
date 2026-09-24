@@ -455,7 +455,7 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
           fail('VALIDATION_ERROR', 'Say why the invoice is being cancelled');
         }
         return (await db.query(
-          `UPDATE invoices SET lifecycle_status=$2, cancelled_reason=$3 WHERE id=$1 RETURNING *`,
+          `UPDATE invoices SET lifecycle_status=$2, cancelled_reason=$3, version=version+1 WHERE id=$1 RETURNING *`,
           [id, input.status, input.status === 'CANCELLED' ? input.reason : invoice.cancelled_reason]))
           .rows[0];
       }),
@@ -471,7 +471,7 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
         // A flag, not a status: the invoice a client disputes is exactly the
         // one that also goes overdue, and both facts have to be visible.
         return (await db.query(
-          'UPDATE invoices SET disputed=$2, dispute_reason=$3 WHERE id=$1 RETURNING *',
+          'UPDATE invoices SET disputed=$2, dispute_reason=$3, version=version+1 WHERE id=$1 RETURNING *',
           [id, input.disputed, input.disputed ? input.reason : null])).rows[0];
       }),
     };

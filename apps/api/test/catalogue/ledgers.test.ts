@@ -171,6 +171,9 @@ describe("payables ageing", () => {
     const held = await post(w.admin, `/api/v1/ap/invoices/${inv.id}/hold`,
       { on_hold: true, reason: "Awaiting a credit note for short delivery" });
     expect(held.status, JSON.stringify(held.body)).toBe(200);
+    // Bumped (fix round 2) so a stale PATCH /invoices/:id/lines If-Match
+    // taken before this hold is refused rather than passing silently.
+    expect(held.data.version).toBe(2);
     const res = await get(w.admin, "/api/v1/ap/ageing?as_of=2026-09-15");
     expect(res.data.onHold).toBeGreaterThanOrEqual(75000);
     expect(res.data.total).toBeGreaterThanOrEqual(75000);

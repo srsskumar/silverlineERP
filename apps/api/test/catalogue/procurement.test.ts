@@ -479,8 +479,11 @@ describe("three-way match", () => {
     const res = await post(w.admin, `/api/v1/invoices/${invoiceId}/match`, {});
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     expect(res.data.matched).toBe(true);
-    const inv = await w.pool.query("SELECT match_status FROM invoices WHERE id=$1", [invoiceId]);
+    const inv = await w.pool.query("SELECT match_status, version FROM invoices WHERE id=$1", [invoiceId]);
     expect(inv.rows[0].match_status).toBe("MATCHED");
+    // Bumped (fix round 2) so a stale PATCH /invoices/:id/lines If-Match
+    // taken before this match is refused rather than passing silently.
+    expect(inv.rows[0].version).toBe(2);
   });
 
   it("catches an invoice for more than arrived", async () => {
@@ -936,6 +939,68 @@ describe("vendor invoice lines (finding B-004)", () => {
     });
     expect(res.status).toBe(409);
     expect(res.body.code).toBe("INVALID_STATUS");
+  });
+
+  it("refuses to edit lines while the invoice is on hold (fix round 2)", async () => {
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 10, rate: 400 },
+    ]);
+    const inv = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 10, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    const held = await post(w.admin, `/api/v1/ap/invoices/${inv.data.id}/hold`,
+      { on_hold: true, reason: "Awaiting a credit note" });
+    expect(held.status, JSON.stringify(held.body)).toBe(200);
+
+    const res = await patchInvoiceLines(w.admin, inv.data.id, {
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 5, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("INVALID_STATUS");
+    expect(res.body.message).toContain("on hold");
+  });
+
+  it("refuses to edit lines while the invoice is disputed (fix round 2)", async () => {
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 10, rate: 400 },
+    ]);
+    const inv = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 10, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    const dispute = await post(w.admin, `/api/v1/invoices/${inv.data.id}/dispute`,
+      { disputed: true, reason: "Wrong item delivered" });
+    expect(dispute.status, JSON.stringify(dispute.body)).toBe(200);
+
+    const res = await patchInvoiceLines(w.admin, inv.data.id, {
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 5, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("INVALID_STATUS");
+    expect(res.body.message).toContain("disputed");
+  });
+
+  it("GET /invoices/:id reports on-hold and disputed as reasons lines cannot be edited (fix round 2)", async () => {
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 10, rate: 400 },
+    ]);
+    const inv = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 10, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    expect((await get(w.admin, `/api/v1/invoices/${inv.data.id}`)).data.lines_editable).toBe(true);
+
+    await post(w.admin, `/api/v1/ap/invoices/${inv.data.id}/hold`, { on_hold: true, reason: "Query" });
+    const held = await get(w.admin, `/api/v1/invoices/${inv.data.id}`);
+    expect(held.data.lines_editable).toBe(false);
+    expect(held.data.lines_lock_reason).toContain("on hold");
   });
 
   it("keeps invoice line writes behind invoice.manage, not invoice.read", async () => {
