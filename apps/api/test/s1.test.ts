@@ -460,6 +460,17 @@ describe("employees", () => {
     expect(body["phonepe_number_last4"]).toBe("••••3210");
   });
 
+  it("lets AUDITOR read org units, like every other role that reads employees (P-002)", async () => {
+    // Post-deploy QA browser walk: /employees as qa-admin-auditor threw a
+    // console 403 on load -- the district filter fetches GET /org/units,
+    // gated on org.units.read. HR_MANAGER, PROJECT_MANAGER and TEAM_LEAD all
+    // pair EMPLOYEE_READ with ORG_UNITS_READ in S1_ROLE_GRANTS; AUDITOR only
+    // had EMPLOYEE_READ.
+    const auditor = await roleHeaders("AUDITOR");
+    const res = await app.inject({ method: "GET", url: "/api/v1/org/units?type=district&limit=100", headers: auditor });
+    expect(res.statusCode).toBe(200);
+  });
+
   it("returns full decrypted PII with pii.read on the detail only (HR-15)", async () => {
     const admin = await adminHeaders();
     const hr = await roleHeaders("HR_MANAGER");

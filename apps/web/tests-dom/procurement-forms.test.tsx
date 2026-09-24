@@ -16,6 +16,7 @@ import { NewRequisition } from '@/components/procurement/NewRequisitionForm';
 import { NewPurchaseOrder } from '@/components/procurement/NewPurchaseOrderForm';
 import { NewGrn } from '@/components/procurement/NewGrnForm';
 import { NewRfq } from '@/components/procurement/NewRfqForm';
+import { AmendOrder } from '@/components/procurement/AmendOrderForm';
 import { __resetAuthStateForTests, setTokens } from '@/lib/apiClient';
 
 const store = new Map<string, string>();
@@ -240,6 +241,54 @@ describe('NewGrn (B-005)', () => {
     expect(typeof body.lines[0].received_quantity).toBe('number');
     expect(typeof body.lines[0].accepted_quantity).toBe('number');
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
+  });
+});
+
+describe('AmendOrder (round-2 deep walk: POST /purchase-orders/:id/amend had no UI at all)', () => {
+  const po = {
+    id: '88888888-8888-8888-8888-888888888888', po_number: 'PO-9001', version: 4,
+    lines: [
+      { id: 'l1', description: 'TMT bars 12mm', quantity: 500, unit_rate: 62.75 },
+      { id: 'l2', description: 'OPC 53 cement', quantity: 100, unit_rate: 350.5 },
+    ],
+  };
+
+  it('requires a reason, and omits untouched lines from the body', async () => {
+    const onDone = vi.fn();
+    mount(<AmendOrder po={po} onClose={vi.fn()} onDone={onDone} />);
+
+    const submit = screen.getByRole('button', { name: 'Submit amendment' });
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Amendment reason'), { target: { value: 'Vendor renegotiated the rate' } });
+    expect(submit).not.toBeDisabled();
+
+    // Only the cement line's rate is actually changed.
+    fireEvent.change(screen.getByLabelText('Rate for OPC 53 cement'), { target: { value: '360' } });
+
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({
+      path: `/api/v1/purchase-orders/${po.id}/amend`, method: 'POST',
+    });
+    expect(sent[0].body).toEqual({
+      reason: 'Vendor renegotiated the rate',
+      lines: [{ po_line_id: 'l2', unit_rate: 360 }],
+    });
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+  });
+
+  it('sends the order version as X-Record-Version (apiClient rewrites If-Match)', async () => {
+    handlers[`POST /api/v1/purchase-orders/${po.id}/amend`] = (init) => {
+      expect(new Headers(init?.headers).get('X-Record-Version')).toBe('4');
+      sent.push({ path: `/api/v1/purchase-orders/${po.id}/amend`, method: 'POST', body: JSON.parse(String(init?.body)) });
+      return jsonResponse({ data: { id: po.id } }, 200);
+    };
+    mount(<AmendOrder po={po} onClose={vi.fn()} onDone={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText('Amendment reason'), { target: { value: 'Delivery slipped a week' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Submit amendment' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
   });
 });
 

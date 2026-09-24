@@ -656,6 +656,19 @@ describe("tenant isolation", () => {
   });
 });
 
+describe("AUDITOR can actually use its expense.read_all grant (P-002)", () => {
+  it("lists expense claims org-wide, not just 403s", async () => {
+    // Post-deploy QA browser walk: /expenses as qa-admin-auditor threw a
+    // console 403 on load. EXPENSE_ROLE_GRANTS.AUDITOR held expense.read_all
+    // (and expense.policy.read) but not the base expense.read every GET
+    // /expense-claims* route gates on -- every other role holding
+    // expense.read_all (PROJECT_MANAGER, PAYROLL_OFFICER, HR_MANAGER) also
+    // holds expense.read alongside it; AUDITOR was the one role missing it.
+    const res = await get(w.role.AUDITOR, "/api/v1/expense-claims?limit=100");
+    expect(res.status).toBe(200);
+  });
+});
+
 describe("expense receipts (B-003)", () => {
   const PNG = Buffer.from("89504e470d0a1a0a", "hex");
   const png = (extra = "payload") => Buffer.concat([PNG, Buffer.from(extra)]).toString("base64");

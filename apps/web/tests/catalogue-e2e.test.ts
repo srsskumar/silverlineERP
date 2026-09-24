@@ -184,6 +184,22 @@ describe('E2E-20 PM drags card through allowed then disallowed board transition'
     expect(board).toMatch(/not allowed from the current status/);
   });
 
+  it('gates the project-people fetch on the permission the route itself requires, not a role name (P-001 round 2)', () => {
+    // Post-deploy QA round 1 (P-001): this board fetched `projects/:id/people`
+    // unconditionally to label avatars and 403'd for CLIENT_VIEWER. The
+    // first fix gated it on `!session?.roles?.every(r=>r==='CLIENT_VIEWER')`
+    // — but GET /projects/:id/people is actually gated on `task.read`
+    // (planning/routes.ts), which CLIENT_VIEWER holds and GOVT_OBSERVER does
+    // not: a role-name check only ever protects the one role it names, so
+    // GOVT_OBSERVER (holding nothing) still 403'd. Must gate on the actual
+    // permission via hasPermission/PERMISSIONS, like every other guarded
+    // fetch in this codebase.
+    expect(board).toMatch(
+      /useRows\(`projects\/\$\{projectId\}\/people\?limit=100`,\s*!!projectId\s*&&\s*hasPermission\(session,\s*PERMISSIONS\.TASK_READ\)\)/,
+    );
+    expect(board).not.toMatch(/roles\?\.every\(r\s*=>\s*r\s*===\s*'CLIENT_VIEWER'\)/);
+  });
+
   it('offers only the statuses the server says are reachable', () => {
     // allowed_next is the server's answer; the board must not invent targets.
     const page = normalizeTasksPage({

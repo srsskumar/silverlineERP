@@ -65,7 +65,15 @@ export const S5_ROLE_GRANTS: Record<RoleCode, string[]> = {
   HR_MANAGER: [S5_PERMISSIONS.NOTIFICATION_READ],
   PAYROLL_OFFICER: [S5_PERMISSIONS.NOTIFICATION_READ],
   INVENTORY_MANAGER: [S5_PERMISSIONS.NOTIFICATION_READ],
- SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[], GOVT_OBSERVER:[],
+  // Every other role above holds notification.read -- the Inbox nav item is
+  // shown to everyone, not gated per module, so a role missing it still sees
+  // the tab and 403s the moment it opens. GOVT_OBSERVER was the one role
+  // left with nothing at all (not even this ambient one), found live during
+  // the round-2 deep walk's govt crawl. SALES_BD_EXECUTIVE and
+  // BID_TENDER_MANAGER are the same shape but unverified live this round;
+  // see findings-post.md.
+  GOVT_OBSERVER: [S5_PERMISSIONS.NOTIFICATION_READ],
+ SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[],
 };
 
 // ---------------------------------------------------------------------------

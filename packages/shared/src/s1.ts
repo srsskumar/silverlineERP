@@ -69,7 +69,10 @@ export const S1_ROLE_GRANTS: Record<RoleCode, string[]> = {
   INVENTORY_MANAGER: [],
   EMPLOYEE: [],
   CLIENT_VIEWER: [],
-  AUDITOR: [S1_PERMISSIONS.EMPLOYEE_READ],
+  // ORG_UNITS_READ alongside EMPLOYEE_READ, same as every other role below
+  // that reads employees (HR_MANAGER/PROJECT_MANAGER/TEAM_LEAD) — without it
+  // the district filter on /employees 403s for an auditor (P-002).
+  AUDITOR: [S1_PERMISSIONS.EMPLOYEE_READ, S1_PERMISSIONS.ORG_UNITS_READ],
  SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[], GOVT_OBSERVER:[],
 };
 

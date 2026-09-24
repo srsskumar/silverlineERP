@@ -103,6 +103,8 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "094_vendor_invoice_lines_match", file: "094_vendor_invoice_lines_match.sql" },
   { version: "095_drop_msme_registered_check", file: "095_drop_msme_registered_check.sql" },
   { version: "096_invoice_version", file: "096_invoice_version.sql" },
+  { version: "097_auditor_base_reads", file: "097_auditor_base_reads.sql" },
+  { version: "098_govt_observer_notification_read", file: "098_govt_observer_notification_read.sql" },
 ];
 
 /**

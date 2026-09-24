@@ -484,7 +484,12 @@ export const EXPENSE_ROLE_GRANTS: Record<RoleCode, string[]> = {
   PAYROLL_OFFICER: ['expense.read', 'expense.manage', 'expense.read_all',
     'expense.policy.read', 'expense.policy.manage', 'expense.reimburse'],
   HR_MANAGER: ['expense.read', 'expense.manage', 'expense.read_all', 'expense.policy.read'],
-  AUDITOR: ['expense.read_all', 'expense.policy.read'],
+  // expense.read alongside expense.read_all, same as every other role below
+  // that holds read_all (PROJECT_MANAGER/PAYROLL_OFFICER/HR_MANAGER) — every
+  // GET /expense-claims* route gates on the base permission first and only
+  // widens scope with read_all internally, so without it an auditor 403s on
+  // /expenses outright (P-002).
+  AUDITOR: ['expense.read', 'expense.read_all', 'expense.policy.read'],
   INVENTORY_MANAGER: ['expense.read', 'expense.manage'],
   SALES_BD_EXECUTIVE: ['expense.read', 'expense.manage'],
   BID_TENDER_MANAGER: ['expense.read', 'expense.manage'],
