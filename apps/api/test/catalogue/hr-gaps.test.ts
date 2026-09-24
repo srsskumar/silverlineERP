@@ -424,23 +424,38 @@ describe("HR-5 a punch is accepted with or without a position", () => {
 // HR-14: exiting an employee offboards them
 // ===========================================================================
 
-describe("HR-14 exit disables the login, withdraws leave and flags open tasks", () => {
-  it("does all of it in the exit itself", async () => {
+describe("HR-14 exit disables the login, withdraws leave, unassigns open tasks and notifies the PM", () => {
+  it("does all of it in the exit itself (owner decision 2026-09-24 #1)", async () => {
     const { employeeId, userId, headers } = await worker();
     const leave = await fileLeave(headers, {
       employee_id: employeeId,
       from_date: `${Number(workDate().slice(0, 4)) + 1}-04-06`,
       to_date: `${Number(workDate().slice(0, 4)) + 1}-04-06`,
     });
+    await w.app.inject({
+      method: "PATCH", url: `/api/v1/projects/${w.activeProject}`,
+      headers: { ...w.admin, ...(await ifMatch(w, "projects", w.activeProject)), ...idem() },
+      payload: { project_manager_id: w.roleUserId.PROJECT_MANAGER },
+    });
     const task = await w.pool.query(
       `INSERT INTO tasks(org_id, project_id, title, status, assignee_id, created_by)
        VALUES ($1, $2, 'Open task', 'IN_PROGRESS', $3, $4) RETURNING id`,
+      [w.orgId, w.activeProject, userId, w.adminId],
+    );
+    const secondOpenTask = await w.pool.query(
+      `INSERT INTO tasks(org_id, project_id, title, status, assignee_id, created_by)
+       VALUES ($1, $2, 'Second open task', 'TO_DO', $3, $4) RETURNING id`,
       [w.orgId, w.activeProject, userId, w.adminId],
     );
     const doneTask = await w.pool.query(
       `INSERT INTO tasks(org_id, project_id, title, status, assignee_id, created_by)
        VALUES ($1, $2, 'Finished task', 'DONE', $3, $4) RETURNING id`,
       [w.orgId, w.activeProject, userId, w.adminId],
+    );
+
+    const notificationsBefore = await w.pool.query(
+      "SELECT count(*)::int AS n FROM notifications WHERE recipient_id = $1 AND type = 'TASK_REASSIGN_NEEDED'",
+      [w.roleUserId.PROJECT_MANAGER],
     );
 
     const exit = await w.app.inject({
@@ -465,20 +480,83 @@ describe("HR-14 exit disables the login, withdraws leave and flags open tasks", 
     const request = await w.pool.query("SELECT status FROM leave_requests WHERE id = $1", [leave.id]);
     expect(request.rows[0].status).toBe("CANCELLED");
 
-    // Open work stays attributable (UT-WORK-06) and is flagged for the
-    // project manager on the task's own trail; finished work is left alone.
+    // Open tasks come off the exited employee (owner decision 2026-09-24
+    // #1); finished work is left exactly alone.
     const open = await w.pool.query("SELECT assignee_id FROM tasks WHERE id = $1", [task.rows[0].id]);
-    expect(open.rows[0].assignee_id).toBe(userId);
+    expect(open.rows[0].assignee_id).toBeNull();
+    const secondOpen = await w.pool.query(
+      "SELECT assignee_id FROM tasks WHERE id = $1", [secondOpenTask.rows[0].id]);
+    expect(secondOpen.rows[0].assignee_id).toBeNull();
+    const done = await w.pool.query("SELECT assignee_id FROM tasks WHERE id = $1", [doneTask.rows[0].id]);
+    expect(done.rows[0].assignee_id).toBe(userId);
+
     const audit = await w.pool.query(
-      "SELECT count(*)::int AS n FROM audit_events WHERE action = 'task.assignee_exited' AND entity_id = $1",
+      "SELECT count(*)::int AS n FROM audit_events WHERE action = 'task.unassigned' AND entity_id = $1",
       [task.rows[0].id],
     );
+    expect(audit.rows[0].n).toBe(1);
     const doneAudit = await w.pool.query(
-      "SELECT count(*)::int AS n FROM audit_events WHERE action = 'task.assignee_exited' AND entity_id = $1",
+      "SELECT count(*)::int AS n FROM audit_events WHERE action = 'task.unassigned' AND entity_id = $1",
       [doneTask.rows[0].id],
     );
     expect(doneAudit.rows[0].n).toBe(0);
-    expect(audit.rows[0].n).toBe(1);
+
+    // The project manager is notified once for the project, not once per
+    // orphaned task -- two open tasks on the same project still produce a
+    // single TASK_REASSIGN_NEEDED row.
+    const notifications = await w.pool.query(
+      `SELECT title, body FROM notifications
+        WHERE recipient_id = $1 AND type = 'TASK_REASSIGN_NEEDED' AND entity_id = $2
+        ORDER BY created_at DESC`,
+      [w.roleUserId.PROJECT_MANAGER, w.activeProject],
+    );
+    expect(notifications.rows.length).toBe(notificationsBefore.rows[0].n + 1);
+    expect(notifications.rows[0].body).toContain("Open task");
+    expect(notifications.rows[0].body).toContain("Second open task");
+    expect(notifications.rows[0].body).not.toContain("Finished task");
+  });
+
+  it("leaves another organisation's tasks and notifications untouched", async () => {
+    // accountIds (the exited employee's user rows) are org-scoped, and the
+    // exit route's own task query additionally filters on org_id -- so no
+    // uuid collision across tenants can make this cross over. Proven here
+    // with a task and a would-be PM built directly in `w.other`'s org.
+    const otherWorkspace = await w.pool.query(
+      "INSERT INTO workspaces (org_id, name) VALUES ($1, 'Other workspace') RETURNING id",
+      [w.other.orgId],
+    );
+    const otherType = await w.pool.query(
+      "INSERT INTO project_types (org_id, code, name) VALUES ($1, 'GEN', 'General') RETURNING id",
+      [w.other.orgId],
+    );
+    const otherProject = await w.pool.query(
+      `INSERT INTO projects (org_id, workspace_id, code, name, project_type_id, project_manager_id, status)
+       VALUES ($1, $2, $3, 'Other org project', $4, $5, 'ACTIVE') RETURNING id`,
+      [w.other.orgId, otherWorkspace.rows[0].id, uniq("POTH"), otherType.rows[0].id, w.other.adminId],
+    );
+    const otherTask = await w.pool.query(
+      `INSERT INTO tasks(org_id, project_id, title, status, assignee_id, created_by)
+       VALUES ($1, $2, 'Other org open task', 'IN_PROGRESS', $3, $3) RETURNING id`,
+      [w.other.orgId, otherProject.rows[0].id, w.other.adminId],
+    );
+
+    const { employeeId } = await worker();
+    const exit = await w.app.inject({
+      method: "POST",
+      url: `/api/v1/employees/${employeeId}/exit`,
+      headers: { ...w.admin, ...idem() },
+      payload: { exit_date: workDate(), reason: "Resigned" },
+    });
+    expect(exit.statusCode, exit.body).toBe(200);
+
+    const stillAssigned = await w.pool.query(
+      "SELECT assignee_id FROM tasks WHERE id = $1", [otherTask.rows[0].id]);
+    expect(stillAssigned.rows[0].assignee_id).toBe(w.other.adminId);
+    const otherNotifications = await w.pool.query(
+      "SELECT count(*)::int AS n FROM notifications WHERE recipient_id = $1 AND type = 'TASK_REASSIGN_NEEDED'",
+      [w.other.adminId],
+    );
+    expect(otherNotifications.rows[0].n).toBe(0);
   });
 
   it("refuses to roster or allocate somebody who has exited", async () => {
