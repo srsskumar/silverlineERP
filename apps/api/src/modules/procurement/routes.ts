@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { paise } from "../../common/money.js";
 import type { Pool, PoolClient } from 'pg';
 import {
   requisitionSchema, purchaseOrderSchema, grnSchema,
@@ -12,6 +13,7 @@ import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail, projectAccess } from '../../common/domain.js';
 import { levelsForPolicy, submitForApproval } from '../../common/approvalRouting.js';
 import { itemOnHand, lockItem, notifyLowStockCrossing } from '../../common/stockLedger.js';
+
 
 /**
  * Procurement (§6.6, §13.2, §43).
@@ -211,9 +213,9 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
       }
 
       const lines = input.lines.map(l => {
-        const taxable = Math.round(l.quantity * l.unit_rate * 100) / 100;
-        const tax = Math.round(taxable * l.gst_rate_pct) / 100;
-        return { ...l, taxable, tax, total: Math.round((taxable + tax) * 100) / 100 };
+        const taxable = paise(l.quantity * l.unit_rate);
+        const tax = paise(taxable * l.gst_rate_pct / 100);
+        return { ...l, taxable, tax, total: paise(taxable + tax) };
       });
       const taxableValue = lines.reduce((t, l) => t + l.taxable, 0);
       const taxAmount = lines.reduce((t, l) => t + l.tax, 0);
@@ -749,8 +751,8 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
         if (!change) continue;
         const quantity = change.quantity ?? Number(l.quantity);
         const rate = change.unit_rate ?? Number(l.unit_rate);
-        const taxable = Math.round(quantity * rate * 100) / 100;
-        const tax = Math.round(taxable * Number(l.gst_rate_pct)) / 100;
+        const taxable = paise(quantity * rate);
+        const tax = paise(taxable * Number(l.gst_rate_pct) / 100);
         await db.query(
           `UPDATE purchase_order_lines SET quantity=$2, unit_rate=$3, taxable_value=$4,
              tax_amount=$5, line_total=$6 WHERE id=$1`,

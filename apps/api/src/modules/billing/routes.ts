@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { paise } from "../../common/money.js";
 import type { Pool, PoolClient } from 'pg';
 import {
   boqItemSchema, raBillSchema, deductionPolicySchema, advanceSchema,
@@ -83,7 +84,7 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
     await projectAccess(pool, req, id);
     const row = await mutate(pool, req, 'boq.create', 'boq_item', async db => {
       await inOrg(db, 'projects', id, u.orgId);
-      const amount = Math.round(input.quantity * input.rate * 100) / 100;
+      const amount = paise(input.quantity * input.rate);
       return (await db.query(
         `INSERT INTO boq_items(org_id, created_by, project_id, item_code, section, description,
            unit, quantity, rate, amount, sort_order)
