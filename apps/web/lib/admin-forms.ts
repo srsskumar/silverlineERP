@@ -69,12 +69,29 @@ export function settingsBody(values: FormValues): { name?: string; settings: Rec
   put('session_timeout_minutes', num('session_timeout_minutes'));
   put('attendance_future_tolerance_minutes', num('attendance_future_tolerance_minutes'));
   put('retention_days', num('retention_days'));
-  const tolerance: Record<string, number> = {};
-  for (const [field, key] of [['match_quantity_pct', 'quantity_pct'], ['match_rate_pct', 'rate_pct'], ['match_value_absolute', 'value_absolute']] as const) {
-    const v = num(field);
-    if (v !== undefined) tolerance[key] = v;
+  // A-013: if any one of the three is set, all three go over, with an
+  // explicit `null` for whichever is blank. The API merges match_tolerance
+  // sub-field by sub-field, so `null` deliberately clears one; but sending
+  // only the two survivors -- the old behaviour -- could not be told apart
+  // from never having touched the third, and the API's old shallow merge
+  // dropped it silently either way. Sent as a whole triple whenever any one
+  // is touched, so a value already showing on screen is never lost by
+  // omission, whether the field was left blank from the start or cleared
+  // just now.
+  const TOLERANCE_FIELDS = [
+    ['match_quantity_pct', 'quantity_pct'],
+    ['match_rate_pct', 'rate_pct'],
+    ['match_value_absolute', 'value_absolute'],
+  ] as const;
+  const toleranceTouched = TOLERANCE_FIELDS.some(([field]) => str(field) !== undefined);
+  if (toleranceTouched) {
+    const tolerance: Record<string, number | null> = {};
+    for (const [field, key] of TOLERANCE_FIELDS) {
+      const v = num(field);
+      tolerance[key] = v === undefined ? null : v;
+    }
+    settings.match_tolerance = tolerance;
   }
-  if (Object.keys(tolerance).length) settings.match_tolerance = tolerance;
   const name = str('name');
   return { ...(name !== undefined ? { name } : {}), settings };
 }

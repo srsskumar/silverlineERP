@@ -37,12 +37,32 @@ describe('organisation settings', () => {
     });
     expect(body).toEqual({
       name: 'Silverline',
-      settings: { timezone: 'Asia/Kolkata', gst_state_code: '37', session_timeout_minutes: 720, match_tolerance: { rate_pct: 2.5 } },
+      // Touching one tolerance field sends the whole triple -- see A-013
+      // below -- with the two untouched ones explicitly null.
+      settings: {
+        timezone: 'Asia/Kolkata', gst_state_code: '37', session_timeout_minutes: 720,
+        match_tolerance: { quantity_pct: null, rate_pct: 2.5, value_absolute: null },
+      },
     });
     // Zero is a value: an organisation may refuse any forward skew at all.
     expect(settingsBody({ attendance_future_tolerance_minutes: '0' }).settings).toEqual({ attendance_future_tolerance_minutes: 0 });
     // Nothing filled: an empty merge rather than a row of blanks the API would refuse.
     expect(settingsBody({ name: '', timezone: '' })).toEqual({ settings: {} });
+    // Touching no tolerance field at all leaves match_tolerance out entirely,
+    // not sent as an empty/all-null object the API would have to no-op.
+    expect(settingsBody({ name: 'X' }).settings).toEqual({});
+  });
+
+  it('A-013: clearing one tolerance sub-field while changing another keeps the untouched one, not blank', () => {
+    // The organisation already has all three set (settingsInitial pre-fills
+    // them); the operator blanks "Rate tolerance" and edits "Quantity
+    // tolerance", leaving "Value tolerance" exactly as shown.
+    const body = settingsBody({
+      match_quantity_pct: '6', match_rate_pct: '', match_value_absolute: '100',
+    });
+    expect(body.settings.match_tolerance).toEqual({
+      quantity_pct: 6, rate_pct: null, value_absolute: 100,
+    });
   });
 });
 

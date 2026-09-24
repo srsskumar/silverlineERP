@@ -346,6 +346,46 @@ describe("the settings the split depends on", () => {
     expect(stored.rows[0].code).toBe("37");
   });
 
+  /*
+   * A-013: `settings` holds `match_tolerance` as a nested object, and the
+   * merge used to be a single top-level `settings || $3::jsonb` -- a plain
+   * Postgres jsonb concat, which *replaces* a top-level key wholesale when
+   * the incoming object also names it. Clearing one sub-field client-side
+   * while changing another sent `match_tolerance` with only the two
+   * survivors, and the shallow merge threw the third away silently: no
+   * validation error, no UI warning, just gone from storage.
+   */
+  it("clearing one three-way-match tolerance sub-field does not drop the others", async () => {
+    const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
+    try {
+      const full = await app.inject({
+        method: "PATCH", url: "/api/v1/admin/settings", headers: admin,
+        payload: { settings: { match_tolerance: { quantity_pct: 5, rate_pct: 3, value_absolute: 100 } } },
+      });
+      expect(full.statusCode, JSON.stringify(full.json())).toBe(200);
+
+      // Rate is explicitly cleared (null) while quantity changes; value is
+      // not resent at all -- both are legitimate ways a client says "leave
+      // this".
+      const cleared = await app.inject({
+        method: "PATCH", url: "/api/v1/admin/settings", headers: admin,
+        payload: { settings: { match_tolerance: { quantity_pct: 6, rate_pct: null } } },
+      });
+      expect(cleared.statusCode, JSON.stringify(cleared.json())).toBe(200);
+
+      const stored = await pool.query(
+        "SELECT settings->'match_tolerance' AS mt FROM organizations WHERE id=$1", [orgId]);
+      expect(stored.rows[0].mt).toEqual({ quantity_pct: 6, value_absolute: 100 });
+    } finally {
+      // organizations is not truncated between tests (see below) and
+      // procurement.test.ts's own three-way-match tests read this same
+      // organisation's match_tolerance -- leaving one here would silently
+      // change what "no configured tolerance" means for a sibling file.
+      await pool.query(
+        "UPDATE organizations SET settings = settings - 'match_tolerance' WHERE id = $1", [orgId]);
+    }
+  });
+
   it("closes the loop: set the state, and the schedule names the tax heads", async () => {
     const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
     /*

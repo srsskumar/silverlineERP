@@ -166,8 +166,29 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
    // How far an invoice may differ from its order and receipt and still
    // pass the three-way match. Held here, not sent with each match: a
    // tolerance the person running the match chooses is not a control.
-   match_tolerance:z.object({quantity_pct:z.number().min(0).max(25).optional(),rate_pct:z.number().min(0).max(25).optional(),value_absolute:z.number().min(0).max(1_000_000).optional()}).strict().optional()})}),req.body),u=actor(req);
-  return mutate(pool,req,'admin.settings','settings',async db=>(await db.query('UPDATE organizations SET name=COALESCE($2,name),settings=settings||$3::jsonb WHERE id=$1 RETURNING id,name,settings',[u.orgId,i.name??null,JSON.stringify(i.settings)])).rows[0]);
+   // Each sub-field is nullable as well as optional: null is how a client
+   // says "clear this one" (A-013), distinct from omitting it to mean
+   // "leave it as stored".
+   match_tolerance:z.object({quantity_pct:z.number().min(0).max(25).nullable().optional(),rate_pct:z.number().min(0).max(25).nullable().optional(),value_absolute:z.number().min(0).max(1_000_000).nullable().optional()}).strict().optional()})}),req.body),u=actor(req);
+  return mutate(pool,req,'admin.settings','settings',async db=>{
+   const {match_tolerance,...rest}=i.settings;
+   const current=((await db.query('SELECT settings FROM organizations WHERE id=$1 FOR UPDATE',[u.orgId])).rows[0]?.settings ?? {}) as Record<string,unknown>;
+   const merged:Record<string,unknown>={...current,...rest};
+   if(match_tolerance){
+    // match_tolerance is the one nested object `settings` holds. A plain
+    // top-level `settings || $3::jsonb` replaces it wholesale with whatever
+    // the client sent, so a sub-field the client didn't resend -- because it
+    // was never touched, not because it was cleared -- was silently dropped
+    // rather than kept. Merged here field-by-field instead, with an
+    // explicit null deleting the one sub-field the client did mean to clear.
+    const tolerance:Record<string,number>={...(current.match_tolerance as Record<string,number> ?? {})};
+    for(const [k,v] of Object.entries(match_tolerance)){
+     if(v===null||v===undefined) delete tolerance[k]; else tolerance[k]=v;
+    }
+    merged.match_tolerance=tolerance;
+   }
+   return (await db.query('UPDATE organizations SET name=COALESCE($2,name),settings=$3::jsonb WHERE id=$1 RETURNING id,name,settings',[u.orgId,i.name??null,JSON.stringify(merged)])).rows[0];
+  });
  });
  app.get('/api/v1/auth/sessions',{preHandler:auth},async req=>({data:(await pool.query('SELECT id,family,device,ip,created_at,last_used_at,expires_at FROM sessions WHERE user_id=$1 AND revoked=false ORDER BY created_at DESC LIMIT 100',[actor(req).id])).rows}));
  app.post('/api/v1/auth/sessions/:id/revoke',{preHandler:auth},async req=>{const u=actor(req),id=(req.params as {id:string}).id;return mutate(pool,req,'session.revoke','session',async db=>{const r=await db.query('UPDATE sessions SET revoked=true,revoked_at=now() WHERE user_id=$1 AND family=(SELECT family FROM sessions WHERE id=$2 AND user_id=$1) RETURNING id',[u.id,id]);if(!r.rowCount)fail('NOT_FOUND','Session not found',404);return {id,revoked:true};});});
