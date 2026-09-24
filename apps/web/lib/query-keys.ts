@@ -144,6 +144,8 @@ export const queryKeys = {
     requests: (filters?: Record<string, unknown>) =>
       [...queryKeys.leave.all, 'requests', filters ?? {}] as const,
     request: (id: string) => [...queryKeys.leave.all, 'request', id] as const,
+    openYearPreview: (year: number) =>
+      [...queryKeys.leave.all, 'open-year-preview', year] as const,
   },
   /**
    * P1 payroll (frozen contract). Lists/reports keep the default staleTime —

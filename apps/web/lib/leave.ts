@@ -183,6 +183,38 @@ export async function upsertBalance(input: {
   return data;
 }
 
+/** POST /api/v1/leave-balances/open-year result (R5-008). */
+export interface OpenYearResult {
+  year: number;
+  created: number;
+  skipped: number;
+  total: number;
+  dry_run: boolean;
+}
+
+/**
+ * Bulk-opens next year's balances (leave.admin). No carry-forward — every
+ * matching employee x balance-requiring type opens at the type's plain
+ * annual entitlement (owner decision, 2026-09-24: unused balance lapses).
+ * `dry_run: true` reports the counts without writing anything.
+ */
+export async function openYearBalances(input: {
+  year: number;
+  leave_type_ids?: string[];
+  employee_ids?: string[];
+  dry_run?: boolean;
+}): Promise<OpenYearResult> {
+  const qs = input.dry_run ? '?dry_run=1' : '';
+  const body: Record<string, unknown> = { year: input.year };
+  if (input.leave_type_ids?.length) body.leave_type_ids = input.leave_type_ids;
+  if (input.employee_ids?.length) body.employee_ids = input.employee_ids;
+  const { data } = await apiRequest<OpenYearResult>(`/api/v1/leave-balances/open-year${qs}`, {
+    method: 'POST',
+    body,
+  });
+  return data;
+}
+
 export interface ListRequestsParams {
   status?: string;
   mine?: string;

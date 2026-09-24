@@ -41,6 +41,22 @@ function plusDays(days: number, from = workDate()): string {
   return base.toISOString().slice(0, 10);
 }
 
+/**
+ * Calendar days in [from, to] that are not a Sunday (D-012 sandwich rule for
+ * PAID leave; this fixture configures no holidays, so Sunday is the only
+ * exclusion). Used instead of a hardcoded day count so this does not depend
+ * on which day of the week "today + N" happens to land on.
+ */
+function workingDaysCount(from: string, to: string): number {
+  let n = 0;
+  let cur = from;
+  while (cur <= to) {
+    if (new Date(`${cur}T00:00:00Z`).getUTCDay() !== 0) n += 1;
+    cur = plusDays(1, cur);
+  }
+  return n;
+}
+
 interface ErrorBody {
   code: string;
   message: string;
@@ -157,9 +173,11 @@ describe("UT-LP-01 calculate leave ledger", () => {
     });
     expect(decision.statusCode).toBe(200);
 
+    // CL is paid: a Sunday inside the range (D-012 sandwich rule) is not debited.
+    const debited = workingDaysCount(plusDays(30), plusDays(31));
     const after = await balanceOf(employeeId, types.CL!);
-    expect(after.consumed).toBe(before.consumed + 2);
-    expect(after.current_balance).toBe(before.current_balance - 2);
+    expect(after.consumed).toBe(before.consumed + debited);
+    expect(after.current_balance).toBe(before.current_balance - debited);
   });
 
   it("refuses a request that exceeds the available balance", async () => {

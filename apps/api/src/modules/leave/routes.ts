@@ -14,9 +14,12 @@ import {
   leaveBalanceUpsertSchema,
   leaveCancelSchema,
   leaveDecisionSchema,
+  leaveOpenYearSchema,
   leaveRequestCreateSchema,
+  resolveEffectiveHolidays,
   toFieldErrors,
   type ApprovalChainStep,
+  type HolidayCandidate,
 } from "@silverline/shared";
 import { buildAuthenticate, requirePermission,scopesForPermission } from "../../common/auth.js";
 import { writeAudit } from "../../common/audit.js";
@@ -62,21 +65,50 @@ function inclusiveDays(from: string, to: string): number {
   return Math.round(ms / 86_400_000) + 1;
 }
 
+function addDays(date: string, n: number): string {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + n * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+function isSundayDate(date: string): boolean {
+  return new Date(`${date}T00:00:00Z`).getUTCDay() === 0;
+}
+
 /**
- * The days of a leave, per leave year (D-011).
+ * The days of a leave, per leave year (D-011), skipping any date in
+ * `skipDates`.
  *
  * A balance belongs to a calendar year. Leave from 30 Dec to 2 Jan is two
  * days of one year's balance and two of the next; charging all four to the
  * first year (as the balance check and the debit both did) overdrew it and
  * never touched the second.
+ *
+ * `skipDates` is the sandwich rule (D-012, owner decision 2026-09-24): for a
+ * PAID leave type, a Sunday or an effective holiday inside the range is
+ * already a paid day off and is not deducted a second time. Callers pass an
+ * empty set for unpaid (LOP) leave, which keeps counting every calendar day
+ * exactly as before.
  */
-function daysByYear(from: string, to: string): Array<{ year: number; days: number }> {
+function daysByYear(
+  from: string,
+  to: string,
+  skipDates: ReadonlySet<string> = new Set(),
+): Array<{ year: number; days: number }> {
   const out: Array<{ year: number; days: number }> = [];
   const first = Number(from.slice(0, 4)), last = Number(to.slice(0, 4));
   for (let y = first; y <= last; y++) {
     const start = y === first ? from : `${y}-01-01`;
     const end = y === last ? to : `${y}-12-31`;
-    out.push({ year: y, days: inclusiveDays(start, end) });
+    if (skipDates.size === 0) {
+      out.push({ year: y, days: inclusiveDays(start, end) });
+      continue;
+    }
+    let days = 0;
+    for (let d = start; d <= end; d = addDays(d, 1)) {
+      if (!skipDates.has(d)) days += 1;
+    }
+    out.push({ year: y, days });
   }
   return out;
 }
@@ -342,6 +374,46 @@ export async function registerLeaveRoutes(
     return res.rows[0] as LeaveTypeRow | undefined;
   }
 
+  /**
+   * The dates inside [from, to] that a PAID leave request does not debit
+   * (D-012, sandwich rule, owner decision 2026-09-24): every Sunday, plus
+   * this employee's own effective holiday calendar for the range -- the same
+   * scope-precedence resolution payroll uses (`resolveEffectiveHolidays`),
+   * restricted to active holiday rows. Called only for `is_paid` types; an
+   * unpaid (LOP) request keeps charging every calendar day, so callers pass
+   * an empty set instead of calling this at all.
+   */
+  async function sandwichSkipDates(
+    db: Pick<Pool, "query">,
+    orgId: string,
+    employeeId: string,
+    from: string,
+    to: string,
+  ): Promise<Set<string>> {
+    const skip = new Set<string>();
+    for (let d = from; d <= to; d = addDays(d, 1)) {
+      if (isSundayDate(d)) skip.add(d);
+    }
+    const empRes = await db.query(
+      "SELECT site_id, village_id, mandal_id, district_id FROM employees WHERE id = $1::uuid AND org_id = $2",
+      [employeeId, orgId],
+    );
+    const emp = empRes.rows[0] as
+      | { site_id: string | null; village_id: string | null; mandal_id: string | null; district_id: string | null }
+      | undefined;
+    const holRes = await db.query(
+      `SELECT id, date::text AS date, name, type, scope_type, scope_id FROM holidays
+       WHERE org_id = $1 AND active = true AND date BETWEEN $2::date AND $3::date`,
+      [orgId, from, to],
+    );
+    const candidates = holRes.rows as HolidayCandidate[];
+    const effective = resolveEffectiveHolidays(candidates, [
+      emp?.site_id, emp?.village_id, emp?.mandal_id, emp?.district_id,
+    ]);
+    for (const h of effective) skip.add(h.date);
+    return skip;
+  }
+
   async function findRequest(
     orgId: string,
     id: string,
@@ -559,8 +631,146 @@ export async function registerLeaveRoutes(
       requestId: req.requestId,
     });
     return reply.status(created ? 201 : 200).send(body);
-  
+
 });});
+
+  // ------------------------------------------------ POST /leave-balances/open-year
+  //
+  // R5-008: bulk-opens next year's leave balances so a request that crosses
+  // into a not-yet-opened year does not 422 for lack of a row. Owner
+  // decision (2026-09-24): carry-forward is out of scope -- every row opens
+  // at the leave type's plain annual_entitlement, with nothing brought over
+  // from the year before. Unused balance simply lapses; there is no
+  // carry-forward or expiry rule to apply, because the leave-type schema
+  // does not define one. If the owner later wants unused CL/SL/EL to roll
+  // into the new year, that needs its own explicit field and its own change
+  // -- this endpoint must not silently start carrying balances forward.
+  const openYearQuerySchema = z.object({ dry_run: z.string().optional() });
+
+  app.post(
+    "/api/v1/leave-balances/open-year",
+    { preHandler: canAdmin },
+    async (req, reply) => {
+      return mutationRoute(opts.pool, req, reply, async (db, reply) => {
+        const parsedQuery = openYearQuerySchema.safeParse(req.query);
+        if (!parsedQuery.success) {
+          return sendError(reply, req.requestId, {
+            status: 422,
+            code: "VALIDATION_ERROR",
+            message: "Validation failed",
+            fieldErrors: toFieldErrors(parsedQuery.error),
+          });
+        }
+        const dryRun = isTrueFlag(parsedQuery.data.dry_run);
+        const parsed = leaveOpenYearSchema.safeParse(req.body ?? {});
+        if (!parsed.success) {
+          return sendError(reply, req.requestId, {
+            status: 422,
+            code: "VALIDATION_ERROR",
+            message: "Validation failed",
+            fieldErrors: toFieldErrors(parsed.error),
+          });
+        }
+        const user = req.authUser;
+        if (!user) {
+          return sendError(reply, req.requestId, {
+            status: 401,
+            code: "UNAUTHENTICATED",
+            message: "Authentication required",
+          });
+        }
+        const d = parsed.data;
+        const thisYear = currentIstYear();
+        if (d.year !== thisYear && d.year !== thisYear + 1) {
+          return sendRuleError(reply, req.requestId, {
+            status: 422,
+            code: "VALIDATION_ERROR",
+            message: `year must be the current (${thisYear}) or next (${thisYear + 1}) year`,
+            fieldErrors: [
+              { field: "year", message: `must be ${thisYear} or ${thisYear + 1}` },
+            ],
+          });
+        }
+
+        const values: unknown[] = [user.orgId, d.year];
+        let empFilter = "";
+        if (d.employee_ids?.length) {
+          values.push(d.employee_ids);
+          empFilter = ` AND e.id = ANY($${values.length}::uuid[])`;
+        }
+        let typeFilter = "";
+        if (d.leave_type_ids?.length) {
+          values.push(d.leave_type_ids);
+          typeFilter = ` AND t.id = ANY($${values.length}::uuid[])`;
+        }
+
+        // Every (active employee) x (balance-requiring leave type) pair in
+        // scope, and whether that year already has a row -- computed once so
+        // dry-run and the real write agree on the same counts.
+        const pairsRes = await db.query(
+          `SELECT e.id AS employee_id, t.id AS leave_type_id, t.annual_entitlement,
+                  EXISTS (
+                    SELECT 1 FROM leave_balances b
+                    WHERE b.employee_id = e.id AND b.leave_type_id = t.id AND b.period_year = $2
+                  ) AS exists_already
+           FROM employees e
+           CROSS JOIN leave_types t
+           WHERE e.org_id = $1 AND e.status = 'ACTIVE'
+             AND t.org_id = $1 AND t.active = true AND t.requires_balance = true
+             ${empFilter}${typeFilter}`,
+          values,
+        );
+        const rows = pairsRes.rows as Array<{
+          employee_id: string;
+          leave_type_id: string;
+          annual_entitlement: string | number;
+          exists_already: boolean;
+        }>;
+        const toCreate = rows.filter((r) => !r.exists_already);
+
+        if (dryRun) {
+          return reply.status(200).send({
+            data: {
+              year: d.year,
+              created: 0,
+              skipped: rows.length - toCreate.length,
+              total: rows.length,
+              dry_run: true,
+            },
+          });
+        }
+
+        let created = 0;
+        for (const r of toCreate) {
+          const ins = await db.query(
+            `INSERT INTO leave_balances (employee_id, leave_type_id, period_year, opening_balance)
+             VALUES ($1::uuid, $2::uuid, $3, $4)
+             ON CONFLICT (employee_id, leave_type_id, period_year) DO NOTHING
+             RETURNING id`,
+            [r.employee_id, r.leave_type_id, d.year, r.annual_entitlement],
+          );
+          if ((ins.rowCount ?? 0) > 0) created += 1;
+        }
+        const skipped = rows.length - created;
+        const body = { year: d.year, created, skipped, total: rows.length, dry_run: false };
+        await writeAudit(db, {
+          orgId: user.orgId,
+          actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
+          actorIp: req.ip,
+          actorUserAgent:
+            typeof req.headers["user-agent"] === "string"
+              ? (req.headers["user-agent"] as string)
+              : null,
+          action: "leave.balance.open_year",
+          entityType: "leave_balance",
+          entityId: null,
+          afterState: body,
+          requestId: req.requestId,
+        });
+        return reply.status(200).send({ data: body });
+      });
+    },
+  );
 
   // ------------------------------------------------ POST /leave/requests
   app.post("/api/v1/leave/requests", { preHandler: canRequest }, async (req, reply) => {return mutationRoute(opts.pool,req,reply,async(db,reply)=>{
@@ -704,10 +914,15 @@ export async function registerLeaveRoutes(
         message: "Leave type not found",
       });
     }
-    const totalDays = inclusiveDays(d.from_date, d.to_date);
+    // D-012 sandwich rule: a paid request does not debit its Sundays/effective
+    // holidays; an unpaid (LOP) one keeps charging every calendar day.
+    const skipDates = type.is_paid
+      ? await sandwichSkipDates(db, user.orgId, employeeId, d.from_date, d.to_date)
+      : new Set<string>();
     // Rule 3: balance check for paid types that require a balance, once per
     // leave year the request touches, for that year's days only (D-011).
-    const years = daysByYear(d.from_date, d.to_date);
+    const years = daysByYear(d.from_date, d.to_date, skipDates);
+    const totalDays = years.reduce((sum, y) => sum + y.days, 0);
     if (type.requires_balance) for (const { year: periodYear, days } of years) {
       const inYear = years.length > 1 ? ` in ${periodYear}` : "";
       await db.query(
@@ -1054,13 +1269,17 @@ export async function registerLeaveRoutes(
     const lastStep = chain.filter((s) => s.status === "PENDING").length <= 1;
     if (!lastStep) return null;
     const type = (
-      await client.query("SELECT requires_balance FROM leave_types WHERE id = $1::uuid", [
+      await client.query("SELECT is_paid, requires_balance FROM leave_types WHERE id = $1::uuid", [
         cur.leave_type_id,
       ])
-    ).rows[0] as { requires_balance: boolean } | undefined;
+    ).rows[0] as { is_paid: boolean; requires_balance: boolean } | undefined;
     if (!type?.requires_balance) return null;
+    // D-012 sandwich rule, same as at filing.
+    const skipDates = type.is_paid
+      ? await sandwichSkipDates(client, cur.org_id, cur.employee_id, from, to)
+      : new Set<string>();
     // Each leave year the request touches is checked for its own days (D-011).
-    for (const { year, days } of daysByYear(from, to)) {
+    for (const { year, days } of daysByYear(from, to, skipDates)) {
       const bal = await client.query(
         `SELECT (opening_balance + credits - consumed + adjustments) AS available
            FROM leave_balances
@@ -1209,8 +1428,13 @@ export async function registerLeaveRoutes(
               | { is_paid: boolean; requires_balance: boolean }
               | undefined;
             if (t?.requires_balance) {
+              // D-012 sandwich rule, same as at filing/approval-check.
+              const from = dateOnly(cur.from_date), to = dateOnly(cur.to_date);
+              const skipDates = t.is_paid
+                ? await sandwichSkipDates(client, cur.org_id, cur.employee_id, from, to)
+                : new Set<string>();
               // Each leave year is debited for its own days (D-011).
-              for (const { year, days } of daysByYear(dateOnly(cur.from_date), dateOnly(cur.to_date))) {
+              for (const { year, days } of daysByYear(from, to, skipDates)) {
                 await client.query(
                   `INSERT INTO leave_balances
                      (employee_id, leave_type_id, period_year, consumed)

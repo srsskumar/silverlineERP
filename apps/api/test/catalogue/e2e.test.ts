@@ -70,6 +70,24 @@ function plusDays(days: number): string {
   return base.toISOString().slice(0, 10);
 }
 
+/**
+ * Calendar days in [from, to] that are not a Sunday (D-012 sandwich rule for
+ * PAID leave; this fixture configures no holidays, so Sunday is the only
+ * exclusion). Used instead of a hardcoded day count so this does not depend
+ * on which day of the week "today + N" happens to land on.
+ */
+function workingDaysCount(from: string, to: string): number {
+  let n = 0;
+  let cur = from;
+  while (cur <= to) {
+    if (new Date(`${cur}T00:00:00Z`).getUTCDay() !== 0) n += 1;
+    const next = new Date(`${cur}T00:00:00Z`);
+    next.setUTCDate(next.getUTCDate() + 1);
+    cur = next.toISOString().slice(0, 10);
+  }
+  return n;
+}
+
 /** A signed-in field employee on their own chain. */
 async function fieldWorker(over: Record<string, unknown> = {}): Promise<{
   employeeId: string;
@@ -852,7 +870,7 @@ describe("E2E-15 employee submits leave through configured TL and manager chain"
       ).statusCode,
     ).toBe(200);
 
-    // The ledger moved by exactly the two days taken.
+    // The ledger moved by exactly the days taken (Sundays excluded, D-012).
     const balance = await w.app.inject({
       method: "GET",
       url: `/api/v1/leave/balances?employee_id=${employeeId}`,
@@ -863,8 +881,10 @@ describe("E2E-15 employee submits leave through configured TL and manager chain"
         data: Array<{ leave_type_id: string; consumed: number; current_balance: number }>;
       }
     ).data.find((b) => b.leave_type_id === types.CL)!;
-    expect(cl.consumed).toBe(2);
-    expect(cl.current_balance).toBe(8);
+    // CL is paid: a Sunday inside the 2-day range (D-012 sandwich rule) is not debited.
+    const debited = workingDaysCount(plusDays(30), plusDays(31));
+    expect(cl.consumed).toBe(debited);
+    expect(cl.current_balance).toBe(10 - debited);
 
     // And the employee can see the outcome.
     const own = await w.app.inject({

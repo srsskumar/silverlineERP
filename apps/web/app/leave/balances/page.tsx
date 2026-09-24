@@ -9,7 +9,8 @@ import { RequirePermission } from '@/components/RequirePermission';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 import { getMyEmployee } from '@/lib/employees';
-import { listBalances, listTypes, upsertBalance } from '@/lib/leave';
+import { listBalances, listTypes, openYearBalances, upsertBalance, type OpenYearResult } from '@/lib/leave';
+import { businessToday } from '@/lib/finance';
 import { queryKeys } from '@/lib/query-keys';
 import { leaveBalanceSchema, type LeaveBalanceFormInput } from '@/lib/validation';
 import { applyFieldErrors } from '@/lib/form-errors';
@@ -148,21 +149,128 @@ function AdjustDialog({
   );
 }
 
-function BalancesPanel() {
+/**
+ * Bulk-open next year's balances (R5-008, leave.admin). Dry-runs first so
+ * the confirm shows real preview counts, then writes for real on confirm.
+ * No carry-forward: opened rows start at the leave type's plain annual
+ * entitlement (owner decision, 2026-09-24).
+ */
+function OpenYearDialog({
+  open,
+  onClose,
+  year,
+  onOpened,
+}: {
+  open: boolean;
+  onClose: () => void;
+  year: number;
+  onOpened: () => void;
+}) {
+  const [result, setResult] = React.useState<OpenYearResult | null>(null);
+
+  const previewQuery = useQuery({
+    queryKey: queryKeys.leave.openYearPreview(year),
+    queryFn: () => openYearBalances({ year, dry_run: true }),
+    enabled: open,
+    staleTime: 0,
+  });
+
+  React.useEffect(() => {
+    if (open) setResult(null);
+  }, [open, year]);
+
+  const confirmMutation = useMutation({
+    mutationFn: () => openYearBalances({ year }),
+    onSuccess: (r) => {
+      setResult(r);
+      onOpened();
+    },
+  });
+
+  if (!open) return null;
+  const preview = previewQuery.data;
+  const toCreate = preview ? preview.total - preview.skipped : null;
+  return (
+    <div role="dialog" aria-modal="true" aria-label={`Open ${year} balances`} className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-surface p-6 shadow-lg">
+        <h2 className="text-base font-semibold text-text">Open {year} balances</h2>
+        <p className="mt-1 text-sm text-text-muted">
+          Creates a {year} balance row, at the standard annual entitlement, for every active employee
+          and balance-tracked leave type that does not already have one. No carry-forward — unused{' '}
+          {year - 1} balance is not brought over.
+        </p>
+        {result ? (
+          <div className="mt-4 flex flex-col gap-3">
+            <div role="status" className="rounded-md border border-success/30 bg-success-subtle px-3 py-2 text-sm text-success">
+              Opened {year}: {result.created} created, {result.skipped} already existed (of {result.total}).
+            </div>
+            <div className="flex justify-end">
+              <Button variant="secondary" onClick={onClose}>Close</Button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 flex flex-col gap-4">
+            {previewQuery.isLoading ? (
+              <Skeleton className="h-16 w-full" />
+            ) : previewQuery.isError ? (
+              <ErrorCard title="Could not preview" error={previewQuery.error} onRetry={() => previewQuery.refetch()} />
+            ) : preview ? (
+              <div role="status" className="rounded-md border border-border bg-surface-muted px-3 py-2 text-sm text-text">
+                Would create <strong>{toCreate}</strong> of {preview.total} employee x type rows
+                ({preview.skipped} already open).
+              </div>
+            ) : null}
+            {confirmMutation.isError ? (
+              <ErrorCard title="Could not open balances" error={confirmMutation.error} />
+            ) : null}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
+              <Button
+                onClick={() => confirmMutation.mutate()}
+                loading={confirmMutation.isPending}
+                disabled={!preview || toCreate === 0}
+              >
+                {preview && toCreate === 0 ? 'Already fully open' : `Open ${year} balances`}
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function BalancesPanel() {
   const { session } = useAuth();
   const queryClient = useQueryClient();
   const canAdmin = hasPermission({ permissions: session?.permissions }, PERMISSIONS.LEAVE_ADMIN);
 
   const currentYear = new Date().getFullYear();
+  const nextYear = currentYear + 1;
   const [year, setYear] = React.useState(String(currentYear));
   const [employeeInput, setEmployeeInput] = React.useState('');
   const [employeeId, setEmployeeId] = React.useState<string | null>(null);
   const [adjustOpen, setAdjustOpen] = React.useState(false);
+  const [openYearOpen, setOpenYearOpen] = React.useState(false);
   const [meLoading, setMeLoading] = React.useState(false);
   const [meError, setMeError] = React.useState<unknown>(null);
 
   const yearNum = Number(year);
   const yearValid = Number.isInteger(yearNum) && yearNum >= 2000 && yearNum <= 2100;
+
+  // From 1 December (org/IST time), nudge admins if next year's balances
+  // are not yet open (R5-008) -- otherwise a request crossing into January
+  // 422s for lack of a row, not for lack of entitlement.
+  const isDecemberOrLater = businessToday().slice(5, 7) === '12';
+  const rolloverBannerQuery = useQuery({
+    queryKey: queryKeys.leave.openYearPreview(nextYear),
+    queryFn: () => openYearBalances({ year: nextYear, dry_run: true }),
+    enabled: canAdmin && isDecemberOrLater,
+    staleTime: 5 * 60_000,
+  });
+  const rolloverOutstanding = rolloverBannerQuery.data
+    ? rolloverBannerQuery.data.total - rolloverBannerQuery.data.skipped
+    : 0;
 
   const balancesQuery = useQuery({
     queryKey: queryKeys.leave.balances({ employee_id: employeeId ?? 'none', period_year: year }),
@@ -221,7 +329,23 @@ function BalancesPanel() {
             Adjust…
           </Button>
         )}
+        {canAdmin && (
+          <Button variant="secondary" onClick={() => setOpenYearOpen(true)}>
+            Open {nextYear} balances
+          </Button>
+        )}
       </div>
+
+      {canAdmin && isDecemberOrLater && rolloverOutstanding > 0 && (
+        <div role="status" className="rounded-md border border-warning/30 bg-warning-subtle px-3 py-2 text-sm text-warning">
+          {rolloverOutstanding} employee x type balance{rolloverOutstanding === 1 ? '' : 's'} for {nextYear}{' '}
+          {rolloverOutstanding === 1 ? 'is' : 'are'} not open yet — a request crossing into January will be
+          refused for lack of a balance row, not for lack of entitlement.{' '}
+          <button type="button" className="font-medium underline" onClick={() => setOpenYearOpen(true)}>
+            Open {nextYear} balances
+          </button>
+        </div>
+      )}
 
       {meError ? <ErrorCard title="Could not load your employee record" error={meError} /> : null}
       {!yearValid && <ErrorCard title="Invalid year" error={new Error('Enter a 4-digit year (2000–2100).')} />}
@@ -247,6 +371,16 @@ function BalancesPanel() {
         defaultEmployeeId={employeeId ?? employeeInput.trim() ?? undefined}
         defaultYear={yearValid ? yearNum : currentYear}
         onSaved={() => queryClient.invalidateQueries({ queryKey: queryKeys.leave.balances() })}
+      />
+
+      <OpenYearDialog
+        open={openYearOpen}
+        onClose={() => setOpenYearOpen(false)}
+        year={nextYear}
+        onOpened={() => {
+          queryClient.invalidateQueries({ queryKey: queryKeys.leave.balances() });
+          queryClient.invalidateQueries({ queryKey: queryKeys.leave.openYearPreview(nextYear) });
+        }}
       />
     </div>
   );

@@ -176,6 +176,23 @@ export const leaveBalanceUpsertSchema = z.object({
 
 export type LeaveBalanceUpsertInput = z.infer<typeof leaveBalanceUpsertSchema>;
 
+/**
+ * POST /api/v1/leave-balances/open-year — bulk-opens next year's balances
+ * (R5-008). Owner decision (2026-09-24): carry-forward = lapse. Every
+ * matching employee x balance-requiring leave type gets a fresh row at that
+ * type's standard annual entitlement and nothing else -- unused balance from
+ * the year before is not brought forward, it simply lapses. Idempotent:
+ * created only where a row does not already exist (ON CONFLICT DO NOTHING on
+ * the same natural key `leave_balances` already enforces).
+ */
+export const leaveOpenYearSchema = z.object({
+  year: z.number().int().min(2000).max(2100),
+  leave_type_ids: z.array(z.string().uuid("leave_type_ids must be UUIDs")).optional(),
+  employee_ids: z.array(z.string().uuid("employee_ids must be UUIDs")).optional(),
+});
+
+export type LeaveOpenYearInput = z.infer<typeof leaveOpenYearSchema>;
+
 /** POST /api/v1/leave/requests/:id/decision */
 export const leaveDecisionSchema = z.object({
   decision: z.enum(["APPROVE", "REJECT"]),
