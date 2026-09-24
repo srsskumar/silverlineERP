@@ -94,10 +94,12 @@ describe('ExecutePaymentRunForm (B-002)', () => {
       bank_reference: 'UTR998877',
       note: 'Batch cleared by RTGS',
     });
-    // apiClient sends the version as X-Record-Version, not If-Match — a
-    // CDN can legally rewrite a transport-level precondition on the way
-    // back, and one did (see apiClient.ts's comment on this rename).
-    expect(sent[0].headers['X-Record-Version']).toBe('3');
+    // apiClient sends the version as X-Record-Version, not If-Match — a CDN
+    // can legally rewrite a transport-level precondition on the way back,
+    // and one did (see apiClient.ts's comment on this rename). Header names
+    // land lower-cased: apiClient builds the fetch init from a Headers
+    // object, whose .entries() always lower-cases per the Fetch spec.
+    expect(sent[0].headers['x-record-version']).toBe('3');
     await waitFor(() => expect(onDone).toHaveBeenCalled());
   });
 
