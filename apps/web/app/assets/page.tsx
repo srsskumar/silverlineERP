@@ -13,7 +13,7 @@ import { useReveal } from '@/lib/use-reveal';
 import { Combobox } from '@/components/ui/Combobox';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
-import { ASSET_CONDITIONS, ASSET_LOCATION_LABELS } from '@silverline/shared';
+import { ASSET_CONDITIONS, ASSET_LOCATION_LABELS, assetConditionLabel } from '@silverline/shared';
 import { day } from '@/lib/finance';
 
 /**
@@ -356,8 +356,8 @@ function AssetHistory({ asset }: { asset: Row }) {
                   <td className="py-2 pr-3 text-text-muted">
                     {h.returned_at ? day(h.returned_at) : <em>still out</em>}
                   </td>
-                  <td className="py-2 pr-3 text-text-muted">{label(h.condition)}</td>
-                  <td className="py-2 pr-3 text-text-muted">{label(h.return_condition)}</td>
+                  <td className="py-2 pr-3 text-text-muted">{assetConditionLabel(h.condition as string | null)}</td>
+                  <td className="py-2 pr-3 text-text-muted">{assetConditionLabel(h.return_condition as string | null)}</td>
                   <td className="py-2 pr-3 text-text-muted">{String(h.returned_to_name ?? '—')}</td>
                 </tr>
               ))}
@@ -568,11 +568,3 @@ function Fact({ label: name, value }: { label: string; value: string }) {
   );
 }
 
-/** A condition code as words, including the ones the register held before. */
-function label(code: unknown): string {
-  if (!code) return '—';
-  const known = ASSET_CONDITIONS.find((c) => c.code === code);
-  if (known) return known.label;
-  const raw = String(code);
-  return raw.charAt(0) + raw.slice(1).toLowerCase().replace(/_/g, ' ');
-}
