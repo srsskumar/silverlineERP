@@ -5,11 +5,12 @@
  * on the server either: the running total is summed from these, which is what
  * makes a return filed three days late still correct.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ScrollView, View } from "react-native";
 import { DELAY_REASONS, day } from "@silverline/shared";
 import {
+  getFiledEntry,
   getSurveyMeasures,
   getVillageRovers,
   type MyVillage,
@@ -32,11 +33,7 @@ import {
 } from "../ui/primitives";
 import { space, useTheme } from "../theme";
 import { buildEntry, emptyDraft, type ReturnDraft } from "./returnForm";
-
-/** A rover, as against the tripod and the radio that travelled with it. */
-function isSurveyInstrument(category: string | null): boolean {
-  return String(category ?? "").toUpperCase() === "SURVEY";
-}
+import { draftFromEntry, partitionKit } from "./fieldCrew";
 
 function ReasonPicker({
   value,
@@ -73,6 +70,7 @@ export function DailyReturn({
   const [draft, setDraft] = useState<ReturnDraft>(emptyDraft);
   const [problems, setProblems] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [prefilled, setPrefilled] = useState(false);
 
   const catalogue = useQuery({ queryKey: ["survey", "measures"], queryFn: getSurveyMeasures });
   const kit = useQuery({
@@ -86,6 +84,26 @@ export function DailyReturn({
   );
 
   /*
+   * A day already filed opens with what was sent (SG-003).
+   *
+   * It used to open blank, and filing again was refused as a second return
+   * for the day. Now the figures come back to be corrected, and the outbox
+   * turns the filing into an amendment of the day already in.
+   */
+  const filed = useQuery({
+    queryKey: ["survey", "filed", village.id, workDate],
+    queryFn: () => getFiledEntry(village.id, workDate),
+    enabled: village.filed_today,
+  });
+  useEffect(() => {
+    if (!prefilled && filed.data && measures.length) {
+      setDraft(draftFromEntry(filed.data, measures));
+      setPrefilled(true);
+    }
+  }, [filed.data, measures, prefilled]);
+  const correcting = village.filed_today;
+
+  /*
    * Only the instruments, and only the ones still out.
    *
    * Kit is issued to a person, not to a place, so a crew's allocation carries
@@ -93,14 +111,14 @@ export function DailyReturn({
    * set. Asking the crew to mark a welding set "in use or idle" every evening
    * teaches them the whole question is noise.
    */
-  const rovers = useMemo(
-    () => (kit.data ?? []).filter(r => r.out && isSurveyInstrument(r.category)),
-    [kit.data],
-  );
-  const otherKitOut = useMemo(
-    () => (kit.data ?? []).filter(r => r.out && !isSurveyInstrument(r.category)).length,
-    [kit.data],
-  );
+  /*
+   * Only the instruments this person may account for (SG-001). The server
+   * refuses a rover issued to somebody else, and one refused rover threw
+   * away the whole day. The rest are named with who records them.
+   */
+  const split = useMemo(() => partitionKit(kit.data ?? []), [kit.data]);
+  const rovers = split.mine;
+  const otherKitOut = split.otherKitOut;
 
   const setQuantity = (code: string, text: string) =>
     setDraft(d => ({ ...d, quantities: { ...d.quantities, [code]: text } }));
@@ -156,7 +174,9 @@ export function DailyReturn({
     }
   };
 
-  if (catalogue.isLoading || kit.isLoading) return <Loading label="Loading the day's form…" />;
+  if (catalogue.isLoading || kit.isLoading || (correcting && filed.isLoading)) {
+    return <Loading label="Loading the day's form…" />;
+  }
 
   const grouped = new Map<string, SurveyMeasure[]>();
   for (const m of measures) {
@@ -174,6 +194,17 @@ export function DailyReturn({
         <Badge text={village.stage_label} tone="info" />
         <Subtle>Return for {day(workDate)}</Subtle>
       </Row>
+
+      {correcting ? (
+        <Banner
+          tone="info"
+          icon="create-outline"
+          title="Today's return is already filed"
+          message={filed.data
+            ? "These are the figures you sent. Change what is wrong and save — the day is corrected, not filed twice."
+            : "Could not load what was sent. Enter the whole day as it should read; saving corrects the day already filed."}
+        />
+      ) : null}
 
       {catalogue.isError || kit.isError ? (
         <Banner
@@ -258,6 +289,12 @@ export function DailyReturn({
             );
           })
         )}
+        {split.others.map(r => (
+          <View key={r.asset_id} style={{ marginTop: space.sm }}>
+            <Subtle>{r.asset_code}</Subtle>
+            <Muted>{r.note}</Muted>
+          </View>
+        ))}
         {otherKitOut > 0 ? (
           <Muted>
             {otherKitOut} other item{otherKitOut === 1 ? " is" : "s are"} out on this village and
@@ -271,6 +308,15 @@ export function DailyReturn({
         * the department's staff. On the other stages there is nobody to count
         * and the question would collect noise.
         */}
+      <Card title="Teams">
+        <Input
+          label="Teams deployed today"
+          value={draft.teamsDeployed}
+          onChangeText={(v: string) => setDraft(d => ({ ...d, teamsDeployed: v }))}
+          keyboardType="number-pad"
+        />
+      </Card>
+
       {village.stage_code === "GROUND_TRUTHING" ? (
         <Card title="Who was in the village">
           <Input
@@ -349,7 +395,7 @@ export function DailyReturn({
       </Card>
 
       <Button
-        title="File the day's return"
+        title={correcting ? "Save the correction" : "File the day's return"}
         icon="cloud-upload-outline"
         loading={busy}
         onPress={file}
