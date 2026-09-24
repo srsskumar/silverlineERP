@@ -636,11 +636,35 @@ describe("vendor invoice lines (finding B-004)", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     expect(Number(res.data.subtotal)).toBe(40_000);
     expect(Number(res.data.total)).toBeCloseTo(40_000 * 1.28, 2);
+    // gst_enabled/gst_rate are recomputed from the lines too (fix round 1,
+    // item 5) -- the client claimed no GST at all; the line says 28%.
+    expect(res.data.gst_enabled).toBe(true);
+    expect(Number(res.data.gst_rate)).toBeCloseTo(28, 2);
     const lines = (await w.pool.query(
       "SELECT * FROM invoice_lines WHERE invoice_id=$1", [res.data.id])).rows;
     expect(lines).toHaveLength(1);
     expect(Number(lines[0].taxable_value)).toBe(40_000);
     expect(String(lines[0].po_line_id)).toBe(String(poLines[0].id));
+  });
+
+  it("recomputes gst_enabled/gst_rate on an edit too, not only on create (fix round 1, item 5)", async () => {
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 100, rate: 400 },
+    ]);
+    const inv = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 100, unit_rate: 400, gst_rate_pct: 0 }],
+    });
+    expect(inv.data.gst_enabled).toBe(false);
+
+    const res = await patchInvoiceLines(w.admin, inv.data.id, {
+      lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 100, unit_rate: 400, gst_rate_pct: 18 }],
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.data.gst_enabled).toBe(true);
+    expect(Number(res.data.gst_rate)).toBeCloseTo(18, 2);
   });
 
   it("refuses a line whose po_line_id belongs to a different purchase order", async () => {

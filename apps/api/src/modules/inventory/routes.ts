@@ -241,6 +241,28 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
   const gstLines:GstInvoiceLineInput[]=lines.map(l=>({description:l.description,hsnSac:l.hsn_sac,quantity:l.quantity,unitRate:l.unit_rate,gstRatePct:l.gst_rate_pct}));
   return computeInvoice({lines:gstLines,supplierStateCode,placeOfSupplyCode});
  }
+ /**
+  * The legacy header gst_enabled/gst_rate from the priced lines (fix round
+  * 1, item 5 on task 5c / finding B-004).
+  *
+  * Once lines exist they are the authority on tax, the same way they
+  * already are for subtotal/tax/total -- leaving gst_enabled/gst_rate as
+  * whatever the client sent would keep two disagreeing answers to "is this
+  * taxed, and at what rate" on the same row. A single rate cannot represent
+  * several lines taxed at different notified rates exactly, so gst_rate
+  * becomes the effective rate the computed tax actually works out to
+  * (taxTotal / taxableValue), which is the one number consistent with
+  * computeInvoice's own total: subtotal + round(subtotal*gst_rate/100)
+  * reproduces computed.total for a single-rate invoice exactly, and comes
+  * closest to it otherwise.
+  */
+ function gstFieldsFromComputed(computed:ReturnType<typeof computeInvoice>) {
+  const gstEnabled=computed.taxTotal>0.005;
+  const gstRate=gstEnabled&&computed.taxableValue>0.005
+   ?round2((computed.taxTotal/computed.taxableValue)*100)
+   :0;
+  return {gstEnabled,gstRate};
+ }
  /** Every line's po_line_id, if given, has to be on the invoice's own order — not just any order in the org. */
  async function checkLinePoIds(db:import('pg').PoolClient,purchaseOrderId:string|null,lines:{po_line_id?:string|null}[]) {
   const withLink=lines.filter(l=>l.po_line_id);
@@ -290,11 +312,14 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    }
    if(Number(i.gst_rate)>100)fail('VALIDATION_ERROR','Tax rate must be between zero and 100');
 
-   // The header's legacy subtotal/tax/total are never trusted once lines are
-   // given -- the server prices every line itself and the header totals are
-   // summed from that, never from what the client sent.
+   // The header's legacy subtotal/tax/total/gst_enabled/gst_rate are never
+   // trusted once lines are given -- the server prices every line itself
+   // and every one of these header fields is derived from that, never from
+   // what the client sent.
    let subtotal=Number(i.subtotal);
-   let tax=i.gst_enabled?round2(subtotal*Number(i.gst_rate)/100):0;
+   let gstEnabled=i.gst_enabled;
+   let gstRate=Number(i.gst_rate);
+   let tax=gstEnabled?round2(subtotal*gstRate/100):0;
    let total=round2(subtotal+tax);
    let computed:ReturnType<typeof computeInvoice>|null=null;
    if(i.lines?.length){
@@ -302,12 +327,13 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
     await checkLineItemIds(db,u.orgId,i.lines);
     computed=await priceInvoiceLines(db,u.orgId,i.vendor_id,i.purchase_order_id??null,i.lines);
     subtotal=computed.taxableValue;tax=computed.taxTotal;total=computed.total;
+    ({gstEnabled,gstRate}=gstFieldsFromComputed(computed));
    }
 
    const r=await db.query(
     `INSERT INTO invoices(org_id,serial_number,vendor_id,hsn,gst_enabled,gst_rate,subtotal,tax,total,payment_mode,reference,created_by,purchase_order_id)
      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
-    [u.orgId,i.serial_number,i.vendor_id,i.hsn,i.gst_enabled,i.gst_rate,
+    [u.orgId,i.serial_number,i.vendor_id,i.hsn,gstEnabled,gstRate.toFixed(2),
      subtotal.toFixed(2),tax.toFixed(2),total.toFixed(2),i.payment_mode,i.reference,u.id,i.purchase_order_id??null]);
 
    if(i.lines?.length&&computed)await writeInvoiceLines(db,u.orgId,r.rows[0].id,i.lines,computed);
@@ -341,10 +367,14 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    // most often, since that is the one state this route exists to let
    // somebody correct — so it resets to UNMATCHED and forces a fresh match
    // rather than leaving a stale verdict standing over lines that changed
-   // under it.
+   // under it. gst_enabled/gst_rate are re-derived the same way POST
+   // /invoices derives them, so an edit cannot leave them disagreeing with
+   // the lines that now justify subtotal/tax/total.
+   const {gstEnabled,gstRate}=gstFieldsFromComputed(computed);
    const updated=(await db.query(
-    "UPDATE invoices SET subtotal=$2,tax=$3,total=$4,match_status='UNMATCHED',version=version+1 WHERE id=$1 RETURNING *",
-    [id,computed.taxableValue.toFixed(2),computed.taxTotal.toFixed(2),computed.total.toFixed(2)])).rows[0];
+    "UPDATE invoices SET subtotal=$2,tax=$3,total=$4,gst_enabled=$5,gst_rate=$6,match_status='UNMATCHED',version=version+1 WHERE id=$1 RETURNING *",
+    [id,computed.taxableValue.toFixed(2),computed.taxTotal.toFixed(2),computed.total.toFixed(2),
+     gstEnabled,gstRate.toFixed(2)])).rows[0];
    const lines=(await db.query('SELECT * FROM invoice_lines WHERE invoice_id=$1 ORDER BY line_no',[id])).rows;
    return {...updated,lines};
   })};
