@@ -65,3 +65,16 @@ UNKNOWN_MEASURE path is closed here: with a crewed account it returns
   move the task and the dashboard ignores it. One of two fixes is needed: the
   stage writes also move the task, or the link stops driving stage state.
   Both change live figures on RESURVEY-2026 and Krishna.
+
+## Fix round 1 (review of SG-003 / SG-013 / SG-014)
+
+| # | Sev | What was wrong | Fix | Commit |
+|---|---|---|---|---|
+| 1 | P0 (review) | The SG-003 outbox amend PATCHed with the version it had *just fetched*, so If-Match never fired. A stale or offline replay overwrote a supervisor's web correction or another crew member's figures. It also sent measures missing from the form, and a blank teams field, as 0 | The op carries the base version the form was opened from, and the day is amended only if the server still holds it. Otherwise the op is FAILED/CONFLICT with "This day was changed by someone else. Review and re-submit.", and it stays in the Sync queue for review. Only entered measures are sent (a typed 0 removes one). Blank teams, attendance and notes are omitted, which the PATCH route leaves unchanged. A retry after a lost amend response is a success. The executor (`src/sync/surveyEntryOp.ts`) is tested through the real `createQueue`/`flushQueue` against a fake server: a stale replay gives CONFLICT and no PATCH; a matching base gives a PATCH of the changed field only; a replayed op has one effect | 31c5f16 |
+| 2 | test gap | No behavioural tests of what the forms queue. SG-014 was guarded by a regex over the source | `returnSubmission`/`pointSubmission`/`stageSubmission` build every survey op and the screens use them. Tests cover the ISO date in every payload and op key, a display date refused, only the filer's own rovers sent, and the base version carried | 388fb61 |
+| 3 | minor | Stage completion sent the `started_on` read when the list loaded (possibly stale) | Not sent; the server keeps its own (SG-015) | e57d5c1 |
+| 4 | minor | `expenses.tsx` / `project-finance.tsx` defaulted dates to the UTC day, which is yesterday before 05:30 IST | `formToday()` = shared `businessDay` | 667f444 |
+
+A change in meaning worth saying out loud: on a correction, a pre-filled field
+the crew clears is left as it was, and they type 0 to remove a figure. The
+correction banner says so.
