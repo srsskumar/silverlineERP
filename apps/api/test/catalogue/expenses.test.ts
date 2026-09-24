@@ -702,6 +702,14 @@ describe("expense receipts (B-003)", () => {
   it("refuses a receipt once the claim has been decided", async () => {
     const claim = await draftClaim();
     await clearLadder(claim.id);
+    // Clearing the ladder only settles the approval instance; the claim
+    // itself is decided separately (see "will not let an ordinary employee
+    // record the outcome" above), so that step is repeated here too.
+    const approved = await post(
+      { ...w.role.PROJECT_MANAGER, ...(await ver("expense_claims", claim.id)) },
+      `/api/v1/expense-claims/${claim.id}/decision`, { status: "APPROVED" });
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+
     const upload = await post(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
       file_name: "toolate.png", content_base64: png(),
     });
