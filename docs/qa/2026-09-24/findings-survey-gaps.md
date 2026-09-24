@@ -78,3 +78,14 @@ UNKNOWN_MEASURE path is closed here: with a crewed account it returns
 A change in meaning worth saying out loud: on a correction, a pre-filled field
 the crew clears is left as it was, and they type 0 to remove a figure. The
 correction banner says so.
+
+## Fix round 2
+
+| # | Sev | What was wrong | Fix | Commit |
+|---|---|---|---|---|
+| 1 | important | Filing the same village-day twice offline queued two ops (enqueueOp only dedupes identical payloads). The second, with no base, became a CONFLICT once the first landed. Retry refuses a CONFLICT, and the draft lived only in the queue row, so the crew had to discard and re-type | `enqueueOp` takes a `supersede` function, and a QUEUED or BACKOFF op for the same village-day is rewritten with the latest figures, so one op lands. Rules: **(a)** a SENDING op is never rewritten (it may be on the wire); the new filing queues behind it as before. **(b)** The idempotency key is kept. If the op was never sent, the new body goes under it and lands as the only POST. **(c)** If it was sent and the reply was lost, the server may hold the key with the *first* body, so the new body gets IDEMPOTENCY_CONFLICT. The op therefore remembers the first body it may have carried (`_sent`, stripped before sending), replays it to recover the day it created, and amends that with the latest figures. It still refuses (CONFLICT) if anyone changed the day in between. A CONFLICT survey return now has **Review** in the Sync queue: it reopens the queued figures on the day as the server holds it now (current version), lists what differs ("the day now says 50; you had 6"), and re-submitting replaces the conflicted row. Tests through the real queue: file → re-file offline → one POST with the second figures; the same after a lost first reply → one entry, one PATCH; somebody else's edit in between → CONFLICT; conflict → review → re-submit → amended | 046233e |
+| 2 | minor | The correction's base was read from `filed.data` at submit time, so a refetch could move it | Pinned in the draft (`baseVersion`) when the form is filled, and the builder prefers it; tested against a moved refetch | 046233e |
+| 3 | minor | Notes could not be cleared from the phone (blank now means unchanged) | "Clear the note" sends `notes: null`, which `PATCH /survey/entries/:id` writes as a clear (it sets any key that is not undefined, and the schema allows null) | 051a9fe |
+
+Items 1 and 2 share a commit: the review builds its draft through the same
+pinned-base `draftFromEntry`, and its test asserts the pinned version.
