@@ -353,3 +353,35 @@ describe("D-008 an expense claim settled through both payment paths", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(422);
   });
 });
+
+/* ------------------------------------------------------------ lost update */
+
+describe("D-009 two people editing different fields of one catalogue item", () => {
+  it("keeps both edits instead of the second silently restoring the first's field", async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      const res = await post(w.admin, "/api/v1/catalogue-items", {
+        code: uniq("CAT"), name: "Original", kind: "GOOD", uom: "nos", standard_rate: 100, gst_rate: 18,
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      ids.push(res.data.id);
+    }
+    await Promise.all(ids.flatMap(id => [
+      send("PATCH", w.admin, `/api/v1/catalogue-items/${id}`, { standard_rate: 250 }),
+      send("PATCH", w.admin, `/api/v1/catalogue-items/${id}`, { name: "Renamed" }),
+    ]));
+    const rows = (await w.pool.query(
+      "SELECT name, standard_rate::float8 AS rate FROM catalogue_items WHERE id = ANY($1)", [ids])).rows;
+    expect(rows.filter(r => r.name !== "Renamed" || r.rate !== 250)).toEqual([]);
+  });
+
+  it("refuses a stale If-Match when one is sent", async () => {
+    const res = await post(w.admin, "/api/v1/catalogue-items", {
+      code: uniq("CAT"), name: "Versioned", kind: "GOOD", uom: "nos", standard_rate: 100, gst_rate: 18,
+    });
+    const first = await send("PATCH", { ...w.admin, "if-match": "1" }, `/api/v1/catalogue-items/${res.data.id}`, { name: "One" });
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    const stale = await send("PATCH", { ...w.admin, "if-match": "1" }, `/api/v1/catalogue-items/${res.data.id}`, { name: "Two" });
+    expect(stale.status).toBe(409);
+  });
+});

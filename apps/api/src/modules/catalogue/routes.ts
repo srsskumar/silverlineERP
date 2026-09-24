@@ -12,7 +12,7 @@ import {
   toFieldErrors,
 } from "@silverline/shared";
 import { buildAuthenticate, requirePermission } from "../../common/auth.js";
-import { actor, mutate } from "../../common/domain.js";
+import { actor, mutate, version } from "../../common/domain.js";
 
 /**
  * §077 -- the catalogue, and what was agreed for a project.
@@ -119,12 +119,17 @@ export async function registerCatalogueRoutes(
         ? null
         : parse(catalogueItemSchema.partial(), body);
       const row = await mutate(pool, req, "catalogue.item.update", "catalogue_item", async (db) => {
+        // Locked (D-009): the whole row is written back below, so a read that
+        // raced another edit wrote that edit's field back to its old value.
         const existing = await db.query(
-          "SELECT * FROM catalogue_items WHERE id=$1 AND org_id=$2", [id, u.orgId]);
+          "SELECT * FROM catalogue_items WHERE id=$1 AND org_id=$2 FOR UPDATE", [id, u.orgId]);
         if (!existing.rowCount) {
           throw new ApiError({ status: 404, code: "NOT_FOUND", message: "No such catalogue item" });
         }
         const before = existing.rows[0] as Record<string, unknown>;
+        // Optimistic concurrency when the caller holds a version; callers that
+        // predate it still get the row lock, which is what keeps fields safe.
+        if (req.headers["if-match"] !== undefined) version(req, before as { version: number });
         const next = { ...before, ...(input ?? {}), ...(archiving ? { status: body.status } : {}) };
         return (await db.query(
           `UPDATE catalogue_items
