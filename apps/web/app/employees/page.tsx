@@ -6,6 +6,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { AppShell } from '@/components/AppShell';
 import { RequirePermission } from '@/components/RequirePermission';
 import { Badge } from '@/components/ui/Badge';
+import { OnLeaveBadge } from '@/components/OnLeaveBadge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
@@ -211,7 +212,10 @@ function EmployeesTable() {
                       ) : '—'}
                     </td>
                     <td className="px-3 py-2">
-                      <Badge tone={statusTone(e.status)}>{e.status}</Badge>
+                      <div className="flex items-center gap-1.5">
+                        <Badge tone={statusTone(e.status)}>{e.status}</Badge>
+                        <OnLeaveBadge onLeaveToday={e.on_leave_today} />
+                      </div>
                     </td>
                     <td className="px-3 py-2">
                       <Link href={`/employees/${e.id}`} className="text-primary hover:underline">

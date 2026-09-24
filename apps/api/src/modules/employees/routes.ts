@@ -112,6 +112,7 @@ interface EmployeeRow {
   version: number;
   created_at: Date | string;
   updated_at: Date | string;
+  on_leave_today?: boolean;
 }
 
 function dateOnly(v: Date | string | null): string | null {
@@ -193,6 +194,10 @@ function toShape(row: EmployeeRow, canSeePii: boolean) {
     version: row.version,
     created_at: iso(row.created_at),
     updated_at: iso(row.updated_at),
+    // A badge, not a status (owner decision 2026-09-24 #2): whether today
+    // falls inside an *approved* leave request, computed in SQL from the
+    // organisation's own calendar day.
+    on_leave_today: Boolean(row.on_leave_today),
   };
 }
 
@@ -273,7 +278,22 @@ const SELECT_COLS = `id, org_id, emp_no, first_name, last_name, father_name,
    */
   (SELECT COALESCE(NULLIF(trim(concat_ws(' ', m.first_name, m.last_name)), ''), m.emp_no)
      FROM employees m WHERE m.id = employees.reports_to) AS reports_to_name,
-  (SELECT m.emp_no FROM employees m WHERE m.id = employees.reports_to) AS reports_to_emp_no`;
+  (SELECT m.emp_no FROM employees m WHERE m.id = employees.reports_to) AS reports_to_emp_no,
+  /*
+   * "On leave today" is a badge, not a status (owner decision 2026-09-24
+   * #2): derived on read from approved leave covering the organisation's
+   * current calendar day, never stored, so it is never a status somebody
+   * forgot to clear. orgTodaySql matches the org-timezone day the leave and
+   * audit modules already use (D-006/D-013) -- CURRENT_DATE alone is the
+   * database session's UTC day, which is still "yesterday" in India before
+   * 05:30.
+   */
+  EXISTS (
+    SELECT 1 FROM leave_requests lr
+     WHERE lr.employee_id = employees.id AND lr.status = 'APPROVED'
+       AND lr.from_date <= ${orgTodaySql('employees.org_id')}
+       AND lr.to_date >= ${orgTodaySql('employees.org_id')}
+  ) AS on_leave_today`;
 
 /**
  * The designation a write means, as both an id and a label.

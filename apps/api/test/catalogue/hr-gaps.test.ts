@@ -21,6 +21,7 @@ import {
   ifMatch,
   leaveTypeIds,
   loginAs,
+  NOW,
   uniq,
   uniquePhone,
   workDate,
@@ -346,6 +347,60 @@ describe("HR-6 punches and approved leave", () => {
     expect(body.conflicting_dates).toEqual([workDate()]);
     const row = await w.pool.query("SELECT status FROM leave_requests WHERE id = $1", [leave.id]);
     expect(row.rows[0].status).toBe("PENDING");
+  });
+});
+
+describe("on_leave_today is a badge, not a status (owner decision 2026-09-24 #2)", () => {
+  it("is true on both the detail and the list once leave for today is approved", async () => {
+    const { employeeId, headers } = await worker();
+    const before = await w.app.inject({
+      method: "GET", url: `/api/v1/employees/${employeeId}`, headers: w.admin,
+    });
+    expect((before.json() as { on_leave_today: boolean; status: string }).on_leave_today).toBe(false);
+
+    const leave = await fileLeave(headers, {
+      employee_id: employeeId, from_date: workDate(), to_date: workDate(),
+    });
+    expect((await approveAll(leave.id)).statusCode).toBe(200);
+
+    const detail = await w.app.inject({
+      method: "GET", url: `/api/v1/employees/${employeeId}`, headers: w.admin,
+    });
+    const detailBody = detail.json() as { on_leave_today: boolean; status: string };
+    expect(detailBody.on_leave_today).toBe(true);
+    // The badge, not the status: employee.status is untouched by leave.
+    expect(detailBody.status).toBe("ACTIVE");
+
+    const list = await w.app.inject({
+      method: "GET", url: "/api/v1/employees?limit=200", headers: w.admin,
+    });
+    const row = (list.json() as { data: Array<{ id: string; on_leave_today: boolean }> })
+      .data.find((r) => r.id === employeeId);
+    expect(row?.on_leave_today).toBe(true);
+  });
+
+  it("stays false for a merely PENDING leave request", async () => {
+    const { employeeId, headers } = await worker();
+    await fileLeave(headers, { employee_id: employeeId, from_date: workDate(), to_date: workDate() });
+    const detail = await w.app.inject({
+      method: "GET", url: `/api/v1/employees/${employeeId}`, headers: w.admin,
+    });
+    expect((detail.json() as { on_leave_today: boolean }).on_leave_today).toBe(false);
+  });
+
+  it("stays false once approved leave has run its course", async () => {
+    const { employeeId, headers } = await worker();
+    const past = new Date(NOW);
+    past.setDate(past.getDate() - 20);
+    const leave = await fileLeave(headers, {
+      employee_id: employeeId, from_date: workDate(past), to_date: workDate(past),
+      reason: "Past leave for the badge test",
+    });
+    expect((await approveAll(leave.id)).statusCode).toBe(200);
+    const detail = await w.app.inject({
+      method: "GET", url: `/api/v1/employees/${employeeId}`, headers: w.admin,
+    });
+    expect((detail.json() as { on_leave_today: boolean }).on_leave_today).toBe(false);
   });
 });
 

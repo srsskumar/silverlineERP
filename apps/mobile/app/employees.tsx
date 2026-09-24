@@ -81,7 +81,14 @@ function EmployeesScreen() {
                   key={e.id}
                   title={formatEmployeeName(e) || e.emp_no}
                   subtitle={[e.emp_no, e.designation ?? undefined].filter(Boolean).join(" · ")}
-                  right={e.status !== "ACTIVE" ? <Badge text={e.status} tone={employeeStatusTone(e.status)} /> : undefined}
+                  right={
+                    e.status !== "ACTIVE" || e.on_leave_today ? (
+                      <Row gap={space.xs}>
+                        {e.status !== "ACTIVE" ? <Badge text={e.status} tone={employeeStatusTone(e.status)} /> : null}
+                        {e.on_leave_today ? <Badge text="On leave today" tone="info" /> : null}
+                      </Row>
+                    ) : undefined
+                  }
                   onPress={() => setSelectedId(e.id)}
                   last={i === arr.length - 1}
                 />
@@ -121,7 +128,10 @@ function EmployeeDetail({ employee }: { employee: DirectoryEmployee }) {
           <Muted style={{ color: t.text, fontWeight: "700", flex: 1 }}>
             {formatEmployeeName(employee) || employee.emp_no}
           </Muted>
-          <Badge text={employee.status} tone={employeeStatusTone(employee.status)} />
+          <Row gap={space.xs}>
+            <Badge text={employee.status} tone={employeeStatusTone(employee.status)} />
+            {employee.on_leave_today ? <Badge text="On leave today" tone="info" /> : null}
+          </Row>
         </Row>
         <Subtle style={{ marginTop: space.xs }}>{employee.emp_no}</Subtle>
         <Divider />

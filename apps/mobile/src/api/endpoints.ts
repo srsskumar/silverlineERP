@@ -1433,6 +1433,8 @@ export interface DirectoryEmployee {
   aadhaar_last4?: string | null;
   pan_last4?: string | null;
   bank_account_last4?: string | null;
+  /** A badge, not a status (owner decision 2026-09-24 #2): approved leave covers today. */
+  on_leave_today?: boolean;
   [k: string]: unknown;
 }
 
