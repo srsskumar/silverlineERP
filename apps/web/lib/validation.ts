@@ -1094,7 +1094,9 @@ export const holidayStatusChangeSchema = z.object({
   reason: z.string().trim().min(1, 'Say why the holiday is being changed').max(2000),
 });
 export type HolidayStatusChangeInput = z.infer<typeof holidayStatusChangeSchema>;
-\n// ---------------------------------------------------------------------------\n// Vendor invoice lines and three-way match (task 5c, finding B-004). Mirrors
+
+// ---------------------------------------------------------------------------
+// Vendor invoice lines and three-way match (task 5c, finding B-004). Mirrors
 // invoiceLineInputSchema / invoiceLinesUpdateSchema in
 // packages/shared/src/v2.ts — the server prices every line itself and never
 // trusts a client-computed total, so no amount/total field travels here.
