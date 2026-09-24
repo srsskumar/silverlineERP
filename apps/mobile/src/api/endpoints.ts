@@ -819,6 +819,32 @@ export async function getDocument(
   return asItem(data, "data");
 }
 
+/**
+ * POST /api/v1/documents/:id/renew (`document.manage`, §46.3.4) — B-009. Not
+ * an edit of the expiry date: the server inserts a new row that supersedes
+ * this one, so an inspector can still ask for last year's certificate. No
+ * If-Match: a renewal never modifies the old row (apps/api/src/modules/
+ * documents/routes.ts's own comment on the route). `expires_on` is required
+ * only by document types that expire (the server 422s as EXPIRY_REQUIRED
+ * otherwise); mirrors the web RenewDialog, which requires it client-side too
+ * rather than asking the type catalogue which documents need it.
+ */
+export async function postDocumentRenew(
+  id: string,
+  input: {
+    expires_on: string;
+    issued_on?: string;
+    reference_number?: string;
+    notes?: string;
+  },
+): Promise<DocumentRow> {
+  const { data } = await apiFetch(`/api/v1/documents/${id}/renew`, {
+    method: "POST",
+    body: input,
+  });
+  return asItem<DocumentRow>(data, "data");
+}
+
 // --- Approvals (§41) ---------------------------------------------------------
 
 export interface ApprovalStep {
