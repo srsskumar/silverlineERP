@@ -76,8 +76,13 @@ afterAll(async () => {
  *  routes, so every dimension below (auth-state, input-contract,
  *  idempotency-classification-coverage) already exercises them
  *  mechanically via app.routeRegistry, with no per-route override needed --
- *  see findings-contract.md's "QA release 3 merge" note. */
-const EXPECTED_ROUTE_COUNT = 479;
+ *  see findings-contract.md's "QA release 3 merge" note.
+ *  Bumped to 482 in release 3 stage 2a: qa/survey-deep added
+ *  POST /api/v1/survey/billing/:id/reverse (guard('survey.manage')) and
+ *  qa/r5-parity added GET /api/v1/leave/preview (leave.request) and
+ *  POST /api/v1/leave-balances/open-year (leave admin). All three are
+ *  permission-tagged, so the matrix covers them mechanically. */
+const EXPECTED_ROUTE_COUNT = 482;
 
 interface Violation {
   route: string;
