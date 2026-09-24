@@ -57,3 +57,16 @@ Round 2 verification (slot d, `/tmp/svd-lane1-r2.log`): survey and village API t
 | SV-018 | P3 | FIXED b391ba7 | Programme enrolment and single crew assignment now use the survey rule (`mayStaffProgramme`: admin, a TL on the programme, or the survey project's PM) instead of the employee-directory record scope. That scope refused the project's own PM, while start-gt and crew/bulk (arrays, never checked) let the same PM through. **Outside survey:** the one exemption lives in `common/recordScope.ts`, for exactly those two paths. A PM of another project gets 403 `NOT_ON_THIS_PROGRAMME`; the employee must be ACTIVE. |
 
 Not touched, waiting on the owner: SV-001 (stage-completion rule), SV-014 (who may file returns).
+
+Round 3 final verification (slot d, `/tmp/svd-lane1-r3.log`): full apps/api suite 82 files, 2190 passed, 13 skipped, 0 failed; web tsc clean; survey tests-dom 39/39; `next build` exit 0.
+
+## Round 4 (relayed by the controller)
+| ID | Sev | Status | What |
+|---|---|---|---|
+| SV-024 | Important | FIXED a9cb85d | Three SQL spots still used a literal `'Asia/Kolkata'` after SV-017: the unfiled-returns punch day (two places) and the period report's stage movements. All now use `orgZoneSql`. Tested on the second tenant in Pago Pago with an instant that is the 10th there and the 11th in IST. |
+| SV-025 | Important | FIXED 1c6dc3f | `start-gt` and `crew/bulk` now apply `mayStaffProgramme`. Before, another project's PM holding org-wide `survey.manage` got 201 there while being refused on the single crew route. Both refuse the whole request with 403 `NOT_ON_THIS_PROGRAMME`: the rule is about the caller, so there is no per-row case to skip. Nothing is written when refused. The project's own PM succeeds on both. |
+| SV-026 | Minor | FIXED ece5387 | A TEAM_LEAD now counts only on a programme they are enrolled or crewed on, in both `mayStaffProgramme` and `workAuthority`. Before, TEAM_LEAD + AUDITOR (which carries `survey.forecast`, so every programme is visible) could staff any programme, complete stages on it or plant GCPs there. Tests land in ece5387 with SV-025's. |
+
+**How "the project's PM" and "today" are decided (item 4):**
+- **Who counts as the project's PM.** A PROJECT_MANAGER whose role scope is org-wide (`user_roles.scope_type IS NULL`) passes as the PM of every survey project. It is the same test in `workAuthority` (stage completion and GCPs) and `mayStaffProgramme` (staffing). The other ways to qualify are being the paired project's `project_manager_id`, being enrolled on the programme as `PROJECT_MANAGER`, or having a role scoped to that project. So an unscoped PM is not refused on any programme; only a PM scoped to other projects is.
+- **How the org's timezone is looked up.** `orgTimeZone` caches it per process for 60 seconds. After an admin changes the org's timezone, each API process can keep using the old zone for up to a minute. The SQL side (`orgTodaySql` / `orgZoneSql`) reads the setting live.
