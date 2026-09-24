@@ -249,6 +249,23 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
   const ids=new Set((await db.query('SELECT id FROM purchase_order_lines WHERE purchase_order_id=$1',[purchaseOrderId])).rows.map(r=>String(r.id)));
   for(const l of withLink)if(!ids.has(String(l.po_line_id)))fail('VALIDATION_ERROR',"A line references a purchase-order line that is not on this invoice's purchase order");
  }
+ /**
+  * Every line's item_id, if given, has to belong to this organisation (fix
+  * round 1, item 2 on task 5c / finding B-004).
+  *
+  * The FK alone (`invoice_lines.item_id REFERENCES inventory_items(id)`)
+  * only proves the row exists somewhere -- inventory_items carries no
+  * per-organisation uniqueness that would stop it pointing at another
+  * tenant's item. Checked the same way checkLinePoIds already checks
+  * po_line_id, rather than trusting the column type to do a tenancy check
+  * it was never built for.
+  */
+ async function checkLineItemIds(db:import('pg').PoolClient,orgId:string,lines:{item_id?:string|null}[]) {
+  const withItem=[...new Set(lines.filter(l=>l.item_id).map(l=>String(l.item_id)))];
+  if(!withItem.length)return;
+  const found=await db.query('SELECT id FROM inventory_items WHERE org_id=$1 AND id=ANY($2::uuid[])',[orgId,withItem]);
+  if(found.rowCount!==withItem.length)fail('VALIDATION_ERROR','A line references an item that does not belong to this organisation');
+ }
  async function writeInvoiceLines(db:import('pg').PoolClient,orgId:string,invoiceId:string,lines:{item_id?:string|null;po_line_id?:string|null;description:string;hsn_sac:string;quantity:number;unit_rate:number;gst_rate_pct:number}[],computed:ReturnType<typeof computeInvoice>) {
   for(let idx=0;idx<lines.length;idx++){
    const line=lines[idx],c=computed.lines[idx];
@@ -282,6 +299,7 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    let computed:ReturnType<typeof computeInvoice>|null=null;
    if(i.lines?.length){
     await checkLinePoIds(db,i.purchase_order_id??null,i.lines);
+    await checkLineItemIds(db,u.orgId,i.lines);
     computed=await priceInvoiceLines(db,u.orgId,i.vendor_id,i.purchase_order_id??null,i.lines);
     subtotal=computed.taxableValue;tax=computed.taxTotal;total=computed.total;
    }
@@ -312,6 +330,7 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
 
    const purchaseOrderId=invoice.purchase_order_id?String(invoice.purchase_order_id):null;
    await checkLinePoIds(db,purchaseOrderId,input.lines);
+   await checkLineItemIds(db,u.orgId,input.lines);
    const computed=await priceInvoiceLines(db,u.orgId,String(invoice.vendor_id),purchaseOrderId,input.lines);
 
    await db.query('DELETE FROM invoice_lines WHERE invoice_id=$1',[id]);

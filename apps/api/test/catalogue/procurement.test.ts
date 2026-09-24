@@ -655,6 +655,30 @@ describe("vendor invoice lines (finding B-004)", () => {
     expect(res.body.code).toBe("VALIDATION_ERROR");
   });
 
+  it("refuses a line whose item_id belongs to a different organisation (fix round 1, item 2)", async () => {
+    // The FK on invoice_lines.item_id only proves the item exists somewhere
+    // -- inventory_items carries no per-org uniqueness that stops it
+    // pointing at another tenant's item.
+    const { vendor, po, poLines } = await poWithLines([
+      { description: "Cement OPC 53", quantity: 10, rate: 400 },
+    ]);
+    const otherItem = await post(w.other.admin, "/api/v1/inventory/items", {
+      code: uniq("ITM"), name: "Other org's item",
+    });
+    expect(otherItem.status, JSON.stringify(otherItem.body)).toBe(201);
+    const res = await post(w.admin, "/api/v1/invoices", {
+      serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: false,
+      gst_rate: "0", subtotal: "0", payment_mode: "BANK", reference: "test",
+      purchase_order_id: po.id,
+      lines: [{
+        item_id: otherItem.data.id, po_line_id: poLines[0].id, description: "Cement OPC 53",
+        hsn_sac: "25232910", quantity: 10, unit_rate: 400, gst_rate_pct: 0,
+      }],
+    });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("VALIDATION_ERROR");
+  });
+
   it("matches by po_line_id when two order lines share a description", async () => {
     // The old fallback (item_id, else description) would collide on these
     // two lines and check one of them against the wrong price.
