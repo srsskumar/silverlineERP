@@ -6,15 +6,25 @@
  * "Take photo" drops into the same expo-camera flow this screen has always
  * used (src/device/camera.ts's lazy CameraView/useCameraPermissions
  * wrappers). Gallery and file each hand back a native-picker result that
- * goes through the same upload path: safeReceiptFileName() first (some
- * Android SAF providers return a full on-device path as the "name"),
- * then checkReceiptFile() against the picker-reported byte size — BEFORE
- * base64-reading the file, so a huge PDF or an uncompressed gallery photo
- * is rejected without ever asking the phone to base64-encode it — then the
- * upload itself. Every rejection, client-side or server (413/422
- * UNSAFE_FILE/TOO_MANY_RECEIPTS/etc.), renders through describeApiError so
- * the message is always the friendliest one available (field errors first,
- * then the server's own message, matching every other write screen).
+ * goes through the same upload path: reconcileReceiptFileName() first (some
+ * Android SAF providers return a full on-device path as the "name", and
+ * iOS's gallery picker can re-encode a HEIC/PNG-origin photo to JPEG at
+ * quality<1 while still reporting the original name — the mime type is
+ * trusted over a stale extension), then a size check against the
+ * picker-reported byte size — BEFORE base64-reading the file, so a huge PDF
+ * or an uncompressed gallery photo is rejected without ever asking the
+ * phone to base64-encode it — then the upload itself. Every rejection,
+ * client-side or server (413/422 UNSAFE_FILE/TOO_MANY_RECEIPTS/etc.),
+ * renders through describeApiError so the message is always the
+ * friendliest one available (field errors first, then the server's own
+ * message, matching every other write screen).
+ *
+ * Each of the three entry points (capture/pickFromGallery/pickFile) runs
+ * through withBusyGuard(): a ref-backed re-entrancy guard covering the
+ * WHOLE tap-to-completion flow (permission prompt, native picker UI,
+ * upload), not just the upload itself, and a catch-all so a picker/
+ * permission failure (the native picker throwing, e.g.) always surfaces a
+ * message instead of an unhandled rejection.
  */
 import { useRef, useState } from 'react';
 import { Modal, View } from 'react-native';
@@ -23,7 +33,9 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { CameraView, useCameraPermissions } from './camera';
 import { postExpenseReceipt, type ExpenseReceipt } from '../api/endpoints';
-import { checkReceiptFile, safeReceiptFileName } from '../expenseReceiptsFormat';
+import {
+  base64ByteLength, canFallBackToReadingForSize, checkReceiptFile, reconcileReceiptFileName,
+} from '../expenseReceiptsFormat';
 import { describeApiError } from '../errorFormat';
 import { Banner, Button, ListRow, Muted, Row } from '../ui/primitives';
 import { space, useTheme } from '../theme';
@@ -52,20 +64,46 @@ export function ReceiptCapture({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const cameraRef = useRef<import('expo-camera').CameraView | null>(null);
+  // Synchronous re-entrancy guard: `busy` (state) only takes effect on the
+  // next render, so two taps dispatched before that render commits would
+  // both read the same stale busy=false from their closures. This ref
+  // flips immediately, before any await, so the second tap's handler bails
+  // at its very first line.
+  const busyRef = useRef(false);
 
   /**
    * Shared by all three sources: validate what the picker/camera reported
-   * (size first — before ever touching the file's bytes), then upload.
+   * (size first — before ever touching the file's bytes), then upload. Runs
+   * inside withBusyGuard(), so it never touches `busy` itself; a failure
+   * here (unlike a pre-upload permission/picker failure) also drops back to
+   * the chooser menu, since staying on a half-finished upload view has
+   * nothing left to retry.
    */
-  const finishUpload = async (uri: string, rawFileName: string, mimeType?: string | null) => {
-    setBusy(true);
+  const finishUpload = async (
+    uri: string,
+    rawFileName: string,
+    mimeType?: string | null,
+    pickerReportedBytes?: number | null,
+  ) => {
     setError('');
     try {
-      const fileName = safeReceiptFileName(rawFileName);
-      const bytes = new File(uri).size;
-      const check = checkReceiptFile(fileName, bytes, mimeType);
-      if (!check.ok) throw new Error(check.reason);
+      const fileName = reconcileReceiptFileName(rawFileName, mimeType);
+      const fsSizeRaw = new File(uri).size;
+      const fsSize = typeof fsSizeRaw === 'number' && Number.isFinite(fsSizeRaw) ? fsSizeRaw : null;
+      if (fsSize !== null) {
+        const check = checkReceiptFile(fileName, fsSize, mimeType);
+        if (!check.ok) throw new Error(check.reason);
+      } else {
+        const fallback = canFallBackToReadingForSize(pickerReportedBytes);
+        if (!fallback.ok) throw new Error(fallback.reason);
+      }
       const content_base64 = await new File(uri).base64();
+      if (fsSize === null) {
+        // First real measurement — the picker's figure above was only a
+        // pre-flight gate to decide whether reading was safe to attempt.
+        const measured = checkReceiptFile(fileName, base64ByteLength(content_base64), mimeType);
+        if (!measured.ok) throw new Error(measured.reason);
+      }
       const receipt = await postExpenseReceipt(claimId, { file_name: fileName, content_base64 });
       onSaved(receipt);
     } catch (e) {
@@ -73,30 +111,34 @@ export function ReceiptCapture({
       setMode('menu');
     } finally {
       remove(uri);
-      setBusy(false);
     }
   };
 
-  const capture = async () => {
-    const camera = cameraRef.current;
-    if (!camera) {
-      setError('Camera not ready');
-      return;
-    }
+  /** Runs `task`, guarding re-entrancy and catching whatever it throws. */
+  const withBusyGuard = async (task: () => Promise<void>, friendlyFallback: string) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     setError('');
     try {
-      const photo = await camera.takePictureAsync({ quality: 0.7, base64: false, exif: false });
-      if (!photo?.uri) throw new Error('Capture failed');
-      await finishUpload(photo.uri, `receipt-${Date.now()}.jpg`, 'image/jpeg');
+      await task();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not attach this receipt');
+      setError(describeApiError(e, friendlyFallback));
+    } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
 
-  const pickFromGallery = async () => {
-    setError('');
+  const capture = () => withBusyGuard(async () => {
+    const camera = cameraRef.current;
+    if (!camera) throw new Error('Camera not ready');
+    const photo = await camera.takePictureAsync({ quality: 0.7, base64: false, exif: false });
+    if (!photo?.uri) throw new Error('Capture failed');
+    await finishUpload(photo.uri, `receipt-${Date.now()}.jpg`, 'image/jpeg');
+  }, 'Could not attach this receipt');
+
+  const pickFromGallery = () => withBusyGuard(async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
       setError('Allow photo library access to choose a receipt from your gallery.');
@@ -110,15 +152,10 @@ export function ReceiptCapture({
     });
     if (result.canceled || !result.assets?.[0]) return;
     const asset = result.assets[0];
-    // A fallback extension must agree with the reported mime type (when there
-    // is one) — guessing ".jpg" for a PNG the picker didn't name would fail
-    // checkReceiptFile's mime/extension agreement check.
-    const fallbackExt = asset.mimeType === 'image/png' ? 'png' : 'jpg';
-    await finishUpload(asset.uri, asset.fileName ?? `receipt-${Date.now()}.${fallbackExt}`, asset.mimeType);
-  };
+    await finishUpload(asset.uri, asset.fileName ?? `receipt-${Date.now()}`, asset.mimeType, asset.fileSize);
+  }, 'Could not open the photo gallery');
 
-  const pickFile = async () => {
-    setError('');
+  const pickFile = () => withBusyGuard(async () => {
     const result = await DocumentPicker.getDocumentAsync({
       type: ['application/pdf', 'image/jpeg', 'image/png'],
       copyToCacheDirectory: true,
@@ -126,8 +163,8 @@ export function ReceiptCapture({
     });
     if (result.canceled || !result.assets?.[0]) return;
     const asset = result.assets[0];
-    await finishUpload(asset.uri, asset.name, asset.mimeType);
-  };
+    await finishUpload(asset.uri, asset.name, asset.mimeType, asset.size);
+  }, 'Could not open the file picker');
 
   return (
     <Modal visible animationType="slide" onRequestClose={busy ? () => {} : onClose}>
