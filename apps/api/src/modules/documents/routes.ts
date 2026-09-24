@@ -529,7 +529,8 @@ export async function registerDocumentRoutes(
       const ids = [...new Set(input.ids)];
       const rows = (await db.query(
         `SELECT d.id, d.title, d.legal_hold, d.issued_on, d.expires_on,
-                t.retention_years, t.code AS type_code,
+                d.owner_type, d.owner_id, d.source_type, d.source_id,
+                t.retention_years, t.code AS type_code, t.basis,
                 (SELECT id FROM documents s WHERE s.supersedes_id = d.id) AS successor_id
            FROM documents d JOIN document_types t ON t.id = d.type_id
           WHERE d.id = ANY($1::uuid[]) AND d.org_id = $2 FOR UPDATE OF d`,
@@ -555,7 +556,13 @@ export async function registerDocumentRoutes(
         });
         if (!check.deletable) {
           refused.push({ field: String(row.id), message: check.reason ?? 'Not yet due for purge' });
+          continue;
         }
+        // Carried straight into the audit row below (§46.6.3, controller
+        // ruling: purge removes only the register row -- never the source
+        // content -- so the audit trail is what has to let anyone later
+        // reconstruct exactly what was removed and where its content lived).
+        row.retain_until = check.retainUntil ?? null;
       }
       if (refused.length > 0) {
         throw new ApiError({
@@ -566,7 +573,19 @@ export async function registerDocumentRoutes(
         });
       }
 
-      const purged = rows.map(r => ({ id: String(r.id), title: r.title, type_code: r.type_code }));
+      const purged = rows.map(r => ({
+        id: String(r.id),
+        title: r.title,
+        type_code: r.type_code,
+        owner_type: r.owner_type,
+        owner_id: r.owner_id ? String(r.owner_id) : null,
+        source_type: r.source_type ?? null,
+        source_id: r.source_id ? String(r.source_id) : null,
+        issued_on: iso(r.issued_on),
+        expires_on: iso(r.expires_on),
+        basis: r.basis ?? null,
+        retain_until: r.retain_until ?? null,
+      }));
       await db.query('DELETE FROM documents WHERE id = ANY($1::uuid[])', [ids]);
       return { purged, reason: input.reason, purged_by: u.id, purged_count: purged.length };
     });

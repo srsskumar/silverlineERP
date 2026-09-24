@@ -98,6 +98,21 @@ describe('DueForPurgePanel', () => {
     expect(purgeButton).not.toBeDisabled();
   });
 
+  it('says plainly that purge removes the register entry only (fix round 1, item 1)', async () => {
+    mount(<DueForPurgePanel />);
+    expect(await screen.findByText(/removes the register entry only/)).toBeInTheDocument();
+    expect(screen.getByText(/until deleted there/)).toBeInTheDocument();
+  });
+
+  it('repeats the register-only notice inside the confirm dialog', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    mount(<DueForPurgePanel />);
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select Old labour licence' }));
+    fireEvent.change(screen.getByLabelText(/Reason for purging/), { target: { value: 'Year-end sweep' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Purge selected' }));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('removes the register entry only'));
+  });
+
   it('confirms, then sends only the selected ids and the reason', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     mount(<DueForPurgePanel />);

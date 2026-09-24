@@ -440,6 +440,56 @@ describe("due-for-purge report and explicit purge (owner decision 2026-09-24 #3)
     const state = audit.rows[0].after_state;
     expect(state.reason).toBe("Year-end retention sweep, batch 2026-09");
     expect(state.purged.map((p: any) => p.id).sort()).toEqual([first.id, second.id].sort());
+
+    /*
+     * Purge only ever removes the register row -- never the source content
+     * (controller ruling, fix round 1 item 1: the owner decides that
+     * separately, in the morning). So the audit payload has to carry enough
+     * about what was removed that anyone can later tell exactly what it
+     * was and go find the surviving content at its source.
+     */
+    const row = state.purged.find((p: any) => p.id === first.id);
+    expect(row).toMatchObject({
+      id: first.id,
+      title: first.title,
+      type_code: "LABOUR_LICENCE",
+      owner_type: "organization",
+      owner_id: null,
+      source_type: null,
+      source_id: null,
+      issued_on: null,
+      expires_on: dayOffset(-365 * 4),
+    });
+    expect(row.basis).toContain("Contract Labour");
+    expect(row.retain_until).toBeTruthy();
+  });
+
+  it("carries owner and source through the purge audit for an owned, sourced document", async () => {
+    const doc = await post(w.admin, "/api/v1/documents", {
+      type_code: "MEDICAL_FITNESS", owner_type: "employee", owner_id: w.directEmployee,
+      title: "Old medical certificate", expires_on: dayOffset(-365 * 4),
+      source_type: "employee_document", source_id: w.directEmployee,
+    });
+    expect(doc.status, JSON.stringify(doc.body)).toBe(201);
+
+    const r = await post(w.admin, "/api/v1/documents/purge",
+      { ids: [doc.data.id], reason: "Retention sweep" });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+
+    const audit = await w.pool.query(
+      `SELECT after_state FROM audit_events
+        WHERE action = 'document.purge' AND entity_type = 'document_purge' AND org_id = $1
+        ORDER BY created_at DESC LIMIT 1`,
+      [w.orgId],
+    );
+    const row = audit.rows[0].after_state.purged[0];
+    expect(row).toMatchObject({
+      id: doc.data.id,
+      owner_type: "employee",
+      owner_id: w.directEmployee,
+      source_type: "employee_document",
+      source_id: w.directEmployee,
+    });
   });
 
   it("refuses a purge with no reason", async () => {

@@ -22,6 +22,16 @@ interface DueRow {
 }
 
 /**
+ * What purge actually does, said plainly everywhere the action is offered
+ * (controller ruling, fix round 1 item 1). The owner decides in the
+ * morning whether purge should ever reach into source content; until then
+ * it only ever removes the register row.
+ */
+const REGISTER_ONLY_NOTICE =
+  "This removes the register entry only. The underlying file stays with its "
+  + "source record (e.g. the employee's documents) until deleted there.";
+
+/**
  * "Due for purge" (owner decision 2026-09-24 #3): no scheduled deletion
  * exists anywhere in this product. The only way a document is ever removed
  * for retention is here — an admin reviews this report, picks specific
@@ -121,6 +131,9 @@ export function DueForPurgePanel() {
 
       {items.length > 0 ? (
         <Card className="space-y-3 p-4">
+          <p className="text-xs text-text-subtle">
+            {REGISTER_ONLY_NOTICE}
+          </p>
           <label className="block text-xs font-medium text-text-muted" htmlFor="purge-reason">
             Reason for purging {selected.size || 0} selected document(s)
           </label>
@@ -139,7 +152,7 @@ export function DueForPurgePanel() {
             loading={purge.isPending}
             onClick={() => {
               if (window.confirm(
-                `Permanently purge ${selected.size} document(s)? This cannot be undone.`,
+                `Permanently purge ${selected.size} document(s)? This cannot be undone.\n\n${REGISTER_ONLY_NOTICE}`,
               )) {
                 purge.mutate();
               }
