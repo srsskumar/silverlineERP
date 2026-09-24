@@ -622,6 +622,7 @@ export async function registerSurveyRoutes(
                 WHERE me.id = $2 AND c.org_id = $1 AND c.survey_village_id = sv.id
                   AND c.released_on IS NULL) AS managed_stages,
          COALESCE(p.project_manager_id = $2, false) AS runs_project,
+         sp.id AS programme_id,
          EXISTS (SELECT 1 FROM survey_project_employees pe
                    JOIN users me ON me.employee_id = pe.employee_id
                   WHERE me.id = $2 AND pe.survey_project_id = sp.id
@@ -639,9 +640,11 @@ export async function registerSurveyRoutes(
       [u.orgId, u.id, villageId])).rows[0];
     const pm = roles.includes('PROJECT_MANAGER')
       && Boolean(f && (f.runs_project || f.enrolled_pm || f.pm_scope_covers));
+    // The same confinement as staffing (SV-026): a TL on this programme.
+    const tl = roles.includes('TEAM_LEAD') && Boolean(f?.programme_id)
+      && await onProgramme(db, u, String(f.programme_id));
     return {
-      everything: roles.includes('SUPER_ADMIN') || roles.includes('ADMIN')
-        || roles.includes('TEAM_LEAD') || pm,
+      everything: roles.includes('SUPER_ADMIN') || roles.includes('ADMIN') || tl || pm,
       ownStages: new Set((f?.own_stages ?? []).map(String)),
       managedStages: new Set((f?.managed_stages ?? []).map(String)),
     };
@@ -664,9 +667,10 @@ export async function registerSurveyRoutes(
     programmeId: string,
   ): Promise<boolean> {
     const roles = u.roles ?? [];
-    if (roles.includes('SUPER_ADMIN') || roles.includes('ADMIN') || roles.includes('TEAM_LEAD')) {
-      return true;
-    }
+    if (roles.includes('SUPER_ADMIN') || roles.includes('ADMIN')) return true;
+    // A team leader staffs the programmes they are on (SV-026), not every one
+    // an oversight permission such as survey.forecast happens to show them.
+    if (roles.includes('TEAM_LEAD') && await onProgramme(db, u, programmeId)) return true;
     if (!roles.includes('PROJECT_MANAGER')) return false;
     const f = (await db.query(
       `SELECT COALESCE(p.project_manager_id = $2, false) AS runs_project,
@@ -683,6 +687,23 @@ export async function registerSurveyRoutes(
          FROM survey_projects sp LEFT JOIN projects p ON p.id = sp.project_id
         WHERE sp.id = $3 AND sp.org_id = $1`, [u.orgId, u.id, programmeId])).rows[0];
     return Boolean(f && (f.runs_project || f.enrolled_pm || f.pm_scope_covers));
+  }
+
+  /** Enrolled on the programme, or on a crew on one of its villages. */
+  async function onProgramme(
+    db: Pool | PoolClient, u: { orgId: string; id: string }, programmeId: string,
+  ): Promise<boolean> {
+    return Boolean((await db.query(
+      `SELECT 1 FROM users me
+        WHERE me.id = $2 AND me.org_id = $1 AND me.employee_id IS NOT NULL AND (
+          EXISTS (SELECT 1 FROM survey_project_employees pe
+                   WHERE pe.employee_id = me.employee_id AND pe.survey_project_id = $3
+                     AND pe.released_on IS NULL)
+          OR EXISTS (SELECT 1 FROM survey_crew c
+                       JOIN survey_villages sv ON sv.id = c.survey_village_id
+                      WHERE c.employee_id = me.employee_id AND sv.survey_project_id = $3
+                        AND c.released_on IS NULL))`,
+      [u.orgId, u.id, programmeId])).rowCount);
   }
 
   const STAGE_NOT_ASSIGNED_REASON =

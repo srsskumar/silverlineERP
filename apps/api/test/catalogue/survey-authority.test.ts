@@ -424,3 +424,68 @@ describe("SV-018 enrolling people on the programme", () => {
     expect((await enrol(w.other.admin, w.other.employee)).status).toBe(404);
   });
 });
+
+/*
+ * SV-025 (round 4): the owner's staffing rule on the two bulk ways onto a
+ * crew. start-gt and crew/bulk never asked mayStaffProgramme, so a PM of
+ * another project holding org-wide survey.manage was refused on the single
+ * crew route and let through on these. And a team leader staffs only the
+ * programmes they are on (SV-026), not every one.
+ */
+describe("SV-025 / SV-026 staffing through the bulk routes", () => {
+  let fresh: string;
+  let otherProgramme: string;
+  let otherVillage: string;
+  let freeEmployee: string;
+  const newVillage = async (programme: string) => String((await post(w.admin,
+    `/api/v1/survey/projects/${programme}/villages`,
+    { village_name: uniq("Staff"), village_code: uniq("SF"), mandal_id: mandalId, total_extent_ac: 5 })).data.id);
+
+  beforeAll(async () => {
+    fresh = await newVillage(programmeId);
+    freeEmployee = (await person(["EMPLOYEE"])).employeeId;
+    const p = await post(w.admin, "/api/v1/survey/projects",
+      { code: uniq("OTH"), name: "Somebody else's programme", create_project: false });
+    otherProgramme = String(p.data.id);
+    otherVillage = await newVillage(otherProgramme);
+  });
+
+  const startGt = (h: Headers, village: string) => post(h, `/api/v1/survey/villages/${village}/start-gt`, {
+    started_on: workDate(), expected_end_on: workDate(), employee_ids: [freeEmployee],
+    govt_staff_allocated: 1, crew_allocated: 1,
+  });
+  const bulk = (h: Headers, village: string) => post(h, `/api/v1/survey/villages/${village}/crew/bulk`,
+    { employee_ids: [freeEmployee], stage_code: "GT_QC" });
+
+  it("refuses another project's PM on start-gt and crew/bulk", async () => {
+    for (const r of [await startGt(elsewherePm.headers, fresh), await bulk(elsewherePm.headers, fresh)]) {
+      expect(r.status, JSON.stringify(r.body)).toBe(403);
+      expect(r.body.code).toBe("NOT_ON_THIS_PROGRAMME");
+    }
+    const crew = await send("GET", w.admin, `/api/v1/survey/villages/${fresh}/crew`);
+    expect(crew.data).toEqual([]);
+  });
+
+  it("lets the project's own PM do both", async () => {
+    expect((await bulk(ownPm.headers, fresh)).status).toBe(201);
+    const r = await startGt(ownPm.headers, fresh);
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+
+  it("confines a team leader with oversight to the programmes they are on", async () => {
+    // TEAM_LEAD + AUDITOR: survey.forecast makes every programme visible,
+    // which is exactly how a TL used to staff programmes they are not on.
+    const tlAuditor = await person(["TEAM_LEAD", "AUDITOR"]);
+    await joinProgramme(w.pool, w.orgId, tlAuditor.userId, programmeId, "TEAM_LEAD");
+    const own = await post(tlAuditor.headers, `/api/v1/survey/projects/${programmeId}/employees`,
+      { employee_id: freeEmployee, project_role: "GT_USER" });
+    expect(own.status, JSON.stringify(own.body)).toBe(201);
+    const theirs = await post(tlAuditor.headers, `/api/v1/survey/projects/${otherProgramme}/employees`,
+      { employee_id: freeEmployee, project_role: "GT_USER" });
+    expect(theirs.status, JSON.stringify(theirs.body)).toBe(403);
+    expect(theirs.body.code).toBe("NOT_ON_THIS_PROGRAMME");
+    const crew = await post(tlAuditor.headers, `/api/v1/survey/villages/${otherVillage}/crew`,
+      { employee_id: freeEmployee, stage_code: "GT_QC" });
+    expect([403, 404]).toContain(crew.status);
+  });
+});
