@@ -689,6 +689,22 @@ export async function registerSurveyRoutes(
     return Boolean(f && (f.runs_project || f.enrolled_pm || f.pm_scope_covers));
   }
 
+  /**
+   * The owner's staffing rule as a guard (SV-027): refuse unless this caller
+   * may staff the programme. Used by every write that changes who, or what
+   * kit, is on a programme.
+   */
+  async function requireStaffing(
+    db: Pool | PoolClient, u: { orgId: string; id: string; roles?: string[] },
+    programmeId: string, what: string,
+  ): Promise<void> {
+    if (!(await mayStaffProgramme(db, u, programmeId))) {
+      fail('NOT_ON_THIS_PROGRAMME',
+        `Only this programme’s project manager, a team leader on it or an `
+        + `administrator can ${what}.`, 403);
+    }
+  }
+
   /** Enrolled on the programme, or on a crew on one of its villages. */
   async function onProgramme(
     db: Pool | PoolClient, u: { orgId: string; id: string }, programmeId: string,
@@ -2109,8 +2125,13 @@ export async function registerSurveyRoutes(
       return {
         data: await mutate(pool, req, 'survey.crew.release', 'survey_crew', async db => {
           const row = (await db.query(
-            'SELECT * FROM survey_crew WHERE id = $1 AND org_id = $2', [id, u.orgId])).rows[0];
+            'SELECT * FROM survey_crew WHERE id = $1 AND org_id = $2 FOR UPDATE',
+            [id, u.orgId])).rows[0];
           if (!row) fail('NOT_FOUND', 'Not found', 404);
+          // Through the village, so a programme the caller cannot see is a
+          // 404, then the staffing rule (SV-027).
+          const village = await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+          await requireStaffing(db, u, String(village.survey_project_id), 'release its crew');
           /*
            * What their posting brought goes back with them.
            *
