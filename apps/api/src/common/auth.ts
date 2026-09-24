@@ -275,7 +275,7 @@ export function requireAllPermissions(
   authenticate: (req: FastifyRequest) => Promise<void>,
   permissions: readonly string[],
 ) {
-  return async function guard(req: FastifyRequest): Promise<void> {
+  async function guard(req: FastifyRequest): Promise<void> {
     await authenticate(req);
     for (const permission of permissions) {
       if (!req.authUser?.permissions.includes(permission)) {
@@ -296,7 +296,12 @@ export function requireAllPermissions(
       if((permission.startsWith('payroll.')||permission.startsWith('inventory.')||permission==='webhook.manage'||permission==='admin.configure'||permission==='users.manage'||permission==='users.read')&&req.authUser!.scopes.length&&!req.authUser!.scopes.some(s=>!s.scope_type||!s.scope_id))throw new ApiError({status:403,code:'FORBIDDEN',message:'This organization-wide action requires organization-wide permission'});
       await enforceRecordScope(req, permission);
     }
-  };
+  }
+  // Metadata only, read by the contract test's onRoute hook (createApp.ts)
+  // to build a route -> required-permissions registry mechanically, instead
+  // of grepping route files. Never read at request time.
+  (guard as { requiredPermissions?: readonly string[] }).requiredPermissions = permissions;
+  return guard;
 }
 
 /** A global low-privilege role must not widen a different role's permission. */
