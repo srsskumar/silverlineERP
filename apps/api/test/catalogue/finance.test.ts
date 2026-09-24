@@ -429,6 +429,9 @@ describe("invoice lifecycle", () => {
       { status: "CANCELLED", reason: "Raised against the wrong vendor" });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.data.cancelled_reason).toContain("wrong vendor");
+    // Bumped (fix round 2) so a PATCH /invoices/:id/lines If-Match taken
+    // before this cancel is refused as stale rather than silently passing.
+    expect(res.data.version).toBe(2);
   });
 
   it("carries disputed alongside the status rather than instead of it", async () => {
@@ -440,6 +443,8 @@ describe("invoice lifecycle", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.data.disputed).toBe(true);
     expect(res.data.lifecycle_status).toBe("ISSUED");
+    // Bumped (fix round 2), same reason as cancel above.
+    expect(res.data.version).toBe(2);
   });
 
   it("demands to know what is being disputed", async () => {

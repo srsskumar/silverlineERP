@@ -126,6 +126,16 @@ export interface MsmeParty {
   udyamNumber?: string | null;
   msmeCategory?: string | null;
   hasWrittenAgreement?: boolean;
+  /**
+   * The vendor's own registration flag (task 5c, finding B-004).
+   *
+   * Optional, and its absence means the same as `true` — every caller from
+   * before this flag existed passes udyamNumber/msmeCategory alone and must
+   * keep working unchanged. Only an explicit `false` (a vendor that once
+   * registered and has since let it lapse, say) turns statutory MSME
+   * treatment off despite udyamNumber/msmeCategory still being on file.
+   */
+  msmeRegistered?: boolean;
 }
 
 export interface PayableDue {
@@ -158,6 +168,7 @@ export function payableDue(args: {
   asOf: string;
 }): PayableDue {
   const isMsme = Boolean(
+    args.party.msmeRegistered !== false &&
     args.party.udyamNumber &&
     ['MICRO', 'SMALL'].includes(String(args.party.msmeCategory ?? '').toUpperCase()));
 

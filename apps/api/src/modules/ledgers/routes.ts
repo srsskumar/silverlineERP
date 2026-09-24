@@ -269,7 +269,7 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
               i.disputed, i.on_hold, i.hold_reason, i.match_status, i.lifecycle_status,
               i.purchase_order_id,
               v.id AS vendor_id, v.name AS vendor_name,
-              v.udyam_number, v.msme_category, v.has_written_agreement,
+              v.udyam_number, v.msme_category, v.has_written_agreement, v.msme_registered,
               ${SETTLED.replace('$DOCTYPE', "'VENDOR_INVOICE'").replace('$DOCID', 'i.id')} AS settled,
               (SELECT r.run_no FROM payment_run_lines l JOIN payment_runs r ON r.id = l.run_id
                 WHERE l.document_type = 'VENDOR_INVOICE' AND l.document_id = i.id
@@ -287,7 +287,7 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
       const due = payableDue({
         party: {
           udyamNumber: r.udyam_number, msmeCategory: r.msme_category,
-          hasWrittenAgreement: r.has_written_agreement,
+          hasWrittenAgreement: r.has_written_agreement, msmeRegistered: r.msme_registered,
         },
         acceptanceDate: iso(r.accepted_on) ?? iso(r.invoice_date),
         contractualDueDate: iso(r.due_date),
@@ -379,11 +379,13 @@ export async function registerLedgerRoutes(app: FastifyInstance, opts: { pool: P
     return {
       data: await mutate(pool, req, 'payable.hold', 'invoice', async db => {
         await inOrg(db, 'invoices', id, u.orgId, true);
-        // The invoice table carries no version or updated_by column, so the
-        // hold is the one mutation here that cannot be stamped; the audit
-        // event written by mutate() is the record of who held it and when.
+        // The invoice table still carries no updated_by column, so the audit
+        // event written by mutate() remains the record of who held it and
+        // when. It does have version (migration 096, task 5c fix round 1) --
+        // bumped here too, so a stale PATCH .../lines that read the invoice
+        // before this hold is refused rather than silently overwriting it.
         return (await db.query(
-          'UPDATE invoices SET on_hold = $2, hold_reason = $3 WHERE id = $1 RETURNING *',
+          'UPDATE invoices SET on_hold = $2, hold_reason = $3, version = version + 1 WHERE id = $1 RETURNING *',
           [id, input.on_hold, input.on_hold ? input.reason : null])).rows[0];
       }),
     };

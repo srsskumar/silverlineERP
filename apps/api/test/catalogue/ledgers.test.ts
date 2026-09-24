@@ -171,6 +171,9 @@ describe("payables ageing", () => {
     const held = await post(w.admin, `/api/v1/ap/invoices/${inv.id}/hold`,
       { on_hold: true, reason: "Awaiting a credit note for short delivery" });
     expect(held.status, JSON.stringify(held.body)).toBe(200);
+    // Bumped (fix round 2) so a stale PATCH /invoices/:id/lines If-Match
+    // taken before this hold is refused rather than passing silently.
+    expect(held.data.version).toBe(2);
     const res = await get(w.admin, "/api/v1/ap/ageing?as_of=2026-09-15");
     expect(res.data.onHold).toBeGreaterThanOrEqual(75000);
     expect(res.data.total).toBeGreaterThanOrEqual(75000);
@@ -792,5 +795,59 @@ describe("permissions", () => {
     expect((await post(w.role.AUDITOR, "/api/v1/payment-runs", {
       run_no: uniq("PR"), run_date: "2026-09-15", due_through: "2026-09-15",
     })).status).toBe(403);
+  });
+});
+
+/**
+ * MSME registration on a vendor, written through the API (task 5c, finding
+ * B-004). The columns (migration 032) and the due-date maths (payableDue,
+ * above) already existed; vendorSchema never carried the fields, so the
+ * generic vendor CRUD route silently dropped them from every request.
+ */
+describe("vendor MSME fields", () => {
+  it("writes msme_registered, udyam_number and msme_category through the vendor API", async () => {
+    const res = await post(w.admin, "/api/v1/vendors", {
+      code: uniq("VN"), name: `Vendor ${uniq()}`,
+      msme_registered: true, udyam_number: "UDYAM-MH-05-0001234", msme_category: "MICRO",
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.data.udyam_number).toBe("UDYAM-MH-05-0001234");
+    expect(res.data.msme_category).toBe("MICRO");
+    expect(res.data.msme_registered).toBe(true);
+  });
+
+  it("rejects an Udyam number that is not the notified shape", async () => {
+    const res = await post(w.admin, "/api/v1/vendors", {
+      code: uniq("VN"), name: `Vendor ${uniq()}`,
+      udyam_number: "NOT-A-UDYAM-NUMBER", msme_category: "SMALL",
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it("lets an existing vendor's MSME registration be edited, and the edit takes effect in the ageing", async () => {
+    const vendor = await msmeVendor();
+    const bill = await invoice({ vendor_id: vendor.id, total: 1000, accepted_on: "2026-08-01" });
+    const before = await get(w.admin, `/api/v1/ap/ageing?as_of=2026-09-15`);
+    const beforeRow = before.data.vendors.find((v: Record<string, unknown>) => v.vendor_id === vendor.id);
+    expect(beforeRow.invoices.find((i: Record<string, unknown>) => i.invoice_id === bill.id).is_msme).toBe(true);
+
+    // The generic vendor PATCH (apps/api/src/modules/inventory/routes.ts)
+    // validates the whole body against vendorSchema before filtering down to
+    // what was actually sent, so code/name -- required, no default -- travel
+    // on every edit, not only a full replace.
+    const res = await patch(
+      { ...w.admin, ...(await ver("vendors", vendor.id)) },
+      `/api/v1/vendors/${vendor.id}`,
+      { code: vendor.code, name: vendor.name, msme_registered: false },
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.data.msme_registered).toBe(false);
+
+    // Turning registration off takes the vendor out of statutory treatment
+    // for the same invoice, even though udyam_number and msme_category are
+    // still on file.
+    const after = await get(w.admin, `/api/v1/ap/ageing?as_of=2026-09-15`);
+    const afterRow = after.data.vendors.find((v: Record<string, unknown>) => v.vendor_id === vendor.id);
+    expect(afterRow.invoices.find((i: Record<string, unknown>) => i.invoice_id === bill.id).is_msme).toBe(false);
   });
 });

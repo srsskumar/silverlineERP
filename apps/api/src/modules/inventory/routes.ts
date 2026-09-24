@@ -2,7 +2,7 @@ import {resolveScopes,employeeScopeClause} from '../../common/scopes.js';
 import {scopedReads} from "../../common/scopedReads.js";
 import type { FastifyInstance,FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
-import { vendorSchema,itemSchema,stockSchema,invoiceSchema,assetSchema,assetLookupSchema,assetAssignSchema,assetBulkAssignSchema,assetTransferSchema,assetAllocationEditSchema,assetLookupCode,assetTransitionSchema,assetAuditSchema,assetLocation } from '@silverline/shared';
+import { vendorSchema,itemSchema,stockSchema,invoiceSchema,invoiceLinesUpdateSchema,computeInvoice,assetSchema,assetLookupSchema,assetAssignSchema,assetBulkAssignSchema,assetTransferSchema,assetAllocationEditSchema,assetLookupCode,assetTransitionSchema,assetAuditSchema,assetLocation,type InvoiceLineInput as GstInvoiceLineInput } from '@silverline/shared';
 import { buildAuthenticate,requirePermission,scopesForPermission } from '../../common/auth.js';
 import { actor,parse,page,inOrg,mutate,version,fail,projectAccess,employeeAccess } from '../../common/domain.js';
 import { itemDeltaSql,itemOnHand,lowStockLevel,notifyLowStockCrossing } from '../../common/stockLedger.js';
@@ -155,6 +155,159 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
  // gated on inventory.read, so the payables officer who holds invoice.read
  // and invoice.manage could match and pay an invoice but never list one.
  app.get('/api/v1/invoices',{preHandler:guard('invoice.read')},async req=>{const {limit,offset}=page(req),rows=(await pool.query('SELECT * FROM invoices WHERE org_id=$1 ORDER BY created_at DESC,id DESC LIMIT $2 OFFSET $3',[actor(req).orgId,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
+ /**
+  * Whether a vendor invoice's lines can still be changed, and why not if not
+  * (fix round 1, item 1 on task 5c / finding B-004).
+  *
+  * UNMATCHED and EXCEPTION are both editable: EXCEPTION means a match was
+  * run and failed, which is exactly the state somebody needs to correct a
+  * line from — refusing it left override-with-reason as the only way out of
+  * a mismatch, even a mismatch caused by a typo in the invoice's own lines.
+  * MATCHED and OVERRIDDEN are not: a recorded match is a decision, and
+  * changing the lines under it without reversing that decision first would
+  * invalidate it silently.
+  *
+  * Blocked independently of match_status once the invoice is approved or
+  * cancelled, has any payment allocated against it (even a partial one —
+  * changing what a real payment was allocated against is never safe), or
+  * sits on a payment run that is still open or has already paid.
+  */
+ async function invoiceLinesLockReason(db:Pool|import('pg').PoolClient,id:string,invoice:Record<string,any>):Promise<string|null> {
+  if(!['UNMATCHED','EXCEPTION'].includes(String(invoice.match_status)))
+   return 'This invoice has already been matched or overridden. Reverse the match before changing its lines.';
+  if(['APPROVED','CANCELLED'].includes(String(invoice.lifecycle_status)))
+   return `An invoice at ${invoice.lifecycle_status} cannot have its lines changed`;
+  // Fix round 2: on_hold and disputed were missing here entirely, so a held
+  // or disputed invoice's lines could be edited silently -- the hold/dispute
+  // is a decision about the invoice as it stands, and changing its lines
+  // under either invalidates that decision the same way changing them under
+  // a recorded match would.
+  if(invoice.on_hold)
+   return `This invoice is on hold${invoice.hold_reason?` (${invoice.hold_reason})`:''}. Release the hold before changing its lines.`;
+  if(invoice.disputed)
+   return `This invoice is disputed${invoice.dispute_reason?` (${invoice.dispute_reason})`:''}. Resolve the dispute before changing its lines.`;
+  const status=(await db.query(
+   `SELECT
+      COALESCE((SELECT sum(a.amount + a.tds_amount + a.advance_adjusted)
+                FROM payment_allocations a JOIN payments pm ON pm.id = a.payment_id
+                WHERE a.document_type = 'VENDOR_INVOICE' AND a.document_id = $1
+                  AND a.reversed_at IS NULL AND pm.reversed_at IS NULL), 0) AS settled,
+      EXISTS(SELECT 1 FROM payment_run_lines l JOIN payment_runs r ON r.id = l.run_id
+             WHERE l.document_type = 'VENDOR_INVOICE' AND l.document_id = $1
+               AND r.status IN ('DRAFT','APPROVED','PAID')) AS in_run`,
+   [id])).rows[0];
+  if(Number(status.settled)>0.005)
+   return 'This invoice has a payment allocated against it. Its lines cannot be changed.';
+  if(status.in_run)
+   return 'This invoice is on a payment run. Its lines cannot be changed until it is taken off the run.';
+  return null;
+ }
+ async function assertInvoiceLinesEditable(db:import('pg').PoolClient,id:string,invoice:Record<string,any>) {
+  const reason=await invoiceLinesLockReason(db,id,invoice);
+  if(reason)fail('INVALID_STATUS',reason,409);
+ }
+ app.get('/api/v1/invoices/:id',{preHandler:guard('invoice.read')},async req=>{
+  const u=actor(req),id=(req.params as {id:string}).id,invoice=await inOrg(pool,'invoices',id,u.orgId);
+  const vendor=(await pool.query(
+   'SELECT name,udyam_number,msme_category,msme_registered,has_written_agreement FROM vendors WHERE id=$1',
+   [invoice.vendor_id])).rows[0];
+  const lines=(await pool.query('SELECT * FROM invoice_lines WHERE invoice_id=$1 ORDER BY line_no',[id])).rows;
+  const lockReason=await invoiceLinesLockReason(pool,id,invoice);
+  return {data:{...invoice,vendor_name:vendor?.name??null,
+   vendor_udyam_number:vendor?.udyam_number??null,vendor_msme_category:vendor?.msme_category??null,
+   vendor_msme_registered:vendor?.msme_registered??null,vendor_has_written_agreement:vendor?.has_written_agreement??null,
+   lines_editable:!lockReason,lines_lock_reason:lockReason,
+   lines}};
+ });
+ const round2=(n:number)=>Math.round((n+Number.EPSILON)*100)/100;
+ /**
+  * Where a vendor invoice's lines are priced from (task 5c, finding B-004).
+  *
+  * Reuses the same GST engine every other GST document in the system reuses
+  * (computeInvoice, packages/shared/src/india.ts) rather than reinventing a
+  * second tax calculation. The supplier's state is the vendor's own primary
+  * GST registration where one is on file; place of supply follows the
+  * linked order's, since that is what the order already records about where
+  * the goods are delivered. Either missing falls back to the organisation's
+  * own state, and both missing falls back to treating the purchase as
+  * intra-state -- the common case, and never a case that overstates tax.
+  */
+ async function gstCodesFor(db:import('pg').PoolClient,orgId:string,vendorId:string,purchaseOrderId:string|null) {
+  const vendorState=(await db.query(
+   `SELECT state_code FROM party_gst_registrations
+     WHERE party_type='VENDOR' AND party_id=$1 AND status='ACTIVE'
+     ORDER BY is_primary DESC LIMIT 1`,[vendorId])).rows[0]?.state_code as string|undefined;
+  const orgState=(await db.query('SELECT primary_state_code FROM organizations WHERE id=$1',[orgId])).rows[0]?.primary_state_code as string|undefined;
+  const poPlaceOfSupply=purchaseOrderId
+   ?(await db.query('SELECT place_of_supply FROM purchase_orders WHERE id=$1',[purchaseOrderId])).rows[0]?.place_of_supply as string|undefined
+   :undefined;
+  const supplierStateCode=vendorState??orgState??'00';
+  const placeOfSupplyCode=poPlaceOfSupply??orgState??supplierStateCode;
+  return {supplierStateCode,placeOfSupplyCode};
+ }
+ async function priceInvoiceLines(db:import('pg').PoolClient,orgId:string,vendorId:string,purchaseOrderId:string|null,lines:{description:string;hsn_sac:string;quantity:number;unit_rate:number;gst_rate_pct:number}[]) {
+  const {supplierStateCode,placeOfSupplyCode}=await gstCodesFor(db,orgId,vendorId,purchaseOrderId);
+  const gstLines:GstInvoiceLineInput[]=lines.map(l=>({description:l.description,hsnSac:l.hsn_sac,quantity:l.quantity,unitRate:l.unit_rate,gstRatePct:l.gst_rate_pct}));
+  return computeInvoice({lines:gstLines,supplierStateCode,placeOfSupplyCode});
+ }
+ /**
+  * The legacy header gst_enabled/gst_rate from the priced lines (fix round
+  * 1, item 5 on task 5c / finding B-004).
+  *
+  * Once lines exist they are the authority on tax, the same way they
+  * already are for subtotal/tax/total -- leaving gst_enabled/gst_rate as
+  * whatever the client sent would keep two disagreeing answers to "is this
+  * taxed, and at what rate" on the same row. A single rate cannot represent
+  * several lines taxed at different notified rates exactly, so gst_rate
+  * becomes the effective rate the computed tax actually works out to
+  * (taxTotal / taxableValue), which is the one number consistent with
+  * computeInvoice's own total: subtotal + round(subtotal*gst_rate/100)
+  * reproduces computed.total for a single-rate invoice exactly, and comes
+  * closest to it otherwise.
+  */
+ function gstFieldsFromComputed(computed:ReturnType<typeof computeInvoice>) {
+  const gstEnabled=computed.taxTotal>0.005;
+  const gstRate=gstEnabled&&computed.taxableValue>0.005
+   ?round2((computed.taxTotal/computed.taxableValue)*100)
+   :0;
+  return {gstEnabled,gstRate};
+ }
+ /** Every line's po_line_id, if given, has to be on the invoice's own order — not just any order in the org. */
+ async function checkLinePoIds(db:import('pg').PoolClient,purchaseOrderId:string|null,lines:{po_line_id?:string|null}[]) {
+  const withLink=lines.filter(l=>l.po_line_id);
+  if(!withLink.length)return;
+  if(!purchaseOrderId)fail('VALIDATION_ERROR','A line cannot reference a purchase-order line unless the invoice itself is linked to that purchase order');
+  const ids=new Set((await db.query('SELECT id FROM purchase_order_lines WHERE purchase_order_id=$1',[purchaseOrderId])).rows.map(r=>String(r.id)));
+  for(const l of withLink)if(!ids.has(String(l.po_line_id)))fail('VALIDATION_ERROR',"A line references a purchase-order line that is not on this invoice's purchase order");
+ }
+ /**
+  * Every line's item_id, if given, has to belong to this organisation (fix
+  * round 1, item 2 on task 5c / finding B-004).
+  *
+  * The FK alone (`invoice_lines.item_id REFERENCES inventory_items(id)`)
+  * only proves the row exists somewhere -- inventory_items carries no
+  * per-organisation uniqueness that would stop it pointing at another
+  * tenant's item. Checked the same way checkLinePoIds already checks
+  * po_line_id, rather than trusting the column type to do a tenancy check
+  * it was never built for.
+  */
+ async function checkLineItemIds(db:import('pg').PoolClient,orgId:string,lines:{item_id?:string|null}[]) {
+  const withItem=[...new Set(lines.filter(l=>l.item_id).map(l=>String(l.item_id)))];
+  if(!withItem.length)return;
+  const found=await db.query('SELECT id FROM inventory_items WHERE org_id=$1 AND id=ANY($2::uuid[])',[orgId,withItem]);
+  if(found.rowCount!==withItem.length)fail('VALIDATION_ERROR','A line references an item that does not belong to this organisation');
+ }
+ async function writeInvoiceLines(db:import('pg').PoolClient,orgId:string,invoiceId:string,lines:{item_id?:string|null;po_line_id?:string|null;description:string;hsn_sac:string;quantity:number;unit_rate:number;gst_rate_pct:number}[],computed:ReturnType<typeof computeInvoice>) {
+  for(let idx=0;idx<lines.length;idx++){
+   const line=lines[idx],c=computed.lines[idx];
+   await db.query(
+    `INSERT INTO invoice_lines(org_id,invoice_id,line_no,item_id,po_line_id,description,hsn_sac,quantity,unit_rate,discount_amount,taxable_value,gst_rate_pct,cgst_amount,sgst_amount,igst_amount,line_total)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+    [orgId,invoiceId,idx+1,line.item_id??null,line.po_line_id??null,line.description,line.hsn_sac,
+     line.quantity,line.unit_rate,0,c.taxableValue.toFixed(2),line.gst_rate_pct,
+     c.cgst.toFixed(2),c.sgst.toFixed(2),c.igst.toFixed(2),c.lineTotal.toFixed(2)]);
+  }
+ }
  app.post('/api/v1/invoices',{preHandler:guard('inventory.manage')},async(req,reply)=>{
   const i=parse(invoiceSchema,req.body),u=actor(req);
   const row=await mutate(pool,req,'invoice.create','invoice',async db=>{
@@ -167,8 +320,73 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
     if(String(po.vendor_id)!==String(i.vendor_id))fail('PO_VENDOR_MISMATCH','This purchase order belongs to a different vendor than the invoice');
    }
    if(Number(i.gst_rate)>100)fail('VALIDATION_ERROR','Tax rate must be between zero and 100');
-   const r=await db.query(`INSERT INTO invoices(org_id,serial_number,vendor_id,hsn,gst_enabled,gst_rate,subtotal,tax,total,payment_mode,reference,created_by,purchase_order_id) VALUES($1,$2,$3,$4,$5,$6,$7,round(CASE WHEN $5 THEN $7::numeric*$6::numeric/100 ELSE 0 END,2),$7::numeric+round(CASE WHEN $5 THEN $7::numeric*$6::numeric/100 ELSE 0 END,2),$8,$9,$10,$11) RETURNING *`,[u.orgId,i.serial_number,i.vendor_id,i.hsn,i.gst_enabled,i.gst_rate,i.subtotal,i.payment_mode,i.reference,u.id,i.purchase_order_id??null]);return r.rows[0];
+
+   // The header's legacy subtotal/tax/total/gst_enabled/gst_rate are never
+   // trusted once lines are given -- the server prices every line itself
+   // and every one of these header fields is derived from that, never from
+   // what the client sent.
+   let subtotal=Number(i.subtotal);
+   let gstEnabled=i.gst_enabled;
+   let gstRate=Number(i.gst_rate);
+   let tax=gstEnabled?round2(subtotal*gstRate/100):0;
+   let total=round2(subtotal+tax);
+   let computed:ReturnType<typeof computeInvoice>|null=null;
+   if(i.lines?.length){
+    await checkLinePoIds(db,i.purchase_order_id??null,i.lines);
+    await checkLineItemIds(db,u.orgId,i.lines);
+    computed=await priceInvoiceLines(db,u.orgId,i.vendor_id,i.purchase_order_id??null,i.lines);
+    subtotal=computed.taxableValue;tax=computed.taxTotal;total=computed.total;
+    ({gstEnabled,gstRate}=gstFieldsFromComputed(computed));
+   }
+
+   const r=await db.query(
+    `INSERT INTO invoices(org_id,serial_number,vendor_id,hsn,gst_enabled,gst_rate,subtotal,tax,total,payment_mode,reference,created_by,purchase_order_id)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+    [u.orgId,i.serial_number,i.vendor_id,i.hsn,gstEnabled,gstRate.toFixed(2),
+     subtotal.toFixed(2),tax.toFixed(2),total.toFixed(2),i.payment_mode,i.reference,u.id,i.purchase_order_id??null]);
+
+   if(i.lines?.length&&computed)await writeInvoiceLines(db,u.orgId,r.rows[0].id,i.lines,computed);
+   return r.rows[0];
   });return reply.code(201).send(row);
+ });
+ /**
+  * Replace a vendor invoice's lines wholesale (task 5c, finding B-004).
+  *
+  * Only while the invoice is still unmatched and not yet approved or
+  * cancelled -- once a three-way match has been recorded against a set of
+  * lines, changing them under it would silently invalidate a decision that
+  * was already made and, worse, one a payment run may already rely on.
+  */
+ app.patch('/api/v1/invoices/:id/lines',{preHandler:guard('invoice.manage')},async req=>{
+  const u=actor(req),id=(req.params as {id:string}).id,input=parse(invoiceLinesUpdateSchema,req.body);
+  return {data:await mutate(pool,req,'invoice.lines.update','invoice',async db=>{
+   const invoice=await inOrg(db,'invoices',id,u.orgId,true);
+   version(req,invoice as {version:number});
+   await assertInvoiceLinesEditable(db,id,invoice);
+
+   const purchaseOrderId=invoice.purchase_order_id?String(invoice.purchase_order_id):null;
+   await checkLinePoIds(db,purchaseOrderId,input.lines);
+   await checkLineItemIds(db,u.orgId,input.lines);
+   const computed=await priceInvoiceLines(db,u.orgId,String(invoice.vendor_id),purchaseOrderId,input.lines);
+
+   await db.query('DELETE FROM invoice_lines WHERE invoice_id=$1',[id]);
+   await writeInvoiceLines(db,u.orgId,id,input.lines,computed);
+
+   // An edit invalidates whatever match_status was on record -- EXCEPTION
+   // most often, since that is the one state this route exists to let
+   // somebody correct — so it resets to UNMATCHED and forces a fresh match
+   // rather than leaving a stale verdict standing over lines that changed
+   // under it. gst_enabled/gst_rate are re-derived the same way POST
+   // /invoices derives them, so an edit cannot leave them disagreeing with
+   // the lines that now justify subtotal/tax/total.
+   const {gstEnabled,gstRate}=gstFieldsFromComputed(computed);
+   const updated=(await db.query(
+    "UPDATE invoices SET subtotal=$2,tax=$3,total=$4,gst_enabled=$5,gst_rate=$6,match_status='UNMATCHED',version=version+1 WHERE id=$1 RETURNING *",
+    [id,computed.taxableValue.toFixed(2),computed.taxTotal.toFixed(2),computed.total.toFixed(2),
+     gstEnabled,gstRate.toFixed(2)])).rows[0];
+   const lines=(await db.query('SELECT * FROM invoice_lines WHERE invoice_id=$1 ORDER BY line_no',[id])).rows;
+   return {...updated,lines};
+  })};
  });
  /*
   * The asset vocabulary (enhancement note 3).

@@ -3,7 +3,7 @@ import type { Pool, PoolClient } from 'pg';
 import {
   requisitionSchema, purchaseOrderSchema, grnSchema,
   rfqSchema, quoteSchema, returnSchema, acknowledgementSchema,
-  receiptStatus, threeWayMatch, withinRequisition,
+  receiptStatus, withinRequisition, matchInvoiceToOrder,
   compareQuotes, lowestQuote, checkAmendment, requiresReapproval,
   PR_TRANSITIONS, PO_TRANSITIONS, type PrStatus, type PoStatus,
   type LadderMode, type VendorQuote,
@@ -440,22 +440,27 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
       const invoiceLines = (await db.query(
         'SELECT * FROM invoice_lines WHERE invoice_id = $1 ORDER BY line_no', [id])).rows;
 
-      // Match by description where no explicit link exists; a real deployment
-      // would key on item_id, and that is preferred when present.
-      const invoiceByKey = new Map(invoiceLines.map(l => [String(l.item_id ?? l.description), l]));
-      const lines = poLines.map(p => {
-        const inv = invoiceByKey.get(String(p.item_id ?? p.description));
-        return {
-          reference: String(p.description),
-          orderedQuantity: Number(p.quantity),
-          orderedRate: Number(p.unit_rate),
-          receivedQuantity: receipts.get(String(p.id))?.accepted ?? 0,
-          invoicedQuantity: inv ? Number(inv.quantity) : 0,
-          invoicedRate: inv ? Number(inv.unit_rate) : 0,
-        };
-      });
+      // po_line_id is the preferred key — two order lines routinely share a
+      // description, and matching on text alone risks checking the invoice
+      // against the wrong line's price. item_id, then description, are the
+      // fallback for a line entered without picking one explicitly.
+      const orderLines = poLines.map(p => ({
+        id: String(p.id),
+        itemId: p.item_id ? String(p.item_id) : null,
+        reference: String(p.description),
+        orderedQuantity: Number(p.quantity),
+        orderedRate: Number(p.unit_rate),
+        receivedQuantity: receipts.get(String(p.id))?.accepted ?? 0,
+      }));
+      const invoiceLinesForMatch = invoiceLines.map(l => ({
+        poLineId: l.po_line_id ? String(l.po_line_id) : null,
+        itemId: l.item_id ? String(l.item_id) : null,
+        reference: String(l.description),
+        quantity: Number(l.quantity),
+        rate: Number(l.unit_rate),
+      }));
 
-      const result = threeWayMatch(lines, tolerance);
+      const result = matchInvoiceToOrder(orderLines, invoiceLinesForMatch, tolerance);
       let overridden = false;
       if (!result.matched && body.override_reason) {
         if (!u.permissions.includes('match.override')) {
@@ -475,7 +480,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
          overridden ? new Date() : null, u.id])).rows[0];
 
       await db.query(
-        'UPDATE invoices SET match_status = $2 WHERE id = $1',
+        'UPDATE invoices SET match_status = $2, version = version + 1 WHERE id = $1',
         [id, result.matched ? 'MATCHED' : overridden ? 'OVERRIDDEN' : 'EXCEPTION']);
 
       return { ...record, ...result };

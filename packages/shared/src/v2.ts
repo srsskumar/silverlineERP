@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { dateStringSchema } from './s1.js';
+import { isValidUdyam, isValidGstRate } from './india.js';
 import type { RoleCode } from './rbac.js';
 
 export const V2_PERMISSIONS = ['inventory.read','inventory.manage','asset.read','asset.manage','cycle.read','cycle.manage','custom_field.manage','automation.read','automation.manage','webhook.manage','analytics.read','admin.configure'] as const;
@@ -14,13 +15,58 @@ export const V2_ROLE_GRANTS: Record<RoleCode,string[]> = {
 const text = z.string().trim().min(1).max(255);
 const uuid = z.string().uuid();
 export const decimalSchema = z.union([z.string(), z.number().finite()]).transform(String).refine(v => /^\d{1,12}(\.\d{1,4})?$/.test(v), 'Use a positive decimal with up to four fractional digits');
-export const vendorSchema = z.object({code:text,name:text,contact:z.string().max(1000).optional(),tax_id:z.string().max(100).optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE')});
+/**
+ * MSMED Act 2006 s.15/16 registration (task 5c, finding B-004).
+ *
+ * The DB columns (migration 032) and the payables due-date maths
+ * (packages/shared/src/ledgers.ts's payableDue) already existed; what was
+ * missing is a way to write them — vendorSchema never carried these fields,
+ * so the generic vendor CRUD route (apps/api/src/modules/inventory/routes.ts)
+ * silently dropped them from every request.
+ */
+export const MSME_CATEGORIES = ['MICRO', 'SMALL', 'MEDIUM'] as const;
+export const vendorSchema = z.object({code:text,name:text,contact:z.string().max(1000).optional(),tax_id:z.string().max(100).optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE'),
+ msme_registered:z.boolean().optional(),
+ udyam_number:z.string().trim().toUpperCase().max(25)
+   .refine(v=>isValidUdyam(v),'Not a valid Udyam number (format UDYAM-XX-00-0000000)')
+   .nullable().optional(),
+ msme_category:z.enum(MSME_CATEGORIES).nullable().optional(),
+ // Governs which statutory window applies — 45 days with a written
+ // agreement, 15 without (payableDue). Defaults true in the DB because most
+ // supply relationships are documented; explicit here only when it isn't.
+ has_written_agreement:z.boolean().optional()});
 export const itemSchema = z.object({code:text,name:text,unit:text.default('unit'),low_stock_threshold:decimalSchema.default('0'),unit_cost:decimalSchema.default('0'),vendor_id:uuid.nullable().optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE')});
 export const stockSchema = z.object({item_id:uuid,direction:z.enum(['IN','OUT']),quantity:decimalSchema.refine(v=>Number(v)>0,'Quantity must be greater than zero'),reference:text,project_id:uuid.nullable().optional(),reason:z.string().max(2000).optional(),invoice_id:uuid.nullable().optional()});
+/**
+ * One line of a vendor invoice (task 5c, finding B-004).
+ *
+ * `invoice_lines` (migration 036) and a working three-way match
+ * (apps/api/src/modules/procurement/routes.ts's /invoices/:id/match) already
+ * existed; nothing could ever write a line, so the match always ran against
+ * zero of them. po_line_id is optional but preferred — matchInvoiceToOrder
+ * keys on it before falling back to item_id and then description.
+ */
+export const invoiceLineInputSchema = z.object({
+ item_id:uuid.nullable().optional(),
+ po_line_id:uuid.nullable().optional(),
+ description:text,
+ hsn_sac:z.string().regex(/^[0-9]{4,8}$/,'HSN/SAC is 4 to 8 digits'),
+ quantity:z.coerce.number().positive(),
+ unit_rate:z.coerce.number().nonnegative(),
+ gst_rate_pct:z.coerce.number().refine(v=>isValidGstRate(v),'Not a notified GST rate').default(0),
+});
 export const invoiceSchema = z.object({serial_number:text,vendor_id:uuid,hsn:z.string().max(50),gst_enabled:z.boolean(),gst_rate:decimalSchema.default('0'),subtotal:decimalSchema,payment_mode:z.enum(['CASH','BANK','UPI','CREDIT']),reference:text,
  // Optional: without it, an invoice can never be linked to the purchase
  // order it bills against, and /invoices/:id/match always 422s.
- purchase_order_id:uuid.nullable().optional()});
+ purchase_order_id:uuid.nullable().optional(),
+ // Optional: when present, the server prices every line itself (via
+ // computeInvoice) and overwrites subtotal/gst_rate/tax/total from the
+ // lines — the legacy header fields above are never trusted once lines
+ // exist. Absent, an invoice still posts as a single header row exactly as
+ // it always has.
+ lines:z.array(invoiceLineInputSchema).min(1,'An invoice needs at least one line').optional()});
+/** PATCH /api/v1/invoices/:id/lines — replace a vendor invoice's lines wholesale. */
+export const invoiceLinesUpdateSchema = z.object({lines:z.array(invoiceLineInputSchema).min(1,'An invoice needs at least one line')});
 /**
  * Registering an asset (enhancement note 3).
  *
