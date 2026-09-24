@@ -771,7 +771,13 @@ describe("vendor MSME fields", () => {
     const beforeRow = before.data.vendors.find((v: Record<string, unknown>) => v.vendor_id === vendor.id);
     expect(beforeRow.invoices.find((i: Record<string, unknown>) => i.invoice_id === bill.id).is_msme).toBe(true);
 
-    const res = await patch(w.admin, `/api/v1/vendors/${vendor.id}`, { msme_registered: false });
+    // The generic vendor PATCH (apps/api/src/modules/inventory/routes.ts)
+    // validates the whole body against vendorSchema before filtering down to
+    // what was actually sent, so code/name -- required, no default -- travel
+    // on every edit, not only a full replace.
+    const res = await patch(w.admin, `/api/v1/vendors/${vendor.id}`, {
+      code: vendor.code, name: vendor.name, msme_registered: false,
+    });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.data.msme_registered).toBe(false);
 

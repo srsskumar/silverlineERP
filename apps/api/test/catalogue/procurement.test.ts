@@ -619,8 +619,10 @@ describe("vendor invoice lines (finding B-004)", () => {
     const res = await post(w.admin, "/api/v1/invoices", {
       serial_number: uniq("INV"), vendor_id: vendor.id, hsn: "25232910", gst_enabled: true,
       // A client that lies about its own totals is exactly the case the rule
-      // guards against.
-      gst_rate: "999", subtotal: "1", payment_mode: "BANK", reference: "test",
+      // guards against. gst_rate stays a legal value (it is still checked
+      // against its own 0-100 bound before lines are even considered) but
+      // subtotal is nowhere near the true line total.
+      gst_rate: "0", subtotal: "1", payment_mode: "BANK", reference: "test",
       purchase_order_id: po.id,
       lines: [{
         po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910",
