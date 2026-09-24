@@ -38,6 +38,12 @@ export interface ReturnDraft {
   rovers: Record<string, RoverDraft>;
   govtStaffPresent: string;
   crewPresent: string;
+  /** Teams out in the village today (§59.4.2). Blank means not asked. */
+  teamsDeployed: string;
+  /** The version of a filed day this draft corrects, pinned when it was filled. */
+  baseVersion?: number;
+  /** The crew asked to clear the note on a filed day. */
+  clearNotes?: boolean;
   notes: string;
   lowProgressReason: string | null;
   lowProgressRemarks: string;
@@ -52,6 +58,7 @@ export function emptyDraft(): ReturnDraft {
     rovers: {},
     govtStaffPresent: "",
     crewPresent: "",
+    teamsDeployed: "",
     notes: "",
     lowProgressReason: null,
     lowProgressRemarks: "",
@@ -134,6 +141,11 @@ export function buildEntry(args: {
   } | null;
   /** The village's business day, for measuring lateness against. */
   today?: string;
+  /**
+   * Correcting a filed day: a typed 0 is an entry ("take this figure off"),
+   * not a blank, so it is sent.
+   */
+  keepZeros?: boolean;
 }): BuildResult {
   const { draft, measures } = args;
   const problems: string[] = [];
@@ -146,7 +158,7 @@ export function buildEntry(args: {
     // A zero is not sent. The absence of a measure means nothing was done
     // against it, which is what a typed 0 means, and sending both makes two
     // spellings of one fact.
-    else if (value !== null && value > 0) values[m.code] = value;
+    else if (value !== null && (value > 0 || (args.keepZeros && value === 0))) values[m.code] = value;
   }
 
   const rovers: RoverDayInput[] = Object.entries(draft.rovers).map(([assetId, r]) => ({
@@ -169,6 +181,13 @@ export function buildEntry(args: {
   if (govt.error) problems.push(govt.error);
   const crew = parseNumber(draft.crewPresent, "Crew present", { integer: true });
   if (crew.error) problems.push(crew.error);
+  // Teams out today (SG-008). Every phone-filed day was stored as zero teams
+  // because the form never asked, and a supervisor's team-days read nought.
+  const teams = parseNumber(draft.teamsDeployed ?? "", "Teams deployed");
+  if (teams.error) problems.push(teams.error);
+  else if (teams.value !== null && !Number.isInteger(teams.value)) {
+    problems.push("Teams deployed counts teams, so it has to be a whole number.");
+  }
 
   const low = checkLowProgress({
     areaToday: extentToday(draft.quantities, measures),
@@ -225,7 +244,8 @@ export function buildEntry(args: {
       entry_date: args.entryDate,
       values,
       ...(rovers.length ? { rovers } : {}),
-      ...(draft.notes.trim() ? { notes: draft.notes.trim() } : {}),
+      ...(teams.value !== null ? { teams_deployed: teams.value } : {}),
+      ...(draft.notes.trim() ? { notes: draft.notes.trim() } : draft.clearNotes ? { notes: null } : {}),
       ...(draft.lowProgressReason
         ? {
             low_progress_reason: draft.lowProgressReason,

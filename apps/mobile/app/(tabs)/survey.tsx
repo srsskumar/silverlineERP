@@ -8,13 +8,17 @@
  * from a photograph of a notebook.
  */
 import { withScreenBoundary } from "../../src/ui/ErrorBoundary";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Modal, View } from "react-native";
 import { useAuth } from "../../src/auth/AuthContext";
-import { getMyVillages, type MyVillage } from "../../src/api/endpoints";
+import { getMyVillages, type MyVillage, type SurveyEntryInput } from "../../src/api/endpoints";
+import { readPayload } from "../../src/sync/queue";
+import { useLocalSearchParams } from "expo-router";
 import { DailyReturn } from "../../src/survey/DailyReturn";
 import { ControlPointForm } from "../../src/survey/ControlPointForm";
+import { StageComplete } from "../../src/survey/StageComplete";
+import { completionOffer } from "../../src/survey/fieldCrew";
 import {
   Badge,
   Banner,
@@ -33,7 +37,11 @@ import {
 import { space, useTheme } from "../../src/theme";
 import { day } from "@silverline/shared";
 
-type Sheet = { village: MyVillage; kind: "return" | "point" } | null;
+type Sheet = {
+  village: MyVillage;
+  kind: "return" | "point" | "stage";
+  review?: { clientUuid: string; payload: SurveyEntryInput } | null;
+} | null;
 
 function SurveyScreen() {
   const t = useTheme();
@@ -47,6 +55,22 @@ function SurveyScreen() {
 
   const mayEnter = canDo("survey.enter");
   const outstanding = villages.filter(v => !v.filed_today);
+
+  /*
+   * Opened from the Sync queue on a conflicted return (fix round 2): the
+   * queued draft, read back and reopened on its village for review.
+   */
+  const { review: reviewId } = useLocalSearchParams<{ review?: string }>();
+  useEffect(() => {
+    if (!reviewId || !villages.length) return;
+    void readPayload(reviewId).then(p => {
+      const payload = p as SurveyEntryInput | null;
+      const village = payload && villages.find(v => v.id === payload.survey_village_id);
+      if (payload && village) {
+        setSheet({ village, kind: "return", review: { clientUuid: reviewId, payload } });
+      }
+    }).catch(() => undefined);
+  }, [reviewId, villages.length]);
 
   const close = (note?: string) => {
     setSheet(null);
@@ -127,6 +151,27 @@ function SurveyScreen() {
             ))}
           </Card>
 
+          {/*
+            * Finishing a stage (SG-013): only the stage this person is crewed
+            * on, and only while it is running. Nobody else's stage is ever
+            * offered here.
+            */}
+          {villages.some(v => completionOffer(v, mayEnter)) ? (
+            <Card title="Finish your stage">
+              <View style={{ gap: space.xs }}>
+                {villages.filter(v => completionOffer(v, mayEnter)).map(v => (
+                  <Button
+                    key={v.id}
+                    title={`${v.village_name}: ${v.stage_label} complete`}
+                    variant="secondary"
+                    icon="checkmark-done-outline"
+                    onPress={() => setSheet({ village: v, kind: "stage" })}
+                  />
+                ))}
+              </View>
+            </Card>
+          ) : null}
+
           {mayEnter ? (
             <Card title="Control points">
               <Muted>
@@ -159,9 +204,12 @@ function SurveyScreen() {
             <Button title="Close" variant="ghost" onPress={() => close()} />
           </Row>
           {sheet?.kind === "return" ? (
-            <DailyReturn village={sheet.village} workDate={day(workDate)} onFiled={close} />
+            <DailyReturn village={sheet.village} workDate={workDate} onFiled={close}
+              review={sheet.review ?? null} />
           ) : sheet?.kind === "point" ? (
-            <ControlPointForm village={sheet.village} workDate={day(workDate)} onRecorded={close} />
+            <ControlPointForm village={sheet.village} workDate={workDate} onRecorded={close} />
+          ) : sheet?.kind === "stage" ? (
+            <StageComplete village={sheet.village} workDate={workDate} onDone={close} />
           ) : null}
         </View>
       </Modal>

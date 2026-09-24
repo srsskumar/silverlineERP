@@ -7,6 +7,7 @@
  * all applied server-side on submit; this screen only pre-checks that the
  * form is fillable (src/validators.ts's validateExpenseClaim).
  */
+import { formToday } from "../src/formDate";
 import { router } from "expo-router";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -54,9 +55,8 @@ import { radius, space, useTheme } from "../src/theme";
 import { formatMoney as money } from "../src/money";
 
 
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
+// The Indian day, not the UTC one: until 05:30 IST those differ (fix round 1).
+const today = formToday;
 
 function ExpensesScreen() {
   const { canDo } = useAuth();

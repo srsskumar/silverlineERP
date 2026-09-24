@@ -165,6 +165,14 @@ export interface MyVillage {
   gt_completed_on: string | null;
   gt_state: string | null;
   gt_variance_reason: string | null;
+  /**
+   * The stage this person is crewed on, as it stands (SG-013). Absent from
+   * an older server, in which case the phone offers no completion.
+   */
+  stage_state?: string | null;
+  stage_started_on?: string | null;
+  stage_expected_end_on?: string | null;
+  stage_variance_reason?: string | null;
   /** Whether today's progress return has already been filed for it. */
   filed_today: boolean;
 }
@@ -224,6 +232,14 @@ export interface VillageRover {
   category: string | null;
   /** Still allocated — released kit is history and is not asked about. */
   out: boolean;
+  /**
+   * Whether the server will take this person's figures for it: issued to
+   * them, or to somebody who reports to them (SG-001). Absent from an older
+   * server.
+   */
+  issued_to_me?: boolean;
+  /** Who it is issued to, or null when nobody. */
+  holder_name?: string | null;
 }
 
 /**
@@ -260,6 +276,8 @@ export interface SurveyEntryInput {
   entry_date: string;
   values: Record<string, number>;
   rovers?: RoverDayInput[];
+  /** Teams out in the village that day (§59.4.2). */
+  teams_deployed?: number;
   notes?: string | null;
   low_progress_reason?: string | null;
   low_progress_remarks?: string | null;
@@ -278,6 +296,54 @@ export async function postSurveyEntry(
   const { data } = await apiFetch("/api/v1/survey/entries", {
     method: "POST",
     body: input,
+    idempotencyKey,
+  });
+  return asItem(data);
+}
+
+/**
+ * Today's return for a village, as the server holds it (SG-003).
+ *
+ * Read so the phone can open a filed day for correction, and so the outbox
+ * can turn a second filing for the same day into an amendment rather than a
+ * refusal.
+ */
+export async function getFiledEntry(
+  villageId: string,
+  date: string,
+): Promise<import("../survey/fieldCrew").FiledEntry | null> {
+  const q = `survey_village_id=${encodeURIComponent(villageId)}&from=${date}&to=${date}&limit=1`;
+  const { data } = await apiFetch<{ data: Array<import("../survey/fieldCrew").FiledEntry> }>(
+    `/api/v1/survey/entries?${q}`);
+  const rows = (data as { data?: Array<import("../survey/fieldCrew").FiledEntry> } | null)?.data ?? [];
+  return rows.find(r => String(r.entry_date).slice(0, 10) === date) ?? null;
+}
+
+/** Correct a return already filed. Carries the version it is correcting. */
+export async function patchSurveyEntry(
+  entryId: string,
+  version: number,
+  body: import("../survey/fieldCrew").EntryAmendment,
+  idempotencyKey?: string,
+): Promise<unknown> {
+  const { data } = await apiFetch(`/api/v1/survey/entries/${entryId}`, {
+    method: "PATCH",
+    body,
+    idempotencyKey,
+    headers: { "If-Match": String(version) },
+  });
+  return asItem(data);
+}
+
+/** Move the caller's own stage on a village (SG-013). */
+export async function postVillageStage(
+  villageId: string,
+  body: Record<string, unknown>,
+  idempotencyKey?: string,
+): Promise<unknown> {
+  const { data } = await apiFetch(`/api/v1/survey/villages/${villageId}/stage`, {
+    method: "POST",
+    body,
     idempotencyKey,
   });
   return asItem(data);

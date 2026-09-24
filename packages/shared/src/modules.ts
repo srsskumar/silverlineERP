@@ -80,7 +80,7 @@ export const MODULE_CATALOG: ModuleCatalogEntry[] = [
   { code: 'my-payslip', label: 'My payslip', group: 'People', permission: 'payslip.read' },
 
   { code: 'documents', label: 'Documents', group: 'Operations', permission: 'document.read' },
-  { code: 'survey', label: 'Land survey', group: 'Operations', permission: 'survey.read' },
+  { code: 'survey', label: 'Land survey', group: 'Operations', permission: 'survey.read', anyOf: ['survey.dashboard'] },
   { code: 'inventory', label: 'Inventory', group: 'Operations', permission: 'inventory.read' },
   { code: 'assets', label: 'Assets', group: 'Operations', permission: 'asset.read' },
   { code: 'asset-movements', label: 'Asset movements', group: 'Operations',

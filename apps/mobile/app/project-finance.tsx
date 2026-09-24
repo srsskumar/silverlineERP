@@ -9,6 +9,7 @@
  * their status, what each is worth and when it falls due, including the
  * disputed flag and the payment-terms due date this round added server-side.
  */
+import { formToday } from "../src/formDate";
 import { router } from "expo-router";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -38,9 +39,8 @@ import { day } from "@silverline/shared";
 import { formatMoney as money } from "../src/money";
 
 
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
+// The Indian day, not the UTC one: until 05:30 IST those differ (fix round 1).
+const today = formToday;
 
 function ProjectFinanceScreen() {
   const { canDo } = useAuth();

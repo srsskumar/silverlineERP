@@ -1361,9 +1361,19 @@ export async function registerSurveyRoutes(
              updated_by)
            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
            ON CONFLICT (survey_village_id, stage_id)
-           DO UPDATE SET state = EXCLUDED.state, started_on = EXCLUDED.started_on,
+           /*
+            * A field the call did not mention is kept (SG-015). Completing a
+            * stage with only its completion date used to blank the start
+            * date and the remarks agreed at start-gt. An explicit null still
+            * clears: that is somebody saying so.
+            */
+           DO UPDATE SET state = EXCLUDED.state,
+                         started_on = CASE WHEN $13 THEN EXCLUDED.started_on
+                                           ELSE survey_village_stages.started_on END,
+                         -- Always what was sent: a reopened stage is not finished.
                          completed_on = EXCLUDED.completed_on,
-                         remarks = EXCLUDED.remarks,
+                         remarks = CASE WHEN $14 THEN EXCLUDED.remarks
+                                        ELSE survey_village_stages.remarks END,
                          expected_start_on = COALESCE(
                            EXCLUDED.expected_start_on, survey_village_stages.expected_start_on),
                          expected_end_on = COALESCE(
@@ -1379,7 +1389,8 @@ export async function registerSurveyRoutes(
             input.remarks ?? null,
             input.expected_start_on ?? null, input.expected_end_on ?? null,
             input.variance_reason ?? null, input.variance_remarks ?? null,
-            u.id])).rows[0];
+            u.id,
+            input.started_on !== undefined, input.remarks !== undefined])).rows[0];
 
         // Reported back with the row, so the screen that just wrote it can
         // say "eight days late" without asking again.
@@ -1477,19 +1488,23 @@ export async function registerSurveyRoutes(
           // and expected finish, and a second copy on the village is how the
           // two come to disagree.
           await db.query(
+            // The remarks too (SG-007): what was agreed with the mandal is
+            // said once, here, and was being accepted and thrown away.
             `INSERT INTO survey_village_stages
                (org_id, survey_village_id, stage_id, state, started_on,
-                expected_start_on, expected_end_on, updated_by)
-             VALUES ($1, $2, $3, 'IN_PROGRESS', $4, $4, $5, $6)
+                expected_start_on, expected_end_on, remarks, updated_by)
+             VALUES ($1, $2, $3, 'IN_PROGRESS', $4, $4, $5, $7, $6)
              ON CONFLICT (survey_village_id, stage_id) DO UPDATE
                SET state = 'IN_PROGRESS',
                    started_on = COALESCE(survey_village_stages.started_on, EXCLUDED.started_on),
                    expected_start_on = COALESCE(
                      survey_village_stages.expected_start_on, EXCLUDED.expected_start_on),
                    expected_end_on = EXCLUDED.expected_end_on,
+                   remarks = COALESCE(EXCLUDED.remarks, survey_village_stages.remarks),
                    updated_by = EXCLUDED.updated_by,
                    updated_at = now()`,
-            [u.orgId, id, stage.id, input.started_on, input.expected_end_on, u.id]);
+            [u.orgId, id, stage.id, input.started_on, input.expected_end_on, u.id,
+              input.remarks?.trim() || null]);
 
           // Already-on-the-village is not an error. Two people starting the
           // same village within a minute of each other is ordinary, and the
@@ -1612,6 +1627,18 @@ export async function registerSurveyRoutes(
               gt.state            AS gt_state,
               gt.variance_reason  AS gt_variance_reason,
               s.code AS stage_code, s.label AS stage_label,
+              /*
+               * Where the caller's own stage stands (SG-013).
+               *
+               * The phone offers "mark complete" only on the stage this person
+               * is crewed on, and only while it is open. The start date goes
+               * back with the completion, because the stage route writes
+               * whatever start it is given, blank included.
+               */
+              own.state AS stage_state,
+              own.started_on AS stage_started_on,
+              own.expected_end_on AS stage_expected_end_on,
+              own.variance_reason AS stage_variance_reason,
               EXISTS (SELECT 1 FROM survey_entries se
                       WHERE se.survey_village_id = sv.id
                         AND se.entry_date = $3::date) AS filed_today
@@ -1627,6 +1654,8 @@ export async function registerSurveyRoutes(
        LEFT JOIN survey_village_stages gt ON gt.survey_village_id = sv.id
          AND gt.stage_id = (SELECT id FROM survey_stages
                              WHERE org_id = sv.org_id AND code = 'GROUND_TRUTHING')
+       LEFT JOIN survey_village_stages own ON own.survey_village_id = sv.id
+         AND own.stage_id = c.stage_id
        WHERE c.org_id = $1 AND usr.id = $2
          AND c.released_on IS NULL
          AND p.status = 'ACTIVE'
@@ -1640,6 +1669,10 @@ export async function registerSurveyRoutes(
         gt_completed_on: iso(r.gt_completed_on),
         gt_state: r.gt_state ?? null,
         gt_variance_reason: r.gt_variance_reason ?? null,
+        stage_state: r.stage_state ?? 'NOT_STARTED',
+        stage_started_on: iso(r.stage_started_on),
+        stage_expected_end_on: iso(r.stage_expected_end_on),
+        stage_variance_reason: r.stage_variance_reason ?? null,
         filed_today: r.filed_today === true,
       })),
       // So the app can label the question it is about to ask.
@@ -1925,20 +1958,43 @@ export async function registerSurveyRoutes(
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       await villageOr404(pool, u.orgId, id, u);
+      const supervises = u.permissions.includes('survey.manage')
+        || u.permissions.includes('survey.assign');
       const rows = (await pool.query(
         `SELECT r.*, a.asset_code, a.name AS asset_name, a.serial_number, a.condition,
                 -- So a caller can tell a rover from the tripod that travelled
                 -- with it: the kit follows the crew, the daily return does not
                 -- ask them to account for a welding set.
-                a.category
+                a.category,
+                /*
+                 * Whose hands it is in, and whether that makes it the
+                 * caller's to report (SG-001).
+                 *
+                 * The same test POST /survey/entries applies (ROVER_NOT_YOURS):
+                 * issued to the caller, or to somebody who reports to them.
+                 * The phone listed every allocated rover, the second crew
+                 * member marked the first one's, and the outbox dropped the
+                 * refused day. Said here so the device can apply the rule
+                 * before it queues anything (§59.9.3).
+                 */
+                COALESCE(NULLIF(trim(concat_ws(' ', holder.first_name, holder.last_name)), ''),
+                         holder.emp_no) AS holder_name,
+                (holder.id IS NOT NULL
+                  AND (holder.id = me.employee_id OR holder.reports_to = me.employee_id))
+                  AS carried_by_me
          FROM survey_rover_allocations r
          JOIN assets a ON a.id = r.asset_id
+         LEFT JOIN asset_assignments aa ON aa.asset_id = r.asset_id AND aa.returned_at IS NULL
+         LEFT JOIN employees holder ON holder.id = aa.employee_id
+         LEFT JOIN users me ON me.id = $3
          WHERE r.survey_village_id = $1 AND r.org_id = $2
-         ORDER BY r.allocated_on DESC`, [id, u.orgId])).rows;
+         ORDER BY r.allocated_on DESC`, [id, u.orgId, u.id])).rows;
       return {
-        data: rows.map(r => ({
+        data: rows.map(({ carried_by_me: carried, ...r }) => ({
           ...r, allocated_on: iso(r.allocated_on), released_on: iso(r.released_on),
           out: !r.released_on,
+          holder_name: r.holder_name ?? null,
+          issued_to_me: supervises || carried === true,
         })),
       };
     });
@@ -2473,6 +2529,11 @@ export async function registerSurveyRoutes(
           dgps_base: updated.dgps_base,
           dgps_rovers: updated.dgps_rovers,
           notes: updated.notes,
+          // Both sides of the trail carry attendance (SG-012). The before
+          // state had it and the after did not, so "who changed four
+          // government staff to nought" showed a four and then nothing.
+          govt_staff_present: updated.govt_staff_present,
+          crew_present: updated.crew_present,
           values: Object.fromEntries((await db.query(
             `SELECT mm.code, ev.quantity FROM survey_entry_values ev
                JOIN survey_measures mm ON mm.id = ev.measure_id
@@ -3080,8 +3141,12 @@ export async function registerSurveyRoutes(
         async db => {
           await villageOr404(db, u.orgId, id, u);
           await requireOwnCrew(db, u, id);
+          // Case-blind (SG-006): "gcp-1" beside "GCP-1" is one pillar written
+          // twice, and the control list the department receives would carry it
+          // as two.
           const clash = await db.query(
-            'SELECT 1 FROM survey_village_gcps WHERE survey_village_id = $1 AND point_code = $2',
+            `SELECT 1 FROM survey_village_gcps
+              WHERE survey_village_id = $1 AND lower(point_code) = lower($2)`,
             [id, input.point_code]);
           if (clash.rowCount) {
             fail('POINT_ALREADY_RECORDED',
@@ -3126,6 +3191,21 @@ export async function registerSurveyRoutes(
           await villageOr404(db, u.orgId, String(row.survey_village_id), u);
           await requireOwnCrew(db, u, String(row.survey_village_id));
           version(req, row as { version: number });
+
+          // Renaming onto another point's name, in any case, is the duplicate
+          // the create path refuses (SG-006). The point keeping its own name
+          // in a different case is not a clash.
+          if (input.point_code !== undefined) {
+            const clash = await db.query(
+              `SELECT 1 FROM survey_village_gcps
+                WHERE survey_village_id = $1 AND id <> $2 AND lower(point_code) = lower($3)`,
+              [row.survey_village_id, id, input.point_code]);
+            if (clash.rowCount) {
+              fail('POINT_ALREADY_RECORDED',
+                `This village already has a point called ${input.point_code}. `
+                + 'Give this point another name.', 409);
+            }
+          }
 
           /*
            * A grid reference needs a zone, counting the one already on the row.

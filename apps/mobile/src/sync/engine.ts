@@ -15,11 +15,16 @@ import {
   postTaskEvidence,
   postSurveyEntry,
   postVillageGcp,
+  postVillageStage,
+  getFiledEntry,
+  patchSurveyEntry,
   postTask as apiPostTask,
 } from "../api/endpoints";
 import { enqueueOp, flushQueue, rewriteOp, type OpExecutor } from "./queue";
 import { reviewMessage } from "./queueCore";
 import { punchBody } from "./replay";
+import { runSurveyEntryOp } from "./surveyEntryOp";
+import { ApiError } from "../api/client";
 import { getRefreshToken } from "../device/auth";
 import { countPendingOps, countReadyOps, getAccount, getDb, type PendingOpRow } from "./db";
 
@@ -128,7 +133,7 @@ export const defaultExecutor: OpExecutor = async (op) => {
           payload as unknown as Parameters<typeof postLeaveRequest>[0], op.idempotency_key,
         ),
       };
-    case "survey_entry":
+    case "survey_entry": {
       /*
        * The day's return, filed from the village.
        *
@@ -138,13 +143,33 @@ export const defaultExecutor: OpExecutor = async (op) => {
        * typed at a desk a week later. The server refuses a second entry for
        * the same village-day outright, so a replay of an op that actually
        * landed is rejected as ALREADY_ENTERED rather than doubling the day.
+       *
+       * That refusal is not the end of it (SG-003). A second filing for the
+       * same day is a correction -- a typo fixed, or a second go queued while
+       * the first was still waiting for signal -- and it was being dropped.
+       * It becomes an amendment of the day already in, keyed off this op so
+       * a retry sends the same request.
        */
+      // Only amended when the server still holds the version the crew
+      // corrected; otherwise a CONFLICT they review (fix round 1).
+      return runSurveyEntryOp(op, {
+        post: postSurveyEntry,
+        getFiled: getFiledEntry,
+        patch: patchSurveyEntry,
+        remember: (id, body) => rewriteOp(id, body),
+        conflict: (message) => new ApiError({
+          status: 409, code: "SURVEY_DAY_CHANGED", message, retryable: false,
+        }),
+      });
+    }
+    case "survey_stage": {
+      // The crew member's own stage, completed from the village (SG-013).
+      const { survey_village_id, ...body } = payload;
       return {
-        status: 201,
-        body: await postSurveyEntry(
-          payload as unknown as Parameters<typeof postSurveyEntry>[0], op.idempotency_key,
-        ),
+        status: 200,
+        body: await postVillageStage(String(survey_village_id), body, op.idempotency_key),
       };
+    }
     case "survey_gcp": {
       // Established once per village, standing on the point. The village id
       // is in the path rather than the body, so it is peeled off here.

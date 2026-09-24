@@ -43,6 +43,7 @@ export type QueueEntity =
   | "notification_read"
   | "survey_entry"
   | "survey_gcp"
+  | "survey_stage"
   | "client_error";
 
 
@@ -133,26 +134,127 @@ export const LIST_OPS_SQL = `SELECT * FROM pending_ops
   ORDER BY CASE state WHEN 'FAILED' THEN 0 WHEN 'SUCCEEDED' THEN 2 ELSE 1 END,
     created_at DESC, seq DESC
   LIMIT 100`;
-export function createQueue({getDb,getAccount,seal,unseal,uuid,isApiError}:{getDb:()=>Promise<QueueDatabase>;getAccount:()=>Promise<string|null>;seal:(account:string,value:string)=>Promise<string>;unseal:(account:string,value:string)=>Promise<string>;uuid:()=>string;isApiError:(e:unknown)=>e is RequestError}) {
+/**
+ * How several ops for one record chain together (round 4). `supersede` folds
+ * a new payload into an op already in the chain; `handOver` passes what a
+ * settling op sent to the op queued behind it.
+ */
+export interface OpChain {
+  supersede(pending: Record<string, unknown>, next: Record<string, unknown>,
+    ctx: SupersedeContext): Record<string, unknown> | null;
+  handOver(older: Record<string, unknown>, newer: Record<string, unknown>,
+    ctx: SupersedeContext): Record<string, unknown>;
+}
+/**
+ * What a chain rule is told about the older op: its key, and whether a
+ * request may have gone out under it (round 5). An op that was never sent
+ * carries nothing the server could hold, so nothing of it is remembered.
+ */
+export interface SupersedeContext { idempotencyKey: string; sent: boolean; sending: boolean }
+/** An op that is sending, or has been tried, may have delivered its body. */
+const maySent = (op: PendingOpRow) => op.state !== "QUEUED" || op.retry_count > 0;
+
+export function createQueue({getDb,getAccount,seal,unseal,uuid,isApiError,chains={}}:{getDb:()=>Promise<QueueDatabase>;getAccount:()=>Promise<string|null>;seal:(account:string,value:string)=>Promise<string>;unseal:(account:string,value:string)=>Promise<string>;uuid:()=>string;isApiError:(e:unknown)=>e is RequestError;chains?:Partial<Record<string,OpChain>>}) {
 const ACTIVE_STATES = ["QUEUED", "SENDING", "BACKOFF"];
+/** Rows a runAsync touched, where the driver says; unknown counts as touched. */
+const rowsChanged = (r: unknown): number | null => {
+  const n = (r as { changes?: unknown } | null)?.changes;
+  return typeof n === "number" ? n : null;
+};
 
 function newUuid(): string { return uuid(); }
 
-async function enqueueOp(args: {
+/*
+ * One lock for every change to the outbox (round 5).
+ *
+ * Enqueue (with its supersede), the flush's claim, its settle (hand-over,
+ * absorb, the op's new state) and the executor's own rewrites each read a
+ * row, merge in JS across awaits, and write it back. Nothing stopped an
+ * enqueue from running inside a flush's read-modify-write, or the other way
+ * round, so one overwrote the other: the newest figures were lost, or the
+ * older op's record of what it sent was (then a false CONFLICT). Each step
+ * now runs whole, one at a time. The network call is outside the lock, so a
+ * filing made while a request is on the wire still goes in at once.
+ * Recovery on open (SENDING back to QUEUED) runs inside getDb, before any
+ * of this can start.
+ */
+let tail: Promise<unknown> = Promise.resolve();
+function locked<T>(fn: () => Promise<T>): Promise<T> {
+  const run = tail.then(fn, fn);
+  tail = run.catch(() => undefined);
+  return run;
+}
+
+type EnqueueArgs = {
   entity: QueueEntity;
   op: string;
   payload: Record<string, unknown>;
   baseVersion?: number;
   idempotencyKey?: string;
-}): Promise<PendingOpRow> {
+  supersede?: (
+    pending: Record<string, unknown>,
+    next: Record<string, unknown>,
+    ctx: SupersedeContext,
+  ) => Record<string, unknown> | null;
+};
+function enqueueOp(args: EnqueueArgs): Promise<PendingOpRow> {
+  return locked(() => enqueueUnlocked(args));
+}
+async function enqueueUnlocked(args: EnqueueArgs): Promise<PendingOpRow> {
   const db = await getDb();
   const account=await getAccount();if(!account)throw new Error("Sign in first");
   const key = dedupeKey(args.entity, args.op);
+  /*
+   * The NEWEST active op for the record (round 4). It was the oldest, so in
+   * a chain (A sending, C queued behind it) a new filing found A again and
+   * queued a second behind-op, or folded newer figures into A while C with
+   * older ones waited to land after it. With the newest, a chain holds at
+   * most one waiting op, behind at most one sending one.
+   */
   const existing = await db.getFirstAsync<PendingOpRow>(
-    `SELECT * FROM pending_ops WHERE dedupe_key = ? AND state IN (${ACTIVE_STATES.map(() => "?").join(",")}) ORDER BY created_at ASC LIMIT 1`,
+    `SELECT * FROM pending_ops WHERE dedupe_key = ? AND state IN (${ACTIVE_STATES.map(() => "?").join(",")}) ORDER BY seq DESC LIMIT 1`,
     [key, ...ACTIVE_STATES],
   );
+  const supersede = args.supersede ?? chains[args.entity]?.supersede;
   if (existing && (await unseal(account,existing.payload)) === JSON.stringify(args.payload)) return existing;
+  /*
+   * A second go at the same record while the first still waits (fix round 2).
+   *
+   * Where the caller says how to fold the new payload into the pending one,
+   * the pending op is rewritten rather than a second op queued behind it: one
+   * op lands, with the latest figures. Only an op that is QUEUED or in
+   * BACKOFF is rewritten; one that is SENDING may be on the wire, so the new
+   * filing queues behind it as before. The idempotency key is kept, and the
+   * supersede function is responsible for making that safe (survey_entry
+   * remembers the first body the key may already have carried).
+   */
+  /*
+   * Round 3: the rewrite is conditional, and its row count is read. A flush
+   * may claim the row (SENDING) between the SELECT above and this UPDATE;
+   * then nothing was rewritten, and claiming success would lose the new
+   * figures. In that case, and whenever the pending op is already SENDING,
+   * the merged payload goes in as a NEW op queued behind it. The merge still
+   * records the pending op's first body and key, so the new op can recover
+   * the day the pending op creates and amend it.
+   */
+  let payload: Record<string, unknown> = args.payload;
+  let baseVersion = args.baseVersion ?? null;
+  if (existing && supersede) {
+    const merged = supersede(JSON.parse(await unseal(account, existing.payload)), args.payload,
+      { idempotencyKey: existing.idempotency_key, sent: maySent(existing), sending: existing.state === "SENDING" });
+    if (merged) {
+      payload = merged;
+      baseVersion = args.baseVersion ?? existing.base_version ?? null;
+      if (existing.state === "QUEUED" || existing.state === "BACKOFF") {
+        const sealed = await seal(account, JSON.stringify(merged));
+        const r = await db.runAsync(
+          "UPDATE pending_ops SET payload = ?, base_version = ?, updated_at = ? WHERE client_uuid = ? AND state IN ('QUEUED','BACKOFF')",
+          [sealed, baseVersion, Date.now(), existing.client_uuid],
+        );
+        if (rowsChanged(r) !== 0) return { ...existing, payload: sealed, base_version: baseVersion };
+      }
+    }
+  }
   const now = Date.now();
   // Monotonic within the outbox: two operations enqueued in the same
   // millisecond still have a defined order, which FIFO flush depends on.
@@ -166,9 +268,9 @@ async function enqueueOp(args: {
     entity: args.entity,
     op: args.op,
     dedupe_key: key,
-    payload: await seal(account,JSON.stringify(args.payload)),
+    payload: await seal(account,JSON.stringify(payload)),
     idempotency_key: args.idempotencyKey ?? newUuid(),
-    base_version: args.baseVersion ?? null,
+    base_version: baseVersion,
     state: "QUEUED",
     decision: null,
     retry_count: 0,
@@ -211,6 +313,46 @@ async function setOp(
   );
 }
 
+/**
+ * An op has been sent; tell the op queued behind it for the same record
+ * (round 4).
+ *
+ * The behind-op was started from a snapshot of this one, taken while it was
+ * on the wire, so it may not know everything this op went on to send (an
+ * amendment, say). Whatever the outcome, what this op sent is handed over.
+ * If this op is going back to wait (BACKOFF) and a newer filing is already
+ * waiting behind it, the newer one absorbs it and this row goes: two waiting
+ * ops for one record would land out of order. Returns true when absorbed.
+ */
+async function settleChain(op: PendingOpRow, outcome: string): Promise<boolean> {
+  const chain = chains[op.entity];
+  if (!chain) return false;
+  const db = await getDb();
+  const account = await getAccount();
+  if (!account) return false;
+  const newer = await db.getFirstAsync<PendingOpRow>(
+    "SELECT * FROM pending_ops WHERE dedupe_key=? AND seq>? AND state IN ('QUEUED','BACKOFF') ORDER BY seq DESC LIMIT 1",
+    [op.dedupe_key, op.seq],
+  );
+  if (!newer) return false;
+  const current = await db.getFirstAsync<PendingOpRow>("SELECT * FROM pending_ops WHERE client_uuid=?", [op.client_uuid]);
+  if (!current) return false;
+  const merged = chain.handOver(
+    JSON.parse(await unseal(account, current.payload)),
+    JSON.parse(await unseal(account, newer.payload)),
+    { idempotencyKey: op.idempotency_key, sent: true, sending: true },
+  );
+  await db.runAsync(
+    "UPDATE pending_ops SET payload=?, base_version=COALESCE(base_version, ?), updated_at=? WHERE client_uuid=? AND state IN ('QUEUED','BACKOFF')",
+    [await seal(account, JSON.stringify(merged)), current.base_version, Date.now(), newer.client_uuid],
+  );
+  if (outcome === "BACKOFF") {
+    await db.runAsync("DELETE FROM pending_ops WHERE client_uuid=?", [op.client_uuid]);
+    return true;
+  }
+  return false;
+}
+
 /** FIFO flush of all eligible ops. Never throws (per-op errors recorded). */
 async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
   const db = await getDb();
@@ -227,8 +369,33 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
       result.deferred += 1;
       continue;
     }
+    // Never ahead of an older op for the same record (round 4): the chain
+    // lands in the order it was filed.
+    const ahead = await db.getFirstAsync<{ n: number }>(
+      "SELECT count(*) AS n FROM pending_ops WHERE dedupe_key=? AND seq<? AND state IN ('QUEUED','SENDING','BACKOFF')",
+      [op.dedupe_key, op.seq],
+    );
+    if ((ahead?.n ?? 0) > 0) { result.deferred += 1; continue; }
+    /*
+     * Claimed, then read again (round 3). The rows were read in one SELECT
+     * before any was sent, so a supersede could rewrite a row this loop
+     * already holds: the stale payload went, was marked SUCCEEDED and
+     * cleared, and the newest figures were lost. Now the row is claimed only
+     * if it is still QUEUED/BACKOFF, and its payload and base are read after
+     * the claim, so what is sent is what the row says at that moment.
+     */
+    const claimed = await locked(async () => {
+      const claim = await db.runAsync(
+        "UPDATE pending_ops SET state='SENDING', error=NULL, updated_at=? WHERE client_uuid=? AND state IN ('QUEUED','BACKOFF')",
+        [Date.now(), op.client_uuid],
+      );
+      if (rowsChanged(claim) === 0) return false;
+      const fresh = await db.getFirstAsync<PendingOpRow>("SELECT * FROM pending_ops WHERE client_uuid=?", [op.client_uuid]);
+      if (fresh) Object.assign(op, { payload: fresh.payload, base_version: fresh.base_version });
+      return true;
+    });
+    if (!claimed) continue;
     result.attempted += 1;
-    await update(op.client_uuid, { state: "SENDING", error: null });
     // Decryption is not a network step: a payload this account's key cannot
     // open never will be, so it fails immediately rather than burning the whole
     // retry budget on a request that can never be built.
@@ -237,17 +404,22 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
       payload = await unseal(account, op.payload);
     } catch {
       result.failed += 1;
-      await update(op.client_uuid, {
+      await locked(() => update(op.client_uuid, {
         state: "FAILED",
         decision: "REJECTED",
         error: "payload could not be decrypted for the signed-in account",
-      });
+      }));
       continue;
     }
-    try {
-      const { status, body } = await executor({ ...op, payload });
+    // The request goes outside the lock; what came of it is written under it.
+    let sent: { status: number; body: unknown } | { err: unknown };
+    try { sent = await executor({ ...op, payload }); } catch (err) { sent = { err }; }
+    await locked(async () => {
+    if (!("err" in sent)) {
+      const { status, body } = sent;
       const decision = classifySyncResponse(status, body);
       const outcome = resolveOutcome(decision);
+      if (await settleChain(op, outcome.state)) { result.deferred += 1; return; }
       if (outcome.state === "SUCCEEDED") {
         result.succeeded += 1;
         // The server has it now, so the sealed body -- a photo can be megabytes
@@ -282,14 +454,18 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
           state: "FAILED", decision, error: code,
         });
       }
-    } catch (err) {
+    } else {
+      const { err } = sent;
       if (isApiError(err) && !err.retryable && err.status !== 401) {
+        await settleChain(op, "FAILED");
         result.failed += 1;
         await update(op.client_uuid, { state: "FAILED", decision: err.status === 409 ? "CONFLICT" : "REJECTED", error: describeApiError(err, err.message) });
-        continue;
+        return;
       }
       // Transport failure (network down, timeout) or a server that asked us
-      // to wait (429, 503): back off, keep op.
+      // to wait (429, 503): back off, keep op -- unless a newer filing for
+      // the same record is waiting behind it, which absorbs it (round 4).
+      if (await settleChain(op, "BACKOFF")) { result.deferred += 1; return; }
       const retryCount = op.retry_count + 1;
       const message = describeApiError(err, "unknown error");
       if (maxRetriesExceeded(retryCount, MAX_QUEUE_RETRIES)) {
@@ -313,8 +489,9 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
         });
       }
     }
+    });
   }
-  await purgeSettledOps(db);
+  await locked(() => purgeSettledOps(db));
   return result;
 }
 
@@ -326,17 +503,21 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
  * differs by one field is refused as a different request. Sealed with the
  * signed-in account's key like the original; a delivered row is left alone.
  */
-async function rewriteOp(clientUuid:string,payload:string):Promise<void> {
+function rewriteOp(clientUuid:string,payload:string):Promise<void> {
+ return locked(async()=>{
  const db=await getDb();
  const account=await getAccount();if(!account)throw new Error("Sign in first");
  await db.runAsync("UPDATE pending_ops SET payload=? WHERE client_uuid=? AND state IN ('QUEUED','SENDING','BACKOFF')",[await seal(account,payload),clientUuid]);
+ });
 }
 
-async function retryOp(clientUuid:string):Promise<void> {
+function retryOp(clientUuid:string):Promise<void> {
+ return locked(async()=>{
  const db=await getDb();
  const row=await db.getFirstAsync<PendingOpRow>('SELECT * FROM pending_ops WHERE client_uuid=?',[clientUuid]);
  if(!row||row.decision==='CONFLICT'||row.decision==='REJECTED')throw new Error('Review and correct this operation before submitting a new request.');
  await db.runAsync("UPDATE pending_ops SET state='QUEUED',retry_count=0,next_retry_at=NULL,error=NULL WHERE client_uuid=? AND state='FAILED'",[clientUuid]);
+ });
 }
 
 /**
@@ -346,16 +527,24 @@ async function retryOp(clientUuid:string):Promise<void> {
  * rows can go -- a row that is waiting or sending may still be delivered, and
  * discarding it would lose work the user has not seen fail.
  */
-async function discardOp(clientUuid:string):Promise<void> {
+function discardOp(clientUuid:string):Promise<void> {
+ return locked(async()=>{
  const db=await getDb();
  const row=await db.getFirstAsync<PendingOpRow>('SELECT * FROM pending_ops WHERE client_uuid=?',[clientUuid]);
  if(!row||row.state!=='FAILED')throw new Error('Only a failed operation can be discarded.');
  await db.runAsync("DELETE FROM pending_ops WHERE client_uuid=? AND state='FAILED'",[clientUuid]);
+ });
 }
 
 async function listOps():Promise<PendingOpRow[]> {
  return (await getDb()).getAllAsync<PendingOpRow>(LIST_OPS_SQL,[]);
 }
 
-return {enqueueOp,flushQueue,rewriteOp,retryOp,discardOp,listOps};
+async function readPayload(clientUuid:string):Promise<unknown> {
+ const db=await getDb(),account=await getAccount();if(!account)throw new Error("Sign in first");
+ const row=await db.getFirstAsync<PendingOpRow>('SELECT * FROM pending_ops WHERE client_uuid=?',[clientUuid]);
+ return row?JSON.parse(await unseal(account,row.payload)):null;
+}
+
+return {enqueueOp,flushQueue,rewriteOp,retryOp,discardOp,listOps,readPayload};
 }
