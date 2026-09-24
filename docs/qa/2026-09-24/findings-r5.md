@@ -46,11 +46,17 @@ checks fall back to a freshly-created record — noted inline). 20/20 pass, 0 fa
 R5-001 (P2, envelope inconsistency, not fixed — out of task-4 scope): `POST /api/v1/invoices`
 (`apps/api/src/modules/inventory/routes.ts:355`, `return reply.code(201).send(row)`) sends the created row
 bare, unlike every other create endpoint in the API (which wrap as `{data: row}`, including this same
-route's own GET/PATCH-lines/match). No web screen calls this route directly today (payables' only invoice
-UI is `VendorInvoiceLines.tsx`, which manages lines/match on an *existing* invoice and correctly reads the
-wrapped envelope from GET), so nothing in the current UI is broken by it. Flagging because any client
-written against the API's usual convention (as `smoke-deploy2.mjs` initially was) will silently get
-`undefined` for `.data.id`.
+route's own GET/PATCH-lines/match). Payables' own invoice UI (`VendorInvoiceLines.tsx`) only manages
+lines/match on an *existing* invoice and correctly reads the wrapped envelope from GET, so that screen is
+unaffected. **Correction (fix round 1, item 6):** the claim that no web screen creates an invoice through
+this route was wrong — the Inventory page's "Invoices" tab (`apps/web/app/inventory/page.tsx`) has a
+"Record invoice" panel built from the generic `<MutationForm path="invoices" .../>`, which does POST here.
+It was never actually broken by the bare shape, and works unchanged after the R5-001 fix wrapped it,
+because `MutationForm` submits through `apiRequest()`, whose `unwrap()` already tolerates both a bare body
+and a `{data:...}` envelope (see `apps/web/lib/apiClient.ts`) — confirmed with a dedicated DOM test
+(`apps/web/tests-dom/invoice-mutation-form-envelope.test.tsx`) rather than left to inspection. Flagging was
+still correct: any client written against the API's usual convention (as `smoke-deploy2.mjs` initially
+was) would have silently gotten `undefined` for `.data.id`.
 
 ## 2. Mobile ↔ web parity
 
@@ -358,3 +364,304 @@ web 963/963 (+ `tsc --noEmit` clean, `next build` exit 0).
   lists and in mobile) is correct. Flagging as a minor known cosmetic gap rather than fixing, to
   keep this batch's scope to the named items; the client has no holiday calendar loaded to compute
   it correctly client-side without an extra request per keystroke.
+  **Closed in fix round 1, item 2** — see §6: `GET /api/v1/leave/preview` now gives both clients
+  the server-computed figure directly, so this is no longer a gap.
+
+## 6. Fix round 1 (2026-09-25)
+
+Addresses seven numbered items raised against the round-1 write-up (§5), plus two owner decisions
+the coordinator added mid-round. TDD throughout; RED shown per item. Commits are grouped by the
+files they actually touch, same rationale as §5 — several items are concentrated in
+`apps/api/src/modules/leave/{routes.ts,openYear.ts}` and don't split along the numbered
+boundaries without forcing unrelated hunks apart.
+
+### Item 1 (important) — open-year skipped an employee whose next-year row existed at opening 0
+
+**Bug, exactly as reported.** Filing self-healed a `leave_balances` row for *every* year a leave
+touched — including a year the sandwich rule (D-012) leaves at 0 days, now possible since fix
+round 1 didn't exist yet when D-012 shipped in the original batch. Example given: paid CL Fri 31
+Dec–Sun 2 Jan with 1 Jan a holiday — the new year's share is 0, but a row got created anyway, and
+open-year then saw "row exists" and skipped it forever, so the employee started the year with
+nothing.
+
+**Fix, both sides:**
+- Filing (`apps/api/src/modules/leave/routes.ts`): a year the request costs 0 days in is skipped
+  entirely in the balance-check/self-heal loop — no row, no check. Same skip added to the
+  approval-time re-check and the debit loop (a year that had days at filing can become 0 at
+  approval if a holiday was added since — see item 3).
+- Open-year (`apps/api/src/modules/leave/openYear.ts`, new — see item 3 for why this got factored
+  out of the route): every (employee, type) pair is now classified into **created** (no row),
+  **filled** (a row exists, every ledger term is 0, and there is no `leave.balance.upsert` audit
+  entry for it — self-healed empty, not a deliberate admin 0) or **skipped** (a real balance, or a
+  manually-set one, even a manual 0 — the audit trail is the only way to tell a manual 0 from a
+  self-healed one). A **filled** row is backfilled to the entitlement and audited as
+  `leave.balance.open_year_fill`. New `filled` count in the response; the web dialog shows it.
+
+**RED.** `apps/api/test/s3.test.ts`, `describe("R5-008 fix round 1, item 1: ...")`: the exact
+scenario (Fri 31 Dec–Sun 2 Jan, 1 Jan a holiday, using two explicit holidays rather than relying
+on which weekday 31 Dec happens to fall on for determinism across run dates) — files with
+total_days=1, no row for the new year before or after approval, then open-year opens it fresh
+(`created:1, filled:0`). A second test seeds a genuinely self-healed empty row directly and a
+separate manually-set-to-0 row, and asserts open-year fills the first (`filled:1`) and leaves the
+second alone, and that a second open-year run doesn't re-fill what it already filled.
+
+**GREEN.** Both pass; full API suite green (see §7).
+
+**Files.** `apps/api/src/modules/leave/routes.ts`, `apps/api/src/modules/leave/openYear.ts` (new),
+`apps/api/test/s3.test.ts`. Commit `f776539` (bundled with items 2/3/4/5, see below) plus the
+`openYear.ts` extraction in `49a17df` (bundled with owner decision (b), see below).
+
+### Item 2 (important) — pre-submit day preview counted calendar days, not the sandwich-rule figure
+
+**Fix.** New `GET /api/v1/leave/preview?leave_type_id&from_date&to_date&employee_id?`
+(leave.request; `employee_id` for someone else needs leave.admin, same rule as filing) —
+returns `{total_days, years:[{year,days}], is_paid}` computed by filing's own `daysByYear` +
+`sandwichSkipDates`, for the target employee's own effective holiday scope. One function, so the
+preview and the actual charge cannot disagree. A range the sandwich rule reduces to 0 shows a
+warning ("Every day in this range is a Sunday or a holiday") instead of "0 days".
+
+Wired into both clients: `apps/web/components/LeaveRequestForm.tsx` (replacing the old
+`inclusiveDays()` client-side count) and `apps/mobile/app/(tabs)/leave.tsx` (new preview line,
+this screen had no day-count preview at all before).
+
+**RED.** `apps/api/test/s3.test.ts`, `describe("GET /leave/preview ...")`: matches
+`daysByYear`+sandwich exactly for a Fri–Mon paid range; matches what filing the same range
+actually charges (direct comparison, not two hand-computed numbers); counts every calendar day for
+LOP ignoring holidays; 401 anon; 422 DATE_RANGE; 404 unknown type; 403 previewing someone else
+without leave.admin; 200 for leave.admin previewing someone else. `apps/web/tests-dom/leave-request-form-preview.test.tsx`
+(new): the badge shows the server's total (3), not the calendar count (4) for a 4-day range with
+one excluded day; a range reduced to 0 shows the warning, not "0 days".
+
+**GREEN.** All pass; web suite green, `tsc --noEmit` clean, `next build` exit 0 (see §7).
+
+**Files.** `apps/api/src/modules/leave/routes.ts`, `apps/api/test/s3.test.ts`,
+`apps/web/lib/leave.ts`, `apps/web/components/LeaveRequestForm.tsx`,
+`apps/web/tests-dom/leave-request-form-preview.test.tsx` (new), `apps/mobile/src/api/endpoints.ts`,
+`apps/mobile/app/(tabs)/leave.tsx`. Commit `f776539`.
+
+### Item 3 (important) — stored total_days could disagree with what was actually debited
+
+**Fix.** total_days is now one source of truth. At the step that finally approves a request (the
+same step that debits), the split is recomputed fresh — same as the approval-time balance
+re-check already did — and persisted as `total_days` **and** a new `debited_days` JSONB column
+(`[{year,days}]`, migration **102** — 101 is reserved for concurrently developed work) in the
+same `UPDATE` as the status change, then the debit loop below reuses that identical computation
+(one holiday query, one split, not two that could disagree). List/detail/web/mobile all read
+`total_days`, so they show the figure actually charged.
+
+**RED.** `apps/api/test/s3.test.ts`, in `describe("leave decisions", ...)`: files a paid Fri–Mon
+CL request with no holiday configured (total_days=3 at filing, `debited_days:[]` since nothing's
+debited yet), adds a holiday on the Saturday *after* filing but before approval, approves, and
+asserts the decision response's `total_days` is now 2 (not the stale 3), `debited_days` is
+`[{year,days:2}]`, the actual `leave_balances.consumed` is 2, and the GET detail afterward also
+shows 2.
+
+**GREEN.** Passes; full API suite green.
+
+**Files.** `apps/api/src/database/migrations/102_leave_request_debited_days.sql` (new),
+`apps/api/src/database/migrate.ts`, `apps/api/src/modules/leave/routes.ts`,
+`apps/api/test/s3.test.ts`. Commit `f776539`.
+
+### Item 4 (minor) — an all-excluded range filed as a 0-day request instead of refusing
+
+**Fix.** A paid range the sandwich rule reduces to 0 days now gets 422 `ALL_DAYS_EXCLUDED`
+("Every day in this range is a Sunday or a holiday; there is nothing to charge") at filing,
+before any balance check or approval-chain assembly runs.
+
+**RED.** `apps/api/test/s3.test.ts`, in the D-012 describe block: a paid range spanning exactly a
+Saturday (declared a holiday) and the following Sunday gets 422 `ALL_DAYS_EXCLUDED`, and no
+`leave_requests` row is created.
+
+**GREEN.** Passes.
+
+**Files.** `apps/api/src/modules/leave/routes.ts`, `apps/api/test/s3.test.ts`. Commit `f776539`.
+
+### Item 5 (minor) — open-year's year check used a fixed IST year; banner sourced "next year" from the browser
+
+**Fix.**
+- `currentOrgYear()` (`apps/api/src/modules/leave/openYear.ts`) now reads
+  `organizations.settings->>'timezone'` (default Asia/Kolkata) via the same `orgTodaySql`/
+  `orgZoneSql` helpers D-006/D-013 already use, replacing the fixed-IST `currentIstYear()` for
+  this one check (that function stays fixed-IST for the unrelated per-request backdating rule
+  elsewhere in the same file — not in scope here).
+- `year` in the open-year request body is now **optional**: omit it and the server resolves "next
+  year" itself and echoes it back in the response. The web button/banner/dialog now source "next
+  year" from a dry-run call with no `year` (`openYearBalances({dry_run:true})`), not
+  `new Date().getFullYear()` — a skewed or differently-zoned browser clock can no longer ask to
+  open the wrong year.
+
+**RED.** `apps/api/test/s3.test.ts`: sets the org's `settings.timezone` to a non-Kolkata zone
+(`Pacific/Kiritimati`) and confirms the year-bound error message names the year computed
+independently via that same zone (proves the org-settings lookup is real, not just coincidentally
+equal to IST today) — and that the same zone drives the omitted-`year` default. Web:
+`apps/web/tests-dom/leave-open-year.test.tsx` rewritten for the new resolve-then-use flow: the
+label-resolving query fires with no `year`; the dialog's own preview then asks for the resolved
+year specifically; the banner still gates on December but no longer computes its own year.
+
+**GREEN.** All pass.
+
+**Files.** `apps/api/src/modules/leave/openYear.ts`, `apps/api/src/modules/leave/routes.ts`,
+`packages/shared/src/s3.ts`, `apps/api/test/s3.test.ts`, `apps/web/lib/leave.ts`,
+`apps/web/lib/query-keys.ts`, `apps/web/components/LeaveBalancesPanel.tsx`,
+`apps/web/tests-dom/leave-open-year.test.tsx`. Commit `f776539`.
+
+### Item 6 (minor) — correcting the "no web screen creates an invoice" claim
+
+**Correction, not a code fix.** `apps/web/app/inventory/page.tsx`'s "Invoices" tab has a "Record
+invoice" panel built from `<MutationForm path="invoices" .../>`, which does POST here — the
+original R5-001 write-up (§5) was wrong to say no screen does. It was never actually at risk from
+the R5-001 envelope change: `MutationForm` submits through `apiRequest()`, whose `unwrap()`
+already tolerates both a bare body and a `{data:...}` envelope, so `onSaved` received the plain
+row either way, before and after. Confirmed with a dedicated DOM test rather than left to
+inspection, and the original paragraph in §1 corrected in place.
+
+**Files.** `apps/web/tests-dom/invoice-mutation-form-envelope.test.tsx` (new),
+`docs/qa/2026-09-24/findings-r5.md` (§1 correction). Commit `622e31d`.
+
+### Item 7 (optional) — remaining mobile *Format.ts local tone maps
+
+**Done: approvals.** Web's generic `financialTone` had no case for an approval instance's
+`RECALLED` (silent neutral default) and disagreed with mobile's own `SUPERSEDED` (mobile read it
+danger; web reads `SUPERSEDED` info for every other document type that carries it). New
+`APPROVAL_STATUS_TONES` (`packages/shared/src/approvals.ts`) is the one map both now read:
+`RECALLED` closes the web gap as danger (mobile's existing value), `SUPERSEDED` keeps web's
+existing info.
+
+**Deferred: projects and the rest.** `apps/mobile/src/projectsFormat.ts`'s `projectStatusTone`
+and the remaining local tone maps were not checked against their web counterparts this round —
+approvals was the one with an actual behavioural mismatch found while triaging item 7; a full
+sweep of the others for cosmetic-only refactors (no divergence, just duplicated code) is left
+undone rather than expanded further under this round's scope.
+
+**RED.** `packages/shared/src/approvals.test.ts`: every `APPROVAL_STATUSES` value has an entry;
+`RECALLED`→danger, `SUPERSEDED`→info. `apps/mobile/test/approvals-format.test.ts`: rewrote the
+existing `SUPERSEDED`→danger assertion to `SUPERSEDED`→info (the old one pinned the mismatch).
+`apps/web/tests/finance.test.ts`: new `approvalTone` tests.
+
+**GREEN.** All pass.
+
+**Files.** `packages/shared/src/approvals.ts` (+ `.test.ts`), `apps/mobile/src/approvalsFormat.ts`
+(+ `.test.ts`), `apps/web/lib/finance.ts`, `apps/web/app/approvals/page.tsx`,
+`apps/web/tests/finance.test.ts`. Commit `fbdc734`.
+
+### Owner decision (a) — leave step-2 approver must be the org's HR manager, never "the oldest admin"
+
+**Bug, exactly as reported.** `step2Approver` picked whichever of HR_MANAGER/ADMIN/SUPER_ADMIN had
+the *oldest account* — an ADMIN account created before the org's HR_MANAGER account silently won
+every time, so HR could go an entire deployment without ever seeing this step.
+
+**Fix.** Two-phase, both excluding the applicant's own account:
+1. The org's active HR_MANAGER, deterministically the **lowest user id** (org settings carries no
+   designated-HR-approver override today; this is the ordering until one is added).
+2. Only if none exists (or the only one is the applicant): fall back to ADMIN/SUPER_ADMIN, same
+   lowest-id rule.
+
+The applicant exclusion matters on its own: without it, an applicant who is themselves the org's
+only/lowest-id HR manager would resolve to themselves, and `assembleApprovalChain`'s existing
+self-approval check would then just *drop* the step rather than hand it to the next eligible
+person — the wrong outcome for "the next eligible person" the decision calls for.
+
+**RED.** `apps/api/test/s3.test.ts`, `describe("leave step-2 approver: HR manager preferred over
+admin ...")`: (1) HR manager present → routes to them, not admin; (2) no HR manager in the org →
+falls back to admin (regression-covers the pre-existing behaviour for the common case); (3)
+applicant is the org's own lowest-id HR manager → routes to the *other* HR manager (determined by
+querying actual id order, since UUIDs aren't creation-ordered — this makes the test deterministic
+regardless of which account happens to get the lower id), never back to admin and never to the
+applicant.
+
+**Found by running the suite, not by inspection:** two pre-existing tests broke as a direct,
+correct consequence of this behaviour change --
+`apps/api/test/catalogue/ut-auth.test.ts`, UT-AUTH-06 "denies an out-of-scope user who merely
+holds the decide grant" used HR_MANAGER as its "holds leave.decide but is not the named approver"
+bystander -- exactly the role this decision now *does* route to. Switched the bystander to
+PROJECT_MANAGER, which holds leave.decide too but has no path to being picked for that test's
+employee either way (no `reports_to` relationship, not HR/admin).
+
+**GREEN.** All pass; full suite green.
+
+**Files.** `apps/api/src/modules/leave/routes.ts`, `apps/api/test/s3.test.ts`,
+`apps/api/test/catalogue/ut-auth.test.ts`. Commit `b9f3557`.
+
+### Owner decision (b) — leave year-open runs automatically on 1 January, org timezone
+
+**Fix.** Extracted the open-year action itself out of the HTTP route into
+`apps/api/src/modules/leave/openYear.ts` (`classify`/`previewOpenYear`/`runOpenYear`, unchanged
+behaviour) so the manual endpoint and a new scheduled job call **exactly the same implementation**.
+
+New `apps/api/src/modules/jobs/leaveYearOpen.ts`, wired into the existing worker pass (`runJobs`,
+`apps/api/src/modules/automation/worker.ts`) the same way scheduled reports and SLA alerts already
+are (`isolated(...)`, so one org's failure doesn't stop the rest): for every active org, resolves
+its own current year (`currentOrgYear`, same org-timezone source as item 5) and, if that
+(org, year) pair hasn't been auto-opened yet, runs it — idempotent (`ON CONFLICT DO NOTHING` on
+the `leave_balances` natural key, same as the manual action), lapse-only (no carry-forward),
+audited with `actor_id NULL` and `triggered_by:'scheduled_job'` in `after_state` so the trail
+distinguishes it from a human's click. The manual button and December banner are unchanged and
+stay available regardless.
+
+Migration **111** (102 already used this batch; 103–110 reserved for concurrently developed
+migrations) adds `leave_year_open_runs (org_id, year PRIMARY KEY, run_at, created, filled,
+skipped, total)` — purely a per-(org, year) "already ran" marker, so a worker tick every few
+seconds doesn't re-run the same pair for the rest of the year.
+
+**Date gate.** Deliberately not a separate check: a year value only ever becomes an org's "current
+year" once its own calendar actually reaches 1 January of it (`currentOrgYear`'s definition), so
+there is no separate before/after-the-boundary state to construct. This is also why it can't be
+tested by faking "before 1 Jan" — the test database's clock can't be frozen from inside a test.
+What's directly tested is the mechanism that gate depends on: the per-(org, year) tracking is
+exactly that, per year, not a one-time-ever flag.
+
+**RED.** `apps/api/test/s3.test.ts`, `describe("automatic leave year-open ...")`: (1) opens the
+org's current year, records the tracking row, audits with `actor_id NULL` and
+`triggered_by:'scheduled_job'`; (2) a second run makes no further changes and adds no further
+tracking row (idempotent); (3) two orgs are opened independently, each with its own tracking row
+and its own balances; (4) a tracking row already present for `year-1` does not block `year` from
+being opened, and the job never reaches into `year+1` — the closest a test in this environment can
+get to proving the per-year gate without a fakeable clock.
+
+**GREEN.** All pass; full API suite green, `fresh-database.test.ts` confirms migration 111 (and
+102) apply cleanly to an empty database.
+
+**Files.** `apps/api/src/modules/leave/openYear.ts` (new), `apps/api/src/modules/jobs/leaveYearOpen.ts`
+(new), `apps/api/src/modules/automation/worker.ts`, `apps/api/src/database/migrations/111_leave_year_open_runs.sql`
+(new), `apps/api/src/database/migrate.ts`, `apps/api/test/s3.test.ts`, `apps/api/test/tables.ts`.
+Commit `49a17df`.
+
+### Suite fixes found only by running the suite (not a numbered item)
+
+Four pre-existing tests broke as accurate, intended consequences of behaviour actually changing
+this round, not from any code defect — fixed in commit `dfde7e5`:
+- `apps/api/test/s3.test.ts`: open-year's dry-run test still expected the old placeholder
+  `created:0`; dry-run now reports the real would-be created/filled counts (item 1's response
+  redesign).
+- `apps/api/test/catalogue/ut-auth.test.ts` UT-AUTH-06 (two tests): one filed a single-day paid
+  request on a date that happens to be a Sunday under this run's calendar (now correctly refused,
+  D-012); the other is owner decision (a)'s bystander issue, above.
+- `apps/api/test/catalogue/ut-lp.test.ts` UT-LP-02: the overlap-then-cancel probe used a
+  single-day Sunday too.
+
+## 7. Fix round 1 — verification
+
+Full suites, VM slot `e`, after every commit in this round:
+- **shared**: vitest, 29 files / 1029 tests, all green.
+- **api**: vitest, 80 files / 2170 tests. One unrelated failure on a run that happened to cross a
+  real midnight during an unusually contended (multiple other agents' concurrent slots) 19-minute
+  run: `test/catalogue/survey-operations.test.ts` — "raises a village past the date somebody
+  committed to" hardcodes an expected "5 days ago" against a fixed due date, which becomes "6 days
+  ago" the instant the calendar actually turns over. Confirmed unrelated to this round (survey
+  overdue-alert wording, nothing to do with leave/payables/invoices/approvals) and confirmed to
+  fail identically in isolation on today's date regardless of load — a pre-existing date-drift
+  fragility, not a regression, left unfixed as out of scope for this round.
+- **mobile**: `tsx --test`, 420/420; `tsc --noEmit` clean (after hardlinking the missing
+  `expo-image-picker`/`expo-document-picker` from `~/sl-test/node_modules` into slot `e`, per
+  standing instructions).
+- **web**: vitest, 81 files / 969 tests. Two timeouts on the full contended run
+  (`tests-dom/documents-legal-hold.test.tsx`, `tests-dom/survey-tabs.test.tsx`, both `Test timed
+  out in 5000ms`) that passed cleanly (37/37) when re-run in isolation seconds later — confirmed
+  resource-contention flakes from the shared VM, not regressions, in modules this round never
+  touched. `tsc --noEmit` clean. `next build` (`NEXT_VERIFY_BUILD=1`) exit 0, all 73 routes
+  including `/leave/balances` and `/leave/new`.
+
+Migrations this round: **102** (`leave_requests.debited_days`), **111**
+(`leave_year_open_runs`) — 101 and 103–110 reserved for concurrently developed work per the
+coordinator's instructions. Both confirmed to apply cleanly to an empty database
+(`fresh-database.test.ts`).
