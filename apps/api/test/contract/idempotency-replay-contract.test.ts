@@ -22,13 +22,19 @@
  *    pure read/dry-run, or a write that is already naturally idempotent
  *    (upsert-on-conflict, a version-fenced decision, a PUT full-replace, a
  *    fan-out to already-keyed sub-requests).
- *  - Neither -- currently exactly one route, `POST /api/v1/boards` (finding
- *    C-009 below): it replays a *stored* response for a reused key, but
- *    unlike every other wrapped route, it never checks whether the second
- *    request's body actually matches the first. A caller who reuses a key
- *    for a genuinely different board silently gets back the *first* board's
- *    response, and no second board is ever created -- the opposite of a
- *    500, but just as wrong: the write is silently dropped, unflagged.
+ *
+ * C-009 (fixed): `POST /api/v1/boards` used to call `replayIfSeen()`/
+ * `storeIdempotentResponse()` directly -- its own bare pair, not the
+ * `mutationRoute()` wrapper every sibling create route in s5/routes.ts uses
+ * -- and `replayIfSeen()` only matches on key+method+path, never checking
+ * the stored request's body against a new one. A reused key with a
+ * genuinely different body silently replayed the *first* board's response
+ * and never created a second board. Moved onto `mutationRoute()`
+ * (s5/routes.ts, this commit), which gives it the same body-hash check
+ * every other wrapped route already has. Every bare (non-`db`-scoped, i.e.
+ * not already running inside a `mutationRoute()`/`mutate()` transaction)
+ * caller of `replayIfSeen`/`storeIdempotentResponse` was grepped for across
+ * every module at the time of the fix; `/boards` was the only one.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildWorld, idem, type CatalogueWorld } from "../catalogue/fixture.js";
@@ -40,14 +46,8 @@ afterAll(async () => { await w.app.close(); await w.pool.end(); });
 
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-/** The one route known, by direct reproduction below, not to honour a body
- *  mismatch on a reused key -- see the file header and findings-contract.md
- *  C-009. Carved out of the "every write route is accounted for" assertion
- *  so that assertion keeps proving the *rest* of the surface is clean. */
-const KNOWN_UNSAFE_REPLAY = new Set(["POST /api/v1/boards"]);
-
 describe("idempotency classification coverage", () => {
-  it("every write route is mutate/mutationRoute-covered, explicitly exempt, or a documented finding", () => {
+  it("every write route is mutate/mutationRoute-covered or explicitly exempt", () => {
     const unaccounted = w.app.routeRegistry
       .filter((r) => WRITE_METHODS.has(r.method))
       .map((r) => `${r.method} ${r.url}`)
@@ -55,7 +55,6 @@ describe("idempotency classification coverage", () => {
         const [method, url] = [k.split(" ")[0]!, k.split(" ").slice(1).join(" ")];
         if (idempotencyModeOf(method, url) !== "none") return false;
         if (IDEMPOTENCY_EXEMPT.has(k)) return false;
-        if (KNOWN_UNSAFE_REPLAY.has(k)) return false;
         return true;
       });
     expect(unaccounted, unaccounted.join("\n")).toEqual([]);
@@ -175,32 +174,44 @@ describe("idempotency-key replay (representative per wrapper/module)", () => {
   });
 });
 
-describe("C-009: POST /api/v1/boards does not honour a body mismatch on a reused key", () => {
-  it("reproduces the silent-drop: second board is never created, first board's response is replayed instead", async () => {
+describe("C-009 (fixed): POST /api/v1/boards now honours a body mismatch on a reused key", () => {
+  it("mutationRoute()-wrapped create (boards): same key+body replays once, different body 409s IDEMPOTENCY_MISMATCH -- not a silent replay of board A", async () => {
     const key = idem();
-    const bodyA = { project_id: w.activeProject, name: "Idem Board A", view_type: "LIST" };
-    const bodyB = { project_id: w.activeProject, name: "Idem Board B (different)", view_type: "LIST" };
+    const name = `Idem Board ${Date.now().toString(36)}`;
+    const bodyA = { project_id: w.activeProject, name, view_type: "LIST" };
+    const bodyB = { project_id: w.activeProject, name: `${name} (different)`, view_type: "LIST" };
 
     const first = await w.app.inject({
       method: "POST", url: "/api/v1/boards", headers: { ...w.admin, ...key }, payload: bodyA,
     });
     expect(first.statusCode).toBe(201);
-    const firstBody = first.json();
-    expect(firstBody.name).toBe("Idem Board A");
 
-    // What every other wrapped create route does here is 409
-    // IDEMPOTENCY_CONFLICT/IDEMPOTENCY_MISMATCH. `/boards` instead silently
-    // replays board A's stored response -- no error, no second board.
-    const second = await w.app.inject({
-      method: "POST", url: "/api/v1/boards", headers: { ...w.admin, ...key }, payload: bodyB,
+    const replay = await w.app.inject({
+      method: "POST", url: "/api/v1/boards", headers: { ...w.admin, ...key }, payload: bodyA,
     });
-    expect(second.statusCode).toBe(201);
-    expect(second.json()).toEqual(firstBody); // board A's response, not an error, not board B
+    expect(replay.statusCode).toBe(first.statusCode);
+    expect(replay.json()).toEqual(first.json());
 
     const count = await w.pool.query(
-      "SELECT count(*)::int AS n FROM boards WHERE project_id = $1 AND name LIKE 'Idem Board%'",
-      [w.activeProject],
+      "SELECT count(*)::int AS n FROM boards WHERE project_id = $1 AND name = $2",
+      [w.activeProject, name],
     );
-    expect(count.rows[0].n, "board B was silently never created").toBe(1);
+    expect(count.rows[0].n, "same key + same body must have exactly one effect").toBe(1);
+
+    // Before the fix this silently replayed board A's stored response (201,
+    // board A's body) instead of rejecting -- no error, and board B was
+    // never created. It must now behave exactly like every other
+    // mutationRoute()-wrapped create route.
+    const mismatch = await w.app.inject({
+      method: "POST", url: "/api/v1/boards", headers: { ...w.admin, ...key }, payload: bodyB,
+    });
+    expect(mismatch.statusCode).toBe(409);
+    expect(mismatch.json().code).toBe("IDEMPOTENCY_MISMATCH");
+
+    const stillOne = await w.pool.query(
+      "SELECT count(*)::int AS n FROM boards WHERE project_id = $1 AND name LIKE $2",
+      [w.activeProject, `${name}%`],
+    );
+    expect(stillOne.rows[0].n, "the mismatched body must never create a second board").toBe(1);
   });
 });
