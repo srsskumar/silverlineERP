@@ -107,7 +107,7 @@ const positiveMoneyField = (message = 'Enter an amount greater than 0, with at m
  * Every other optional field in this file already tolerates `""` this way;
  * enum fields need the same treatment.
  */
-const optionalEnum = <T extends [string, ...string[]]>(values: T) =>
+const optionalEnum = <T extends readonly [string, ...string[]]>(values: T) =>
   z
     .enum(values)
     .optional()
