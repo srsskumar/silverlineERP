@@ -88,6 +88,58 @@ describe("policy configuration", () => {
     expect(res.status).toBe(422);
     expect(res.body.code).toBe("NO_APPROVAL_POLICY");
   });
+
+  describe("refuses a ladder that could never clear (fix round 2, item 2(a))", () => {
+    it("refuses the same named approver at two levels", async () => {
+      const res = await post(w.admin, "/api/v1/approval-policies", {
+        document_type: "EXPENSE_CLAIM", name: `Same approver twice ${uniq()}`,
+        levels: [
+          { sequence: 1, min_amount: 0, max_amount: 50_000, approver_user_id: w.roleUserId.PROJECT_MANAGER },
+          { sequence: 2, min_amount: 50_000, max_amount: null, approver_user_id: w.roleUserId.PROJECT_MANAGER },
+        ],
+      });
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe("LADDER_UNRESOLVABLE");
+      expect(res.body.message).toContain("levels 1 and 2");
+    });
+
+    it("refuses a role at two levels when the organisation has only one holder of it", async () => {
+      // This fixture creates exactly one ADMIN-role user.
+      const res = await post(w.admin, "/api/v1/approval-policies", {
+        document_type: "EXPENSE_CLAIM", name: `Only one admin ${uniq()}`,
+        levels: [
+          { sequence: 1, min_amount: 0, max_amount: 50_000, approver_role: "ADMIN" },
+          { sequence: 2, min_amount: 50_000, max_amount: null, approver_role: "ADMIN" },
+        ],
+      });
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe("LADDER_UNRESOLVABLE");
+      expect(res.body.message).toContain("levels 1 and 2");
+    });
+
+    it("allows a role at two levels once a second holder exists", async () => {
+      await createUser(w.pool, w.orgId, { username: `cat_second_admin_${uniq()}`, roles: ["ADMIN"] });
+      const res = await post(w.admin, "/api/v1/approval-policies", {
+        document_type: "EXPENSE_CLAIM", name: `Two admins ${uniq()}`,
+        levels: [
+          { sequence: 1, min_amount: 0, max_amount: 50_000, approver_role: "ADMIN" },
+          { sequence: 2, min_amount: 50_000, max_amount: null, approver_role: "ADMIN" },
+        ],
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+    });
+
+    it("leaves two different named approvers, or two different roles, alone", async () => {
+      const res = await post(w.admin, "/api/v1/approval-policies", {
+        document_type: "EXPENSE_CLAIM", name: `Different people ${uniq()}`,
+        levels: [
+          { sequence: 1, min_amount: 0, max_amount: 50_000, approver_role: "TEAM_LEAD" },
+          { sequence: 2, min_amount: 50_000, max_amount: null, approver_user_id: w.roleUserId.PROJECT_MANAGER },
+        ],
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+    });
+  });
 });
 
 describe("organisation-wide fallback approval ladders (owner decision 2026-09-24)", () => {
@@ -633,6 +685,41 @@ describe("segregation of duties (fix round 1, I3)", () => {
       `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
     expect(level2.status, JSON.stringify(level2.body)).toBe(422);
     expect(level2.body.code).toBe("SEGREGATION_OF_DUTIES");
+    expect(level2.body.message).toContain("administrator");
+    expect(level2.body.message).toContain("PM then ADMIN");
+  });
+
+  it("keeps a segregation-blocked item out of the inbox of whoever it would refuse (fix round 2, item 2(c))", async () => {
+    const policy = await post(w.admin, "/api/v1/approval-policies", {
+      document_type: "ADVANCE", name: `PM then ADMIN ${uniq()}`,
+      levels: [
+        { sequence: 1, min_amount: 0, max_amount: 500_000, approver_role: "PROJECT_MANAGER" },
+        { sequence: 2, min_amount: 500_000, max_amount: null, approver_role: "ADMIN" },
+      ],
+    });
+    expect(policy.status, JSON.stringify(policy.body)).toBe(201);
+
+    const today = workDate();
+    const delegation = await post(w.role.ADMIN, "/api/v1/approval-delegations", {
+      to_user_id: w.roleUserId.PROJECT_MANAGER, valid_from: today, valid_to: today, reason: "Covering for admin",
+    });
+    expect(delegation.status, JSON.stringify(delegation.body)).toBe(201);
+
+    const res = await submit(600_000, "ADVANCE", w.role.EMPLOYEE);
+    const level1 = await post({ ...w.role.PROJECT_MANAGER, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(level1.status, JSON.stringify(level1.body)).toBe(200);
+
+    // PM cleared level 1; level 2 is now pending and PM's ADMIN delegation
+    // would otherwise make it look actionable to them -- but canAct() would
+    // refuse it (SEGREGATION_OF_DUTIES), so it must not be in their inbox.
+    const pmInbox = await get(w.role.PROJECT_MANAGER, "/api/v1/approvals/inbox");
+    expect(pmInbox.status, JSON.stringify(pmInbox.body)).toBe(200);
+    expect(pmInbox.data.some((r: any) => r.id === res.data.id)).toBe(false);
+
+    // The real ADMIN still sees it.
+    const adminInbox = await get(w.role.ADMIN, "/api/v1/approvals/inbox");
+    expect(adminInbox.data.some((r: any) => r.id === res.data.id)).toBe(true);
   });
 
   it("still lets the real ADMIN, or another of its delegates, decide L2", async () => {

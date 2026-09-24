@@ -137,6 +137,63 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
   }
 
   /** The policy that governs a document: project override first, then org. */
+  /**
+   * Whether a ladder names the same only-possible person at two levels (fix
+   * round 2, item 2(a)).
+   *
+   * Segregation of duties (I3, fix round 1) refuses the same physical
+   * person -- and any delegate acting on their behalf -- a second level of
+   * one instance, unconditionally. Two patterns make that certain rather
+   * than incidental:
+   *
+   *  - the same approver_user_id named at two levels: always the same
+   *    person, so the ladder could never clear no matter who else is
+   *    involved;
+   *  - the same approver_role at two levels when the organisation
+   *    currently has at most one holder of it: nobody else could stand in
+   *    by role, and I3 also refuses that one holder's own delegate (the
+   *    principal behind a delegation counts as having "decided" too).
+   *
+   * A role held by two or more people is left alone -- a different person
+   * legitimately clearing each level is exactly how the ladder is meant to
+   * work, and who holds a role can change after the policy is saved.
+   */
+  async function ladderUnresolvableReason(
+    db: Pool | PoolClient, orgId: string,
+    levels: { sequence: number; approver_role?: string | null; approver_user_id?: string | null }[],
+  ): Promise<string | null> {
+    const byUser = new Map<string, number[]>();
+    const byRole = new Map<string, number[]>();
+    for (const l of levels) {
+      if (l.approver_user_id) {
+        byUser.set(l.approver_user_id, [...(byUser.get(l.approver_user_id) ?? []), l.sequence]);
+      }
+      if (l.approver_role) {
+        byRole.set(l.approver_role, [...(byRole.get(l.approver_role) ?? []), l.sequence]);
+      }
+    }
+    for (const [userId, sequences] of byUser) {
+      if (sequences.length < 2) continue;
+      const named = (await db.query('SELECT username FROM users WHERE id = $1', [userId])).rows[0];
+      return `${named?.username ?? 'The same person'} is named as the approver for levels `
+        + `${sequences.join(' and ')}. The same person can never decide two levels of one request.`;
+    }
+    for (const [role, sequences] of byRole) {
+      if (sequences.length < 2) continue;
+      const holders = (await db.query(
+        `SELECT count(DISTINCT ur.user_id)::int AS n
+           FROM user_roles ur JOIN roles r ON r.id = ur.role_id JOIN users u ON u.id = ur.user_id
+          WHERE r.code = $1 AND u.org_id = $2`, [role, orgId])).rows[0];
+      if (Number(holders.n) <= 1) {
+        return `${role.replaceAll('_', ' ').toLowerCase()} is named as the approver for levels `
+          + `${sequences.join(' and ')}, and this organisation currently has ${Number(holders.n)} `
+          + `holder${Number(holders.n) === 1 ? '' : 's'} of that role. The same person can never `
+          + `decide two levels of one request.`;
+      }
+    }
+    return null;
+  }
+
   async function policyFor(db: Pool | PoolClient, orgId: string, documentType: string, projectId?: string | null) {
     const rows = (await db.query(
       `SELECT * FROM approval_policies
@@ -211,6 +268,10 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     const u = actor(req), input = parse(approvalPolicySchema, req.body);
     const row = await mutate(pool, req, 'approval.policy.create', 'approval_policy', async db => {
       if (input.project_id) await inOrg(db, 'projects', input.project_id, u.orgId);
+      // Fix round 2, item 2(a): refuse a ladder that could never clear,
+      // before touching the policy this would otherwise replace.
+      const unresolvable = await ladderUnresolvableReason(db, u.orgId, input.levels);
+      if (unresolvable) fail('LADDER_UNRESOLVABLE', unresolvable);
       // Replacing rather than stacking: two active policies for one document
       // type would make routing ambiguous, and the unique index refuses it.
       await db.query(
@@ -418,12 +479,30 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
          AND ($5::boolean OR i.project_id IS NULL OR i.project_id = ANY($6::uuid[]))
        ORDER BY s.pending_since NULLS LAST, i.created_at`,
       [u.orgId, roleMatch, [u.id, ...principals], u.id, scopes.global, scopes.projects])).rows;
-    // Only the step that is actually next may be acted on.
+    // Only a step this actor could actually decide right now belongs in the
+    // inbox -- reusing canAct() itself (fix round 2, item 2(c)) rather than
+    // re-deriving a second opinion of its rules, so sequence, delegation and
+    // segregation of duties (I2/I3) all filter the list exactly as they
+    // would refuse the decision. Without this, an item only a policy fix --
+    // not this person, and not any delegate of theirs -- could ever clear
+    // (the same person named twice, or the sole holder of a role at two
+    // levels) sat in the inbox looking actionable and 422'd on click.
     const actionable = [];
     for (const row of rows) {
       const steps = await stepsFor(pool, String(row.id));
-      const next = nextActionableStep(steps);
-      if (next && next.sequence === Number(row.sequence)) actionable.push(row);
+      const step = steps.find(s => s.id === String(row.step_id)) ?? null;
+      const decision = canAct({
+        step, steps,
+        actorUserId: u.id,
+        actorRoles: u.roles ?? [],
+        requesterUserId: String(row.requested_by),
+        delegations,
+        documentType: row.document_type as ApprovalDocumentType,
+        today: today(),
+        hasSelfApproveOverride: u.permissions.includes('approval.self_approve'),
+        projectId: row.project_id ? String(row.project_id) : null,
+      });
+      if (decision.allowed) actionable.push(row);
     }
     return { data: actionable };
   });
@@ -480,6 +559,19 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
               fail('OUT_OF_SEQUENCE',
                 `Level ${step!.sequence} must decide before your level ${laterRung.sequence}.`);
             }
+          }
+          if (decision.code === 'SEGREGATION_OF_DUTIES') {
+            // Fix round 2, item 2(b): this is a policy design problem, not
+            // something the requester or the approver can work around --
+            // naming the policy and saying who can fix it stops them
+            // resubmitting the same request expecting a different answer.
+            const policy = (await db.query(
+              `SELECT p.name FROM approval_policies p
+                 JOIN approval_instances i ON i.policy_id = p.id
+                WHERE i.id = $1`, [id])).rows[0];
+            fail('SEGREGATION_OF_DUTIES',
+              `${decision.reason} Ask an administrator to change the `
+              + `"${policy?.name ?? 'approval'}" policy so each level can be decided by a different person.`);
           }
           fail(decision.code, decision.reason, decision.code === 'SELF_APPROVAL' ? 403 : 422);
         }
