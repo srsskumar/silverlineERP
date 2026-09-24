@@ -117,7 +117,12 @@ describe('VendorInvoiceLines (task 5c, finding B-004)', () => {
   it('loads the invoice and its lines, pre-filled from the linked order', async () => {
     mount(<VendorInvoiceLines invoiceId={INVOICE_ID} onClose={vi.fn()} />);
     expect(await screen.findByText(/Invoice INV-1/)).toBeInTheDocument();
-    expect(await screen.findByDisplayValue('Cement OPC 53')).toBeInTheDocument();
+    // Both the description input and the order-line <select>'s selected
+    // option read "Cement OPC 53" once the line is pre-filled, so
+    // findByDisplayValue is ambiguous here — check the description field by
+    // itself instead.
+    const description = await screen.findByPlaceholderText('Description') as HTMLInputElement;
+    expect(description.value).toBe('Cement OPC 53');
   });
 
   it('saves an edited line to PATCH .../lines', async () => {
