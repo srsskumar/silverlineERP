@@ -1,6 +1,6 @@
 // Admin: create user, create role, module-visibility toggle, role-assign.
 import { chromium } from 'playwright';
-import { login, newContext, openPage, Results } from './lib.mjs';
+import { login, newContext, openPage, Results, randomPassword, findUserIdByUsername, disableUser } from './lib.mjs';
 
 const results = new Results('admin');
 const browser = await chromium.launch();
@@ -26,10 +26,12 @@ async function createUserValidAndInvalid() {
     results.fail('create-user/blank-required', `usernameValid=${usernameValid} newFailedReqs=${page._rec.failedRequests.length - before}`);
   }
 
-  // Valid: fill a unique QA- user and submit.
+  // Valid: fill a unique QA- user and submit. The password is generated at
+  // runtime and never logged — this account is disabled again below before
+  // the script exits, so nothing durable depends on the password anyway.
   const uname = `qa-lanea-${rand}`;
   await usernameInput.fill(uname);
-  await passwordInput.fill('QA-lanea-Passw0rd!');
+  await passwordInput.fill(randomPassword());
   await page.getByRole('button', { name: 'Save' }).first().click();
   try {
     const status = page.locator('p[role="status"]', { hasText: 'Saved successfully' }).first();
@@ -38,6 +40,23 @@ async function createUserValidAndInvalid() {
   } catch {
     const alert = await page.locator('[role="alert"]').first().textContent().catch(() => null);
     results.fail('create-user/valid', 'no success message; alert=' + JSON.stringify(alert));
+    // Best effort: the UI's success detection can false-negative even when
+    // the account was actually created, so still try to disable it.
+    const maybeId = await findUserIdByUsername(session.access_token, uname).catch(() => null);
+    if (maybeId) await disableUser(session.access_token, maybeId).catch(() => {});
+    await ctx.close();
+    return uname;
+  }
+
+  // Disable the throwaway account immediately — this walk only needed to
+  // prove the create form works, not to leave a live login behind.
+  const userId = await findUserIdByUsername(session.access_token, uname);
+  if (userId) {
+    const status = await disableUser(session.access_token, userId);
+    if (status === 200) results.pass('create-user/cleanup-disabled', `disabled ${uname}`);
+    else results.fail('create-user/cleanup-disabled', `PATCH auth_status=DISABLED for ${uname} returned ${status}`);
+  } else {
+    results.fail('create-user/cleanup-disabled', `could not find ${uname} in GET /admin/users to disable it`);
   }
   await ctx.close();
   return uname;

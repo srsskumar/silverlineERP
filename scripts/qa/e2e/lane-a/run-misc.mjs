@@ -1,7 +1,7 @@
 // MFA enroll, payroll run lifecycle, audit filters+export, inbox mark-read.
 import { chromium } from 'playwright';
 import { authenticator } from 'otplib';
-import { login, newContext, openPage, Results } from './lib.mjs';
+import { login, newContext, openPage, Results, randomPassword, findUserIdByUsername, disableUser } from './lib.mjs';
 
 const results = new Results('misc');
 const browser = await chromium.launch();
@@ -17,7 +17,9 @@ async function mfaEnroll() {
   const adminPage = await openPage(adminCtx, '/admin');
   const rand = Math.random().toString(36).slice(2, 8);
   const throwawayUser = `qa-lanea-mfa-${rand}`;
-  const throwawayPass = 'QA-lanea-Mfa-Passw0rd!';
+  // Generated at runtime, never logged, never hard-coded — this account is
+  // disabled again below before the script exits.
+  const throwawayPass = randomPassword();
   const usernameInput = adminPage.locator('label', { hasText: 'Username *' }).locator('input');
   const passwordInput = adminPage.locator('label', { hasText: 'Initial password' }).locator('input[type="password"]');
   await usernameInput.fill(throwawayUser);
@@ -26,60 +28,75 @@ async function mfaEnroll() {
   await adminPage.locator('p[role="status"]', { hasText: 'Saved successfully' }).first().waitFor({ state: 'visible', timeout: 8000 });
   await adminCtx.close();
 
-  const post = (body) =>
-    fetch(`${process.env.QA_BASE ?? 'http://34.131.134.217'}/api/v1/auth/login`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
-    });
-  const loginRes = await post({ username: throwawayUser, password: throwawayPass });
-  const session = await loginRes.json();
-  if (loginRes.status !== 200) {
-    results.fail('mfa/enroll', 'could not log in as the throwaway account: ' + JSON.stringify(session));
-    return;
-  }
-  const ctx = await newContext(browser, session);
-  const page = await openPage(ctx, '/security');
+  // Every path from here on must still disable the throwaway account, so
+  // the whole enroll attempt runs inside a try/finally.
+  let ctx = null;
+  try {
+    const post = (body) =>
+      fetch(`${process.env.QA_BASE ?? 'http://34.131.134.217'}/api/v1/auth/login`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+    const loginRes = await post({ username: throwawayUser, password: throwawayPass });
+    const session = await loginRes.json();
+    if (loginRes.status !== 200) {
+      results.fail('mfa/enroll', 'could not log in as the throwaway account: ' + JSON.stringify(session));
+      return;
+    }
+    ctx = await newContext(browser, session);
+    const page = await openPage(ctx, '/security');
 
-  const setupBtn = page.getByRole('button', { name: 'Set up authenticator' });
-  if ((await setupBtn.count()) === 0) {
-    results.note('mfa/enroll', 'no "Set up authenticator" button — account may already be enrolled');
-    await ctx.close();
-    return;
-  }
-  await setupBtn.click();
-  await page.waitForTimeout(800);
-  const secretEl = page.locator('code').first();
-  if ((await secretEl.count()) === 0) {
-    results.fail('mfa/enroll', 'clicked Set up authenticator but no secret <code> block appeared');
-    await ctx.close();
-    return;
-  }
-  const secret = (await secretEl.textContent())?.trim() ?? '';
+    const setupBtn = page.getByRole('button', { name: 'Set up authenticator' });
+    if ((await setupBtn.count()) === 0) {
+      results.note('mfa/enroll', 'no "Set up authenticator" button — account may already be enrolled');
+      return;
+    }
+    await setupBtn.click();
+    await page.waitForTimeout(800);
+    const secretEl = page.locator('code').first();
+    if ((await secretEl.count()) === 0) {
+      results.fail('mfa/enroll', 'clicked Set up authenticator but no secret <code> block appeared');
+      return;
+    }
+    const secret = (await secretEl.textContent())?.trim() ?? '';
 
-  // Invalid: wrong code.
-  const codeInput = page.locator('label', { hasText: 'Authentication code' }).locator('input');
-  await codeInput.fill('000000');
-  await page.getByRole('button', { name: 'Verify and enable' }).click();
-  await page.waitForTimeout(800);
-  const err = await page.locator('[role="alert"]').first().textContent().catch(() => null);
-  if (err) results.pass('mfa/enroll-wrong-code', 'wrong code correctly rejected: ' + err);
-  else results.fail('mfa/enroll-wrong-code', 'no error shown for a wrong TOTP code');
+    // Invalid: wrong code.
+    const codeInput = page.locator('label', { hasText: 'Authentication code' }).locator('input');
+    await codeInput.fill('000000');
+    await page.getByRole('button', { name: 'Verify and enable' }).click();
+    await page.waitForTimeout(800);
+    const err = await page.locator('[role="alert"]').first().textContent().catch(() => null);
+    if (err) results.pass('mfa/enroll-wrong-code', 'wrong code correctly rejected: ' + err);
+    else results.fail('mfa/enroll-wrong-code', 'no error shown for a wrong TOTP code');
 
-  // Valid: real code from the secret just issued.
-  const code = authenticator.generate(secret);
-  await codeInput.fill(code);
-  await page.getByRole('button', { name: 'Verify and enable' }).click();
-  await page.waitForTimeout(1500);
-  // signOutMessage path signs the user out to /login with a notice.
-  await page.waitForURL(/\/login/i, { timeout: 8000 }).catch(() => {});
-  const onLogin = /\/login/i.test(page.url());
-  const bodyText = await page.locator('body').innerText().catch(() => '');
-  if (onLogin && /two-factor|sign in again/i.test(bodyText)) {
-    results.pass('mfa/enroll-valid', 'enrolled, signed out with notice: ' + bodyText.slice(0, 120));
-  } else {
-    results.fail('mfa/enroll-valid', `expected sign-out to /login with a notice; url=${page.url()} body=${bodyText.slice(0, 150)}`);
+    // Valid: real code from the secret just issued.
+    const code = authenticator.generate(secret);
+    await codeInput.fill(code);
+    await page.getByRole('button', { name: 'Verify and enable' }).click();
+    await page.waitForTimeout(1500);
+    // signOutMessage path signs the user out to /login with a notice.
+    await page.waitForURL(/\/login/i, { timeout: 8000 }).catch(() => {});
+    const onLogin = /\/login/i.test(page.url());
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    if (onLogin && /two-factor|sign in again/i.test(bodyText)) {
+      results.pass('mfa/enroll-valid', 'enrolled, signed out with notice: ' + bodyText.slice(0, 120));
+    } else {
+      results.fail('mfa/enroll-valid', `expected sign-out to /login with a notice; url=${page.url()} body=${bodyText.slice(0, 150)}`);
+    }
+    results.note('mfa/no-disable-control', 'apps/web/app/security/page.tsx has no MFA-disable button at all (only "Set up authenticator" when not yet enabled) — once enrolled via web, an account can never turn MFA off again through the UI (API-only, see A-005)');
+  } finally {
+    if (ctx) await ctx.close();
+    // Disable the throwaway account regardless of how the attempt above
+    // went (the enrollment itself, if it got that far, already signed its
+    // own session out, so this uses the admin session's token instead).
+    const userId = await findUserIdByUsername(adminSession.access_token, throwawayUser);
+    if (userId) {
+      const status = await disableUser(adminSession.access_token, userId);
+      if (status === 200) results.pass('mfa/enroll-cleanup-disabled', `disabled ${throwawayUser}`);
+      else results.fail('mfa/enroll-cleanup-disabled', `PATCH auth_status=DISABLED for ${throwawayUser} returned ${status}`);
+    } else {
+      results.fail('mfa/enroll-cleanup-disabled', `could not find ${throwawayUser} in GET /admin/users to disable it`);
+    }
   }
-  await ctx.close();
-  results.note('mfa/no-disable-control', 'apps/web/app/security/page.tsx has no MFA-disable button at all (only "Set up authenticator" when not yet enabled) — once enrolled via web, an account can never turn MFA off again through the UI (API-only, see A-005)');
 }
 
 async function payrollRunLifecycle() {

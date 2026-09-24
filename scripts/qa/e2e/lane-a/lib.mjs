@@ -2,6 +2,7 @@
 // Run from ~/sl-e2e/lane-a on the VM (qa-users.json lives in ~/sl-e2e/admin).
 import { chromium } from 'playwright';
 import { readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { authenticator } from 'otplib';
 
 export const BASE = process.env.QA_BASE ?? 'http://34.131.134.217';
@@ -119,6 +120,46 @@ export async function fieldError(page, htmlFor) {
   const el = page.locator(`#${htmlFor}-error`);
   if ((await el.count()) === 0) return null;
   return (await el.textContent())?.trim() ?? '';
+}
+
+// A throwaway password for a QA- account this script creates and disables
+// again before exiting. Generated at runtime, never logged, never
+// hard-coded in source — the API only requires 12-128 chars, no complexity
+// rule, so a random base64url string with the QA- prefix (for at-a-glance
+// identification in any incident review) is enough.
+export function randomPassword() {
+  return `QA-${randomBytes(18).toString('base64url')}`;
+}
+
+// Find a user's id by username via GET /admin/users, paging through
+// results (server caps limit at 100) until found or exhausted.
+export async function findUserIdByUsername(accessToken, username) {
+  let offset = 0;
+  for (;;) {
+    const r = await fetch(`${BASE}/api/v1/admin/users?limit=100&offset=${offset}`, {
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const rows = Array.isArray(j.data) ? j.data : [];
+    const hit = rows.find((u) => u.username === username);
+    if (hit) return hit.id;
+    if (!j.has_more || rows.length === 0) return null;
+    offset += rows.length;
+  }
+}
+
+// Disable a throwaway account this script created, so a QA- test login
+// left over from a submit-walk can never be signed into again. Returns the
+// response status (200 on success) without throwing, so cleanup never
+// masks the actual test result.
+export async function disableUser(accessToken, userId) {
+  const r = await fetch(`${BASE}/api/v1/admin/users/${userId}`, {
+    method: 'PATCH',
+    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ auth_status: 'DISABLED' }),
+  });
+  return r.status;
 }
 
 // Type into a Combobox/EmployeePicker/UserPicker and click the first matching option.
