@@ -136,6 +136,11 @@ export const LIST_OPS_SQL = `SELECT * FROM pending_ops
   LIMIT 100`;
 export function createQueue({getDb,getAccount,seal,unseal,uuid,isApiError}:{getDb:()=>Promise<QueueDatabase>;getAccount:()=>Promise<string|null>;seal:(account:string,value:string)=>Promise<string>;unseal:(account:string,value:string)=>Promise<string>;uuid:()=>string;isApiError:(e:unknown)=>e is RequestError}) {
 const ACTIVE_STATES = ["QUEUED", "SENDING", "BACKOFF"];
+/** Rows a runAsync touched, where the driver says; unknown counts as touched. */
+const rowsChanged = (r: unknown): number | null => {
+  const n = (r as { changes?: unknown } | null)?.changes;
+  return typeof n === "number" ? n : null;
+};
 
 function newUuid(): string { return uuid(); }
 
@@ -145,7 +150,11 @@ async function enqueueOp(args: {
   payload: Record<string, unknown>;
   baseVersion?: number;
   idempotencyKey?: string;
-  supersede?: (pending: Record<string, unknown>, next: Record<string, unknown>) => Record<string, unknown> | null;
+  supersede?: (
+    pending: Record<string, unknown>,
+    next: Record<string, unknown>,
+    ctx: { idempotencyKey: string },
+  ) => Record<string, unknown> | null;
 }): Promise<PendingOpRow> {
   const db = await getDb();
   const account=await getAccount();if(!account)throw new Error("Sign in first");
@@ -166,16 +175,31 @@ async function enqueueOp(args: {
    * supersede function is responsible for making that safe (survey_entry
    * remembers the first body the key may already have carried).
    */
-  if (existing && args.supersede && (existing.state === "QUEUED" || existing.state === "BACKOFF")) {
-    const merged = args.supersede(JSON.parse(await unseal(account, existing.payload)), args.payload);
+  /*
+   * Round 3: the rewrite is conditional, and its row count is read. A flush
+   * may claim the row (SENDING) between the SELECT above and this UPDATE;
+   * then nothing was rewritten, and claiming success would lose the new
+   * figures. In that case, and whenever the pending op is already SENDING,
+   * the merged payload goes in as a NEW op queued behind it. The merge still
+   * records the pending op's first body and key, so the new op can recover
+   * the day the pending op creates and amend it.
+   */
+  let payload: Record<string, unknown> = args.payload;
+  let baseVersion = args.baseVersion ?? null;
+  if (existing && args.supersede) {
+    const merged = args.supersede(JSON.parse(await unseal(account, existing.payload)), args.payload,
+      { idempotencyKey: existing.idempotency_key });
     if (merged) {
-      const sealed = await seal(account, JSON.stringify(merged));
-      const base = args.baseVersion ?? existing.base_version ?? null;
-      await db.runAsync(
-        "UPDATE pending_ops SET payload = ?, base_version = ?, updated_at = ? WHERE client_uuid = ? AND state IN ('QUEUED','BACKOFF')",
-        [sealed, base, Date.now(), existing.client_uuid],
-      );
-      return { ...existing, payload: sealed, base_version: base };
+      payload = merged;
+      baseVersion = args.baseVersion ?? existing.base_version ?? null;
+      if (existing.state === "QUEUED" || existing.state === "BACKOFF") {
+        const sealed = await seal(account, JSON.stringify(merged));
+        const r = await db.runAsync(
+          "UPDATE pending_ops SET payload = ?, base_version = ?, updated_at = ? WHERE client_uuid = ? AND state IN ('QUEUED','BACKOFF')",
+          [sealed, baseVersion, Date.now(), existing.client_uuid],
+        );
+        if (rowsChanged(r) !== 0) return { ...existing, payload: sealed, base_version: baseVersion };
+      }
     }
   }
   const now = Date.now();
@@ -191,9 +215,9 @@ async function enqueueOp(args: {
     entity: args.entity,
     op: args.op,
     dedupe_key: key,
-    payload: await seal(account,JSON.stringify(args.payload)),
+    payload: await seal(account,JSON.stringify(payload)),
     idempotency_key: args.idempotencyKey ?? newUuid(),
-    base_version: args.baseVersion ?? null,
+    base_version: baseVersion,
     state: "QUEUED",
     decision: null,
     retry_count: 0,
@@ -252,8 +276,22 @@ async function flushQueue(executor: OpExecutor): Promise<FlushResult> {
       result.deferred += 1;
       continue;
     }
+    /*
+     * Claimed, then read again (round 3). The rows were read in one SELECT
+     * before any was sent, so a supersede could rewrite a row this loop
+     * already holds: the stale payload went, was marked SUCCEEDED and
+     * cleared, and the newest figures were lost. Now the row is claimed only
+     * if it is still QUEUED/BACKOFF, and its payload and base are read after
+     * the claim, so what is sent is what the row says at that moment.
+     */
+    const claim = await db.runAsync(
+      "UPDATE pending_ops SET state='SENDING', error=NULL, updated_at=? WHERE client_uuid=? AND state IN ('QUEUED','BACKOFF')",
+      [Date.now(), op.client_uuid],
+    );
+    if (rowsChanged(claim) === 0) continue;
+    const fresh = await db.getFirstAsync<PendingOpRow>("SELECT * FROM pending_ops WHERE client_uuid=?", [op.client_uuid]);
+    if (fresh) Object.assign(op, { payload: fresh.payload, base_version: fresh.base_version });
     result.attempted += 1;
-    await update(op.client_uuid, { state: "SENDING", error: null });
     // Decryption is not a network step: a payload this account's key cannot
     // open never will be, so it fails immediately rather than burning the whole
     // retry budget on a request that can never be built.

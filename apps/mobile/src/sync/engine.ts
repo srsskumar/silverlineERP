@@ -156,6 +156,7 @@ export const defaultExecutor: OpExecutor = async (op) => {
         post: postSurveyEntry,
         getFiled: getFiledEntry,
         patch: patchSurveyEntry,
+        remember: (id, body) => rewriteOp(id, body),
         conflict: (message) => new ApiError({
           status: 409, code: "SURVEY_DAY_CHANGED", message, retryable: false,
         }),
