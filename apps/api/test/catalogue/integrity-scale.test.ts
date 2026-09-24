@@ -83,11 +83,30 @@ describe("D-007 limit caps and hostile search strings", () => {
     });
   }
 
-  it("treats % in a search as a literal, not a wildcard", async () => {
-    const res = await w.app.inject({ method: "GET", url: `/api/v1/employees?q=${encodeURIComponent("%")}&limit=100`, headers: w.admin });
+  it("finds a name containing a literal 50%, and % alone matches only that", async () => {
+    const tag = uniq("PC");
+    const emp = (await w.pool.query(
+      `INSERT INTO employees(org_id, emp_no, first_name, last_name, phone, date_of_joining, status)
+       VALUES($1,$2,'Offer','50% Club','8123456789',DATE '2024-01-01','ACTIVE') RETURNING id`,
+      [w.orgId, tag])).rows[0].id as string;
+    const hit = await w.app.inject({ method: "GET", url: `/api/v1/employees?q=${encodeURIComponent("50%")}&limit=100`, headers: w.admin });
+    expect(hit.statusCode).toBe(200);
+    expect((hit.json() as any).data.map((e: any) => e.id)).toContain(emp);
+    const pct = await w.app.inject({ method: "GET", url: `/api/v1/employees?q=${encodeURIComponent("%")}&limit=100`, headers: w.admin });
+    expect((pct.json() as any).data.map((e: any) => e.id)).toEqual([emp]);
+  });
+
+  it("finds an item code with an underscore, and _ does not match any character", async () => {
+    const tag = uniq("U").toUpperCase();
+    const [real, lookalike] = (await w.pool.query(
+      `INSERT INTO inventory_items(org_id, code, name, unit)
+       VALUES ($1, 'CEM_OPC_' || $2, 'Cement OPC', 'BAG'), ($1, 'CEMXOPC_' || $2, 'Lookalike', 'BAG') RETURNING id`,
+      [w.orgId, tag])).rows.map(r => r.id as string);
+    const res = await w.app.inject({ method: "GET", url: `/api/v1/inventory/items?search=${encodeURIComponent(`CEM_OPC_${tag}`)}`, headers: w.admin });
     expect(res.statusCode).toBe(200);
-    // No employee's name, number or phone contains a literal percent sign.
-    expect((res.json() as any).data.length).toBe(0);
+    const ids = (res.json() as any).data.map((i: any) => i.id);
+    expect(ids).toContain(real);
+    expect(ids).not.toContain(lookalike);
   });
 });
 

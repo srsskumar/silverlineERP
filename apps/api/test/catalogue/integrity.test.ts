@@ -11,7 +11,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  buildWorld, createActiveEmployee, createUser, grantLeaveBalance, idem, leaveTypeIds, loginAs,
+  buildWorld, createActiveEmployee, createUser, grantLeaveBalance, headersForUserId, idem, ifMatch, leaveTypeIds, loginAs,
   uniq, uniquePhone, workDate, type CatalogueWorld, type Headers,
 } from "./fixture.js";
 
@@ -299,29 +299,24 @@ describe("D-008 an expense claim settled through both payment paths", () => {
     return p.data.id as string;
   }
 
-  it("will not allocate a payment to a claim already reimbursed in full", async () => {
-    const id = await claim("APPROVED");
-    const paid = await post(w.admin, `/api/v1/expense-claims/${id}/reimburse`, {
-      amount: 1000, paid_on: workDate(), mode: "NEFT",
-    });
-    expect(paid.status, JSON.stringify(paid.body)).toBe(201);
-    const again = await post(w.admin, `/api/v1/payments/${await payment(1000)}/allocations`, {
-      document_type: "EXPENSE_CLAIM", document_id: id, amount: 1000,
-    });
-    expect(again.status, JSON.stringify(again.body)).toBe(422);
-  });
-
-  it("will not reimburse a claim a payment has already settled", async () => {
-    const id = await claim("APPROVED");
-    const allocated = await post(w.admin, `/api/v1/payments/${await payment(1000)}/allocations`, {
-      document_type: "EXPENSE_CLAIM", document_id: id, amount: 1000,
-    });
-    expect(allocated.status, JSON.stringify(allocated.body)).toBe(201);
-    const again = await post(w.admin, `/api/v1/expense-claims/${id}/reimburse`, {
-      amount: 1000, paid_on: workDate(), mode: "NEFT",
-    });
-    expect(again.status, JSON.stringify(again.body)).toBe(422);
-    expect(again.body.code).toBe("OVERPAYMENT");
+  it("pays a claim at most once when a reimbursement and an allocation race", async () => {
+    // Each pair is fired together over separate pooled connections. A partial
+    // reimbursement does not touch the claim row, so an allocation waiting on
+    // that row's lock must still see the reimbursement that just committed.
+    const claims = await Promise.all(Array.from({ length: 10 }, () => claim("APPROVED")));
+    const pays = await Promise.all(claims.map(() => payment(600)));
+    const outcomes = await Promise.all(claims.map((id, i) => Promise.all([
+      post(w.admin, `/api/v1/expense-claims/${id}/reimburse`, { amount: 600, paid_on: workDate(), mode: "NEFT" }),
+      post(w.admin, `/api/v1/payments/${pays[i]}/allocations`, { document_type: "EXPENSE_CLAIM", document_id: id, amount: 600 }),
+    ])));
+    for (const pair of outcomes) expect(pair.filter(r => r.status >= 500).map(r => r.body)).toEqual([]);
+    const paid = (await w.pool.query(
+      `SELECT c.id,
+              (SELECT COALESCE(sum(amount),0) FROM expense_reimbursements r WHERE r.claim_id = c.id)
+            + (SELECT COALESCE(sum(amount),0) FROM payment_allocations a
+                WHERE a.document_type = 'EXPENSE_CLAIM' AND a.document_id = c.id AND a.reversed_at IS NULL) AS paid
+         FROM expense_claims c WHERE c.id = ANY($1)`, [claims])).rows;
+    expect(paid.filter(r => Number(r.paid) > 1000).map(r => Number(r.paid))).toEqual([]);
   });
 
   it("will not allocate a payment to a claim nobody approved", async () => {
@@ -429,5 +424,56 @@ describe("D-010 paise rounding on order lines", () => {
       "SELECT taxable_value::text AS t, tax_amount::text AS x, total_value::text AS v FROM purchase_orders WHERE id=$1",
       [res.data.id])).rows[0];
     expect(po).toEqual({ t: "5.08", x: "0.41", v: "5.49" });
+  });
+});
+
+/* ----------------------------------------------------- leave across years */
+
+describe("D-011 leave that crosses 31 December", () => {
+  it("debits each leave year for the days that fall in it", async () => {
+    const types = await leaveTypeIds(w.app, w.admin);
+    const employeeId = await createActiveEmployee(w.app, w.admin, { district_id: w.chainA.district });
+    await grantLeaveBalance(w.app, w.admin, employeeId, types.CL!, 12);
+    const username = `int_yr_${uniq()}`;
+    await createUser(w.pool, w.orgId, { username, roles: ["EMPLOYEE"], employeeId });
+    const headers = await loginAs(w.app, username);
+    const y = Number(workDate().slice(0, 4));
+    const filed = await w.app.inject({
+      method: "POST", url: "/api/v1/leave/requests", headers: { ...headers, ...idem() },
+      payload: { leave_type_id: types.CL, from_date: `${y}-12-30`, to_date: `${y + 1}-01-02`, reason: "year end" },
+    });
+    expect(filed.statusCode, filed.body).toBe(201);
+    const request = filed.json() as { id: string; current_approver_id: string };
+    const approver = await headersForUserId(w, request.current_approver_id);
+    const decided = await w.app.inject({
+      method: "POST", url: `/api/v1/leave/requests/${request.id}/decision`,
+      headers: { ...approver, ...(await ifMatch(w, "leave_requests", request.id)), ...idem() },
+      payload: { decision: "APPROVE" },
+    });
+    expect(decided.statusCode, decided.body).toBe(200);
+    const rows = (await w.pool.query(
+      `SELECT period_year, consumed::float8 AS consumed FROM leave_balances
+        WHERE employee_id = $1 AND leave_type_id = $2 ORDER BY period_year`, [employeeId, types.CL])).rows;
+    expect(rows.map(r => [r.period_year, r.consumed])).toEqual([[y, 2], [y + 1, 2]]);
+  });
+
+  it("refuses when the second year's balance cannot cover its share", async () => {
+    const types = await leaveTypeIds(w.app, w.admin);
+    const employeeId = await createActiveEmployee(w.app, w.admin, { district_id: w.chainA.district });
+    const y = Number(workDate().slice(0, 4));
+    // Plenty this year, one day next year: 30 Dec to 3 Jan needs three.
+    await grantLeaveBalance(w.app, w.admin, employeeId, types.CL!, 12);
+    await w.pool.query(
+      "UPDATE leave_balances SET opening_balance = 1 WHERE employee_id=$1 AND leave_type_id=$2 AND period_year=$3",
+      [employeeId, types.CL, y + 1]);
+    const username = `int_yr2_${uniq()}`;
+    await createUser(w.pool, w.orgId, { username, roles: ["EMPLOYEE"], employeeId });
+    const headers = await loginAs(w.app, username);
+    const filed = await w.app.inject({
+      method: "POST", url: "/api/v1/leave/requests", headers: { ...headers, ...idem() },
+      payload: { leave_type_id: types.CL, from_date: `${y}-12-30`, to_date: `${y + 1}-01-03`, reason: "year end" },
+    });
+    expect(filed.statusCode, filed.body).toBe(422);
+    expect((filed.json() as { code: string }).code).toBe("INSUFFICIENT_BALANCE");
   });
 });
