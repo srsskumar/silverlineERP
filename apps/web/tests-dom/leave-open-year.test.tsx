@@ -29,7 +29,7 @@ vi.mock('@/lib/finance', async (orig) => ({
   businessToday: () => (isDecember ? '2026-12-05' : '2026-06-05'),
 }));
 
-const { BalancesPanel } = await import('@/app/leave/balances/page');
+const { LeaveBalancesPanel } = await import('@/components/LeaveBalancesPanel');
 
 function meFor(permissions: string[]) {
   return {
@@ -83,7 +83,7 @@ function mount() {
   return render(
     <QueryClientProvider client={client}>
       <AuthProvider>
-        <BalancesPanel />
+        <LeaveBalancesPanel />
       </AuthProvider>
     </QueryClientProvider>,
   );
