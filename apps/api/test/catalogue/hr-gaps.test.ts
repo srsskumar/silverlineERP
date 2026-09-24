@@ -22,6 +22,7 @@ import {
   leaveTypeIds,
   loginAs,
   NOW,
+  post,
   uniq,
   uniquePhone,
   workDate,
@@ -372,7 +373,9 @@ describe("on_leave_today is a badge, not a status (owner decision 2026-09-24 #2)
     expect(detailBody.status).toBe("ACTIVE");
 
     const list = await w.app.inject({
-      method: "GET", url: "/api/v1/employees?limit=200", headers: w.admin,
+      // limit is capped at 100 server-side (cursorPageQuerySchema); the just
+      // created employee sorts first (created_at DESC) so it is on page one.
+      method: "GET", url: "/api/v1/employees?limit=100", headers: w.admin,
     });
     const row = (list.json() as { data: Array<{ id: string; on_leave_today: boolean }> })
       .data.find((r) => r.id === employeeId);
@@ -616,12 +619,10 @@ describe("HR-14 exit disables the login, withdraws leave, unassigns open tasks a
 
   it("notifies the org's HR manager when the project has no manager (policy batch fix round 1, item 3)", async () => {
     const { employeeId, userId } = await worker();
-    const noManagerProject = await post(w.admin, "/api/v1/projects", {
+    const projectId = await post(w.app, w.admin, "/api/v1/projects", {
       workspace_id: w.workspaceId, project_type_id: w.projectTypeId,
       code: uniq("PNOMGR"), name: "No manager project",
     });
-    expect(noManagerProject.status, JSON.stringify(noManagerProject.body)).toBe(201);
-    const projectId = noManagerProject.data.id;
     const task = await w.pool.query(
       `INSERT INTO tasks(org_id, project_id, title, status, assignee_id, created_by)
        VALUES ($1, $2, 'Orphaned project task', 'TO_DO', $3, $4) RETURNING id`,
@@ -647,12 +648,10 @@ describe("HR-14 exit disables the login, withdraws leave, unassigns open tasks a
 
   it("notifies the org's HR manager when the project's manager is the person exiting (policy batch fix round 1, item 3)", async () => {
     const { employeeId, userId } = await worker();
-    const selfManagedProject = await post(w.admin, "/api/v1/projects", {
+    const projectId = await post(w.app, w.admin, "/api/v1/projects", {
       workspace_id: w.workspaceId, project_type_id: w.projectTypeId,
       code: uniq("PSELF"), name: "Self-managed project",
     });
-    expect(selfManagedProject.status, JSON.stringify(selfManagedProject.body)).toBe(201);
-    const projectId = selfManagedProject.data.id;
     await w.app.inject({
       method: "PATCH", url: `/api/v1/projects/${projectId}`,
       headers: { ...w.admin, ...(await ifMatch(w, "projects", projectId)), ...idem() },

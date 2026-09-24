@@ -1038,9 +1038,12 @@ describe("submit is claimant-only too (policy batch fix round 1, item 2)", () =>
     expect(decided.status, JSON.stringify(decided.body)).toBe(200);
     const reimbursed = await post(
       { ...w.role.PAYROLL_OFFICER, ...(await ver("expense_claims", claim.id)) },
-      `/api/v1/expense-claims/${claim.id}/reimburse`, {});
-    expect(reimbursed.status, JSON.stringify(reimbursed.body)).toBe(200);
-    expect(reimbursed.data.status).toBe("REIMBURSED");
+      `/api/v1/expense-claims/${claim.id}/reimburse`,
+      { amount: 300, paid_on: "2026-05-10", mode: "NEFT" });
+    expect(reimbursed.status, JSON.stringify(reimbursed.body)).toBe(201);
+    expect(reimbursed.data.claim_settled).toBe(true);
+    const settled = await get(w.admin, `/api/v1/expense-claims/${claim.id}`);
+    expect(settled.data.status).toBe("REIMBURSED");
   });
 });
 

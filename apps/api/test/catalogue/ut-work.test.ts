@@ -626,7 +626,7 @@ describe("UT-WORK-06 assign task to exited or suspended employee", () => {
     expect(row.rows[0].assignee_id).not.toBe(userId);
   });
 
-  it("marks work already held by a departing employee as needing reassignment", async () => {
+  it("unassigns work already held by a departing employee, needing reassignment (owner decision 2026-09-24 #1)", async () => {
     const p = await project();
     const employeeId = await createActiveEmployee(w.app, w.admin, {
       district_id: w.chainA.district,
@@ -650,10 +650,17 @@ describe("UT-WORK-06 assign task to exited or suspended employee", () => {
     });
     expect(exited.statusCode).toBe(200);
 
-    // The existing task is not silently deleted or reassigned; it stays
-    // visible and attributable so a PM can act on it.
+    // The task comes off the departing employee, in the same transaction as
+    // the exit (owner decision 2026-09-24 #1, superseding this test's older
+    // "stays visible and attributable, unmoved" expectation) -- it is not
+    // deleted, but it is no longer assigned to somebody who is gone.
     const row = await w.pool.query("SELECT assignee_id, status FROM tasks WHERE id = $1", [t]);
-    expect(row.rows[0].assignee_id).toBe(userId);
+    expect(row.rows[0].assignee_id).toBeNull();
+    const audited = await w.pool.query(
+      "SELECT count(*)::int AS n FROM audit_events WHERE action = 'task.unassigned' AND entity_id = $1",
+      [t],
+    );
+    expect(audited.rows[0].n).toBe(1);
 
     // And no further work can be pushed onto them.
     const another = await task(p);

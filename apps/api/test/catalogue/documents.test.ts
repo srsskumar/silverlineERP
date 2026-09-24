@@ -522,7 +522,10 @@ describe("due-for-purge report and explicit purge (owner decision 2026-09-24 #3)
       )).rows[0].today;
       const r = await get(w.admin, "/api/v1/documents/due-for-purge");
       expect(r.status, JSON.stringify(r.body)).toBe(200);
-      expect(r.data.as_of).toBe(expected);
+      // due-for-purge's response is flat -- {data: [...items], as_of, ...}
+      // -- so as_of lives on the raw body, not under the `data` the send()
+      // helper unwraps (that unwrap gives the items array for this route).
+      expect(r.body.as_of).toBe(expected);
     } finally {
       await w.pool.query(
         `UPDATE organizations SET settings = settings || '{"timezone":"Asia/Kolkata"}'::jsonb WHERE id = $1`,
@@ -549,11 +552,12 @@ describe("due-for-purge report and explicit purge (owner decision 2026-09-24 #3)
         + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
       const page = await get(w.admin, url);
       expect(page.status, JSON.stringify(page.body)).toBe(200);
-      expect(page.data.data.length).toBeLessThanOrEqual(1);
+      // Same flat-response shape as above: page.data IS the items array.
+      expect(page.data.length).toBeLessThanOrEqual(1);
       pages += 1;
-      for (const d of page.data.data) seen.push(d.id);
-      if (!page.data.has_more) break;
-      cursor = page.data.next_cursor;
+      for (const d of page.data) seen.push(d.id);
+      if (!page.body.has_more) break;
+      cursor = page.body.next_cursor;
       expect(typeof cursor).toBe("string");
     }
     expect(pages).toBeGreaterThan(1);
@@ -587,6 +591,17 @@ describe("due-for-purge report and explicit purge (owner decision 2026-09-24 #3)
   });
 
   it("never touches, or blocks a batch on, another organisation's document id (fix round 1, item 4)", async () => {
+    // w.other's org is built with a raw SQL insert, after 047's own
+    // document-type seed already ran against every org that existed at
+    // migration time -- so it has no document_types rows of its own. One
+    // is seeded here, directly, purely so the API call below has a type to
+    // attach to.
+    await w.pool.query(
+      `INSERT INTO document_types (org_id, code, label, category, retention_years)
+       VALUES ($1, 'LABOUR_LICENCE', 'Labour licence', 'STATUTORY', 3)
+       ON CONFLICT (org_id, code) DO NOTHING`,
+      [w.otherOrgId],
+    );
     const otherDoc = await post(w.other.admin, "/api/v1/documents", {
       type_code: "LABOUR_LICENCE", owner_type: "organization",
       title: `Other org licence ${uniq()}`, expires_on: dayOffset(-365 * 4),
