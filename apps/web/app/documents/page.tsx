@@ -38,6 +38,8 @@ export default function DocumentsPage() {
   const perms = { permissions: session?.permissions };
   const canRead = hasPermission(perms, 'document.read');
   const canManage = hasPermission(perms, 'document.manage');
+  const canHold = hasPermission(perms, 'document.legalhold');
+  const canRelease = hasPermission(perms, 'document.legalhold.release');
 
   const [tab, setTab] = React.useState<'renewals' | 'register'>('renewals');
   const [within, setWithin] = React.useState(60);
@@ -123,7 +125,10 @@ export default function DocumentsPage() {
         {tab === 'renewals' ? (
           <Renewals query={renewals} canManage={canManage} within={within} />
         ) : (
-          <Register query={register} filters={filters} setFilters={setFilters} summary={summary} />
+          <Register
+            query={register} filters={filters} setFilters={setFilters} summary={summary}
+            canHold={canHold} canRelease={canRelease}
+          />
         )}
       </PageBody>
     </AppShell>
@@ -328,18 +333,24 @@ function RenewDialog({
 /* --------------------------------------------------------------- register */
 
 function Register({
-  query, filters, setFilters, summary,
+  query, filters, setFilters, summary, canHold, canRelease,
 }: {
   query: any;
   filters: { category: string; owner_type: string; state: string };
   setFilters: (f: { category: string; owner_type: string; state: string }) => void;
   summary: Row | undefined;
+  canHold: boolean;
+  canRelease: boolean;
 }) {
+  const qc = useQueryClient();
+  const [holdAction, setHoldAction] = React.useState<{ document: Row; mode: 'hold' | 'release' } | null>(null);
+
   if (query.isLoading) return <Skeleton className="h-64" />;
   if (query.isError) return <ErrorCard error={query.error} onRetry={() => query.refetch()} />;
 
   const items: Row[] = query.data?.data ?? [];
   const select = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
+  const showHoldColumn = canHold || canRelease;
 
   return (
     <div className="space-y-4">
@@ -391,6 +402,7 @@ function Register({
                 <TH>Reference</TH>
                 <TH>Expires</TH>
                 <TH>State</TH>
+                {showHoldColumn ? <TH /> : null}
               </TR>
             </THead>
             <TBody>
@@ -426,13 +438,104 @@ function Register({
                     </Badge>
                     {d.legal_hold ? <Badge tone="warning">Legal hold</Badge> : null}
                   </TD>
+                  {showHoldColumn ? (
+                    <TD className="text-right">
+                      {!d.legal_hold && canHold ? (
+                        <Button type="button" variant="secondary"
+                          onClick={() => setHoldAction({ document: d, mode: 'hold' })}>
+                          Place hold
+                        </Button>
+                      ) : null}
+                      {d.legal_hold && canRelease ? (
+                        <Button type="button" variant="secondary"
+                          onClick={() => setHoldAction({ document: d, mode: 'release' })}>
+                          Release hold
+                        </Button>
+                      ) : null}
+                    </TD>
+                  ) : null}
                 </TR>
               ))}
             </TBody>
           </Table>
         </TableWrap>
       )}
+
+      {holdAction ? (
+        <LegalHoldDialog
+          document={holdAction.document}
+          mode={holdAction.mode}
+          onClose={() => setHoldAction(null)}
+          onDone={() => {
+            setHoldAction(null);
+            qc.invalidateQueries({ queryKey: ['documents'] });
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * Place or release a legal hold (§46.6.2). Two separate permissions govern
+ * the two directions (documents/routes.ts: document.legalhold to place,
+ * document.legalhold.release to release) -- an auditor who places holds
+ * cannot necessarily lift one, and an administrator who can delete should
+ * not quietly lift somebody else's hold unaudited. A hold needs a reason
+ * (legalHoldSchema); a release does not.
+ */
+function LegalHoldDialog({
+  document, mode, onClose, onDone,
+}: {
+  document: Row; mode: 'hold' | 'release'; onClose: () => void; onDone: () => void;
+}) {
+  const [reason, setReason] = React.useState('');
+
+  const act = useMutation({
+    mutationFn: async () =>
+      apiRequest(`/api/v1/documents/${document.id}/legal-hold`, {
+        method: 'POST',
+        body: mode === 'hold' ? { legal_hold: true, reason: reason.trim() } : { legal_hold: false },
+        headers: { 'If-Match': String(document.version) },
+      }),
+    onSuccess: onDone,
+  });
+
+  const field = 'w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
+  const ready = mode === 'release' || reason.trim().length >= 3;
+
+  return (
+    <Card className="space-y-3 p-4">
+      <div>
+        <h3 className="text-sm font-semibold text-text">
+          {mode === 'hold' ? `Place a legal hold on ${document.title}` : `Release the legal hold on ${document.title}`}
+        </h3>
+        <p className="mt-0.5 text-xs text-text-muted">
+          {mode === 'hold'
+            ? 'A document on hold cannot be deleted until the hold is released. Say why, for whoever reviews this later.'
+            : 'The document becomes deletable again once retention otherwise allows it.'}
+        </p>
+      </div>
+
+      {mode === 'hold' ? (
+        <label className="block space-y-1">
+          <span className="text-2xs uppercase tracking-wide text-text-subtle">Reason</span>
+          <input aria-label="Reason" className={field} value={reason}
+            placeholder="Under litigation, audit query…"
+            onChange={(e) => setReason(e.target.value)} />
+        </label>
+      ) : null}
+
+      {act.isError ? <ErrorCard error={act.error} /> : null}
+
+      <div className="flex gap-2">
+        <Button type="button" variant={mode === 'hold' ? 'primary' : 'danger'} loading={act.isPending}
+          disabled={!ready} onClick={() => act.mutate()}>
+          {mode === 'hold' ? 'Confirm hold' : 'Confirm release'}
+        </Button>
+        <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+      </div>
+    </Card>
   );
 }
 
