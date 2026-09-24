@@ -89,3 +89,23 @@ correction banner says so.
 
 Items 1 and 2 share a commit: the review builds its draft through the same
 pinned-base `draftFromEntry`, and its test asserts the pinned version.
+
+## Fix round 3
+
+| # | Sev | What was wrong | Fix | Commit |
+|---|---|---|---|---|
+| 1 | important (race) | `flushQueue` read up to 50 rows with payloads in one SELECT and sent them one by one. A supersede could rewrite a row the flush already held; the stale payload was sent, marked SUCCEEDED and cleared, and the newest figures were lost. The supersede UPDATE also ignored its row count | **(i)** The flush claims each row just before sending (`SET state='SENDING' WHERE client_uuid=? AND state IN ('QUEUED','BACKOFF')`), skips it if the claim touched 0 rows, and re-reads the payload and base after the claim. **(ii)** The supersede checks `changes`. If 0 (the row was claimed in between, or was already SENDING), the merged filing is inserted as a **new op queued behind it**. That op carries the pending op's first body and key (`_sent`/`_sentKey`); on ALREADY_ENTERED it replays them to recover the version the earlier op created, then amends. It is still a CONFLICT if anyone else changed the day | d0b98c1 |
+| 3 | minor | A correction's amend PATCH whose reply was lost, then superseded, was re-sent under the same amend key with a new body, and looked like someone else's edit, giving a false CONFLICT | Before a correction's PATCH goes, the op records `_amend` (base, body, key) via `rewriteOp`. On the retry, if the day has moved from that base, the recorded PATCH is replayed under its own key; the stored reply gives the version it made, and that becomes the base. Each distinct correction gets its own amend key (`…:amend:<fingerprint>`) | d0b98c1 (same executor as item 1) |
+| 2 | partial | The conflict review diffed only measures; `payload.notes ?? current.notes` dropped a queued note-clear; queued rovers did not come back | The review diffs teams, attendance, notes (null = queued clear, kept apart from undefined = not set) and instruments (used/idle against the day's counts, with the SG-016 caveat that a correction doesn't change instrument lines on the server). The queued rover lines are restored into the draft | 4ed1f93 |
+
+Tests (`test/survey-outbox-round3.test.ts`, shared fake server in
+`test/support/surveyOutbox.ts`) drive the real queue deterministically:
+- The flush has read the row, a supersede rewrites it, then the flush sends:
+  the latest figures land.
+- A re-file while the op is SENDING: a second op lands the latest figures,
+  with one POST.
+- Someone else's edit in between: CONFLICT.
+- A lost amend reply, then a supersede: the latest figures land, with no
+  false conflict.
+- The review lists teams, attendance, a note-clear and instruments, and
+  restores the rover lines.
