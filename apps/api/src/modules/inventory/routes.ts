@@ -110,7 +110,15 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    });return reply.code(201).send(row);
   });
   app.patch(`/api/v1/${path}/:id`,{preHandler:guard(`${permission}.manage`)},async req=>{
-   const input=parse(schema as any,req.body) as Record<string,unknown>,u=actor(req),id=(req.params as {id:string}).id;
+   const parsed=parse(schema as any,req.body) as Record<string,unknown>,u=actor(req),id=(req.params as {id:string}).id;
+   // A PATCH is a partial update, but every schema here is the same one POST
+   // uses to create a row -- its zod defaults (status:'ACTIVE', condition:
+   // 'GOOD', ...) fill in any key the caller left out. Left alone, editing
+   // one field (say, a name) would silently reset every defaulted field the
+   // form doesn't carry back to its default, reactivating a deliberately
+   // deactivated item. Keep only the keys the caller actually sent.
+   const sent=(req.body??{}) as Record<string,unknown>;
+   const input=Object.fromEntries(Object.entries(parsed).filter(([k])=>k in sent));
    return mutate(pool,req,`${permission}.update`,table,async db=>{
     const old=await inOrg(db,table,id,u.orgId,true);if(table==='assets')await assetAccess(req,id);version(req,old as {version:number});
     if(input.vendor_id)await inOrg(db,'vendors',String(input.vendor_id),u.orgId);
