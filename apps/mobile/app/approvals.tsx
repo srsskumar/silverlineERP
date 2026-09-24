@@ -12,6 +12,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Modal, View } from "react-native";
 import { ApiError } from "../src/api/client";
+import { describeApiError } from "../src/errorFormat";
 import { useAuth } from "../src/auth/AuthContext";
 import {
   getApproval,
@@ -104,11 +105,9 @@ function ApprovalsScreen() {
       close();
     } catch (e) {
       setDecisionError(
-        e instanceof ApiError
-          ? e.status === 409
-            ? "This request changed while you were looking at it. Reload and try again."
-            : e.message
-          : "Decision failed",
+        e instanceof ApiError && e.status === 409
+          ? "This request changed while you were looking at it. Reload and try again."
+          : describeApiError(e, "Decision failed"),
       );
     } finally {
       setBusy(false);
@@ -124,7 +123,7 @@ function ApprovalsScreen() {
       refreshAll();
       close();
     } catch (e) {
-      setDecisionError(e instanceof ApiError ? e.message : "Could not withdraw this request");
+      setDecisionError(describeApiError(e, "Could not withdraw this request"));
     } finally {
       setBusy(false);
     }

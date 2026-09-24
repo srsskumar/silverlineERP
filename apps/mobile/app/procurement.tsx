@@ -12,7 +12,7 @@ import { router } from "expo-router";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Modal, View } from "react-native";
-import { ApiError } from "../src/api/client";
+import { describeApiError } from "../src/errorFormat";
 import { useAuth } from "../src/auth/AuthContext";
 import {
   getPurchaseOrder,
@@ -137,7 +137,7 @@ function ProcurementScreen() {
       setShowForm(false);
       void requisitions.refetch();
     } catch (e) {
-      setFormError(e instanceof ApiError ? e.message : "Could not raise this requisition");
+      setFormError(describeApiError(e, "Could not raise this requisition"));
     } finally {
       setSubmitting(false);
     }
@@ -152,7 +152,7 @@ function ProcurementScreen() {
       await reqDetail.refetch();
       void qc.invalidateQueries({ queryKey: ["requisitions"] });
     } catch (e) {
-      setActionError(e instanceof ApiError ? e.message : "Could not submit this requisition");
+      setActionError(describeApiError(e, "Could not submit this requisition"));
     } finally {
       setBusy(false);
     }

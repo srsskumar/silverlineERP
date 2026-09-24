@@ -11,6 +11,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Modal, ScrollView, View } from "react-native";
 import { LEAD_STAGES } from "@silverline/shared";
 import { ApiError } from "../src/api/client";
+import { describeApiError } from "../src/errorFormat";
 import { useAuth } from "../src/auth/AuthContext";
 import { getLead, getLeads, postLeadStage, type LeadDetail } from "../src/api/endpoints";
 import { formatLeadStage, leadStageTone, validateLeadStageChange } from "../src/leadsFormat";
@@ -187,11 +188,9 @@ function LeadDetailView({
       onChanged();
     } catch (e) {
       setError(
-        e instanceof ApiError
-          ? e.status === 409
-            ? "This lead changed while you were looking at it. Reload and try again."
-            : e.message
-          : "Could not change the stage",
+        e instanceof ApiError && e.status === 409
+          ? "This lead changed while you were looking at it. Reload and try again."
+          : describeApiError(e, "Could not change the stage"),
       );
     } finally {
       setBusy(false);
