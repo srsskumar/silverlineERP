@@ -453,6 +453,59 @@ describe("delegation", () => {
     expect(step.rows[0].acted_on_behalf_of).toBe(w.roleUserId.PROJECT_MANAGER);
   });
 
+  it("lets a delegate act on a role-based step, not only one naming them by user id (owner decision 2026-09-24)", async () => {
+    // ladderPolicy()'s level 2 is "any PROJECT_MANAGER", not a named user.
+    // TEAM_LEAD holds no such role directly -- only through the PM's own
+    // delegation, the same cover a PM on leave would set up for level 1's
+    // named case above.
+    const today = workDate();
+    const delegation = await post(w.role.PROJECT_MANAGER, "/api/v1/approval-delegations", {
+      to_user_id: w.roleUserId.TEAM_LEAD, valid_from: today, valid_to: today, reason: "Covering for the PM",
+    });
+    expect(delegation.status, JSON.stringify(delegation.body)).toBe(201);
+
+    const res = await submit(100_000); // level 1: TEAM_LEAD, level 2: PROJECT_MANAGER
+    const level1 = await post({ ...w.role.TEAM_LEAD, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(level1.status, JSON.stringify(level1.body)).toBe(200);
+
+    const level2 = await post({ ...w.role.TEAM_LEAD, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(level2.status, JSON.stringify(level2.body)).toBe(200);
+    expect(level2.data.status).toBe("APPROVED");
+
+    const steps = await w.pool.query(
+      "SELECT sequence, acted_by, acted_on_behalf_of FROM approval_steps WHERE instance_id=$1 ORDER BY sequence",
+      [res.data.id]);
+    expect(steps.rows[1].acted_by).toBe(w.roleUserId.TEAM_LEAD);
+    // The audit shows whose role-based authority TEAM_LEAD acted under.
+    expect(steps.rows[1].acted_on_behalf_of).toBe(w.roleUserId.PROJECT_MANAGER);
+  });
+
+  it("still blocks a delegate from approving their own document even on a role-based step", async () => {
+    const today = workDate();
+    const delegation = await post(w.role.PROJECT_MANAGER, "/api/v1/approval-delegations", {
+      to_user_id: w.roleUserId.TEAM_LEAD, valid_from: today, valid_to: today, reason: "Covering for the PM",
+    });
+    expect(delegation.status, JSON.stringify(delegation.body)).toBe(201);
+
+    // A single-level, PROJECT_MANAGER-only policy: TEAM_LEAD is eligible
+    // here only through the delegation above, never by their own role.
+    const policy = await post(w.admin, "/api/v1/approval-policies", {
+      document_type: "ADVANCE", name: `Role-only self-approval check ${uniq()}`,
+      levels: [{ sequence: 1, min_amount: 0, max_amount: null, approver_role: "PROJECT_MANAGER" }],
+    });
+    expect(policy.status, JSON.stringify(policy.body)).toBe(201);
+
+    const res = await submit(5_000, "ADVANCE", w.role.TEAM_LEAD); // TEAM_LEAD raises their own advance
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+
+    const decision = await post({ ...w.role.TEAM_LEAD, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(decision.status).toBe(403);
+    expect(decision.body.code).toBe("SELF_APPROVAL");
+  });
+
   it("refuses a delegation that would close a cycle", async () => {
     // Both roles hold approval.delegate — delegating authority is a narrower
     // grant than exercising it, so most approvers cannot delegate at all.

@@ -88,11 +88,23 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     }
   }
 
-  /** Live delegations in the org, as the pure layer wants them. */
+  /**
+   * Live delegations in the org, as the pure layer wants them.
+   *
+   * `from_user_roles` is what lets `canAct` honour delegation on a
+   * role-based step ("any PROJECT_MANAGER") and not only a named-approver
+   * one: the delegate inherits the principal's eligibility, so the pure
+   * layer needs to know what roles the principal actually held.
+   */
   async function delegationsFor(db: Pool | PoolClient, orgId: string): Promise<Delegation[]> {
     const rows = (await db.query(
-      `SELECT from_user_id, to_user_id, valid_from, valid_to, document_types, revoked_at
-       FROM approval_delegations WHERE org_id = $1 AND revoked_at IS NULL`, [orgId])).rows;
+      `SELECT d.from_user_id, d.to_user_id, d.valid_from, d.valid_to, d.document_types, d.revoked_at,
+              COALESCE(array_agg(DISTINCT r.code) FILTER (WHERE r.code IS NOT NULL), '{}') AS from_user_roles
+       FROM approval_delegations d
+       LEFT JOIN user_roles ur ON ur.user_id = d.from_user_id
+       LEFT JOIN roles r ON r.id = ur.role_id
+       WHERE d.org_id = $1 AND d.revoked_at IS NULL
+       GROUP BY d.id`, [orgId])).rows;
     return rows.map(r => ({
       fromUserId: String(r.from_user_id),
       toUserId: String(r.to_user_id),
@@ -100,6 +112,7 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
       validTo: String(r.valid_to).slice(0, 10),
       documentTypes: Array.isArray(r.document_types) && r.document_types.length ? r.document_types : null,
       revokedAt: r.revoked_at ? String(r.revoked_at) : null,
+      fromUserRoles: Array.isArray(r.from_user_roles) ? r.from_user_roles.map(String) : [],
     }));
   }
 
@@ -420,7 +433,10 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
         }
 
         const current = steps.find(s => s.sequence === step!.sequence)!;
-        const onBehalf = decision.viaDelegation ? current.approverUserId : null;
+        // A named-approver step's principal is current.approverUserId; a
+        // role-based step ("any PROJECT_MANAGER") has none, so canAct itself
+        // says whose authority a delegated match actually used.
+        const onBehalf = decision.viaDelegation ? (decision.onBehalfOf ?? null) : null;
         await db.query(
           `UPDATE approval_steps SET status = $2, acted_by = $3, acted_at = now(),
              acted_on_behalf_of = $4, comments = $5

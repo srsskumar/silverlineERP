@@ -269,6 +269,77 @@ describe('delegation', () => {
     });
     expect(decision.allowed).toBe(false);
   });
+
+  describe('role-based steps (owner decision 2026-09-24)', () => {
+    // A role-based step ("any PROJECT_MANAGER") names no one person, so
+    // delegation used to only ever help a *named-approver* step: a deputy
+    // covering their PM's leave held no PM role of their own and could not
+    // act on a step that simply asked for the role. The principal's own
+    // eligibility -- holding the role -- is what the delegate inherits.
+    const roleStep = step({ approverRole: 'PROJECT_MANAGER', approverUserId: null });
+
+    it('lets the delegate act when the principal holds the step’s role', () => {
+      const decision = canAct({
+        step: roleStep, steps: [roleStep],
+        actorUserId: 'deputy', actorRoles: [], requesterUserId: 'u1',
+        delegations: [delegation({ fromUserRoles: ['PROJECT_MANAGER'] })],
+        documentType: 'PURCHASE_ORDER', today: '2026-09-15',
+      });
+      expect(decision.allowed).toBe(true);
+      if (decision.allowed) {
+        expect(decision.viaDelegation).toBe(true);
+        // Audit needs to name whose authority the role match came from -- a
+        // role step has no single approverUserId to fall back on the way a
+        // named-approver step does.
+        expect(decision.onBehalfOf).toBe('boss');
+      }
+    });
+
+    it('refuses the delegate when the principal never held that role', () => {
+      const decision = canAct({
+        step: roleStep, steps: [roleStep],
+        actorUserId: 'deputy', actorRoles: [], requesterUserId: 'u1',
+        delegations: [delegation({ fromUserRoles: ['TEAM_LEAD'] })],
+        documentType: 'PURCHASE_ORDER', today: '2026-09-15',
+      });
+      expect(decision.allowed).toBe(false);
+      if (!decision.allowed) expect(decision.code).toBe('NOT_THE_APPROVER');
+    });
+
+    it('still refuses outside the delegation window even with a matching role', () => {
+      const decision = canAct({
+        step: roleStep, steps: [roleStep],
+        actorUserId: 'deputy', actorRoles: [], requesterUserId: 'u1',
+        delegations: [delegation({ fromUserRoles: ['PROJECT_MANAGER'] })],
+        documentType: 'PURCHASE_ORDER', today: '2026-10-05',
+      });
+      expect(decision.allowed).toBe(false);
+    });
+
+    it('never lets a delegate approve their own document, role-based or not', () => {
+      // Deputy raised the request themselves; boss's PM role would otherwise
+      // hand deputy eligibility on the very document deputy is the requester
+      // of. Maker-checker must still win.
+      const decision = canAct({
+        step: roleStep, steps: [roleStep],
+        actorUserId: 'deputy', actorRoles: [], requesterUserId: 'deputy',
+        delegations: [delegation({ fromUserRoles: ['PROJECT_MANAGER'] })],
+        documentType: 'PURCHASE_ORDER', today: '2026-09-15',
+      });
+      expect(decision.allowed).toBe(false);
+      if (!decision.allowed) expect(decision.code).toBe('SELF_APPROVAL');
+    });
+
+    it('holding the role directly still works without any delegation', () => {
+      const decision = canAct({
+        step: roleStep, steps: [roleStep],
+        actorUserId: 'someone_else', actorRoles: ['PROJECT_MANAGER'], requesterUserId: 'u1',
+        documentType: 'PURCHASE_ORDER', today: '2026-09-15',
+      });
+      expect(decision.allowed).toBe(true);
+      if (decision.allowed) expect(decision.viaDelegation).toBe(false);
+    });
+  });
 });
 
 describe('re-approval on amount change', () => {

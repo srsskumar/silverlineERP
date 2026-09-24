@@ -128,6 +128,17 @@ export interface Delegation {
   validTo: string;
   documentTypes?: ApprovalDocumentType[] | null;
   revokedAt?: string | null;
+  /**
+   * Role codes the delegating user holds.
+   *
+   * A named-approver step ("boss, specifically") only ever needed
+   * `fromUserId`/`toUserId` — `effectiveApprovers` walks the chain by user
+   * id. A role-based step ("any PROJECT_MANAGER") names no one person, so
+   * the same delegation only helps there if the delegate can be shown to
+   * stand in for *someone who holds that role*. This is what lets `canAct`
+   * check that without a database lookup of its own.
+   */
+  fromUserRoles?: string[];
 }
 
 /**
@@ -216,7 +227,7 @@ export function nextActionableStep(steps: ApprovalStep[]): ApprovalStep | null {
 }
 
 export type ApprovalDecision =
-  | { allowed: true; viaDelegation: boolean }
+  | { allowed: true; viaDelegation: boolean; onBehalfOf?: string | null }
   | { allowed: false; code: string; reason: string };
 
 /**
@@ -265,17 +276,27 @@ export function canAct(args: {
     if (!match) {
       return { allowed: false, code: 'NOT_THE_APPROVER', reason: 'This step is assigned to somebody else' };
     }
-    return { allowed: true, viaDelegation: match.viaDelegation };
+    return { allowed: true, viaDelegation: match.viaDelegation, onBehalfOf: match.viaDelegation ? step.approverUserId : null };
   }
 
   if (step.approverRole) {
-    if (!actorRoles.includes(step.approverRole)) {
-      return {
-        allowed: false, code: 'NOT_THE_APPROVER',
-        reason: `This step needs the ${step.approverRole.replaceAll('_', ' ').toLowerCase()} role`,
-      };
+    if (actorRoles.includes(step.approverRole)) {
+      return { allowed: true, viaDelegation: false };
     }
-    return { allowed: true, viaDelegation: false };
+    // Nobody named holds this step -- any role holder does. So a delegate
+    // inherits it exactly as they would a named approver's step, provided
+    // the person they stand in for actually held the role: a deputy covering
+    // a PM's leave should be able to act on "any PROJECT_MANAGER" the same
+    // as they act on a step assigned to that PM by name.
+    const live = (args.delegations ?? []).filter(d =>
+      !d.revokedAt && d.validFrom <= today && today <= d.validTo &&
+      (!d.documentTypes || d.documentTypes.length === 0 || d.documentTypes.includes(documentType)));
+    const viaRoleDelegation = live.find(d => d.toUserId === actorUserId && (d.fromUserRoles ?? []).includes(step.approverRole!));
+    if (viaRoleDelegation) return { allowed: true, viaDelegation: true, onBehalfOf: viaRoleDelegation.fromUserId };
+    return {
+      allowed: false, code: 'NOT_THE_APPROVER',
+      reason: `This step needs the ${step.approverRole.replaceAll('_', ' ').toLowerCase()} role`,
+    };
   }
 
   return { allowed: false, code: 'NO_APPROVER', reason: 'This step names no approver' };
