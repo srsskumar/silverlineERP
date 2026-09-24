@@ -122,6 +122,22 @@ export async function registerHolidayRoutes(
       });
     }
     const { limit, cursor, year, scope_type, scope_id, include_inactive } = parsed.data;
+    // Review finding (Task 5e fix round 1): the web UI's "Show retired
+    // holidays" toggle only renders for a holiday.manage holder, but that
+    // is a UI courtesy, not enforcement -- nothing stopped a plain reader
+    // (holiday.read, no holiday.manage) from asking for include_inactive
+    // directly. Mirrors leave/routes.ts's `employee_id` filter check
+    // (around line 857 -- a stronger permission gating what an optional
+    // query filter may reveal, 403 FORBIDDEN naming the permission and
+    // the way around it).
+    if (include_inactive === true && !user.permissions.includes(S1_PERMISSIONS.HOLIDAY_MANAGE)) {
+      return sendError(reply, req.requestId, {
+        status: 403,
+        code: "FORBIDDEN",
+        message:
+          'include_inactive needs the "holiday.manage" permission. Leave it unset to see the active calendar.',
+      });
+    }
     const values: unknown[] = [user.orgId];
     // employee_id resolves what currently applies to that employee, so it
     // always means active-only regardless of include_inactive.
