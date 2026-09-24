@@ -45,7 +45,11 @@ export async function createShift(input: ShiftFormInput): Promise<Shift> {
 
 export async function updateShift(
   id: string, version: number,
-  input: Pick<ShiftFormInput, 'name' | 'starts_at' | 'ends_at' | 'break_minutes' | 'rest_days' | 'daily_threshold_hours' | 'overtime_multiplier' | 'effective_from' | 'active'> & { effective_to?: string },
+  // effective_to is required (not optional) here on purpose: a PATCH that
+  // omits a nullable field leaves it untouched (COALESCE, on the server
+  // side), but an edit form's blank date box means "clear it," which needs
+  // an explicit null on the wire, never a missing key. See ShiftForm.tsx.
+  input: Pick<ShiftFormInput, 'name' | 'starts_at' | 'ends_at' | 'break_minutes' | 'rest_days' | 'daily_threshold_hours' | 'overtime_multiplier' | 'effective_from' | 'active'> & { effective_to: string | null },
 ): Promise<Shift> {
   const { data } = await apiRequest<Shift>(`/api/v1/shifts/${id}`, {
     method: 'PATCH',

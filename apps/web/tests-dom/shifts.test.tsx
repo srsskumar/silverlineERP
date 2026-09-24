@@ -137,10 +137,32 @@ describe('ShiftForm edit', () => {
     expect(sent[0].body).toEqual({
       name: 'Night shift', starts_at: '22:00', ends_at: '06:00', break_minutes: 30,
       rest_days: [], daily_threshold_hours: 8, overtime_multiplier: 1.5,
-      effective_from: '2026-09-01', active: true,
+      effective_from: '2026-09-01', active: true, effective_to: null,
     });
     expect(sent[0].headers['x-record-version']).toBe('4');
     expect(sent[0].body).not.toHaveProperty('code');
+  });
+});
+
+describe('fix round 1 item 3 — clearing effective_to on edit sends an explicit null', () => {
+  it('sends effective_to: null when a shift that had one is cleared', async () => {
+    const existing = {
+      id: 'shift-9', code: 'NIGHT', name: 'Night', starts_at: '22:00:00', ends_at: '06:00:00',
+      break_minutes: 30, rest_days: [], daily_threshold_hours: 8, overtime_multiplier: 1.5,
+      rest_day_multiplier: null, effective_from: '2026-09-01', effective_to: '2026-12-31', active: true,
+      shift_hours: 7.5, version: 4,
+    };
+    mount(<ShiftForm initial={existing as any} onClose={vi.fn()} onSaved={vi.fn()} />);
+
+    // The field starts pre-filled from the existing shift...
+    expect(await screen.findByLabelText(/Effective to/)).toHaveValue('2026-12-31');
+    // ...and clearing it must send null, not omit the key (which a PATCH
+    // would read as "leave it alone," via the API's own COALESCE).
+    fireEvent.change(screen.getByLabelText(/Effective to/), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0].body).toMatchObject({ effective_to: null });
   });
 });
 

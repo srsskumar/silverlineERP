@@ -51,7 +51,11 @@ export function ShiftForm({
             name: v.name, starts_at: v.starts_at, ends_at: v.ends_at, break_minutes: v.break_minutes,
             rest_days: v.rest_days, daily_threshold_hours: v.daily_threshold_hours,
             overtime_multiplier: v.overtime_multiplier, effective_from: v.effective_from,
-            active: v.active, ...(v.effective_to ? { effective_to: v.effective_to } : {}),
+            active: v.active,
+            // Explicit null when the box was cleared, so the API actually
+            // clears effective_to rather than leaving it untouched (a PATCH
+            // that omits a nullable field is COALESCEd away server-side).
+            effective_to: v.effective_to || null,
           })
         : createShift(v),
     onSuccess: onSaved,
