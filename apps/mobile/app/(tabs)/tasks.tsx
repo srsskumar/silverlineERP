@@ -14,6 +14,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../src/auth/AuthContext";
 import { EvidenceCapture } from "../../src/device/EvidenceCapture";
 import { isUuid } from "../../src/deepLinks";
+import { quickAddAssigneeId } from "../../src/tasksFormat";
 import { submitQueued } from "../../src/sync/engine";
 import {
   getProjects,
@@ -67,7 +68,7 @@ function TasksScreen() {
   const [selectedId, setSelectedId] = useState<string | null>(
     rawTaskId && isUuid(rawTaskId) ? rawTaskId : null,
   );
-  const { canDo } = useAuth();
+  const { canDo, user } = useAuth();
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => getProjects() });
   const [quickProject, setQuickProject] = useState("");
   const [quickTitle, setQuickTitle] = useState("");
@@ -103,7 +104,15 @@ function TasksScreen() {
         await submitQueued({
           entity: "task_create",
           op: `quickadd:${Date.now()}`,
-          payload: { project_id: quickProject, title: quickTitle.trim() },
+          payload: {
+            project_id: quickProject,
+            title: quickTitle.trim(),
+            // See src/tasksFormat.ts's quickAddAssigneeId doc comment.
+            ...(() => {
+              const assigneeId = quickAddAssigneeId(canDo("task.assign"), user?.id);
+              return assigneeId ? { assignee_id: assigneeId } : {};
+            })(),
+          },
         }),
       );
       setQuickTitle("");
