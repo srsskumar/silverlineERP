@@ -94,6 +94,68 @@ export function safeReceiptFileName(rawName: string): string {
   return `${stem.slice(0, keep)}${suffix}`;
 }
 
+/** The canonical extension this app writes for each mime type it accepts. */
+const EXTENSION_FOR_MIME: Record<string, string> = {
+  "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png",
+};
+
+/**
+ * Reconcile a picker-supplied file name with its (possibly re-encoded) mime
+ * type, on top of safeReceiptFileName's usual cleanup.
+ *
+ * iOS's gallery picker re-encodes a HEIC- or PNG-origin photo to JPEG
+ * whenever it's asked for quality < 1 (this screen always does, to stay
+ * under the 10MB cap) — but keeps reporting the ORIGINAL asset's display
+ * name (e.g. "IMG_1234.HEIC"). The returned uri really is a jpeg and
+ * `mimeType` says so correctly, but the name's own extension would fail
+ * checkReceiptFile's extension allow-list (".heic" isn't accepted at all)
+ * or its mime/extension agreement check. Trusting the mime type — that's
+ * what the actual bytes on disk are — this renames the extension to match,
+ * but only when it doesn't already agree (".jpg" and ".jpeg" both already
+ * agree with "image/jpeg", so neither gets renamed).
+ */
+export function reconcileReceiptFileName(rawName: string, mimeType?: string | null): string {
+  const cleaned = safeReceiptFileName(rawName);
+  if (!mimeType) return cleaned;
+  const currentExt = receiptExtension(cleaned);
+  if (RECEIPT_MIME_BY_EXTENSION[currentExt] === mimeType) return cleaned;
+  const canonicalExt = EXTENSION_FOR_MIME[mimeType];
+  if (!canonicalExt) return cleaned; // unrecognized mime — checkReceiptFile rejects it downstream
+  const stem = currentExt ? cleaned.slice(0, cleaned.length - currentExt.length - 1) : cleaned;
+  return safeReceiptFileName(`${stem}.${canonicalExt}`);
+}
+
+/** Approximate decoded byte length of a base64 string (padding-aware). */
+export function base64ByteLength(base64: string): number {
+  const compact = base64.replace(/\s+/g, "");
+  if (compact.length === 0) return 0;
+  const padding = compact.endsWith("==") ? 2 : compact.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((compact.length * 3) / 4) - padding);
+}
+
+/**
+ * Whether it's safe to read a whole file's bytes just to measure its size —
+ * the rare fallback for when expo-file-system's own `File.size` comes back
+ * null/undefined (some content:// URIs don't expose it directly). Reading
+ * an unknown-size file into base64 just to discover it's 200MB is exactly
+ * what checking size BEFORE reading is meant to avoid, so this only allows
+ * the fallback when the picker's OWN reported size already says it's under
+ * the cap; otherwise it refuses outright rather than gamble on a phone
+ * choking on a huge file. Whatever this allows through still gets a real
+ * checkReceiptFile() call against the size actually measured after reading
+ * — the picker's figure here is only ever a pre-flight gate, never trusted
+ * as the final word.
+ */
+export function canFallBackToReadingForSize(pickerReportedBytes: number | null | undefined): ReceiptCheck {
+  if (typeof pickerReportedBytes !== "number" || !Number.isFinite(pickerReportedBytes)) {
+    return { ok: false, reason: "Couldn't read this file's size. Try a different file." };
+  }
+  if (pickerReportedBytes > MAX_RECEIPT_BYTES) {
+    return { ok: false, reason: "File exceeds the 10MB limit." };
+  }
+  return { ok: true };
+}
+
 /** Whether one more receipt may be added, given how many are on the claim already. */
 export function canAddReceipt(status: string, existingCount: number): ReceiptCheck {
   if (!claimTakesReceipts(status)) {

@@ -7,8 +7,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   ALLOWED_RECEIPT_EXTENSIONS, ALLOWED_RECEIPT_MIME_TYPES, MAX_RECEIPT_BYTES, MAX_RECEIPTS_PER_CLAIM,
-  canAddReceipt, checkReceiptFile, claimTakesReceipts, formatReceiptSize,
-  receiptExtension, receiptIcon, safeReceiptFileName,
+  base64ByteLength, canAddReceipt, canFallBackToReadingForSize, checkReceiptFile, claimTakesReceipts,
+  formatReceiptSize, receiptExtension, receiptIcon, reconcileReceiptFileName, safeReceiptFileName,
 } from "../src/expenseReceiptsFormat";
 
 describe("receiptExtension", () => {
@@ -113,6 +113,78 @@ describe("safeReceiptFileName", () => {
     const result = safeReceiptFileName(long);
     assert.ok(result.length <= 120);
     assert.match(result, /\.png$/);
+  });
+});
+
+describe("reconcileReceiptFileName", () => {
+  it("leaves a name whose extension already agrees with its mime type", () => {
+    assert.equal(reconcileReceiptFileName("bill.png", "image/png"), "bill.png");
+    assert.equal(reconcileReceiptFileName("scan.pdf", "application/pdf"), "scan.pdf");
+  });
+
+  it("treats .jpg and .jpeg as both already agreeing with image/jpeg", () => {
+    assert.equal(reconcileReceiptFileName("bill.jpg", "image/jpeg"), "bill.jpg");
+    assert.equal(reconcileReceiptFileName("bill.jpeg", "image/jpeg"), "bill.jpeg");
+  });
+
+  it("renames a HEIC-origin photo the gallery picker re-encoded to JPEG", () => {
+    assert.equal(reconcileReceiptFileName("IMG_1234.HEIC", "image/jpeg"), "IMG_1234.jpg");
+  });
+
+  it("renames a PNG-origin photo re-encoded to JPEG the same way", () => {
+    assert.equal(reconcileReceiptFileName("photo.png", "image/jpeg"), "photo.jpg");
+  });
+
+  it("appends the mime type's extension when the name has none", () => {
+    assert.equal(reconcileReceiptFileName("scan", "application/pdf"), "scan.pdf");
+  });
+
+  it("leaves the name alone when there's no mime type to reconcile against", () => {
+    assert.equal(reconcileReceiptFileName("odd-name.xyz", undefined), "odd-name.xyz");
+    assert.equal(reconcileReceiptFileName("odd-name.xyz", null), "odd-name.xyz");
+  });
+
+  it("leaves the name alone for a mime type it doesn't recognize (checkReceiptFile rejects it later)", () => {
+    assert.equal(reconcileReceiptFileName("bill.png", "application/zip"), "bill.png");
+  });
+
+  it("still strips path segments and control characters (delegates to safeReceiptFileName)", () => {
+    assert.equal(reconcileReceiptFileName("/cache/IMG.HEIC", "image/jpeg"), "IMG.jpg");
+  });
+});
+
+describe("base64ByteLength", () => {
+  it("matches the real decoded length for known base64 strings", () => {
+    assert.equal(base64ByteLength(""), 0);
+    assert.equal(base64ByteLength(Buffer.from("A").toString("base64")), 1);
+    assert.equal(base64ByteLength(Buffer.from("AB").toString("base64")), 2);
+    assert.equal(base64ByteLength(Buffer.from("ABC").toString("base64")), 3);
+    assert.equal(base64ByteLength(Buffer.from("ABCD").toString("base64")), 4);
+  });
+
+  it("ignores embedded whitespace", () => {
+    const b64 = Buffer.from("ABCD").toString("base64");
+    const withNewlines = `${b64.slice(0, 2)}\n${b64.slice(2)}`;
+    assert.equal(base64ByteLength(withNewlines), 4);
+  });
+});
+
+describe("canFallBackToReadingForSize", () => {
+  it("refuses when the picker never reported a size either", () => {
+    assert.equal(canFallBackToReadingForSize(undefined).ok, false);
+    assert.equal(canFallBackToReadingForSize(null).ok, false);
+    assert.equal(canFallBackToReadingForSize(Number.NaN).ok, false);
+  });
+
+  it("refuses when the picker's own reported size is already over the limit", () => {
+    const r = canFallBackToReadingForSize(MAX_RECEIPT_BYTES + 1);
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.match(r.reason, /10MB limit/);
+  });
+
+  it("allows reading when the picker reports a size at or under the limit", () => {
+    assert.equal(canFallBackToReadingForSize(1000).ok, true);
+    assert.equal(canFallBackToReadingForSize(MAX_RECEIPT_BYTES).ok, true);
   });
 });
 
