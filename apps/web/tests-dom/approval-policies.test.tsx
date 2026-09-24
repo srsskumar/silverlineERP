@@ -154,6 +154,33 @@ describe('ApprovalPolicyForm', () => {
   });
 });
 
+describe('fix round 1 item 5 — editing a policy locks document type and project', () => {
+  const existing = {
+    id: 'policy-7', document_type: 'PAYMENT', name: 'Payments DoA', mode: 'CUMULATIVE',
+    project_id: null, tolerance_pct: 0, active: true, version: 2,
+    levels: [{ sequence: 1, min_amount: 0, max_amount: null, approver_role: 'ADMIN', approver_user_id: null, sla_hours: null }],
+  };
+
+  it('shows the document type and project as locked text, not editable controls', async () => {
+    mount(<ApprovalPolicyForm initial={existing} onClose={vi.fn()} onSaved={vi.fn()} />);
+
+    await screen.findByText('Payment');
+    expect(screen.queryByLabelText(/Document type/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Project/)).not.toBeInTheDocument();
+  });
+
+  it('still submits the original document_type and project_id even though they cannot be edited', async () => {
+    mount(<ApprovalPolicyForm initial={existing} onClose={vi.fn()} onSaved={vi.fn()} />);
+
+    await screen.findByText('Payment');
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'Payments DoA v2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save policy' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0].body).toMatchObject({ document_type: 'PAYMENT', project_id: null, name: 'Payments DoA v2' });
+  });
+});
+
 describe('ApprovalPoliciesManager deactivate', () => {
   it('sends the version in If-Match to POST .../:id/deactivate', async () => {
     handlers['GET /api/v1/approval-policies'] = () => jsonResponse({

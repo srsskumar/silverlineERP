@@ -83,6 +83,15 @@ export function ApprovalPolicyForm({
   });
   const { fields, append, remove } = useFieldArray({ control, name: 'levels' });
 
+  const lockedProject = initial?.project_id
+    ? (projects.data ?? []).find((p) => String(p.id) === String(initial.project_id))
+    : null;
+  const lockedProjectLabel = !initial?.project_id
+    ? 'Org-wide'
+    : lockedProject
+      ? `${lockedProject.code} — ${lockedProject.name}`
+      : String(initial.project_id);
+
   const save = useMutation({
     mutationFn: (v: ApprovalPolicyFormInput) => createApprovalPolicy(v),
     onSuccess: (row) => {
@@ -102,14 +111,29 @@ export function ApprovalPolicyForm({
       subtitle="The ladder a document of this type must climb before it is approved."
     >
       <form onSubmit={handleSubmit((v) => save.mutate(v))} noValidate>
+        {initial ? (
+          <p className="mb-3 rounded-lg border border-border bg-surface-sunken p-3 text-2xs text-text-muted">
+            Document type and project are locked while editing. This save replaces whichever policy is currently
+            active for them — changing either here would leave this policy active for its old document type or
+            project <em>and</em> create a second, separate one for the new choice, rather than moving this ladder.
+            To govern a different document type or project, deactivate this policy and create a new one there.
+          </p>
+        ) : null}
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="text-xs text-text-muted">
             Document type
-            <select className="mt-1 w-full" {...register('document_type')}>
-              {APPROVAL_DOCUMENT_TYPES.map((t) => (
-                <option key={t} value={t}>{DOCUMENT_TYPE_LABELS[t] ?? t}</option>
-              ))}
-            </select>
+            {initial ? (
+              <>
+                <input type="hidden" {...register('document_type')} />
+                <p className="mt-1 text-sm text-text">{DOCUMENT_TYPE_LABELS[initial.document_type] ?? initial.document_type}</p>
+              </>
+            ) : (
+              <select className="mt-1 w-full" {...register('document_type')}>
+                {APPROVAL_DOCUMENT_TYPES.map((t) => (
+                  <option key={t} value={t}>{DOCUMENT_TYPE_LABELS[t] ?? t}</option>
+                ))}
+              </select>
+            )}
             <FieldError message={errors.document_type?.message} />
           </label>
           <label className="text-xs text-text-muted">
@@ -126,12 +150,19 @@ export function ApprovalPolicyForm({
           </label>
           <label className="text-xs text-text-muted">
             Project (optional — leave blank for the org-wide default)
-            <select className="mt-1 w-full" {...register('project_id')}>
-              <option value="">Org-wide</option>
-              {(projects.data ?? []).map((p) => (
-                <option key={String(p.id)} value={String(p.id)}>{p.code} — {p.name}</option>
-              ))}
-            </select>
+            {initial ? (
+              <>
+                <input type="hidden" {...register('project_id')} />
+                <p className="mt-1 text-sm text-text">{lockedProjectLabel}</p>
+              </>
+            ) : (
+              <select className="mt-1 w-full" {...register('project_id')}>
+                <option value="">Org-wide</option>
+                {(projects.data ?? []).map((p) => (
+                  <option key={String(p.id)} value={String(p.id)}>{p.code} — {p.name}</option>
+                ))}
+              </select>
+            )}
             <FieldError message={errors.project_id?.message} />
           </label>
           <label className="text-xs text-text-muted">
