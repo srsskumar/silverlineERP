@@ -802,7 +802,14 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
     return { data: rows };
   });
 
-  app.post('/api/v1/expense-claims/:id/receipts', { preHandler: guard('expense.manage') }, async (req, reply) => {
+  app.post('/api/v1/expense-claims/:id/receipts', {
+    preHandler: guard('expense.manage'),
+    // The app-wide bodyLimit (createApp.ts) stays at 8 MiB for every other
+    // route; only this one decodes a base64 body that can legitimately run
+    // to ~13.3 MiB (MAX_RECEIPT_BYTES' 10 MiB), so only this one raises it
+    // (fix round 1, B-002 review).
+    bodyLimit: 15 * 1024 * 1024,
+  }, async (req, reply) => {
     const u = actor(req), id = (req.params as { id: string }).id;
     const input = parse(expenseReceiptUploadSchema, req.body);
     const row = await mutate(pool, req, 'expense.receipt.upload', 'expense_receipt', async db => {

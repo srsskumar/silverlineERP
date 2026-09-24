@@ -821,4 +821,31 @@ describe("expense receipts (B-003)", () => {
     const list = await get(w.other.admin, `/api/v1/expense-claims/${claim.id}/receipts`);
     expect(list.status).toBe(404);
   });
+
+  it("still accepts a receipt well past the app-wide 8MB body limit (fix round 1)", async () => {
+    // The route's own 15MB bodyLimit override (expenses/routes.ts) has to
+    // actually take effect, not just exist unused — 9MB of decoded bytes
+    // base64-expands to about 12MB, comfortably over the reverted 8MB
+    // global default and comfortably under both this route's 15MB and
+    // MAX_RECEIPT_BYTES' 10MB.
+    const claim = await draftClaim();
+    const big = png("x".repeat(9 * 1024 * 1024));
+    const upload = await post(w.directUser, `/api/v1/expense-claims/${claim.id}/receipts`, {
+      file_name: "nine-mb.png", content_base64: big,
+    });
+    expect(upload.status, JSON.stringify(upload.body)).toBe(201);
+  });
+});
+
+describe("app-wide body limit (fix round 1, B-002 review)", () => {
+  it("refuses an oversized body with 413 on an ordinary route, not just the receipts one", async () => {
+    // The receipts route alone raises its own bodyLimit; every other route
+    // — this one included — has to stay at the app-wide 8MB default, or the
+    // global raise this fix round undid is effectively still in force.
+    const res = await post(w.admin, "/api/v1/cost-heads", {
+      code: uniq("BIG"), name: "x", kind: "OTHER",
+      junk: "a".repeat(9 * 1024 * 1024),
+    });
+    expect(res.status).toBe(413);
+  });
 });
