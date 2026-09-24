@@ -538,3 +538,57 @@ describe("SV-016 certified totals are version-checked", () => {
     expect((await figure()).certified).toBeNull();
   });
 });
+
+/*
+ * SV-017: survey's "today" is the organisation's day, as the alerts already
+ * are (D-013), not India's by hard-coding. Run against the second tenant with
+ * a timezone chosen so its calendar day differs from IST at this instant:
+ * Kiritimati (UTC+14) is a day ahead from 15:30 IST, Pago Pago (UTC-11) a day
+ * behind before 16:30 IST, so one of them always disagrees.
+ */
+describe("SV-017 the organisation's own day", () => {
+  const dayIn = (tz: string) => new Intl.DateTimeFormat("en-CA",
+    { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const ist = dayIn("Asia/Kolkata");
+  const zone = dayIn("Pacific/Kiritimati") !== ist ? "Pacific/Kiritimati" : "Pacific/Pago_Pago";
+  let v: string;
+  let employeeId: string;
+
+  beforeAll(async () => {
+    await w.pool.query(
+      `UPDATE organizations SET settings = settings || jsonb_build_object('timezone', $2::text)
+        WHERE id = $1`, [w.other.orgId, zone]);
+    // The second tenant carries no survey pipeline of its own.
+    await w.pool.query(
+      `INSERT INTO survey_stages(org_id, code, label, display_order)
+       VALUES($1,'GROUND_TRUTHING','Ground truthing',10) ON CONFLICT (org_id, code) DO NOTHING`,
+      [w.other.orgId]);
+    const mandal = String((await w.pool.query(
+      `INSERT INTO org_units(org_id,type,code,name,parent_id) VALUES($1,'mandal',$2,'TZ mandal',$3) RETURNING id`,
+      [w.other.orgId, uniq("TM"), w.other.district])).rows[0].id);
+    const p = await post(w.other.admin, "/api/v1/survey/projects",
+      { code: uniq("TZ"), name: "Timezone programme", create_project: false });
+    expect(p.status, JSON.stringify(p.body)).toBe(201);
+    const made = await post(w.other.admin, `/api/v1/survey/projects/${p.data.id}/villages`,
+      { village_name: "TZ village", village_code: uniq("TV"), mandal_id: mandal, total_extent_ac: 10 });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    v = String(made.data.id);
+    employeeId = w.other.employee;
+  });
+
+  afterAll(async () => {
+    await w.pool.query(`UPDATE organizations SET settings = settings - 'timezone' WHERE id = $1`,
+      [w.other.orgId]);
+  });
+
+  it("dates a crew assignment and its release by the organisation's day", async () => {
+    expect(dayIn(zone)).not.toBe(ist);
+    const c = await post(w.other.admin, `/api/v1/survey/villages/${v}/crew`,
+      { employee_id: employeeId, stage_code: "GROUND_TRUTHING" });
+    expect(c.status, JSON.stringify(c.body)).toBe(201);
+    expect(String(c.data.assigned_on).slice(0, 10)).toBe(dayIn(zone));
+    const r = await post(w.other.admin, `/api/v1/survey/crew/${c.data.id}/release`, {});
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(String(r.data.released_on).slice(0, 10)).toBe(dayIn(zone));
+  });
+});

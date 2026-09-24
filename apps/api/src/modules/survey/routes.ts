@@ -36,7 +36,7 @@ import {
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { z } from 'zod';
 import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
-import { orgTodaySql } from '../../common/orgTime.js';
+import { orgTodaySql, orgTimeZone, cachedOrgZone } from '../../common/orgTime.js';
 
 /**
  * Land survey progress (§59).
@@ -51,16 +51,24 @@ export async function registerSurveyRoutes(
 ) {
   const { pool } = opts;
   const auth = buildAuthenticate(opts);
-  const guard = (p: string) => requirePermission(auth, p);
-  // The calendar day where the work happens, not in UTC. For the first
-  // five and a half hours of every Indian day, UTC is still yesterday.
-  const today = () => businessDay();
+  /*
+   * Every survey route loads the caller's organisation timezone after the
+   * permission check (SV-017), so today(orgId) below is synchronous and
+   * agrees with the SQL jobs' orgTodaySql().
+   */
+  const loadZone = async (req: FastifyRequest) => {
+    if (req.authUser?.orgId) await orgTimeZone(pool, req.authUser.orgId);
+  };
+  const guard = (p: string) => [requirePermission(auth, p), loadZone];
+  // The calendar day where the work happens, in the organisation's own
+  // timezone (default Asia/Kolkata), not in UTC and not fixed to IST.
+  const today = (orgId?: string | null) => businessDay(new Date(), cachedOrgZone(orgId));
   // A timestamp becomes the calendar day it fell on *here*, not in UTC. A
   // stage completed at half past midnight would otherwise be dated to the day
   // before on the summary sheet. Date columns land on the same answer either
   // way, so one helper serves both.
-  const iso = (v: unknown) =>
-    v instanceof Date ? businessDay(v) : v ? String(v).slice(0, 10) : null;
+  const iso = (v: unknown, orgId?: string | null) =>
+    v instanceof Date ? businessDay(v, cachedOrgZone(orgId)) : v ? String(v).slice(0, 10) : null;
   const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
 
   /**
@@ -185,7 +193,7 @@ export async function registerSurveyRoutes(
     db: Pool | PoolClient, orgId: string, projectId: string,
     opts: { asOf?: string; from?: string; villageId?: string } = {},
   ): Promise<Array<VillageProgress & { row: Record<string, any> }>> {
-    const asOf = opts.asOf ?? today();
+    const asOf = opts.asOf ?? today(orgId);
     const values: unknown[] = [orgId, projectId, asOf];
     // `from` bounds what was done *in* a period. Cumulative and percentage
     // complete always run from the beginning, because "40% done" is a
@@ -311,8 +319,8 @@ export async function registerSurveyRoutes(
         stageCode: String(s.stage_code),
         linked: Boolean(s.task_id),
         taskStatus: s.task_status,
-        taskStartedAt: iso(s.actual_start_at),
-        taskCompletedAt: iso(s.actual_end_at),
+        taskStartedAt: iso(s.actual_start_at, orgId),
+        taskCompletedAt: iso(s.actual_end_at, orgId),
         ownState: s.own_state as StageState,
         ownStartedOn: iso(s.own_started_on),
         ownCompletedOn: iso(s.own_completed_on),
@@ -1092,7 +1100,7 @@ export async function registerSurveyRoutes(
 
     const [m, codes, all] = await Promise.all([
       measures(pool, u.orgId), stageCodes(pool, u.orgId),
-      positions(pool, u.orgId, id, { asOf: dateParam(req, q.as_of, 'as_of', today()) }),
+      positions(pool, u.orgId, id, { asOf: dateParam(req, q.as_of, 'as_of', today(u.orgId)) }),
     ]);
 
     /*
@@ -1136,7 +1144,7 @@ export async function registerSurveyRoutes(
     const [m, codes, all] = await Promise.all([
       measures(pool, u.orgId), stageCodes(pool, u.orgId),
       positions(pool, u.orgId, String(sv.survey_project_id), {
-        asOf: dateParam(req, q.as_of, 'as_of', today()), villageId: id,
+        asOf: dateParam(req, q.as_of, 'as_of', today(u.orgId)), villageId: id,
       }),
     ]);
     if (!all.length) fail('NOT_FOUND', 'Not found', 404);
@@ -1350,7 +1358,7 @@ export async function registerSurveyRoutes(
           ? input.started_on : iso(held?.started_on);
         // Work that has not happened yet is not a date anybody can record,
         // and a finish before the start is a typo (SV-008).
-        const now = today();
+        const now = today(u.orgId);
         if (startedOn && input.started_on !== undefined && startedOn > now) {
           fail('VALIDATION_ERROR', `A stage cannot start in the future (${startedOn}).`, 422);
         }
@@ -1504,7 +1512,7 @@ export async function registerSurveyRoutes(
           completedOn: iso(row.completed_on),
           expectedEndOn: iso(row.expected_end_on),
           varianceReason: row.variance_reason,
-        }, today());
+        }, today(u.orgId));
         return {
           ...row,
           started_on: iso(row.started_on),
@@ -1715,7 +1723,7 @@ export async function registerSurveyRoutes(
    */
   app.get('/api/v1/survey/me/villages', { preHandler: guard('survey.read') }, async req => {
     const u = actor(req);
-    const workDate = today();
+    const workDate = today(u.orgId);
     const rows = (await pool.query(
       `SELECT DISTINCT ON (sv.id)
               sv.id, sv.survey_project_id, sv.total_extent_ac,
@@ -1806,7 +1814,7 @@ export async function registerSurveyRoutes(
              assigned_on, released_on, created_by)
            VALUES($1,$2,$3,$4,$5::date,$6,$7) RETURNING *`,
           [u.orgId, id, stage.id, input.employee_id,
-            input.assigned_on ?? today(), input.released_on ?? null, u.id])).rows[0];
+            input.assigned_on ?? today(u.orgId), input.released_on ?? null, u.id])).rows[0];
         // Said rather than done silently: somebody who expected to allocate
         // the rovers needs to know it has already happened.
         return { ...crewRow, rovers_brought: kit.brought, rovers_left_elsewhere: kit.elsewhere };
@@ -1851,7 +1859,7 @@ export async function registerSurveyRoutes(
                WHERE survey_village_id = $2 AND stage_id = $3 AND employee_id = $4
                  AND released_on IS NULL)
              RETURNING id`,
-            [u.orgId, id, stage.id, employeeId, input.assigned_on ?? today(), u.id]);
+            [u.orgId, id, stage.id, employeeId, input.assigned_on ?? today(u.orgId), u.id]);
           if (done.rowCount) {
             assigned.push(employeeId);
             // Their instruments come with them, so nobody allocates the same
@@ -2021,7 +2029,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(z.object({ released_on: z.string().optional() }), req.body ?? {});
       // A typed date, checked here: handed raw to $n::date it was a 500 (SV-004).
-      const releasedOn = dateParam(req, input.released_on, 'released_on', today());
+      const releasedOn = dateParam(req, input.released_on, 'released_on', today(u.orgId));
       return {
         data: await mutate(pool, req, 'survey.crew.release', 'survey_crew', async db => {
           const row = (await db.query(
@@ -2120,7 +2128,7 @@ export async function registerSurveyRoutes(
 
       return {
         data: rows.map(r => {
-          const row = { ...r, issued_at: iso(r.issued_at), due_date: iso(r.due_date) };
+          const row = { ...r, issued_at: iso(r.issued_at, u.orgId), due_date: iso(r.due_date) };
           return masksPhones(u) ? withoutPhone(row) : row;
         }),
       };
@@ -2186,7 +2194,7 @@ export async function registerSurveyRoutes(
            ),
            $5,$6)
          RETURNING allocated_on`,
-        [orgId, villageId, k.asset_id, on ?? today(), userId, employeeId])).rows[0];
+        [orgId, villageId, k.asset_id, on ?? today(orgId), userId, employeeId])).rows[0];
       brought.push(String(k.label));
       startedOn.set(String(k.label), String(started.allocated_on).slice(0, 10));
     }
@@ -2209,7 +2217,7 @@ export async function registerSurveyRoutes(
           SET released_on = $4::date
         WHERE org_id = $1 AND survey_village_id = $2
           AND assigned_via_employee_id = $3 AND released_on IS NULL`,
-      [orgId, villageId, employeeId, on ?? today()])).rowCount ?? 0;
+      [orgId, villageId, employeeId, on ?? today(orgId)])).rowCount ?? 0;
   }
 
   app.post('/api/v1/survey/villages/:id/rovers', { preHandler: guard('survey.manage') },
@@ -2254,7 +2262,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(z.object({ released_on: z.string().optional() }), req.body ?? {});
       // A typed date, checked here: handed raw to $n::date it was a 500 (SV-004).
-      const releasedOn = dateParam(req, input.released_on, 'released_on', today());
+      const releasedOn = dateParam(req, input.released_on, 'released_on', today(u.orgId));
       return {
         data: await mutate(pool, req, 'survey.rover.release', 'survey_rover_allocation',
           async db => {
@@ -2426,7 +2434,7 @@ export async function registerSurveyRoutes(
       const backdatedBeforeGt = Boolean(
         gtStage?.startedOn && input.entry_date < gtStage.startedOn);
 
-      if (gtStage && gtReasonRequired(gtStage, today())) {
+      if (gtStage && gtReasonRequired(gtStage, today(u.orgId))) {
         if (!input.gt_variance_reason) {
           fail('GT_VARIANCE_REASON_REQUIRED',
             `Ground truthing on this village was due on ${gtStage.expectedEndOn} and is `
@@ -2537,7 +2545,7 @@ export async function registerSurveyRoutes(
         version(req, row as { version: number });
 
         const entryDay = String(row.entry_date).slice(0, 10);
-        if (entryDay !== businessDay() && !u.permissions.includes('survey.manage')) {
+        if (entryDay !== today(u.orgId) && !u.permissions.includes('survey.manage')) {
           fail('PAST_DAY_AMENDMENT',
             `${entryDay} has already been rolled up and reported on. Correcting an earlier `
             + 'day is a decision about the record rather than a typo, so it needs a '
@@ -2646,11 +2654,11 @@ export async function registerSurveyRoutes(
     // Validated like every other window in this module: a value that is not a
     // date reaches Postgres as `$n::date` and comes back as a 500.
     if (q.from) {
-      values.push(dateParam(req, q.from, 'from', today()));
+      values.push(dateParam(req, q.from, 'from', today(u.orgId)));
       where += ` AND e.entry_date >= $${values.length}`;
     }
     if (q.to) {
-      values.push(dateParam(req, q.to, 'to', today()));
+      values.push(dateParam(req, q.to, 'to', today(u.orgId)));
       where += ` AND e.entry_date <= $${values.length}`;
     }
     values.push(limit + 1, offset);
@@ -2709,7 +2717,7 @@ export async function registerSurveyRoutes(
       const { q } = page(req);
       await projectOr404(pool, u.orgId, id, u);
 
-      const to = dateParam(req, q.to, 'to', today());
+      const to = dateParam(req, q.to, 'to', today(u.orgId));
       const from = dateParam(req, q.from, 'from', to);
       if (from > to) fail('VALIDATION_ERROR', 'The window starts after it ends', 422);
       const span = Math.round(
@@ -2847,7 +2855,7 @@ export async function registerSurveyRoutes(
       for (const r of rows) {
         const code = String(r.stage_code);
         if (!durations[code]) durations[code] = { startedOn: null, completedOn: null, days: null };
-        const at = iso(r.changed_at);
+        const at = iso(r.changed_at, u.orgId);
         if (r.to_state === 'IN_PROGRESS' && !durations[code].startedOn) durations[code].startedOn = at;
         if (r.to_state === 'COMPLETED') durations[code].completedOn = at;
       }
@@ -2861,7 +2869,7 @@ export async function registerSurveyRoutes(
 
       return {
         data: {
-          movements: rows.map(r => ({ ...r, changed_at: r.changed_at, on_date: iso(r.changed_at) })),
+          movements: rows.map(r => ({ ...r, changed_at: r.changed_at, on_date: iso(r.changed_at, u.orgId) })),
           durations,
         },
       };
@@ -3077,7 +3085,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       const village = await villageOr404(pool, u.orgId, id, u);
-      const to = dateParam(req, q.to, 'to', today());
+      const to = dateParam(req, q.to, 'to', today(u.orgId));
       const from = dateParam(req, q.from, 'from', '1900-01-01');
 
       const rows = (await pool.query(
@@ -3426,7 +3434,7 @@ export async function registerSurveyRoutes(
           // here with nothing to release first.
           held_by_village_id: r.held_by_village_id,
           held_by_village_name: r.held_by_village_name,
-          held_since: iso(r.held_since),
+          held_since: iso(r.held_since, u.orgId),
         })),
       };
     });
@@ -3450,7 +3458,7 @@ export async function registerSurveyRoutes(
       return {
         data: await mutate(pool, req, 'survey.rover.claim', 'survey_rover_allocation', async db => {
           await villageOr404(db, u.orgId, id, u);
-          const on = input.on ?? today();
+          const on = input.on ?? today(u.orgId);
           const brought: string[] = [], refused: Array<{ asset_code: string; why: string }> = [];
           const arriving: Array<{ asset_code: string; on: string }> = [];
 
@@ -3572,7 +3580,7 @@ export async function registerSurveyRoutes(
             difference: cert === null ? null : round2(cert - rec),
             reason: f ? f.reason : null,
             certified_by_name: f ? f.certified_by_name : null,
-            certified_at: f ? iso(f.certified_at) : null,
+            certified_at: f ? iso(f.certified_at, u.orgId) : null,
             final_id: f ? f.id : null,
             version: f ? f.version : null,
           };
@@ -3793,7 +3801,7 @@ export async function registerSurveyRoutes(
               // Defaulted from the milestone so the usual case needs no
               // decision; stored, so a different contract keeps its own split.
               input.percent ?? MILESTONE_PERCENT[input.milestone] ?? 0,
-              status, input.submitted_on ?? today(), input.decided_on ?? null,
+              status, input.submitted_on ?? today(u.orgId), input.decided_on ?? null,
               input.reference_no ?? null, input.extent_ac ?? null,
               input.remarks ?? null, u.id])).rows[0];
           return { ...row, percent: num(row.percent), extent_ac: num(row.extent_ac) };
@@ -4246,7 +4254,7 @@ export async function registerSurveyRoutes(
                             version = version + 1, updated_at = now(), updated_by = $7
                       WHERE id = $1`,
                     [r.claim_id, input.percent ?? MILESTONE_PERCENT[input.milestone] ?? 0,
-                      input.submitted_on ?? today(), input.reference_no ?? null,
+                      input.submitted_on ?? today(u.orgId), input.reference_no ?? null,
                       input.use_village_extent ? r.total_extent_ac : null,
                       input.remarks ?? null, u.id]);
                   continue;
@@ -4258,7 +4266,7 @@ export async function registerSurveyRoutes(
                    VALUES($1,$2,$3,$4,'SUBMITTED',$5::date,$6,$7,$8,$9,$9)`,
                   [u.orgId, r.id, input.milestone,
                     input.percent ?? MILESTONE_PERCENT[input.milestone] ?? 0,
-                    input.submitted_on ?? today(), input.reference_no ?? null,
+                    input.submitted_on ?? today(u.orgId), input.reference_no ?? null,
                     input.use_village_extent ? r.total_extent_ac : null,
                     input.remarks ?? null, u.id]);
               }
@@ -4342,7 +4350,7 @@ export async function registerSurveyRoutes(
              DO UPDATE SET project_role = EXCLUDED.project_role, released_on = NULL
              RETURNING *`,
             [u.orgId, id, input.employee_id, input.project_role,
-              input.assigned_on ?? today(), u.id])).rows[0];
+              input.assigned_on ?? today(u.orgId), u.id])).rows[0];
         });
       reply.code(201);
       return { data: row };
@@ -4359,7 +4367,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       await projectOr404(pool, u.orgId, id, u);
-      const to = dateParam(req, q.to, 'to', today());
+      const to = dateParam(req, q.to, 'to', today(u.orgId));
       const from = dateParam(req, q.from, 'from', '1900-01-01');
 
       const rows = (await pool.query(
@@ -4414,7 +4422,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       await projectOr404(pool, u.orgId, id, u);
-      const to = dateParam(req, q.to, 'to', today());
+      const to = dateParam(req, q.to, 'to', today(u.orgId));
       const from = dateParam(req, q.from, 'from', '1900-01-01');
 
       const rows = (await pool.query(
@@ -4486,7 +4494,7 @@ export async function registerSurveyRoutes(
       const { id, assetId } = req.params as { id: string; assetId: string };
       const { q } = page(req);
       await projectOr404(pool, u.orgId, id, u);
-      const to = dateParam(req, q.to, 'to', today());
+      const to = dateParam(req, q.to, 'to', today(u.orgId));
       const from = dateParam(req, q.from, 'from', '1900-01-01');
 
       const rows = (await pool.query(
@@ -4676,7 +4684,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       await projectOr404(pool, u.orgId, id, u);
-      const from = dateParam(req, q.from, 'from', today());
+      const from = dateParam(req, q.from, 'from', today(u.orgId));
       const to = dateParam(req, q.to, 'to', from);
 
       const rows = (await pool.query(
@@ -4738,7 +4746,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       const programme = await projectOr404(pool, u.orgId, id, u);
-      const asOf = dateParam(req, q.as_of, 'as_of', today());
+      const asOf = dateParam(req, q.as_of, 'as_of', today(u.orgId));
 
       const [pipeline, pos] = await Promise.all([
         stagePipeline(pool, u.orgId), positions(pool, u.orgId, id, { asOf }),
@@ -4813,7 +4821,7 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const { q } = page(req);
       const programme = await projectOr404(pool, u.orgId, id, u);
-      const asOf = dateParam(req, q.as_of, 'as_of', today());
+      const asOf = dateParam(req, q.as_of, 'as_of', today(u.orgId));
 
       const [m, codes, pos] = await Promise.all([
         measures(pool, u.orgId), stageCodes(pool, u.orgId),
@@ -4902,8 +4910,8 @@ export async function registerSurveyRoutes(
 
       const level = (REPORT_LEVELS as readonly string[]).includes(String(q.level))
         ? String(q.level) as ReportLevel : 'mandal';
-      const asOf = dateParam(req, q.to ?? q.as_of, q.to ? 'to' : 'as_of', today());
-      const from = q.from ? dateParam(req, q.from, 'from', today()) : undefined;
+      const asOf = dateParam(req, q.to ?? q.as_of, q.to ? 'to' : 'as_of', today(u.orgId));
+      const from = q.from ? dateParam(req, q.from, 'from', today(u.orgId)) : undefined;
 
       const [m, codes, all, pipeline] = await Promise.all([
         measures(pool, u.orgId), stageCodes(pool, u.orgId),
@@ -5235,7 +5243,7 @@ export async function registerSurveyRoutes(
         ? await observerProgrammeOr404(pool, u, id)
         : await projectOr404(pool, u.orgId, id, u);
 
-      const to = dateParam(req, q.to, 'to', today());
+      const to = dateParam(req, q.to, 'to', today(u.orgId));
       const from = dateParam(req, q.from, 'from', '');
       const level = (REPORT_LEVELS as readonly string[]).includes(String(q.level ?? ''))
         ? String(q.level) as ReportLevel : 'district';
@@ -5331,7 +5339,7 @@ export async function registerSurveyRoutes(
                   holders.names, holders.people`,
         [id, u.orgId])).rows;
 
-      const asOf = today();
+      const asOf = today(u.orgId);
       const villages = rows.map(r => {
         const stages = (r.stages ?? {}) as Record<string, StageState>;
         const plan = (r.stage_plan ?? []) as Array<Record<string, string | null>>;
@@ -6255,7 +6263,7 @@ export async function registerSurveyRoutes(
     { preHandler: guard('survey.manage') }, async (req, reply) => {
       const u = actor(req);
       const input = parse(alertSubscriptionSchema, req.body);
-      if (input.active_until < today()) {
+      if (input.active_until < today(u.orgId)) {
         fail('VALIDATION_ERROR',
           `An alert that stops on ${input.active_until} has already stopped. `
           + 'Pick a date in the future.', 422);
@@ -6321,7 +6329,7 @@ export async function registerSurveyRoutes(
 
       const grain = (PERIOD_GRAINS as readonly string[]).includes(String(q.grain))
         ? String(q.grain) as PeriodGrain : 'DAY';
-      const asOf = dateParam(req, q.as_of, 'as_of', today());
+      const asOf = dateParam(req, q.as_of, 'as_of', today(u.orgId));
 
       /*
        * A range somebody chose, rather than a calendar period.
@@ -6334,8 +6342,8 @@ export async function registerSurveyRoutes(
        */
       const custom = q.from && q.to
         ? {
-          from: dateParam(req, q.from, 'from', today()),
-          to: dateParam(req, q.to, 'to', today()),
+          from: dateParam(req, q.from, 'from', today(u.orgId)),
+          to: dateParam(req, q.to, 'to', today(u.orgId)),
         }
         : null;
       if (custom && custom.from > custom.to) {
@@ -6509,9 +6517,9 @@ export async function registerSurveyRoutes(
 
       const grain = (['DAY', 'WEEK', 'MONTH', 'YEAR'] as const).includes(String(q.grain) as PeriodGrain)
         ? String(q.grain) as PeriodGrain : 'MONTH';
-      const fy = financialYearRange(today());
+      const fy = financialYearRange(today(u.orgId));
       const from = dateParam(req, q.from, 'from', fy.from);
-      const to = dateParam(req, q.to, 'to', today());
+      const to = dateParam(req, q.to, 'to', today(u.orgId));
 
       const buckets = periodBuckets(from, to, grain);
       if (buckets.length > 400) {
