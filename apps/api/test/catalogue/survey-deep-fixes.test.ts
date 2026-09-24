@@ -436,3 +436,28 @@ describe("SV-022 bulk decisions and reversals, row by row", () => {
     expect(await statusOf(early)).toBe("APPROVED");
   });
 });
+
+/*
+ * SV-023: SV-011's transition table left out approved -> submitted, which is
+ * what the web's "Undo decision" sends when somebody pressed Approved on the
+ * wrong row. Undoing a decision is not undoing a payment; only PAID is closed.
+ */
+describe("SV-023 undoing an approval", () => {
+  it("puts an approved claim back to submitted", async () => {
+    const v = await village("Undo village");
+    expect((await startGt(v, [await employee()], day(-6))).status).toBe(201);
+    let n = -5;
+    for (const code of ["GROUND_TRUTHING", "GT_QC"]) {
+      await post(w.admin, `/api/v1/survey/villages/${v}/stage`, { stage_code: code, state: "IN_PROGRESS", started_on: day(n) });
+      await post(w.admin, `/api/v1/survey/villages/${v}/stage`, { stage_code: code, state: "COMPLETED", started_on: day(n), completed_on: day(n + 1) });
+      n += 1;
+    }
+    const c = await post(w.admin, `/api/v1/survey/villages/${v}/billing`,
+      { milestone: 1, submitted_on: day(-2), status: "APPROVED", decided_on: day(-1) });
+    expect(c.status, JSON.stringify(c.body)).toBe(201);
+    const r = await send("PATCH", w.admin, `/api/v1/survey/billing/${c.data.id}`,
+      { status: "SUBMITTED", decided_on: null }, { "if-match": String(c.data.version) });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.status).toBe("SUBMITTED");
+  });
+});

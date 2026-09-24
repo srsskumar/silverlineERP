@@ -2219,7 +2219,8 @@ export function billingDecisionRequired(status: BillingStatus): boolean {
  */
 export const BILLING_TRANSITIONS: Record<BillingStatus, BillingStatus[]> = {
   SUBMITTED: ['APPROVED', 'REJECTED', 'PAID'],
-  APPROVED: ['PAID', 'REJECTED'],
+  // Back to submitted undoes a decision pressed on the wrong row (SV-023).
+  APPROVED: ['PAID', 'REJECTED', 'SUBMITTED'],
   REJECTED: ['SUBMITTED'],
   PAID: [],
 };
