@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { paise } from "../../common/money.js";
+import { addMoney, lineAmount, percentOf } from "@silverline/shared";
 import type { Pool, PoolClient } from 'pg';
 import {
   requisitionSchema, purchaseOrderSchema, grnSchema,
@@ -213,12 +213,12 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
       }
 
       const lines = input.lines.map(l => {
-        const taxable = paise(l.quantity * l.unit_rate);
-        const tax = paise(taxable * l.gst_rate_pct / 100);
-        return { ...l, taxable, tax, total: paise(taxable + tax) };
+        const taxable = lineAmount(l.quantity, l.unit_rate);
+        const tax = percentOf(taxable, l.gst_rate_pct);
+        return { ...l, taxable, tax, total: addMoney(taxable, tax) };
       });
-      const taxableValue = lines.reduce((t, l) => t + l.taxable, 0);
-      const taxAmount = lines.reduce((t, l) => t + l.tax, 0);
+      const taxableValue = addMoney(...lines.map(l => l.taxable));
+      const taxAmount = addMoney(...lines.map(l => l.tax));
 
       const po = (await db.query(
         `INSERT INTO purchase_orders(org_id, created_by, po_number, vendor_id, requisition_id,
@@ -229,7 +229,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
         [u.orgId, u.id, input.po_number, input.vendor_id, input.requisition_id ?? null,
          input.project_id ?? null, input.po_date, input.delivery_date ?? null,
          input.payment_terms ?? null, input.delivery_address ?? null, input.place_of_supply ?? null,
-         taxableValue.toFixed(2), taxAmount.toFixed(2), (taxableValue + taxAmount).toFixed(2),
+         taxableValue.toFixed(2), taxAmount.toFixed(2), addMoney(taxableValue, taxAmount).toFixed(2),
          override ? u.id : null, override?.reason ?? null, override ? new Date() : null])).rows[0];
 
       let lineNo = 0;
@@ -254,7 +254,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
            VALUES($1,'PURCHASE_ORDER',$2,'PAYMENT',$3,$4,$5)
            ON CONFLICT DO NOTHING`,
           [u.orgId, input.requisition_id, po.id,
-           JSON.stringify({ total_value: (taxableValue + taxAmount).toFixed(2) }), u.id]);
+           JSON.stringify({ total_value: addMoney(taxableValue, taxAmount).toFixed(2) }), u.id]);
       }
       return { ...po, lines };
     });
@@ -751,12 +751,12 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
         if (!change) continue;
         const quantity = change.quantity ?? Number(l.quantity);
         const rate = change.unit_rate ?? Number(l.unit_rate);
-        const taxable = paise(quantity * rate);
-        const tax = paise(taxable * Number(l.gst_rate_pct) / 100);
+        const taxable = lineAmount(quantity, rate);
+        const tax = percentOf(taxable, Number(l.gst_rate_pct));
         await db.query(
           `UPDATE purchase_order_lines SET quantity=$2, unit_rate=$3, taxable_value=$4,
              tax_amount=$5, line_total=$6 WHERE id=$1`,
-          [l.id, quantity, rate, taxable.toFixed(2), tax.toFixed(2), (taxable + tax).toFixed(2)]);
+          [l.id, quantity, rate, taxable.toFixed(2), tax.toFixed(2), addMoney(taxable, tax).toFixed(2)]);
       }
 
       const totals = (await db.query(

@@ -36,3 +36,4 @@ export * from "./impersonation.js";
 export * from "./assignments.js";
 export * from "./supply.js";
 export * from "./modules.js";
+export * from "./money-exact.js";
