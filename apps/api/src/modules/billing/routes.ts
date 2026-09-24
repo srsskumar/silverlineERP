@@ -67,22 +67,35 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
   }
 
   /**
-   * Cash already allocated against a bill through a receipt (owner decision
-   * 2026-09-24, fix round 1, C1).
+   * What is settled against a bill through its receipts (owner decision
+   * 2026-09-24, fix round 1, C1; fixed round 2, item 1(b)).
    *
    * A receipt may be allocated to a bill from SUBMITTED onward (finance's
    * documentValue), so a certification, a reversion to DRAFT or a
    * cancellation can each leave live money allocated against a payable that
    * just shrank or vanished -- money over-allocated against a lower
    * certified figure, or stranded against a bill that no longer claims
-   * anything at all. Read inside the same transaction that holds the bill's
-   * row lock (`inOrg(..., true)`), so this sees exactly what a concurrent
-   * allocation would see, and blocks behind the same lock rather than racing
-   * it.
+   * anything at all.
+   *
+   * Sums exactly what `settlementPosition`/`checkAllocation`
+   * (packages/shared/src/financial-control.ts) count as settled: cash
+   * (amount) plus the non-cash deductions that still close out the
+   * document (tds_amount, advance_adjusted) -- not retention_amount or
+   * other_deduction, which stay outstanding rather than settling anything.
+   * APAR-2 (the payment-allocation schema) already refuses a caller setting
+   * tds_amount/advance_adjusted on an RA_BILL allocation in the first
+   * place, so both are 0 on every row this reads today; counting them
+   * anyway is defence in depth against whatever future path -- a bulk
+   * import, a data fix -- writes to payment_allocations without going
+   * through that schema.
+   *
+   * Read inside the same transaction that holds the bill's row lock
+   * (`inOrg(..., true)`), so this sees exactly what a concurrent allocation
+   * would see, and blocks behind the same lock rather than racing it.
    */
   async function raBillLiveAllocated(db: Pool | PoolClient, id: string): Promise<number> {
     const row = (await db.query(
-      `SELECT COALESCE(sum(a.amount), 0) AS total
+      `SELECT COALESCE(sum(a.amount + a.tds_amount + a.advance_adjusted), 0) AS total
          FROM payment_allocations a JOIN payments p ON p.id = a.payment_id
         WHERE a.document_type = 'RA_BILL' AND a.document_id = $1
           AND a.reversed_at IS NULL AND p.reversed_at IS NULL`, [id])).rows[0];

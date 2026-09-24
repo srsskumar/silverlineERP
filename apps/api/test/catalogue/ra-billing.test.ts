@@ -507,6 +507,48 @@ describe("over-allocation guard on status change (owner decision 2026-09-24, fix
          AND a.reversed_at IS NULL AND p.reversed_at IS NULL`, [bill.data.id])).rows[0].total);
     expect(finalAllocated).toBeLessThanOrEqual(finalPayable + 0.005);
   });
+
+  it("counts TDS/advance toward what is already settled, not just cash (fix round 2, item 1(b), defence in depth)", async () => {
+    // APAR-2 (packages/shared/src/financial-control.ts's
+    // paymentAllocationSchema) already refuses a caller setting tds_amount
+    // or advance_adjusted on an RA_BILL allocation through the API -- the
+    // only path that writes payment_allocations with caller-controlled
+    // fields (see ledgers.test.ts's "never lets the bulk payment-run path
+    // ..." for the other one). This bypasses that schema on purpose, the
+    // way a data import or a fix script would, to prove the certify-time
+    // check itself does not silently under-count such a row if one ever
+    // exists: settlementPosition/checkAllocation treat tds_amount and
+    // advance_adjusted as settled money, same as cash, and the over-
+    // allocation guard has to agree or it would let a bill certify below
+    // what is genuinely already closed out.
+    const { projectId, boqItemId } = await projectWithBoq();
+    const bill = await raiseBill(projectId, boqItemId, 1000); // gross/net 450,000, no deductions
+    await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "SUBMITTED" });
+
+    const receipt = await w.pool.query(
+      `INSERT INTO payments(org_id, created_by, payment_no, direction, paid_on, amount, mode)
+       VALUES($1,$2,$3,'RECEIVABLE','2026-09-10',400000,'NEFT') RETURNING id`,
+      [w.orgId, w.adminId, uniq("RCP")]);
+    await w.pool.query(
+      `INSERT INTO payment_allocations(org_id, created_by, payment_id, document_type, document_id,
+         amount, tds_amount)
+       VALUES($1,$2,$3,'RA_BILL',$4,400000,50000)`,
+      [w.orgId, w.adminId, receipt.rows[0].id, bill.data.id]);
+
+    // 400,000 cash + 50,000 TDS = 450,000 already settled. Certifying at
+    // 440,000 would leave the bill claiming less than is already closed
+    // out -- refused, even though the raw cash column alone (400,000)
+    // would fit comfortably under 440,000.
+    const tooLow = await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "CERTIFIED", certified_amount: 440_000 });
+    expect(tooLow.status, JSON.stringify(tooLow.body)).toBe(422);
+    expect(tooLow.body.code).toBe("RA_BILL_OVER_ALLOCATED");
+
+    const enough = await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "CERTIFIED", certified_amount: 450_000 });
+    expect(enough.status, JSON.stringify(enough.body)).toBe(200);
+  });
 });
 
 describe("retention", () => {
