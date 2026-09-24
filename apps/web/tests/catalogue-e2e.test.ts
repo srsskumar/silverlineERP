@@ -184,6 +184,19 @@ describe('E2E-20 PM drags card through allowed then disallowed board transition'
     expect(board).toMatch(/not allowed from the current status/);
   });
 
+  it('does not ask for project people on behalf of a client viewer (P-001)', () => {
+    // Post-deploy QA: a CLIENT_VIEWER landing on /dashboard renders this
+    // board, which fetched `projects/:id/people` unconditionally to label
+    // avatars — a route client_viewer has no read permission for, so every
+    // dashboard load threw a console 403. AdvancedTaskFilters.tsx already
+    // guards its own equivalent fetch with the same
+    // `!session?.roles?.every(r=>r==='CLIENT_VIEWER')` check; this board
+    // needs the identical guard on its `people` useRows call.
+    expect(board).toMatch(
+      /useRows\(`projects\/\$\{projectId\}\/people\?limit=100`,\s*!!projectId\s*&&\s*!session\?\.roles\?\.every\(r\s*=>\s*r\s*===\s*'CLIENT_VIEWER'\)\)/,
+    );
+  });
+
   it('offers only the statuses the server says are reachable', () => {
     // allowed_next is the server's answer; the board must not invent targets.
     const page = normalizeTasksPage({

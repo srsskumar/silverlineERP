@@ -90,11 +90,16 @@ export function KanbanBoard({
   assigneeMe?: boolean;
 }) {
   const queryClient = useQueryClient();
+  const { session } = useAuth();
   // Terminal columns are collapsed away by default on a busy board; DONE
   // accumulates without bound and pushes the live columns off-screen.
   // Task rows carry only assignee_id, so avatars would otherwise be initialled
-  // from a UUID. One lookup per board beats one request per card.
-  const people = useRows(`projects/${projectId}/people?limit=100`, !!projectId);
+  // from a UUID. One lookup per board beats one request per card. A client
+  // viewer has no read permission for project people (same reason
+  // AdvancedTaskFilters.tsx guards its own equivalent fetch) — asking anyway
+  // just throws a console 403 on every dashboard load, so skip it for a
+  // session that is CLIENT_VIEWER only.
+  const people = useRows(`projects/${projectId}/people?limit=100`, !!projectId && !session?.roles?.every(r=>r==='CLIENT_VIEWER'));
   const nameById = React.useMemo(() => {
     const map = new Map<string, string>();
     for (const row of people.data?.rows ?? []) {
@@ -104,7 +109,6 @@ export function KanbanBoard({
   }, [people.data]);
   // Task creation lives on the project page; the board links there rather than
   // duplicating the form.
-  const { session } = useAuth();
   const canCreateTask = hasPermission({ permissions: session?.permissions }, PERMISSIONS.TASK_CREATE);
   const [hideDone, setHideDone] = React.useState(false);
   const [filters,setFilters]=React.useState<ListTasksParams>(()=>({...applySavedFilter({id:board.board.id,name:'',version:1,query:normalizeFilterQuery(board.board.filter_config)}),...(assigneeMe?{assignee_me:'true'}:{})}));
