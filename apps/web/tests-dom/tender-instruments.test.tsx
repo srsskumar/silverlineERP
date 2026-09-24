@@ -26,13 +26,18 @@ Object.defineProperty(window, 'localStorage', {
   },
 });
 
-const ME = {
-  data: {
-    user: { id: 'a1', username: 'admin', email: null, phone: null, org_id: 'o1', auth_status: 'ACTIVE',
-            mfa_enabled: true, last_login_at: null, mfa_enrollment_required: false, timezone: 'Asia/Kolkata' },
-    roles: ['SUPER_ADMIN'], permissions: ['instrument.read', 'instrument.manage'], impersonation: null,
-  },
-};
+function meFor(permissions: string[]) {
+  return {
+    data: {
+      user: { id: 'a1', username: 'admin', email: null, phone: null, org_id: 'o1', auth_status: 'ACTIVE',
+              mfa_enabled: true, last_login_at: null, mfa_enrollment_required: false, timezone: 'Asia/Kolkata' },
+      roles: ['SUPER_ADMIN'], permissions, impersonation: null,
+    },
+  };
+}
+const ME_MANAGE = meFor(['instrument.read', 'instrument.manage']);
+const ME_READ_ONLY = meFor(['instrument.read']);
+let ME = ME_MANAGE;
 
 function jsonResponse(body: unknown, status = 200) {
   return { ok: status < 400, status, headers: { get: () => null }, json: async () => body } as unknown as Response;
@@ -48,6 +53,7 @@ function stripOrigin(url: string) {
 beforeEach(() => {
   sent = [];
   handlers = {};
+  ME = ME_MANAGE;
   window.localStorage.clear();
   __resetAuthStateForTests();
   setTokens('admin-access', 'admin-refresh');
@@ -135,5 +141,25 @@ describe('TenderInstruments status change', () => {
     expect(sent[0]).toMatchObject({ path: '/api/v1/instruments/inst-1/status', method: 'POST' });
     expect(sent[0].body).toEqual({ instrument_status: 'RELEASED' });
     expect(sent[0].headers['x-record-version']).toBe('2');
+  });
+});
+
+describe('fix round 1 item 1 — TenderInstruments already gates write controls on instrument.manage', () => {
+  it('hides the create form and the Release/Forfeit actions from an instrument.read-only session', async () => {
+    ME = ME_READ_ONLY;
+    handlers['GET /api/v1/instruments'] = () => jsonResponse({
+      data: [{
+        id: 'inst-1', instrument_type: 'EMD', issuing_bank: 'SBI', instrument_number: 'BG-001',
+        amount: 250000, issue_date: '2026-09-01', expiry_date: '2027-03-01',
+        instrument_status: 'ACTIVE', version: 2,
+      }],
+    });
+
+    mount(<TenderInstruments tenderId="99999999-9999-9999-9999-999999999999" />);
+
+    await screen.findByText('BG-001');
+    expect(screen.queryByRole('button', { name: 'Release' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Forfeit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add instrument' })).not.toBeInTheDocument();
   });
 });

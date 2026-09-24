@@ -26,13 +26,18 @@ Object.defineProperty(window, 'localStorage', {
   },
 });
 
-const ME = {
-  data: {
-    user: { id: 'a1', username: 'admin', email: null, phone: null, org_id: 'o1', auth_status: 'ACTIVE',
-            mfa_enabled: true, last_login_at: null, mfa_enrollment_required: false, timezone: 'Asia/Kolkata' },
-    roles: ['SUPER_ADMIN'], permissions: ['reservation.read', 'reservation.manage'], impersonation: null,
-  },
-};
+function meFor(permissions: string[]) {
+  return {
+    data: {
+      user: { id: 'a1', username: 'admin', email: null, phone: null, org_id: 'o1', auth_status: 'ACTIVE',
+              mfa_enabled: true, last_login_at: null, mfa_enrollment_required: false, timezone: 'Asia/Kolkata' },
+      roles: ['SUPER_ADMIN'], permissions, impersonation: null,
+    },
+  };
+}
+const ME_MANAGE = meFor(['reservation.read', 'reservation.manage']);
+const ME_READ_ONLY = meFor(['reservation.read']);
+let ME = ME_MANAGE;
 
 function jsonResponse(body: unknown, status = 200) {
   return { ok: status < 400, status, headers: { get: () => null }, json: async () => body } as unknown as Response;
@@ -48,6 +53,7 @@ function stripOrigin(url: string) {
 beforeEach(() => {
   sent = [];
   handlers = {};
+  ME = ME_MANAGE;
   window.localStorage.clear();
   __resetAuthStateForTests();
   setTokens('admin-access', 'admin-refresh');
@@ -122,5 +128,23 @@ describe('StockReservationsTab release', () => {
     expect(sent[0]).toMatchObject({ path: '/api/v1/stock-reservations/res-1/release', method: 'POST' });
     expect(sent[0].body).toEqual({});
     expect(sent[0].headers['x-record-version']).toBe('3');
+  });
+});
+
+describe('fix round 1 item 1 — StockReservationsTab already gates write controls on reservation.manage', () => {
+  it('hides the "New reservation" form and the Release action from a reservation.read-only session', async () => {
+    ME = ME_READ_ONLY;
+    handlers['GET /api/v1/stock-reservations'] = () => jsonResponse({
+      data: [{
+        id: 'res-1', item_id: 'item-1', item_code: 'CEM', item_name: 'Cement',
+        location_name: 'Warehouse 1', quantity: 25, project_code: null,
+        state: 'ACTIVE', expires_on: null, version: 3,
+      }],
+    });
+    mount(<StockReservationsTab />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open' }));
+    expect(screen.queryByRole('button', { name: 'Reserve' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Release' })).not.toBeInTheDocument();
   });
 });

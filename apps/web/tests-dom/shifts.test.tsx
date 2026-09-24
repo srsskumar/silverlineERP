@@ -9,6 +9,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AuthProvider } from '@/components/AuthProvider';
 import { ShiftForm } from '@/components/allocation/ShiftForm';
+import { ShiftsManager } from '@/components/allocation/ShiftsManager';
 import { __resetAuthStateForTests, setTokens } from '@/lib/apiClient';
 
 const store = new Map<string, string>();
@@ -24,13 +25,18 @@ Object.defineProperty(window, 'localStorage', {
   },
 });
 
-const ME = {
-  data: {
-    user: { id: 'a1', username: 'admin', email: null, phone: null, org_id: 'o1', auth_status: 'ACTIVE',
-            mfa_enabled: true, last_login_at: null, mfa_enrollment_required: false, timezone: 'Asia/Kolkata' },
-    roles: ['SUPER_ADMIN'], permissions: ['roster.read', 'roster.manage'], impersonation: null,
-  },
-};
+function meFor(permissions: string[]) {
+  return {
+    data: {
+      user: { id: 'a1', username: 'admin', email: null, phone: null, org_id: 'o1', auth_status: 'ACTIVE',
+              mfa_enabled: true, last_login_at: null, mfa_enrollment_required: false, timezone: 'Asia/Kolkata' },
+      roles: ['SUPER_ADMIN'], permissions, impersonation: null,
+    },
+  };
+}
+const ME_MANAGE = meFor(['roster.read', 'roster.manage']);
+const ME_READ_ONLY = meFor(['roster.read']);
+let ME = ME_MANAGE;
 
 function jsonResponse(body: unknown, status = 200) {
   return { ok: status < 400, status, headers: { get: () => null }, json: async () => body } as unknown as Response;
@@ -46,6 +52,7 @@ function stripOrigin(url: string) {
 beforeEach(() => {
   sent = [];
   handlers = {};
+  ME = ME_MANAGE;
   window.localStorage.clear();
   __resetAuthStateForTests();
   setTokens('admin-access', 'admin-refresh');
@@ -134,5 +141,31 @@ describe('ShiftForm edit', () => {
     });
     expect(sent[0].headers['x-record-version']).toBe('4');
     expect(sent[0].body).not.toHaveProperty('code');
+  });
+});
+
+describe('fix round 1 item 1 — ShiftsManager gates write controls on roster.manage', () => {
+  const listHandler = () => jsonResponse({
+    data: [{
+      id: 'shift-1', code: 'DAY', name: 'Day', starts_at: '09:00:00', ends_at: '18:00:00',
+      break_minutes: 60, rest_days: [], daily_threshold_hours: 8, overtime_multiplier: 1.5,
+      effective_from: '2026-09-01', effective_to: null, active: true, shift_hours: 8, version: 1,
+    }],
+  });
+
+  it('hides "New shift" and Edit from a roster.read-only session', async () => {
+    ME = ME_READ_ONLY;
+    handlers['GET /api/v1/shifts'] = listHandler;
+    mount(<ShiftsManager />);
+    await screen.findByText('DAY');
+    expect(screen.queryByRole('button', { name: 'New shift' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+  });
+
+  it('shows "New shift" and Edit for a session holding roster.manage', async () => {
+    handlers['GET /api/v1/shifts'] = listHandler;
+    mount(<ShiftsManager />);
+    expect(await screen.findByRole('button', { name: 'New shift' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
   });
 });

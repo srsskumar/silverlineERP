@@ -11,6 +11,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AuthProvider } from '@/components/AuthProvider';
 import { PaymentForm } from '@/components/finance/PaymentForm';
 import { PaymentAllocationForm } from '@/components/finance/PaymentAllocationForm';
+import { PaymentsManager } from '@/components/finance/PaymentsManager';
 import { FinancialPeriodsManager } from '@/components/finance/FinancialPeriodsManager';
 import { BankImportForm } from '@/components/finance/BankImportForm';
 import { BankReconciliationManager } from '@/components/finance/BankReconciliationManager';
@@ -29,15 +30,20 @@ Object.defineProperty(window, 'localStorage', {
   },
 });
 
-const ME = {
-  data: {
-    user: { id: 'a1', username: 'admin', email: null, phone: null, org_id: 'o1', auth_status: 'ACTIVE',
-            mfa_enabled: true, last_login_at: null, mfa_enrollment_required: false, timezone: 'Asia/Kolkata' },
-    roles: ['SUPER_ADMIN'],
-    permissions: ['payment.read', 'payment.manage', 'payment.allocate', 'bank.read', 'bank.reconcile', 'period.read', 'period.manage'],
-    impersonation: null,
-  },
-};
+function meFor(permissions: string[]) {
+  return {
+    data: {
+      user: { id: 'a1', username: 'admin', email: null, phone: null, org_id: 'o1', auth_status: 'ACTIVE',
+              mfa_enabled: true, last_login_at: null, mfa_enrollment_required: false, timezone: 'Asia/Kolkata' },
+      roles: ['SUPER_ADMIN'], permissions, impersonation: null,
+    },
+  };
+}
+const ME_MANAGE = meFor([
+  'payment.read', 'payment.manage', 'payment.allocate', 'bank.read', 'bank.reconcile', 'period.read', 'period.manage',
+]);
+const ME_READ_ONLY = meFor(['payment.read', 'bank.read', 'period.read']);
+let ME = ME_MANAGE;
 
 function jsonResponse(body: unknown, status = 200) {
   return { ok: status < 400, status, headers: { get: () => null }, json: async () => body } as unknown as Response;
@@ -53,6 +59,7 @@ function stripOrigin(url: string) {
 beforeEach(() => {
   sent = [];
   handlers = {};
+  ME = ME_MANAGE;
   window.localStorage.clear();
   __resetAuthStateForTests();
   setTokens('admin-access', 'admin-refresh');
@@ -269,5 +276,65 @@ describe('BankReconciliationManager reconcile', () => {
     expect(sent[0]).toMatchObject({ path: '/api/v1/bank-transactions/bt-1/reconcile', method: 'POST' });
     expect(sent[0].body).toEqual({ payment_id: 'pay-5' });
     expect(sent[0].headers['x-record-version']).toBe('2');
+  });
+});
+
+describe('fix round 1 item 1 — write controls gated on manage permissions, not just read', () => {
+  it('PaymentsManager hides "New payment" from a payment.read-only session', async () => {
+    ME = ME_READ_ONLY;
+    mount(<PaymentsManager />);
+    await screen.findByText('No payments');
+    expect(screen.queryByRole('button', { name: 'New payment' })).not.toBeInTheDocument();
+  });
+
+  it('PaymentsManager shows "New payment" for a session holding payment.manage', async () => {
+    mount(<PaymentsManager />);
+    expect(await screen.findByRole('button', { name: 'New payment' })).toBeInTheDocument();
+  });
+
+  it('FinancialPeriodsManager hides the create form and Close action from a period.read-only session', async () => {
+    ME = ME_READ_ONLY;
+    handlers['GET /api/v1/financial-periods'] = () => jsonResponse({
+      data: [{ id: 'per-1', code: '2026-09', starts_on: '2026-09-01', ends_on: '2026-09-30', status: 'OPEN', version: 1 }],
+    });
+    mount(<FinancialPeriodsManager />);
+    await screen.findByText('2026-09');
+    expect(screen.queryByLabelText(/^Code/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
+  });
+
+  it('FinancialPeriodsManager shows the create form and Close action for a session holding period.manage', async () => {
+    handlers['GET /api/v1/financial-periods'] = () => jsonResponse({
+      data: [{ id: 'per-1', code: '2026-09', starts_on: '2026-09-01', ends_on: '2026-09-30', status: 'OPEN', version: 1 }],
+    });
+    mount(<FinancialPeriodsManager />);
+    expect(await screen.findByLabelText(/^Code/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+  });
+
+  it('BankReconciliationManager hides the import form and Reconcile action from a bank.read-only session', async () => {
+    ME = ME_READ_ONLY;
+    handlers['GET /api/v1/bank-transactions'] = () => jsonResponse({
+      data: [{
+        id: 'bt-1', statement_ref: 'TXN001', value_date: '2026-09-20', amount: 50000,
+        bank_account: null, reconciliation_status: 'UNMATCHED', version: 1,
+      }],
+    });
+    mount(<BankReconciliationManager />);
+    await screen.findByText('TXN001');
+    expect(screen.queryByLabelText(/CSV/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reconcile' })).not.toBeInTheDocument();
+  });
+
+  it('BankReconciliationManager shows the import form and Reconcile action for a session holding bank.reconcile', async () => {
+    handlers['GET /api/v1/bank-transactions'] = () => jsonResponse({
+      data: [{
+        id: 'bt-1', statement_ref: 'TXN001', value_date: '2026-09-20', amount: 50000,
+        bank_account: null, reconciliation_status: 'UNMATCHED', version: 1,
+      }],
+    });
+    mount(<BankReconciliationManager />);
+    expect(await screen.findByLabelText(/CSV/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reconcile' })).toBeInTheDocument();
   });
 });

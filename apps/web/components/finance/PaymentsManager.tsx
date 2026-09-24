@@ -4,6 +4,8 @@ import * as React from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { listPayments } from '@/lib/payments';
+import { useAuth } from '@/components/AuthProvider';
+import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ErrorCard } from '@/components/ui/ErrorCard';
@@ -16,6 +18,8 @@ import { PaymentForm } from './PaymentForm';
 
 /** Payments list (§45.3) — money that actually moved, in or out. */
 export function PaymentsManager() {
+  const { session } = useAuth();
+  const canManage = hasPermission({ permissions: session?.permissions }, PERMISSIONS.PAYMENT_MANAGE);
   const [direction, setDirection] = React.useState('');
   const [unallocatedOnly, setUnallocatedOnly] = React.useState(false);
   const [createOpen, setCreateOpen] = React.useState(false);
@@ -44,7 +48,7 @@ export function PaymentsManager() {
           Unallocated only
         </label>
         <div className="ml-auto">
-          <Button onClick={() => setCreateOpen(true)}>New payment</Button>
+          {canManage ? <Button onClick={() => setCreateOpen(true)}>New payment</Button> : null}
         </div>
       </div>
 
@@ -99,7 +103,7 @@ export function PaymentsManager() {
         </Card>
       )}
 
-      {createOpen ? (
+      {createOpen && canManage ? (
         <PaymentForm
           onClose={() => setCreateOpen(false)}
           onCreated={() => {

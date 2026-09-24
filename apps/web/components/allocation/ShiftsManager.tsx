@@ -3,6 +3,8 @@
 import * as React from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listShifts, type Shift } from '@/lib/shifts';
+import { useAuth } from '@/components/AuthProvider';
+import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ErrorCard } from '@/components/ui/ErrorCard';
@@ -21,6 +23,8 @@ function shiftWindow(s: Shift): string {
 
 /** Shift definitions (§47) — the windows a roster entry books an employee into. */
 export function ShiftsManager() {
+  const { session } = useAuth();
+  const canManage = hasPermission({ permissions: session?.permissions }, PERMISSIONS.ROSTER_MANAGE);
   const client = useQueryClient();
   const [formOpen, setFormOpen] = React.useState<'new' | Shift | null>(null);
 
@@ -30,9 +34,11 @@ export function ShiftsManager() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex justify-end">
-        <Button onClick={() => setFormOpen('new')}>New shift</Button>
-      </div>
+      {canManage ? (
+        <div className="flex justify-end">
+          <Button onClick={() => setFormOpen('new')}>New shift</Button>
+        </div>
+      ) : null}
 
       {list.isLoading ? (
         <Skeleton className="h-64 w-full" />
@@ -65,7 +71,7 @@ export function ShiftsManager() {
                     <TD tone="subtle">{s.rest_days.length ? s.rest_days.join(', ') : '—'}</TD>
                     <TD><Badge tone={s.active ? 'success' : 'neutral'} size="sm">{s.active ? 'Active' : 'Inactive'}</Badge></TD>
                     <TD align="right">
-                      <Button variant="secondary" size="sm" onClick={() => setFormOpen(s)}>Edit</Button>
+                      {canManage ? <Button variant="secondary" size="sm" onClick={() => setFormOpen(s)}>Edit</Button> : null}
                     </TD>
                   </TR>
                 ))}
@@ -75,7 +81,7 @@ export function ShiftsManager() {
         </Card>
       )}
 
-      {formOpen ? (
+      {formOpen && canManage ? (
         <ShiftForm
           initial={formOpen === 'new' ? null : formOpen}
           onClose={() => setFormOpen(null)}

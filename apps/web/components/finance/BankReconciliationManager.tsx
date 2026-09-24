@@ -3,6 +3,8 @@
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { listBankTransactions, reconcileBankTransaction, type BankTransaction } from '@/lib/bank-transactions';
+import { useAuth } from '@/components/AuthProvider';
+import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ErrorCard } from '@/components/ui/ErrorCard';
@@ -47,6 +49,8 @@ function ReconcileRow({ row, onDone }: { row: BankTransaction; onDone: () => voi
 
 /** Bank statement reconciliation (§45.4). */
 export function BankReconciliationManager() {
+  const { session } = useAuth();
+  const canManage = hasPermission({ permissions: session?.permissions }, PERMISSIONS.BANK_RECONCILE);
   const client = useQueryClient();
   const [status, setStatus] = React.useState('');
 
@@ -61,9 +65,11 @@ export function BankReconciliationManager() {
 
   return (
     <div className="flex flex-col gap-4">
-      <Card className="p-4">
-        <BankImportForm onImported={refresh} />
-      </Card>
+      {canManage ? (
+        <Card className="p-4">
+          <BankImportForm onImported={refresh} />
+        </Card>
+      ) : null}
 
       <div className="flex flex-wrap items-end gap-3 rounded-lg border border-border bg-surface p-4">
         <label className="text-xs text-text-muted">
@@ -110,7 +116,7 @@ export function BankReconciliationManager() {
                       {r.exception_note ? <p className="mt-0.5 text-2xs text-danger">{r.exception_note}</p> : null}
                     </TD>
                     <TD align="right">
-                      {r.reconciliation_status === 'UNMATCHED' || r.reconciliation_status === 'EXCEPTION' ? (
+                      {canManage && (r.reconciliation_status === 'UNMATCHED' || r.reconciliation_status === 'EXCEPTION') ? (
                         <ReconcileRow row={r} onDone={refresh} />
                       ) : null}
                     </TD>

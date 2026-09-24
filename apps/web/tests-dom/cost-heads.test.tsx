@@ -11,6 +11,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AuthProvider } from '@/components/AuthProvider';
 import { CostHeadForm } from '@/components/finance/CostHeadForm';
+import { CostHeadsManager } from '@/components/finance/CostHeadsManager';
 import { BudgetEditForm } from '@/components/finance/BudgetEditForm';
 import { __resetAuthStateForTests, setTokens } from '@/lib/apiClient';
 
@@ -27,13 +28,18 @@ Object.defineProperty(window, 'localStorage', {
   },
 });
 
-const ME = {
-  data: {
-    user: { id: 'a1', username: 'admin', email: null, phone: null, org_id: 'o1', auth_status: 'ACTIVE',
-            mfa_enabled: true, last_login_at: null, mfa_enrollment_required: false, timezone: 'Asia/Kolkata' },
-    roles: ['SUPER_ADMIN'], permissions: ['costhead.read', 'costhead.manage', 'budget.read', 'budget.manage'], impersonation: null,
-  },
-};
+function meFor(permissions: string[]) {
+  return {
+    data: {
+      user: { id: 'a1', username: 'admin', email: null, phone: null, org_id: 'o1', auth_status: 'ACTIVE',
+              mfa_enabled: true, last_login_at: null, mfa_enrollment_required: false, timezone: 'Asia/Kolkata' },
+      roles: ['SUPER_ADMIN'], permissions, impersonation: null,
+    },
+  };
+}
+const ME_MANAGE = meFor(['costhead.read', 'costhead.manage', 'budget.read', 'budget.manage']);
+const ME_READ_ONLY = meFor(['costhead.read', 'budget.read']);
+let ME = ME_MANAGE;
 
 function jsonResponse(body: unknown, status = 200) {
   return { ok: status < 400, status, headers: { get: () => null }, json: async () => body } as unknown as Response;
@@ -49,6 +55,7 @@ function stripOrigin(url: string) {
 beforeEach(() => {
   sent = [];
   handlers = {};
+  ME = ME_MANAGE;
   window.localStorage.clear();
   __resetAuthStateForTests();
   setTokens('admin-access', 'admin-refresh');
@@ -166,5 +173,27 @@ describe('BudgetEditForm', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save budget' }));
 
     expect(await screen.findByText('Say why the budget is being revised')).toBeInTheDocument();
+  });
+});
+
+describe('fix round 1 item 1 — CostHeadsManager gates write controls on costhead.manage', () => {
+  const listHandler = () => jsonResponse({
+    data: [{ id: '22222222-2222-2222-2222-222222222222', code: 'LAB', name: 'Labour', kind: 'LABOUR', active: true, version: 1 }],
+  });
+
+  it('hides "New cost head" and Edit from a costhead.read-only session', async () => {
+    ME = ME_READ_ONLY;
+    handlers['GET /api/v1/cost-heads'] = listHandler;
+    mount(<CostHeadsManager />);
+    await screen.findByText('LAB');
+    expect(screen.queryByRole('button', { name: 'New cost head' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+  });
+
+  it('shows "New cost head" and Edit for a session holding costhead.manage', async () => {
+    handlers['GET /api/v1/cost-heads'] = listHandler;
+    mount(<CostHeadsManager />);
+    expect(await screen.findByRole('button', { name: 'New cost head' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
   });
 });

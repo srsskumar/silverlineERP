@@ -4,6 +4,8 @@ import * as React from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { listApprovalPolicies, deactivateApprovalPolicy, type ApprovalPolicy } from '@/lib/approval-policies';
+import { useAuth } from '@/components/AuthProvider';
+import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ErrorCard } from '@/components/ui/ErrorCard';
@@ -29,6 +31,12 @@ import { ApprovalPolicyForm } from './ApprovalPolicyForm';
  * business decision for the owner, not something safe to guess from code.
  */
 export function ApprovalPoliciesManager() {
+  const { session } = useAuth();
+  // Defense in depth: app/approvals/policies/page.tsx already requires
+  // approval.configure to open this screen at all, but the write controls
+  // check their own permission too, the same way PaymentDetail does, rather
+  // than trusting the page wrapper alone.
+  const canManage = hasPermission({ permissions: session?.permissions }, PERMISSIONS.APPROVAL_CONFIGURE);
   const client = useQueryClient();
   const [documentType, setDocumentType] = React.useState('');
   const [formOpen, setFormOpen] = React.useState<'new' | ApprovalPolicy | null>(null);
@@ -59,7 +67,7 @@ export function ApprovalPoliciesManager() {
           </select>
         </label>
         <div className="ml-auto">
-          <Button onClick={() => setFormOpen('new')}>New policy</Button>
+          {canManage ? <Button onClick={() => setFormOpen('new')}>New policy</Button> : null}
         </div>
       </div>
 
@@ -101,22 +109,24 @@ export function ApprovalPoliciesManager() {
                       <Badge tone={p.active ? 'success' : 'neutral'} size="sm">{p.active ? 'Active' : 'Inactive'}</Badge>
                     </TD>
                     <TD align="right">
-                      <div className="flex justify-end gap-2">
-                        <Button variant="secondary" size="sm" onClick={() => setFormOpen(p)}>Edit</Button>
-                        {p.active ? (
-                          <Button
-                            variant="ghost" size="sm"
-                            loading={deactivate.isPending}
-                            onClick={() => {
-                              if (window.confirm(`Deactivate "${p.name}"? Submissions for ${DOCUMENT_TYPE_LABELS[p.document_type] ?? p.document_type} will fail until another policy covers it.`)) {
-                                deactivate.mutate(p);
-                              }
-                            }}
-                          >
-                            Deactivate
-                          </Button>
-                        ) : null}
-                      </div>
+                      {canManage ? (
+                        <div className="flex justify-end gap-2">
+                          <Button variant="secondary" size="sm" onClick={() => setFormOpen(p)}>Edit</Button>
+                          {p.active ? (
+                            <Button
+                              variant="ghost" size="sm"
+                              loading={deactivate.isPending}
+                              onClick={() => {
+                                if (window.confirm(`Deactivate "${p.name}"? Submissions for ${DOCUMENT_TYPE_LABELS[p.document_type] ?? p.document_type} will fail until another policy covers it.`)) {
+                                  deactivate.mutate(p);
+                                }
+                              }}
+                            >
+                              Deactivate
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </TD>
                   </TR>
                 ))}
@@ -132,7 +142,7 @@ export function ApprovalPoliciesManager() {
         for requests already in flight.
       </p>
 
-      {formOpen ? (
+      {formOpen && canManage ? (
         <ApprovalPolicyForm
           initial={formOpen === 'new' ? null : formOpen}
           onClose={() => setFormOpen(null)}

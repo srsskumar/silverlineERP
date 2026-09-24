@@ -177,6 +177,37 @@ describe('ApprovalPoliciesManager deactivate', () => {
   });
 });
 
+describe('fix round 1 item 1 — ApprovalPoliciesManager gates write controls on approval.configure', () => {
+  // Defense in depth: app/approvals/policies/page.tsx already requires
+  // approval.configure to open the page at all, but the manager checks its
+  // own permission too, the same way PaymentDetail does, rather than relying
+  // solely on the page wrapper.
+  const listHandler = () => jsonResponse({
+    data: [{
+      id: 'policy-9', document_type: 'PAYMENT', name: 'Payments DoA', mode: 'CUMULATIVE',
+      project_id: null, active: true, version: 3, levels: [{ sequence: 1 }],
+    }],
+  });
+
+  it('hides New policy, Edit and Deactivate from a session without approval.configure', async () => {
+    me = ME_ACT_ONLY;
+    handlers['GET /api/v1/approval-policies'] = listHandler;
+    mount(<ApprovalPoliciesManager />);
+    await screen.findByText('Payments DoA');
+    expect(screen.queryByRole('button', { name: 'New policy' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Deactivate' })).not.toBeInTheDocument();
+  });
+
+  it('shows New policy, Edit and Deactivate for a session holding approval.configure', async () => {
+    handlers['GET /api/v1/approval-policies'] = listHandler;
+    mount(<ApprovalPoliciesManager />);
+    expect(await screen.findByRole('button', { name: 'New policy' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deactivate' })).toBeInTheDocument();
+  });
+});
+
 describe('ErrorCard on NO_APPROVAL_POLICY', () => {
   const error = new ApiClientError(422, {
     code: 'NO_APPROVAL_POLICY',

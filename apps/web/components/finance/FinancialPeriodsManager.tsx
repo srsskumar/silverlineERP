@@ -8,6 +8,8 @@ import {
   listFinancialPeriods, createFinancialPeriod, setPeriodClosure, type FinancialPeriod,
 } from '@/lib/financial-periods';
 import { financialPeriodFormSchema, type FinancialPeriodFormInput } from '@/lib/validation';
+import { useAuth } from '@/components/AuthProvider';
+import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ErrorCard } from '@/components/ui/ErrorCard';
@@ -25,6 +27,8 @@ import { day } from '@/lib/finance';
  * (payments, allocations, bank reconciliation) until it is reopened.
  */
 export function FinancialPeriodsManager() {
+  const { session } = useAuth();
+  const canManage = hasPermission({ permissions: session?.permissions }, PERMISSIONS.PERIOD_MANAGE);
   const client = useQueryClient();
   const [reopening, setReopening] = React.useState<FinancialPeriod | null>(null);
   const [reason, setReason] = React.useState('');
@@ -77,6 +81,7 @@ export function FinancialPeriodsManager() {
 
   return (
     <div className="flex flex-col gap-4">
+      {canManage ? (
       <Card className="p-4">
         <Section title="New period">
           <form
@@ -104,6 +109,7 @@ export function FinancialPeriodsManager() {
           {createError ? <ErrorCard title="Could not create the period" error={createError} className="mt-3" /> : null}
         </Section>
       </Card>
+      ) : null}
 
       {actionError ? <ErrorCard title="Could not change the period's state" error={actionError} /> : null}
 
@@ -142,7 +148,7 @@ export function FinancialPeriodsManager() {
                           : '—'}
                     </TD>
                     <TD align="right">
-                      {p.status === 'OPEN' ? (
+                      {!canManage ? null : p.status === 'OPEN' ? (
                         <Button
                           variant="secondary" size="sm"
                           loading={close.isPending}

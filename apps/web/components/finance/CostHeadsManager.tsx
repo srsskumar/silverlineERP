@@ -3,6 +3,8 @@
 import * as React from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listCostHeads, type CostHead } from '@/lib/cost-heads';
+import { useAuth } from '@/components/AuthProvider';
+import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ErrorCard } from '@/components/ui/ErrorCard';
@@ -14,6 +16,8 @@ import { CostHeadForm } from './CostHeadForm';
 
 /** Cost head master list (§15.6): the fixed set a site P&L is read against. */
 export function CostHeadsManager() {
+  const { session } = useAuth();
+  const canManage = hasPermission({ permissions: session?.permissions }, PERMISSIONS.COSTHEAD_MANAGE);
   const client = useQueryClient();
   const [kind, setKind] = React.useState('');
   const [formOpen, setFormOpen] = React.useState<'new' | CostHead | null>(null);
@@ -43,7 +47,7 @@ export function CostHeadsManager() {
           </select>
         </label>
         <div className="ml-auto">
-          <Button onClick={() => setFormOpen('new')}>New cost head</Button>
+          {canManage ? <Button onClick={() => setFormOpen('new')}>New cost head</Button> : null}
         </div>
       </div>
 
@@ -74,7 +78,7 @@ export function CostHeadsManager() {
                     <TD tone="muted">{h.kind}</TD>
                     <TD><Badge tone={h.active ? 'success' : 'neutral'} size="sm">{h.active ? 'Active' : 'Retired'}</Badge></TD>
                     <TD align="right">
-                      <Button variant="secondary" size="sm" onClick={() => setFormOpen(h)}>Edit</Button>
+                      {canManage ? <Button variant="secondary" size="sm" onClick={() => setFormOpen(h)}>Edit</Button> : null}
                     </TD>
                   </TR>
                 ))}
@@ -84,7 +88,7 @@ export function CostHeadsManager() {
         </Card>
       )}
 
-      {formOpen ? (
+      {formOpen && canManage ? (
         <CostHeadForm
           initial={formOpen === 'new' ? null : formOpen}
           onClose={() => setFormOpen(null)}
