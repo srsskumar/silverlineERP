@@ -348,7 +348,7 @@ describe('BankReconciliationManager reconcile', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Reconcile' }));
     // fix round 1 item 7: a payment picker (search by number/amount/date),
     // not a raw UUID paste.
-    const picker = screen.getByPlaceholderText('Search payments…');
+    const picker = await screen.findByPlaceholderText('Search payments…');
     fireEvent.focus(picker);
     fireEvent.click(await screen.findByRole('option', { name: /PAY-5/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
@@ -375,7 +375,7 @@ describe('BankReconciliationManager reconcile', () => {
     mount(<BankReconciliationManager />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Reconcile' }));
-    fireEvent.focus(screen.getByPlaceholderText('Search payments…'));
+    fireEvent.focus(await screen.findByPlaceholderText('Search payments…'));
     await screen.findByRole('option', { name: /PAY-5/ });
 
     expect(paymentsQueried).toBe('limit=100');
