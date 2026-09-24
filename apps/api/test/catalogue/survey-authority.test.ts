@@ -249,12 +249,20 @@ describe("recording a control point", () => {
     const ok = await edit(manager.headers);
     expect(ok.statusCode, ok.body).toBe(200);
   });
-  it("applies the same rule to deleting a point, on top of survey.manage", async () => {
-    const made = await gcp(w.admin, villageA);
-    const del = (h: Headers) => send("DELETE", h, `/api/v1/survey/gcps/${made.data.id}`);
-    expect((await del(elsewherePm.headers)).status).toBe(403);
-    expect((await del(crew.headers)).status).toBe(403); // survey.enter cannot delete
-    expect((await del(ownPm.headers)).status).toBe(200);
+  it("applies the same rule to deleting a point (fix round 1: crew included)", async () => {
+    const del = async (h: Headers) => {
+      const made = await gcp(w.admin, villageA);
+      return send("DELETE", h, `/api/v1/survey/gcps/${made.data.id}`);
+    };
+    for (const h of [bystander.headers, otherCrew.headers, elsewherePm.headers]) {
+      const r = await del(h);
+      expect(r.status, JSON.stringify(r.body)).toBe(403);
+      expect(r.body.code).toBe("NOT_YOUR_VILLAGE");
+    }
+    for (const h of [crew.headers, vecCrew.headers, manager.headers, teamLead.headers, ownPm.headers, w.admin]) {
+      const r = await del(h);
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+    }
   });
   it("is a 404 for another organisation", async () => {
     expect((await gcp(w.other.admin, villageA)).status).toBe(404);
@@ -316,4 +324,55 @@ describe("what an observer is shown of a contact", () => {
     const row = await rowFor(w.admin);
     expect(row.phone).toBe(PHONE);
   });
+});
+
+/*
+ * Fix round 1, item 2: an employee's phone number on the crew-assets and
+ * programme-people lists is masked for anybody holding an observer role,
+ * even alongside a staff role (the same rule as SV-003).
+ */
+describe("what an observer is shown of the crew's phone numbers", () => {
+  let govtStaff: Awaited<ReturnType<typeof person>>;
+  let clientStaff: Awaited<ReturnType<typeof person>>;
+
+  beforeAll(async () => {
+    const asset = String((await w.pool.query(
+      `INSERT INTO assets(org_id, asset_code, name, category, status, condition)
+       VALUES($1,$2,'Phone test rover','SURVEY','ASSIGNED','GOOD') RETURNING id`,
+      [w.orgId, uniq("PR")])).rows[0].id);
+    await w.pool.query(
+      `INSERT INTO asset_assignments(org_id, asset_id, employee_id, condition, reason)
+       VALUES($1,$2,$3,'GOOD','field kit')`, [w.orgId, asset, crew.employeeId]);
+    await joinProgramme(w.pool, w.orgId, crew.userId, programmeId, "GT_USER");
+    govtStaff = await person(["GOVT_OBSERVER", "EMPLOYEE"]);
+    clientStaff = await person(["CLIENT_VIEWER", "EMPLOYEE"]);
+    for (const who of [govtStaff, clientStaff]) {
+      await joinProgramme(w.pool, w.orgId, who.userId, programmeId, "GT_USER");
+    }
+  });
+
+  const urls = () => [
+    `/api/v1/survey/villages/${villageA}/crew-assets`,
+    `/api/v1/survey/projects/${programmeId}/employees`,
+  ];
+
+  it("shows staff the phone numbers", async () => {
+    for (const url of urls()) {
+      const r = await send("GET", w.admin, url);
+      expect(r.status, `${url} ${JSON.stringify(r.body)}`).toBe(200);
+      expect((r.data as any[]).length, url).toBeGreaterThan(0);
+      expect((r.data as any[]).some((x) => typeof x.phone === "string" && x.phone.length > 5), url).toBe(true);
+    }
+  });
+
+  for (const [label, who] of [["a government observer with a staff role", () => govtStaff],
+    ["a client viewer with a staff role", () => clientStaff]] as const) {
+    it(`masks them for ${label}`, async () => {
+      for (const url of urls()) {
+        const r = await send("GET", who().headers, url);
+        if (r.status !== 200) { expect([403, 404], url).toContain(r.status); continue; }
+        for (const row of r.data as any[]) expect(row, url).not.toHaveProperty("phone");
+      }
+    });
+  }
 });

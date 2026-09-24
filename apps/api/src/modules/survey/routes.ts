@@ -471,6 +471,20 @@ export async function registerSurveyRoutes(
   }
 
   /**
+   * Whether phone numbers are withheld from this reader (owner decision
+   * 2026-09-24, SV-003 / fix round 1): anybody holding an observer role,
+   * even alongside a staff role, and anybody reading as an observer.
+   */
+  function masksPhones(u: { permissions: string[]; roles?: string[] }): boolean {
+    return readsAsObserver(u) || (u.roles ?? []).some(
+      r => r === 'CLIENT_VIEWER' || r === 'GOVT_OBSERVER');
+  }
+  const withoutPhone = <T extends Record<string, unknown>>(r: T): Omit<T, 'phone'> => {
+    const { phone: _phone, ...rest } = r;
+    return rest;
+  };
+
+  /**
    * The programmes a client may look at: those run against a project they
    * are assigned to. A client is scoped to projects everywhere else in the
    * system, and an observer's "every active programme in the organisation"
@@ -2104,7 +2118,10 @@ export async function registerSurveyRoutes(
           ORDER BY aa.asset_id, aa.issued_at DESC`, [id, u.orgId])).rows;
 
       return {
-        data: rows.map(r => ({ ...r, issued_at: iso(r.issued_at), due_date: iso(r.due_date) })),
+        data: rows.map(r => {
+          const row = { ...r, issued_at: iso(r.issued_at), due_date: iso(r.due_date) };
+          return masksPhones(u) ? withoutPhone(row) : row;
+        }),
       };
     });
 
@@ -4161,10 +4178,13 @@ export async function registerSurveyRoutes(
          WHERE pe.survey_project_id = $1 AND pe.org_id = $2
          ORDER BY pe.project_role, employee_name`, [id, u.orgId])).rows;
       return {
-        data: rows.map(r => ({
-          ...r, assigned_on: iso(r.assigned_on), released_on: iso(r.released_on),
-          active: !r.released_on,
-        })),
+        data: rows.map(r => {
+          const row = {
+            ...r, assigned_on: iso(r.assigned_on), released_on: iso(r.released_on),
+            active: !r.released_on,
+          };
+          return masksPhones(u) ? withoutPhone(row) : row;
+        }),
       };
     });
 
@@ -5815,8 +5835,7 @@ export async function registerSurveyRoutes(
       // is masked, even alongside a staff role, and the free-text notes go
       // too -- "ring after 10 on 98480…" is where a number ends up when the
       // phone field is the one being hidden.
-      const masked = scoped || (u.roles ?? []).some(
-        r => r === 'CLIENT_VIEWER' || r === 'GOVT_OBSERVER');
+      const masked = masksPhones(u);
       return {
         data: masked
           ? rows.map(({ phone: _phone, email: _email, notes: _notes, ...rest }) => rest)
