@@ -376,3 +376,51 @@ describe("what an observer is shown of the crew's phone numbers", () => {
     });
   }
 });
+
+/*
+ * SV-018: putting somebody on a programme (and on a village's crew) is
+ * governed by the survey authority rule, not by the employee directory's
+ * record scope. A PM of the survey's project could start ground truthing with
+ * anybody (start-gt takes an array the directory check never looked at) yet
+ * was refused 403 enrolling the same person one at a time.
+ */
+describe("SV-018 enrolling people on the programme", () => {
+  const enrol = (h: Headers, employee: string) =>
+    post(h, `/api/v1/survey/projects/${programmeId}/employees`,
+      { employee_id: employee, project_role: "GT_USER" });
+
+  it("lets the survey project's PM enrol anybody in the organisation", async () => {
+    const r = await enrol(ownPm.headers, w.siteEmployee);
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+
+  it("lets a PM scoped to the survey's project enrol, and assign crew", async () => {
+    expect((await enrol(scopedPm.headers, w.directEmployee)).status).toBe(201);
+    const c = await post(scopedPm.headers, `/api/v1/survey/villages/${villageB}/crew`,
+      { employee_id: w.directEmployee, stage_code: "GT_QC" });
+    expect(c.status, JSON.stringify(c.body)).toBe(201);
+  });
+
+  it("lets a team leader on the programme and an admin enrol", async () => {
+    expect((await enrol(teamLead.headers, w.siteEmployee)).status).toBe(201);
+    expect((await enrol(w.admin, w.siteEmployee)).status).toBe(201);
+  });
+
+  it("refuses a PM of some other project", async () => {
+    const r = await enrol(elsewherePm.headers, w.siteEmployee);
+    expect(r.status, JSON.stringify(r.body)).toBe(403);
+    expect(r.body.code).toBe("NOT_ON_THIS_PROGRAMME");
+    const c = await post(elsewherePm.headers, `/api/v1/survey/villages/${villageB}/crew`,
+      { employee_id: w.siteEmployee, stage_code: "GT_QC" });
+    expect(c.status, JSON.stringify(c.body)).toBe(403);
+  });
+
+  it("refuses an employee who has left", async () => {
+    const r = await enrol(w.admin, w.exitedEmployee);
+    expect(r.status, JSON.stringify(r.body)).toBe(422);
+  });
+
+  it("is a 404 for another organisation", async () => {
+    expect((await enrol(w.other.admin, w.other.employee)).status).toBe(404);
+  });
+});

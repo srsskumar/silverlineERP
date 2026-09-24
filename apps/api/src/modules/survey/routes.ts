@@ -654,6 +654,37 @@ export async function registerSurveyRoutes(
     return a.ownStages.has(stageId) || a.managedStages.has(stageId);
   }
 
+  /**
+   * Whether this caller may put people on this programme (SV-018): an admin,
+   * a team leader on it (projectOr404 has already confined a TL to their own
+   * programmes), or the survey project's PM as workAuthority defines one.
+   */
+  async function mayStaffProgramme(
+    db: Pool | PoolClient, u: { orgId: string; id: string; roles?: string[] },
+    programmeId: string,
+  ): Promise<boolean> {
+    const roles = u.roles ?? [];
+    if (roles.includes('SUPER_ADMIN') || roles.includes('ADMIN') || roles.includes('TEAM_LEAD')) {
+      return true;
+    }
+    if (!roles.includes('PROJECT_MANAGER')) return false;
+    const f = (await db.query(
+      `SELECT COALESCE(p.project_manager_id = $2, false) AS runs_project,
+              EXISTS (SELECT 1 FROM survey_project_employees pe
+                        JOIN users me ON me.employee_id = pe.employee_id
+                       WHERE me.id = $2 AND pe.survey_project_id = sp.id
+                         AND pe.released_on IS NULL
+                         AND pe.project_role = 'PROJECT_MANAGER') AS enrolled_pm,
+              EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+                       WHERE ur.user_id = $2 AND r.code = 'PROJECT_MANAGER'
+                         AND (ur.scope_type IS NULL
+                              OR (ur.scope_type = 'project' AND ur.scope_id = sp.project_id))
+                     ) AS pm_scope_covers
+         FROM survey_projects sp LEFT JOIN projects p ON p.id = sp.project_id
+        WHERE sp.id = $3 AND sp.org_id = $1`, [u.orgId, u.id, programmeId])).rows[0];
+    return Boolean(f && (f.runs_project || f.enrolled_pm || f.pm_scope_covers));
+  }
+
   const STAGE_NOT_ASSIGNED_REASON =
     'Only the crew assigned to this stage, their reporting manager, a team leader, '
     + 'the project manager or an administrator can complete it.';
@@ -1792,8 +1823,17 @@ export async function registerSurveyRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(crewAssignmentSchema, req.body);
       const row = await mutate(pool, req, 'survey.crew.assign', 'survey_crew', async db => {
-        await villageOr404(db, u.orgId, id, u);
-        await inOrg(db, 'employees', input.employee_id, u.orgId);
+        const village = await villageOr404(db, u.orgId, id, u);
+        // The survey rule, in place of the directory scope (SV-018).
+        if (!(await mayStaffProgramme(db, u, String(village.survey_project_id)))) {
+          fail('NOT_ON_THIS_PROGRAMME',
+            'Only this programme’s project manager, a team leader on it or an '
+            + 'administrator can assign its crews.', 403);
+        }
+        const e = await inOrg(db, 'employees', input.employee_id, u.orgId);
+        if (e.status !== 'ACTIVE') {
+          fail('EMPLOYEE_INACTIVE', 'Only an active employee can be put on a crew.', 422);
+        }
         const stage = (await db.query(
           'SELECT id FROM survey_stages WHERE org_id = $1 AND code = $2 AND active',
           [u.orgId, input.stage_code])).rows[0];
@@ -4340,8 +4380,16 @@ export async function registerSurveyRoutes(
       const input = parse(projectEmployeeSchema, req.body);
       const row = await mutate(pool, req, 'survey.project.assign', 'survey_project_employee',
         async db => {
-          await projectOr404(db, u.orgId, id);
-          await inOrg(db, 'employees', input.employee_id, u.orgId);
+          await projectOr404(db, u.orgId, id, u);
+          if (!(await mayStaffProgramme(db, u, id))) {
+            fail('NOT_ON_THIS_PROGRAMME',
+              'Only this programme’s project manager, a team leader on it or an '
+              + 'administrator can put people on it.', 403);
+          }
+          const e = await inOrg(db, 'employees', input.employee_id, u.orgId);
+          if (e.status !== 'ACTIVE') {
+            fail('EMPLOYEE_INACTIVE', 'Only an active employee can be put on a programme.', 422);
+          }
           return (await db.query(
             `INSERT INTO survey_project_employees(org_id, survey_project_id, employee_id,
                project_role, assigned_on, created_by)
