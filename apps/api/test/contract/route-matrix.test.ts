@@ -77,12 +77,15 @@ afterAll(async () => {
  *  idempotency-classification-coverage) already exercises them
  *  mechanically via app.routeRegistry, with no per-route override needed --
  *  see findings-contract.md's "QA release 3 merge" note.
- *  Bumped to 482 in release 3 stage 2a: qa/survey-deep added
+ *  Bumped in release 3 stage 2a: qa/survey-deep added
  *  POST /api/v1/survey/billing/:id/reverse (guard('survey.manage')) and
  *  qa/r5-parity added GET /api/v1/leave/preview (leave.request) and
  *  POST /api/v1/leave-balances/open-year (leave admin). All three are
- *  permission-tagged, so the matrix covers them mechanically. */
-const EXPECTED_ROUTE_COUNT = 482;
+ *  permission-tagged, so the matrix covers them mechanically. Plus two
+ *  that qa/policy (stage 1) had already added: GET /api/v1/documents/
+ *  due-for-purge and POST /api/v1/documents/purge (guard('document.delete')).
+ *  484 in all. */
+const EXPECTED_ROUTE_COUNT = 484;
 
 interface Violation {
   route: string;
