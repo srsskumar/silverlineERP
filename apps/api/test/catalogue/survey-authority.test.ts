@@ -260,3 +260,60 @@ describe("recording a control point", () => {
     expect((await gcp(w.other.admin, villageA)).status).toBe(404);
   });
 });
+
+/*
+ * Observers never see a contact's phone number (owner decision 2026-09-24,
+ * SV-003). Contacts are returned by GET /survey/projects/:id/contacts and by
+ * nothing else in the module; every observer shape is asked.
+ */
+describe("what an observer is shown of a contact", () => {
+  let contactId: string;
+  const PHONE = "+91 98480 55555";
+
+  beforeAll(async () => {
+    const c = await post(w.admin, `/api/v1/survey/projects/${programmeId}/contacts`, {
+      side: "GOVT", name: "Observer Test Tahsildar", designation: "Tahsildar", phone: PHONE,
+      email: "tahsildar.auth@example.invalid", notes: `Ring after 10 on ${PHONE}`,
+    });
+    expect(c.status, JSON.stringify(c.body)).toBe(201);
+    contactId = String(c.data.id);
+  });
+
+  async function rowFor(h: Headers) {
+    const r = await send("GET", h, `/api/v1/survey/projects/${programmeId}/contacts`);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const row = (r.data as Array<Record<string, unknown>>).find((x) => x.id === contactId);
+    expect(row, JSON.stringify(r.data)).toBeTruthy();
+    return row!;
+  }
+  function expectMasked(row: Record<string, unknown>) {
+    expect(row).not.toHaveProperty("phone");
+    expect(row).not.toHaveProperty("email");
+    expect(JSON.stringify(row)).not.toContain("98480");
+    expect(row.name).toBe("Observer Test Tahsildar");
+  }
+
+  it("masks them for the government observer", async () => {
+    expectMasked(await rowFor(w.role.GOVT_OBSERVER));
+  });
+
+  it("masks them for a client viewer scoped to the programme's project", async () => {
+    const client = await person(["CLIENT_VIEWER"]);
+    await w.pool.query(
+      `UPDATE user_roles SET scope_type = 'project', scope_id = $2 WHERE user_id = $1`,
+      [client.userId, pairedProjectId]);
+    const name = (await w.pool.query("SELECT username FROM users WHERE id = $1", [client.userId])).rows[0].username;
+    expectMasked(await rowFor(await loginAs(w.app, name)));
+  });
+
+  it("masks them for an observer who also holds a staff role", async () => {
+    const mixed = await person(["GOVT_OBSERVER", "EMPLOYEE"]);
+    await joinProgramme(w.pool, w.orgId, mixed.userId, programmeId, "GT_USER");
+    expectMasked(await rowFor(mixed.headers));
+  });
+
+  it("still shows them to staff", async () => {
+    const row = await rowFor(w.admin);
+    expect(row.phone).toBe(PHONE);
+  });
+});

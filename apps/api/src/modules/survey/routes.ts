@@ -5704,9 +5704,16 @@ export async function registerSurveyRoutes(
       // never whose desk it is on" line the dashboard draws for crew names.
       // Dropped for an observer rather than withheld from the query, so the
       // name, designation and what they cover still come through.
+      //
+      // Owner decision 2026-09-24 (SV-003): anybody holding an observer role
+      // is masked, even alongside a staff role, and the free-text notes go
+      // too -- "ring after 10 on 98480…" is where a number ends up when the
+      // phone field is the one being hidden.
+      const masked = scoped || (u.roles ?? []).some(
+        r => r === 'CLIENT_VIEWER' || r === 'GOVT_OBSERVER');
       return {
-        data: scoped
-          ? rows.map(({ phone: _phone, email: _email, ...rest }) => rest)
+        data: masked
+          ? rows.map(({ phone: _phone, email: _email, notes: _notes, ...rest }) => rest)
           : rows,
       };
     });
