@@ -2934,6 +2934,16 @@ export async function registerSurveyRoutes(
         data: await mutate(pool, req, 'survey.village.plan', 'survey_village', async db => {
           const row = await villageOr404(db, u.orgId, id, u, true);
           version(req, row as { version: number });
+          // A plan that finishes before it starts is a typo, counted against
+          // the pace figure until somebody notices (SV-010).
+          const start = input.planned_start_on !== undefined
+            ? input.planned_start_on : iso(row.planned_start_on);
+          const finish = input.expected_completion_on !== undefined
+            ? input.expected_completion_on : iso(row.expected_completion_on);
+          if (start && finish && finish < start) {
+            fail('VALIDATION_ERROR',
+              `The expected completion (${finish}) cannot be before the planned start (${start}).`, 422);
+          }
           const sets: string[] = [], values: unknown[] = [id];
           for (const key of ['total_extent_ac', 'expected_completion_on', 'planned_start_on',
             'gt_govt_staff_allocated', 'gt_crew_allocated'] as const) {
