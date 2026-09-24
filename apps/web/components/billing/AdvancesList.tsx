@@ -12,6 +12,11 @@ import { day, money, percent } from '@/lib/finance';
 
 type Row = Record<string, any>;
 
+/** Mirrors ADVANCE_TYPES (lib/validation.ts): MOBILISATION, MATERIAL, PLANT. */
+const ADVANCE_TYPE_LABELS: Record<string, string> = {
+  MOBILISATION: 'Mobilisation', MATERIAL: 'Material', PLANT: 'Plant',
+};
+
 /**
  * Item 6 (final QA fix wave): "New advance" on the billing page had no list
  * beside it, and no `GET /api/v1/advances` to back one — the only way to
@@ -53,7 +58,7 @@ export function AdvancesList({ projectId }: { projectId: string }) {
           <TBody>
             {rows.map((a) => (
               <TR key={String(a.id)}>
-                <TD>{String(a.advance_type).charAt(0) + String(a.advance_type).slice(1).toLowerCase()}</TD>
+                <TD>{ADVANCE_TYPE_LABELS[a.advance_type] ?? a.advance_type}</TD>
                 <TD tone="subtle">{day(a.paid_on)}</TD>
                 <TD align="right" className="text-text">{money(a.amount)}</TD>
                 <TD align="right" className="text-text-muted">{percent(a.recovery_pct)}</TD>

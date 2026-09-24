@@ -79,7 +79,8 @@ describe('AdvancesList (item 6, final QA fix wave)', () => {
     mount(<AdvancesList projectId={PROJECT_ID} />);
 
     expect(await screen.findByText('Mobilisation')).toBeInTheDocument();
-    expect(screen.getByText('OUTSTANDING')).toBeInTheDocument();
+    // StatusBadge title-cases the raw status.
+    expect(screen.getByText('Outstanding')).toBeInTheDocument();
     // Scoped to the project it was asked to show.
     expect(requested).toContain(`/api/v1/advances?project_id=${PROJECT_ID}`);
   });
