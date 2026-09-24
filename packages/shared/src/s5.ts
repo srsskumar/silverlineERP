@@ -65,7 +65,13 @@ export const S5_ROLE_GRANTS: Record<RoleCode, string[]> = {
   HR_MANAGER: [S5_PERMISSIONS.NOTIFICATION_READ],
   PAYROLL_OFFICER: [S5_PERMISSIONS.NOTIFICATION_READ],
   INVENTORY_MANAGER: [S5_PERMISSIONS.NOTIFICATION_READ],
- SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[], GOVT_OBSERVER:[],
+ // Both created by 031_commercial_permissions.sql, well before S5 existed,
+ // and never revisited then. The Inbox nav item is shown to every signed-in
+ // user regardless of role (see nav.ts), so leaving these empty meant a
+ // console 403 the instant either role opened the tab every other role has
+ // — the same bug shape 098 fixed for GOVT_OBSERVER (fd4a046). Migration 100
+ // carries the same grant to an already-seeded database.
+ SALES_BD_EXECUTIVE:[S5_PERMISSIONS.NOTIFICATION_READ], BID_TENDER_MANAGER:[S5_PERMISSIONS.NOTIFICATION_READ], GOVT_OBSERVER:[],
 };
 
 // ---------------------------------------------------------------------------

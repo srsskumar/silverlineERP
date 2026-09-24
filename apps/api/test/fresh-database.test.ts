@@ -78,6 +78,22 @@ describe("building a database from nothing", () => {
     expect(orphans.rows).toEqual([]);
   });
 
+  it("grants SALES_BD_EXECUTIVE and BID_TENDER_MANAGER notification.read from the migration alone (100)", async () => {
+    // Both roles are created by 031_commercial_permissions.sql, not only by
+    // the seed, so 100's role_permissions grant is not a no-op here and can
+    // be checked directly after migrate(), with no seedDatabase() call yet —
+    // the same shape as 098's GOVT_OBSERVER check (fd4a046).
+    const granted = await pool.query(
+      `SELECT r.code AS role_code
+         FROM role_permissions rp
+         JOIN roles r ON r.id = rp.role_id
+        WHERE r.code IN ('SALES_BD_EXECUTIVE', 'BID_TENDER_MANAGER') AND r.org_id IS NULL
+          AND rp.permission_code = 'notification.read'
+        ORDER BY r.code`,
+    );
+    expect(granted.rows.map((r) => r.role_code)).toEqual(['BID_TENDER_MANAGER', 'SALES_BD_EXECUTIVE']);
+  });
+
   it("seeds on top of it", async () => {
     const { orgId } = await seedDatabase(pool, { bcryptRounds: 4 });
     expect(orgId).toBeTruthy();
