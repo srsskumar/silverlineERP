@@ -313,6 +313,13 @@ export const FINANCE_PERMISSIONS = [
   'period.override',
   'bank.read', 'bank.reconcile',
   'invoice.read', 'invoice.manage', 'invoice.issue',
+  // Narrower than invoice.manage (fix round 1, I4, controller ruling):
+  // POST /api/v1/invoices accepts either. invoice.manage already implies
+  // it -- every holder of invoice.manage is granted this too, below -- so
+  // this exists for a role that should create a vendor invoice without
+  // also gaining the authority to edit its lines, change its status,
+  // dispute it or record a three-way match against it.
+  'invoice.create',
 ] as const;
 
 export const FINANCE_ROLE_GRANTS: Record<RoleCode, string[]> = {
@@ -321,18 +328,20 @@ export const FINANCE_ROLE_GRANTS: Record<RoleCode, string[]> = {
   // top role as a final escalation.
   ADMIN: FINANCE_PERMISSIONS.filter(p => p !== 'period.override'),
   PAYROLL_OFFICER: ['payment.read', 'payment.manage', 'payment.allocate',
-    'period.read', 'bank.read', 'bank.reconcile', 'invoice.read', 'invoice.manage'],
+    'period.read', 'bank.read', 'bank.reconcile', 'invoice.read', 'invoice.manage', 'invoice.create'],
   PROJECT_MANAGER: ['payment.read', 'period.read', 'invoice.read'],
   BID_TENDER_MANAGER: ['payment.read', 'invoice.read'],
   GOVT_OBSERVER: [],
   AUDITOR: ['payment.read', 'period.read', 'bank.read', 'invoice.read'],
   TEAM_LEAD: [],
-  // invoice.manage, not just invoice.read (owner decision 2026-09-24):
+  // invoice.create, not invoice.manage (fix round 1, I4, controller ruling):
   // POST /api/v1/invoices used to gate on inventory.manage, which this role
-  // holds; moving that route onto invoice.manage (matching every other
-  // vendor-invoice write) would otherwise have taken away its ability to
-  // create one.
-  INVENTORY_MANAGER: ['invoice.read', 'invoice.manage'],
+  // holds; moving that route onto invoice.manage would have taken away its
+  // ability to create one, but invoice.manage itself was too broad a
+  // replacement -- it also covers editing lines, status, disputes and
+  // three-way matching, none of which this role needs. invoice.create is
+  // the narrow permission POST /invoices accepts specifically for this.
+  INVENTORY_MANAGER: ['invoice.read', 'invoice.create'],
   HR_MANAGER: [],
   EMPLOYEE: [],
   SALES_BD_EXECUTIVE: ['invoice.read'],

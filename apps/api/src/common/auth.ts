@@ -299,6 +299,37 @@ export function requireAllPermissions(
   };
 }
 
+/**
+ * A gate that needs at least one of several permissions.
+ *
+ * POST /api/v1/invoices is the first user of it (fix round 1, I4): creating
+ * an invoice may be done under invoice.create (a narrow grant meant only for
+ * that) or under invoice.manage (which already covers every other invoice
+ * write, so a holder of it loses nothing). The scope left on the request,
+ * and the record-scope check run, are for whichever permission the caller
+ * actually holds -- the first match, in the order given.
+ */
+export function requireAnyPermission(
+  authenticate: (req: FastifyRequest) => Promise<void>,
+  permissions: readonly string[],
+) {
+  return async function guard(req: FastifyRequest): Promise<void> {
+    await authenticate(req);
+    const held = permissions.find(p => req.authUser?.permissions.includes(p));
+    if (!held) {
+      throw new ApiError({
+        status: 403,
+        code: "FORBIDDEN",
+        message: `This needs the "${permissions.join('" or "')}" permission, which your roles do not include. `
+          + "An administrator can add it to your role under Administration → Roles.",
+      });
+    }
+    req.authUser!.scopes = await scopesForPermission(req, held);
+    if((held.startsWith('payroll.')||held.startsWith('inventory.')||held==='webhook.manage'||held==='admin.configure'||held==='users.manage'||held==='users.read')&&req.authUser!.scopes.length&&!req.authUser!.scopes.some(s=>!s.scope_type||!s.scope_id))throw new ApiError({status:403,code:'FORBIDDEN',message:'This organization-wide action requires organization-wide permission'});
+    await enforceRecordScope(req, held);
+  };
+}
+
 /** A global low-privilege role must not widen a different role's permission. */
 /**
  * The permissions the visibility policy governs.
