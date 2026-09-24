@@ -24,3 +24,23 @@ export function quickAddAssigneeId(
 ): string | undefined {
   return !canAssign && userId ? userId : undefined;
 }
+
+/**
+ * MA-005: the date a task is due. GET /tasks rows carry planned_end_date;
+ * there is no due_date column, so the list's "Due …" line never rendered.
+ */
+export function taskDueDate(task: { [k: string]: unknown }): string | null {
+  return typeof task.planned_end_date === "string" && task.planned_end_date ? task.planned_end_date : null;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * MA-006: the ?taskId= deep-link param, read on every change (not only as
+ * the first render's initial state). An absent or array value is simply no
+ * link; a string that is not a UUID is flagged so the screen can say so.
+ */
+export function deepLinkTaskId(raw: unknown): { id: string | null; invalid: boolean } {
+  if (typeof raw !== "string" || !raw) return { id: null, invalid: false };
+  return UUID_RE.test(raw) ? { id: raw, invalid: false } : { id: null, invalid: true };
+}

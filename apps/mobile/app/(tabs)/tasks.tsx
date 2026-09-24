@@ -13,8 +13,8 @@ import { useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../src/auth/AuthContext";
 import { EvidenceCapture } from "../../src/device/EvidenceCapture";
-import { isUuid } from "../../src/deepLinks";
-import { quickAddAssigneeId } from "../../src/tasksFormat";
+import { deepLinkTaskId, quickAddAssigneeId, taskDueDate } from "../../src/tasksFormat";
+import { codeLabel } from "../../src/labels";
 import { submitQueued } from "../../src/sync/engine";
 import {
   getProjects,
@@ -61,13 +61,19 @@ function TasksScreen() {
    * garbage. It is validated as a UUID up front; an invalid one renders a
    * not-found banner instead of opening the sheet or crashing.
    */
-  const rawTaskId = typeof params.taskId === "string" ? params.taskId : null;
-  const invalidTaskId = rawTaskId !== null && !isUuid(rawTaskId);
+  const link = deepLinkTaskId(params.taskId);
+  const invalidTaskId = link.invalid;
   const [search, setSearch] = useState("");
   const [onlyMine, setOnlyMine] = useState(true);
-  const [selectedId, setSelectedId] = useState<string | null>(
-    rawTaskId && isUuid(rawTaskId) ? rawTaskId : null,
-  );
+  const [selectedId, setSelectedId] = useState<string | null>(link.id);
+  /*
+   * MA-006: the tab stays mounted once visited, so a second deep link (the
+   * inbox, a push) changes the param without remounting. Reading it only as
+   * initial state meant the sheet never opened for any link after the first.
+   */
+  useEffect(() => {
+    if (link.id) setSelectedId(link.id);
+  }, [link.id]);
   const { canDo, user } = useAuth();
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => getProjects() });
   const [quickProject, setQuickProject] = useState("");
@@ -228,16 +234,16 @@ function TasksScreen() {
         ) : filtered.length === 0 ? (
           <EmptyState
             icon="checkmark-done-outline"
-            title={search ? "No matches" : "Nothing assigned"}
-            message={search ? "Try a different search." : "Tasks assigned to you appear here."}
+            title={search ? "No matches" : onlyMine ? "Nothing assigned" : "No tasks in your scope"}
+            message={search ? "Try a different search." : onlyMine ? "Tasks assigned to you appear here." : "Tasks on projects you can see appear here."}
           />
         ) : (
           filtered.map((t, i, arr) => (
             <ListRow
               key={t.id}
               title={t.title}
-              subtitle={typeof t.due_date === "string" ? `Due ${day(t.due_date)}` : undefined}
-              right={<Badge text={t.status} tone={statusTone(t.status)} />}
+              subtitle={taskDueDate(t) ? `Due ${day(taskDueDate(t))}` : undefined}
+              right={<Badge text={codeLabel(t.status)} tone={statusTone(t.status)} />}
               onPress={() => setSelectedId(t.id)}
               last={i === arr.length - 1}
             />
@@ -369,7 +375,7 @@ function TaskSheet({ taskId, onClose }: { taskId: string | null; onClose: () => 
                   {task.title}
                 </Muted>
                 <Row gap={space.sm} style={{ marginTop: space.sm }}>
-                  <Badge text={task.status} tone={statusTone(task.status)} />
+                  <Badge text={codeLabel(task.status)} tone={statusTone(task.status)} />
                   <Subtle>version {task.version}</Subtle>
                 </Row>
 
@@ -381,7 +387,7 @@ function TaskSheet({ taskId, onClose }: { taskId: string | null; onClose: () => 
                       {nextSteps.map((n) => (
                         <Button
                           key={n}
-                          title={n.replaceAll("_", " ")}
+                          title={codeLabel(n)}
                           icon="arrow-forward-outline"
                           loading={busy}
                           disabled={busy}
