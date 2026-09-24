@@ -86,6 +86,47 @@ describe("policy configuration", () => {
   });
 });
 
+describe("policy deactivation", () => {
+  it("turns a policy off without a replacement, and refuses a stale version", async () => {
+    const policy = await ladderPolicy("RA_BILL");
+
+    // A version past the real one proves staleness is checked before anything changes.
+    const wrong = await post(
+      { ...w.admin, "if-match": String(Number(policy.version) + 1) },
+      `/api/v1/approval-policies/${policy.id}/deactivate`);
+    expect(wrong.status).toBe(409);
+    expect(wrong.body.code).toBe("VERSION_CONFLICT");
+
+    const res = await post(
+      { ...w.admin, "if-match": String(policy.version) },
+      `/api/v1/approval-policies/${policy.id}/deactivate`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.data.active).toBe(false);
+
+    const row = await w.pool.query("SELECT active FROM approval_policies WHERE id = $1", [policy.id]);
+    expect(row.rows[0].active).toBe(false);
+
+    // A document type with no active policy left behaves like it was never configured.
+    const submitRes = await submit(1000, "RA_BILL");
+    expect(submitRes.status).toBe(422);
+    expect(submitRes.body.code).toBe("NO_APPROVAL_POLICY");
+
+    // Already inactive: a second deactivation refuses.
+    const again = await post(
+      { ...w.admin, "if-match": String(Number(policy.version) + 1) },
+      `/api/v1/approval-policies/${policy.id}/deactivate`);
+    expect(again.status).toBe(422);
+  });
+
+  it("is refused to someone who only holds approval.act", async () => {
+    const policy = await ladderPolicy("PAYMENT");
+    const res = await post(
+      { ...w.role.TEAM_LEAD, "if-match": String(policy.version) },
+      `/api/v1/approval-policies/${policy.id}/deactivate`);
+    expect(res.status).toBe(403);
+  });
+});
+
 describe("routing", () => {
   beforeAll(async () => { await ladderPolicy(); });
 

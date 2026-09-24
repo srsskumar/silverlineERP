@@ -41,8 +41,11 @@ export async function submitForApproval(
        AND (project_id = $3::uuid OR project_id IS NULL)
      ORDER BY project_id NULLS LAST LIMIT 1`, [u.orgId, documentType, projectId])).rows[0];
   if (!policy) {
+    // Named so the web admin screen's error card can point straight at
+    // Approvals → Policies without parsing this sentence.
     fail('NO_APPROVAL_POLICY',
-      `No active approval policy covers ${documentType}. Configure the authority slabs before submitting.`);
+      `No approval route is set up for ${documentType.replaceAll('_', ' ').toLowerCase()}`
+      + `${projectId ? ' in this project' : ''}. Ask an administrator to add one under Approvals → Policies.`);
   }
   const ladder = resolveLadder(
     await levelsForPolicy(db, String(policy.id)), amount, policy.mode as LadderMode);

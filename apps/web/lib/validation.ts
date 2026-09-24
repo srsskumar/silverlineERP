@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { APPROVAL_DOCUMENT_TYPES, validateSlabs } from '@silverline/shared';
 
 export const loginSchema = z.object({
   // A username or a mobile number (§34). Still called `username` because
@@ -1051,3 +1052,70 @@ export const invoiceLinesUpdateSchema = z.object({
   lines: z.array(invoiceLineSchema).min(1, 'Add at least one line'),
 });
 export type InvoiceLinesUpdateFormInput = z.infer<typeof invoiceLinesUpdateSchema>;
+
+// ---------------------------------------------------------------------------
+// Approval policies (Task 5f, §41). Mirrors approvalPolicySchema /
+// approvalLevelSchema in packages/shared/src/approvals.ts field-for-field —
+// the same gap/overlap check (validateSlabs) runs here too, so a bad ladder
+// is caught before the round trip rather than only after it — but the raw
+// text-input coercion (empty string -> undefined/null) is handled the way
+// every other form on this page handles it, since the shared schema assumes
+// values already came off JSON, not off an <input>.
+// ---------------------------------------------------------------------------
+
+export { APPROVAL_DOCUMENT_TYPES };
+
+/** An open (no upper bound) money field: '' becomes null, not undefined — the
+ *  API requires max_amount to be present, either a number or null. */
+const openEndedMoneyField = (message = 'Enter an amount of 0 or more, with at most 2 decimal places') =>
+  z
+    .string()
+    .trim()
+    .transform((v) => (v === '' ? null : v))
+    .pipe(z.union([z.null(), z.string().regex(MONEY_RE, message).transform((v) => Number(v))]));
+
+export const approvalPolicyLevelSchema = z
+  .object({
+    sequence: z.coerce.number().int().min(1).max(20),
+    min_amount: moneyField(),
+    max_amount: openEndedMoneyField(),
+    approver_role: optionalText(50),
+    approver_user_id: optionalUuid,
+    sla_hours: z.coerce
+      .string()
+      .trim()
+      .optional()
+      .or(z.literal('').transform(() => undefined))
+      .transform((v) => (v === '' ? undefined : v))
+      .pipe(z.coerce.number().int().min(1).max(8760).optional()),
+  })
+  .refine((v) => Boolean(v.approver_role) || Boolean(v.approver_user_id), {
+    message: 'Name an approver role or a specific approver',
+    path: ['approver_role'],
+  })
+  .refine((v) => v.max_amount === null || v.max_amount > v.min_amount, {
+    message: 'The upper bound must exceed the lower bound',
+    path: ['max_amount'],
+  });
+export type ApprovalPolicyLevelInput = z.infer<typeof approvalPolicyLevelSchema>;
+
+export const approvalPolicySchema = z
+  .object({
+    document_type: z.enum(APPROVAL_DOCUMENT_TYPES, { errorMap: () => ({ message: 'Pick a document type' }) }),
+    name: z.string().trim().min(1, 'Name is required').max(150),
+    mode: z.enum(['SINGLE', 'CUMULATIVE']),
+    project_id: optionalUuid,
+    tolerance_pct: z.coerce.number().min(0, 'Tolerance cannot be negative').max(25, 'Tolerance cannot exceed 25%'),
+    active: z.boolean(),
+    levels: z.array(approvalPolicyLevelSchema).min(1, 'Add at least one level').max(20),
+  })
+  .superRefine((value, ctx) => {
+    const check = validateSlabs(value.levels.map((l) => ({
+      sequence: l.sequence, minAmount: l.min_amount, maxAmount: l.max_amount,
+      approverRole: l.approver_role, approverUserId: l.approver_user_id,
+    })));
+    if (!check.valid) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: check.problem!, path: ['levels'] });
+    }
+  });
+export type ApprovalPolicyFormInput = z.infer<typeof approvalPolicySchema>;

@@ -57,6 +57,7 @@ export const MODULE_CATALOG: ModuleCatalogEntry[] = [
   { code: 'clients', label: 'Clients', group: 'Commercial', permission: 'client.read' },
 
   { code: 'approvals', label: 'Approvals', group: 'Finance', permission: 'approval.read' },
+  { code: 'approval-policies', label: 'Approval policies', group: 'Finance', permission: 'approval.configure' },
   { code: 'procurement', label: 'Procurement', group: 'Finance', permission: 'requisition.read' },
   { code: 'expenses', label: 'Expenses', group: 'Finance', permission: 'expense.read' },
   { code: 'project-finance', label: 'Project finance', group: 'Finance',

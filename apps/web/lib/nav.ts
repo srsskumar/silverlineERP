@@ -99,6 +99,10 @@ export const NAV_GROUPS: NavGroup[] = [
     title: 'Finance',
     items: [
       { href: '/approvals', label: 'Approvals', permission: 'approval.read', icon: CheckSquare },
+      // The DoA ladders behind Approvals — who a document routes to, and at
+      // what amount. Separate from Approvals itself: that screen decides
+      // requests, this one configures who gets to decide them.
+      { href: '/approvals/policies', label: 'Approval policies', permission: 'approval.configure', icon: Settings },
       { href: '/procurement', label: 'Procurement', permission: 'requisition.read', icon: ShoppingCart },
       { href: '/expenses', label: 'Expenses', permission: 'expense.read', icon: Receipt },
       // The bills hang off a project, chosen first.

@@ -50,8 +50,10 @@ export const LAUNCHER_EXCLUDED_CODES: readonly string[] = [
  * Catalog codes the owner decided stay on the web only — never listed in the
  * launcher, not even as "Coming soon". Org locations (2026-09-24): the
  * District→Site hierarchy is admin set-up, not something a field user looks up.
+ * Approval policies (Task 5f, 2026-09-24): the DoA ladder is admin set-up
+ * too — configured once, from a desktop, not something a field user opens.
  */
-export const WEB_ONLY_CODES: readonly string[] = ["org-locations"];
+export const WEB_ONLY_CODES: readonly string[] = ["org-locations", "approval-policies"];
 
 /** Catalog codes this round of mobile work actually built a screen for. */
 export const BUILT_MODULE_ROUTES: Readonly<Record<string, string>> = {

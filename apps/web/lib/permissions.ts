@@ -47,8 +47,12 @@ export const PERMISSIONS = {
   EMPLOYEE_IMPORT: 'employee.import',
   DOCUMENT_READ: 'document.read',
   DOCUMENT_UPLOAD: 'document.upload',
+  DOCUMENT_DELETE: 'document.delete',
   HOLIDAY_READ: 'holiday.read',
   HOLIDAY_MANAGE: 'holiday.manage',
+  // §41 Delegation of Authority (approval-policies admin screen, Task 5f).
+  APPROVAL_READ: 'approval.read',
+  APPROVAL_CONFIGURE: 'approval.configure',
   // S2 frozen contract codes (dot-style; backend enforces these).
   ATTENDANCE_PUNCH: 'attendance.punch',
   ATTENDANCE_READ: 'attendance.read',
