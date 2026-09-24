@@ -129,6 +129,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/employees', label: 'Directory', permission: PERMISSIONS.EMPLOYEE_READ, icon: Users },
       { href: '/attendance', label: 'Attendance', permission: PERMISSIONS.ATTENDANCE_READ, anyOf: [PERMISSIONS.ATTENDANCE_PUNCH], icon: Clock },
       { href: '/attendance/exceptions', label: 'Exceptions', permission: PERMISSIONS.ATTENDANCE_READ, icon: Activity },
+      // §47: the shift windows a roster entry books an employee into.
+      { href: '/shifts', label: 'Shifts', permission: 'roster.read', icon: CalendarClock },
       { href: '/leave', label: 'Leave', permission: PERMISSIONS.LEAVE_REQUEST, icon: PlaneTakeoff },
       { href: '/payroll', label: 'Payroll', permission: PERMISSIONS.PAYROLL_READ, icon: Wallet },
       { href: '/my-payslip', label: 'My payslip', permission: PERMISSIONS.PAYSLIP_READ, icon: Wallet },

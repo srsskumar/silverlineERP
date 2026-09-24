@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import {
-  resourceAllocationSchema, shiftSchema, rosterEntrySchema, rosterBulkSchema,
+  resourceAllocationSchema, shiftSchema, shiftUpdateSchema, rosterEntrySchema, rosterBulkSchema,
   findCapacityConflict, utilisation, shiftHours, isRestDay, dayPay,
   ALLOCATION_TRANSITIONS,
   type Allocation, type AllocationState, type Weekday,
@@ -234,6 +234,57 @@ export async function registerAllocationRoutes(app: FastifyInstance, opts: { poo
     });
     reply.code(201);
     return { data: row };
+  });
+
+  /**
+   * Edit a shift (Task 5f — the web admin screen needed a way to fix a
+   * typo'd name or move a shift's window without retiring and re-creating
+   * it). Every column COALESCEd, same pattern as PATCH /cost-heads/:id.
+   */
+  app.patch('/api/v1/shifts/:id', { preHandler: guard('roster.manage') }, async req => {
+    const u = actor(req), id = (req.params as { id: string }).id;
+    const input = parse(shiftUpdateSchema, req.body);
+    return {
+      data: await mutate(pool, req, 'shift.update', 'work_shift', async db => {
+        const shift = await inOrg(db, 'work_shifts', id, u.orgId, true);
+        version(req, shift as { version: number });
+        const next = {
+          starts_at: input.starts_at ?? String(shift.starts_at).slice(0, 5),
+          ends_at: input.ends_at ?? String(shift.ends_at).slice(0, 5),
+          break_minutes: input.break_minutes ?? Number(shift.break_minutes),
+          effective_from: input.effective_from ?? iso(shift.effective_from),
+          effective_to: input.effective_to !== undefined ? input.effective_to : (shift.effective_to ? iso(shift.effective_to) : null),
+        };
+        if (next.effective_to && next.effective_to < next.effective_from) {
+          fail('VALIDATION_ERROR', 'Ends before it starts');
+        }
+        if (shiftHours({ code: String(shift.code), startsAt: next.starts_at, endsAt: next.ends_at, breakMinutes: next.break_minutes }) <= 0) {
+          fail('VALIDATION_ERROR', 'The break is as long as the shift — nobody would be working');
+        }
+        return (await db.query(
+          `UPDATE work_shifts SET
+             name = COALESCE($2, name),
+             starts_at = COALESCE($3, starts_at),
+             ends_at = COALESCE($4, ends_at),
+             break_minutes = COALESCE($5, break_minutes),
+             rest_days = COALESCE($6, rest_days),
+             daily_threshold_hours = COALESCE($7, daily_threshold_hours),
+             overtime_multiplier = COALESCE($8, overtime_multiplier),
+             rest_day_multiplier = CASE WHEN $9::boolean THEN $10 ELSE rest_day_multiplier END,
+             effective_from = COALESCE($11, effective_from),
+             effective_to = CASE WHEN $12::boolean THEN $13 ELSE effective_to END,
+             active = COALESCE($14, active),
+             version = version + 1, updated_at = now(), updated_by = $15
+           WHERE id = $1 RETURNING *`,
+          [id, input.name ?? null, input.starts_at ?? null, input.ends_at ?? null,
+           input.break_minutes ?? null, input.rest_days ? JSON.stringify(input.rest_days) : null,
+           input.daily_threshold_hours ?? null, input.overtime_multiplier ?? null,
+           input.rest_day_multiplier !== undefined, input.rest_day_multiplier ?? null,
+           input.effective_from ?? null,
+           input.effective_to !== undefined, input.effective_to ?? null,
+           input.active ?? null, u.id])).rows[0];
+      }),
+    };
   });
 
   /* -------------------------------------------------------------- roster */

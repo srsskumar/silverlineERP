@@ -299,6 +299,28 @@ export const shiftSchema = z.object({
   }
 });
 
+/**
+ * PATCH /api/v1/shifts/:id (Task 5f — the web admin screen needed a way to
+ * edit a shift; only create existed). Every field optional rather than
+ * `shiftSchema.partial()`: that schema went through `.superRefine` above,
+ * and a `ZodEffects` has no `.partial()`. The break/span sanity check is
+ * re-applied in the route itself, against the row as it will read after the
+ * update, the same way the route re-derives `shift_hours` for GET.
+ */
+export const shiftUpdateSchema = z.object({
+  name: text.max(100).optional(),
+  starts_at: time.optional(),
+  ends_at: time.optional(),
+  break_minutes: z.coerce.number().int().min(0).max(480).optional(),
+  rest_days: z.array(z.enum(WEEKDAYS)).max(7).optional(),
+  daily_threshold_hours: z.coerce.number().min(0).max(24).optional(),
+  overtime_multiplier: z.coerce.number().min(1).max(4).optional(),
+  rest_day_multiplier: z.coerce.number().min(1).max(4).nullable().optional(),
+  effective_from: dateString.optional(),
+  effective_to: dateString.nullable().optional(),
+  active: z.boolean().optional(),
+});
+
 export const rosterEntrySchema = z.object({
   employee_id: uuid,
   shift_id: uuid,

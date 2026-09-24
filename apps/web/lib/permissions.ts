@@ -68,6 +68,9 @@ export const PERMISSIONS = {
   COSTHEAD_MANAGE: 'costhead.manage',
   BUDGET_READ: 'budget.read',
   BUDGET_MANAGE: 'budget.manage',
+  // §47 workforce allocation: shift definitions (Task 5f — API existed, no web UI).
+  ROSTER_READ: 'roster.read',
+  ROSTER_MANAGE: 'roster.manage',
   // S2 frozen contract codes (dot-style; backend enforces these).
   ATTENDANCE_PUNCH: 'attendance.punch',
   ATTENDANCE_READ: 'attendance.read',

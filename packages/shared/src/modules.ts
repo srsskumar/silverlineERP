@@ -74,6 +74,7 @@ export const MODULE_CATALOG: ModuleCatalogEntry[] = [
     permission: 'attendance.read', anyOf: ['attendance.punch'] },
   { code: 'attendance-exceptions', label: 'Exceptions', group: 'People',
     permission: 'attendance.read' },
+  { code: 'shifts', label: 'Shifts', group: 'People', permission: 'roster.read' },
   { code: 'leave', label: 'Leave', group: 'People', permission: 'leave.request' },
   { code: 'payroll', label: 'Payroll', group: 'People', permission: 'payroll.read' },
   { code: 'my-payslip', label: 'My payslip', group: 'People', permission: 'payslip.read' },

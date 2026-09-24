@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { APPROVAL_DOCUMENT_TYPES, validateSlabs, PAYMENT_DIRECTIONS, PAYMENT_MODES, COST_HEAD_KINDS } from '@silverline/shared';
+import { APPROVAL_DOCUMENT_TYPES, validateSlabs, PAYMENT_DIRECTIONS, PAYMENT_MODES, COST_HEAD_KINDS, WEEKDAYS } from '@silverline/shared';
 
 export const loginSchema = z.object({
   // A username or a mobile number (§34). Still called `username` because
@@ -1239,3 +1239,29 @@ export const budgetFormSchema = z.object({
   lines: z.array(budgetLineFormSchema).min(1, 'A budget needs at least one cost head'),
 });
 export type BudgetFormInput = z.infer<typeof budgetFormSchema>;
+
+// ---------------------------------------------------------------------------
+// Shifts (Task 5f, §47). Mirrors packages/shared/src/allocation.ts's
+// shiftSchema — the create route's own schema, which the PATCH route
+// (added this task) also draws its updatable fields from.
+// ---------------------------------------------------------------------------
+
+export { WEEKDAYS };
+
+const timeField = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use HH:MM');
+
+export const shiftFormSchema = z
+  .object({
+    code: z.string().trim().min(1, 'Code is required').max(30).transform((s) => s.toUpperCase()),
+    name: z.string().trim().min(1, 'Name is required').max(100),
+    starts_at: timeField,
+    ends_at: timeField,
+    break_minutes: z.coerce.number().int().min(0).max(480),
+    rest_days: z.array(z.enum(WEEKDAYS)).max(7),
+    daily_threshold_hours: moneyField('Enter a number of hours'),
+    overtime_multiplier: z.coerce.number().min(1).max(4),
+    effective_from: dateString(),
+    effective_to: optionalDate,
+    active: z.boolean(),
+  });
+export type ShiftFormInput = z.infer<typeof shiftFormSchema>;
