@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { APPROVAL_DOCUMENT_TYPES, validateSlabs } from '@silverline/shared';
+import { APPROVAL_DOCUMENT_TYPES, validateSlabs, PAYMENT_DIRECTIONS, PAYMENT_MODES } from '@silverline/shared';
 
 export const loginSchema = z.object({
   // A username or a mobile number (§34). Still called `username` because
@@ -1119,3 +1119,94 @@ export const approvalPolicySchema = z
     }
   });
 export type ApprovalPolicyFormInput = z.infer<typeof approvalPolicySchema>;
+
+// ---------------------------------------------------------------------------
+// Financial control (Task 5f, §45): payments, bank reconciliation, financial
+// periods. Field lists mirror packages/shared/src/financial-control.ts's
+// paymentSchema / paymentAllocationSchema / financialPeriodSchema /
+// periodClosureSchema / bankTransactionSchema, the same way requisitionSchema
+// above mirrors the procurement module's.
+// ---------------------------------------------------------------------------
+
+export { PAYMENT_DIRECTIONS, PAYMENT_MODES };
+
+export const paymentFormSchema = z.object({
+  direction: z.enum(PAYMENT_DIRECTIONS, { errorMap: () => ({ message: 'Pick a direction' }) }),
+  payment_no: z.string().trim().min(1, 'Payment number is required').max(50),
+  paid_on: dateString(),
+  amount: positiveMoneyField('A payment has to be for something'),
+  mode: z.enum(PAYMENT_MODES, { errorMap: () => ({ message: 'Pick a mode' }) }),
+  reference: optionalText(100),
+  party_type: z.enum(['CLIENT', 'VENDOR', 'EMPLOYEE']).optional().or(z.literal('').transform(() => undefined)),
+  party_id: optionalUuid,
+  project_id: optionalUuid,
+  bank_account: optionalText(50),
+  notes: optionalText(1000),
+});
+export type PaymentFormInput = z.infer<typeof paymentFormSchema>;
+
+export const paymentAllocationFormSchema = z
+  .object({
+    document_type: z.enum(['RA_BILL', 'VENDOR_INVOICE', 'EXPENSE_CLAIM', 'ADVANCE'], {
+      errorMap: () => ({ message: 'Pick a document type' }),
+    }),
+    document_id: userUuid('Enter a valid document ID (UUID)'),
+    amount: moneyField(),
+    tds_amount: optionalMoneyField(),
+    retention_amount: optionalMoneyField(),
+    advance_adjusted: optionalMoneyField(),
+    other_deduction: optionalMoneyField(),
+    deduction_reason: optionalText(500),
+  })
+  .superRefine((v, ctx) => {
+    if (v.document_type === 'RA_BILL') {
+      for (const field of ['tds_amount', 'advance_adjusted'] as const) {
+        if ((v[field] ?? 0) > 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom, path: [field],
+            message: field === 'tds_amount'
+              ? "An RA bill's net payable is already after TDS. Allocate only the cash received."
+              : 'An RA bill already recovered the advance when it was certified. Allocate only the cash received.',
+          });
+        }
+      }
+    }
+    if ((v.other_deduction ?? 0) > 0 && !v.deduction_reason) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom, path: ['deduction_reason'],
+        message: 'Say why the amount was withheld',
+      });
+    }
+  });
+export type PaymentAllocationFormInput = z.infer<typeof paymentAllocationFormSchema>;
+
+export const financialPeriodFormSchema = z
+  .object({
+    code: z.string().trim().min(1, 'Code is required').max(30),
+    starts_on: dateString(),
+    ends_on: dateString(),
+  })
+  .refine((v) => v.ends_on >= v.starts_on, { message: 'A period cannot end before it starts', path: ['ends_on'] });
+export type FinancialPeriodFormInput = z.infer<typeof financialPeriodFormSchema>;
+
+export const periodClosureFormSchema = z
+  .object({
+    action: z.enum(['CLOSE', 'REOPEN']),
+    reason: optionalText(1000),
+  })
+  .superRefine((v, ctx) => {
+    if (v.action === 'REOPEN' && !v.reason) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['reason'], message: 'Say why the period is being reopened' });
+    }
+  });
+export type PeriodClosureFormInput = z.infer<typeof periodClosureFormSchema>;
+
+/** One row of a parsed bank-statement CSV, before it is sent to the import route. */
+export const bankTransactionRowSchema = z.object({
+  statement_ref: z.string().trim().min(1, 'Statement reference is required').max(100),
+  value_date: dateString(),
+  amount: z.coerce.number().finite('Enter a number'),
+  narration: optionalText(500),
+  bank_account: optionalText(50),
+});
+export type BankTransactionRowInput = z.infer<typeof bankTransactionRowSchema>;

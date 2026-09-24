@@ -53,6 +53,15 @@ export const PERMISSIONS = {
   // §41 Delegation of Authority (approval-policies admin screen, Task 5f).
   APPROVAL_READ: 'approval.read',
   APPROVAL_CONFIGURE: 'approval.configure',
+  // §45 Financial control: payments, bank reconciliation, financial periods
+  // (Task 5f — API existed, no web UI).
+  PAYMENT_READ: 'payment.read',
+  PAYMENT_MANAGE: 'payment.manage',
+  PAYMENT_ALLOCATE: 'payment.allocate',
+  BANK_READ: 'bank.read',
+  BANK_RECONCILE: 'bank.reconcile',
+  PERIOD_READ: 'period.read',
+  PERIOD_MANAGE: 'period.manage',
   // S2 frozen contract codes (dot-style; backend enforces these).
   ATTENDANCE_PUNCH: 'attendance.punch',
   ATTENDANCE_READ: 'attendance.read',

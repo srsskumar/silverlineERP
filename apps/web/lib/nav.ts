@@ -15,7 +15,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   FileCheck,
-  Compass, ScrollText, ArrowLeftRight } from 'lucide-react';
+  Compass, ScrollText, ArrowLeftRight, Banknote, Landmark, CalendarClock } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { PERMISSIONS } from './permissions';
 
@@ -112,6 +112,11 @@ export const NAV_GROUPS: NavGroup[] = [
       // jobs, and neither is scoped to one project.
       { href: '/receivables', label: 'Receivables', permission: 'ar.read', icon: ArrowDownToLine },
       { href: '/payables', label: 'Payables', permission: 'ap.read', icon: ArrowUpFromLine },
+      // §45 financial control: money that actually moved, the bank's own
+      // record of it, and the monthly calendar that locks both once closed.
+      { href: '/payments', label: 'Payments', permission: 'payment.read', icon: Banknote },
+      { href: '/bank-reconciliation', label: 'Bank reconciliation', permission: 'bank.read', icon: Landmark },
+      { href: '/financial-periods', label: 'Financial periods', permission: 'period.read', icon: CalendarClock },
     ],
   },
   {

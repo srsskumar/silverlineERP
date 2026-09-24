@@ -64,6 +64,9 @@ export const MODULE_CATALOG: ModuleCatalogEntry[] = [
     permission: 'rabill.read', requires: ['project.read'] },
   { code: 'receivables', label: 'Receivables', group: 'Finance', permission: 'ar.read' },
   { code: 'payables', label: 'Payables', group: 'Finance', permission: 'ap.read' },
+  { code: 'payments', label: 'Payments', group: 'Finance', permission: 'payment.read' },
+  { code: 'bank-reconciliation', label: 'Bank reconciliation', group: 'Finance', permission: 'bank.read' },
+  { code: 'financial-periods', label: 'Financial periods', group: 'Finance', permission: 'period.read' },
 
   { code: 'employees', label: 'Directory', group: 'People', permission: 'employee.read' },
   { code: 'attendance', label: 'Attendance', group: 'People',
