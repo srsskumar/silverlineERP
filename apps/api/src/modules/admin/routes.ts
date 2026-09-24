@@ -83,7 +83,19 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
     const held=(await db.query("SELECT r.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=$1",[id])).rows as Array<{code:string}>;
     if(held.some(r=>mfaFloorRole(r.code)))fail('MFA_REQUIRED','A super administrator cannot be exempted from two-factor authentication',422);
    }
-   await db.query('UPDATE users SET auth_status=COALESCE($2,auth_status),password_hash=COALESCE($3,password_hash),phone=CASE WHEN $5::boolean THEN $4 ELSE phone END,must_change_password=COALESCE($7,must_change_password),password_set_at=CASE WHEN $3::text IS NULL THEN password_set_at ELSE now() END,mfa_policy=COALESCE($6,mfa_policy),updated_at=now() WHERE id=$1',[id,i.auth_status??null,hash,phone??null,phone!==undefined,i.mfa_policy??null,i.must_change_password??null]);await keepAdministrator(db,u.orgId);await db.query('UPDATE sessions SET revoked=true,revoked_at=now() WHERE user_id=$1',[id]);
+   await db.query('UPDATE users SET auth_status=COALESCE($2,auth_status),password_hash=COALESCE($3,password_hash),phone=CASE WHEN $5::boolean THEN $4 ELSE phone END,must_change_password=COALESCE($7,must_change_password),password_set_at=CASE WHEN $3::text IS NULL THEN password_set_at ELSE now() END,mfa_policy=COALESCE($6,mfa_policy),updated_at=now() WHERE id=$1',[id,i.auth_status??null,hash,phone??null,phone!==undefined,i.mfa_policy??null,i.must_change_password??null]);await keepAdministrator(db,u.orgId);
+   /*
+    * A-011: sign-out is for the fields that actually change what the
+    * account can do or how it authenticates -- status, password, MFA
+    * policy. A patch that only touches phone or must_change_password used
+    * to revoke every session here too, unconditionally, contradicting the
+    * web UI's own copy ("Disabling an account signs it out ... Setting a
+    * password here signs the account out ...") which never promises that
+    * for those two fields.
+    */
+   if(i.auth_status!==undefined||i.password!==undefined||i.mfa_policy!==undefined){
+    await db.query('UPDATE sessions SET revoked=true,revoked_at=now() WHERE user_id=$1',[id]);
+   }
    /*
     * Setting a password closes whatever they were waiting on (§note 16).
     *

@@ -217,6 +217,53 @@ describe("changing somebody else's account", () => {
     const admin = await createUser("adm", ["ADMIN"]);
     expect((await patchUser(root, admin.id, { password: "a-fresh-password-2026" })).statusCode).toBe(200);
   });
+
+  /*
+   * A-011: PATCH /admin/users/:id revoked every session for the target user
+   * on ANY successful call, unconditionally -- even a patch that only
+   * touched `phone` or `must_change_password`. The web admin UI's own copy
+   * ("Disabling an account signs it out ... Setting a password here signs
+   * the account out ...") only promises sign-out for auth_status/password/
+   * mfa_policy changes, so an admin correcting a coworker's phone number
+   * would silently force-sign-out every device they were using, with no
+   * warning anywhere. Every other side effect in this handler (e.g. closing
+   * password-reset requests) is already correctly gated on which field
+   * changed; the session revocation line was the one left unconditional.
+   */
+  it("does not revoke sessions for a patch that only touches phone/must_change_password", async () => {
+    const admin = await headersFor((await createUser("adm", ["ADMIN"])).username);
+    const target = await createUser("emp", ["EMPLOYEE"]);
+    await headersFor(target.username); // creates an active session row
+
+    const before = (
+      await pool.query("SELECT revoked FROM sessions WHERE user_id = $1", [target.id])
+    ).rows;
+    expect(before.length).toBeGreaterThan(0);
+    expect(before.every((r) => r.revoked === false)).toBe(true);
+
+    const res = await patchUser(admin, target.id, { phone: "9876543212" });
+    expect(res.statusCode, res.body).toBe(200);
+
+    const after = (
+      await pool.query("SELECT revoked FROM sessions WHERE user_id = $1", [target.id])
+    ).rows;
+    expect(after.every((r) => r.revoked === false)).toBe(true);
+  });
+
+  it("still revokes sessions when auth_status, password or mfa_policy actually change", async () => {
+    const admin = await headersFor((await createUser("adm", ["ADMIN"])).username);
+    const target = await createUser("emp", ["EMPLOYEE"]);
+    await headersFor(target.username);
+
+    const res = await patchUser(admin, target.id, { mfa_policy: "EXEMPT" });
+    expect(res.statusCode, res.body).toBe(200);
+
+    const after = (
+      await pool.query("SELECT revoked FROM sessions WHERE user_id = $1", [target.id])
+    ).rows;
+    expect(after.length).toBeGreaterThan(0);
+    expect(after.every((r) => r.revoked === true)).toBe(true);
+  });
 });
 
 describe("changing your own account", () => {
