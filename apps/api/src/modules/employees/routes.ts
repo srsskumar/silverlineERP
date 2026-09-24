@@ -1444,14 +1444,15 @@ export async function registerEmployeeRoutes(
         )
       ).rows.map((r: { id: string }) => r.id);
       /*
-       * Fix round 2, item 1(ii): pending leave *belonging to somebody else*
-       * that this person was the current approver on is reassigned here, in
-       * the same transaction as the exit -- not left pointing at an
-       * account that is DISABLED as of the write above. Their own leave
-       * (as the requester, not the approver) was withdrawn just above;
-       * this is the other direction. Only reassigns a step-2 (HR/admin)
-       * slot, same scope as reassignIfIneligible everywhere else -- a
-       * step-1 (manager) slot this person held is not re-derived here.
+       * Fix round 2/3, item 1(ii): pending leave *belonging to somebody
+       * else* that this person was the current approver on -- at either
+       * step -- is reassigned here, in the same transaction as the exit,
+       * not left pointing at an account that is DISABLED as of the write
+       * above. Their own leave (as the requester, not the approver) was
+       * withdrawn just above; this is the other direction.
+       * `reassignIfIneligible` decides the fallback for whichever step
+       * this person actually held (their own reporting manager first for
+       * a step-1 slot, HR-then-admin for a step-2 slot).
        */
       const reassignedApprovals: string[] = [];
       if (accountIds.length > 0) {

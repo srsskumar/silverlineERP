@@ -212,6 +212,17 @@ function fileLeave(
   });
 }
 
+/** The create response doesn't carry `approval_chain` (only the detail
+ * GET does) -- this fetches it directly. */
+async function chainOfRequest(
+  id: string,
+  headers: Record<string, string>,
+): Promise<Array<{ step: number; approver_user_id: string; status: string }>> {
+  const res = await app.inject({ method: "GET", url: `/api/v1/leave/requests/${id}`, headers });
+  return (res.json() as { approval_chain: Array<{ step: number; approver_user_id: string; status: string }> })
+    .approval_chain;
+}
+
 /**
  * Standard chain fixture: manager employee M linked to a TEAM_LEAD user,
  * employee E (linked to an EMPLOYEE user) reporting to M. Returns ids +
@@ -1673,6 +1684,198 @@ describe("leave step-2 approver: reassigned when it becomes stale (fix round 2, 
     expect(reassignedTo).not.toBe(hrApplicant.id);
     expect(reassignedTo).not.toBe(hrOriginal.id);
     expect(reassignedTo).toBeTruthy();
+  });
+});
+
+describe("leave step-1 approver: reassigned when it becomes stale (fix round 3, item 1, controller ruling)", () => {
+  it("reassigns to the exiting approver's own reporting manager", async () => {
+    const adminH = await adminHeaders();
+    const types = await typeMap(adminH);
+
+    // Three-level chain: gm manages tlEmp, tlEmp manages eId (the
+    // applicant). gm is a plain TEAM_LEAD (holds leave.decide, so it
+    // qualifies as a step-1 fallback) but not HR/admin, so it is never in
+    // the running for this request's step-2 slot -- no duplicate concern
+    // to entangle with (that's the next test).
+    const gm = await mkUser(["TEAM_LEAD"], "gm1");
+    const gId = await mkEmployee(adminH);
+    await activateEmployee(gId);
+    await linkUser(gm.id, gId);
+
+    const tl = await mkUser(["TEAM_LEAD"], "tl1");
+    const tlEmp = await mkEmployee(adminH, { reports_to: gId });
+    await activateEmployee(tlEmp);
+    await linkUser(tl.id, tlEmp);
+
+    const emp = await mkUser(["EMPLOYEE"], "emp1");
+    const eId = await mkEmployee(adminH, { reports_to: tlEmp });
+    await activateEmployee(eId);
+    await linkUser(emp.id, eId);
+
+    const from = plusDays(30);
+    await setBalance(adminH, eId, types["CL"] as string, yr(from), 12);
+    const filed = await fileLeave(emp.headers, { leave_type_id: types["CL"], from_date: from, to_date: from });
+    expect(filed.statusCode).toBe(201);
+    const body = filed.json() as { id: string; current_approver_id: string };
+    // Step 1 (tl) is current immediately after filing; step 2 fell back to
+    // admin (no HR manager in this org) -- confirms the fixture.
+    expect(body.current_approver_id).toBe(tl.id);
+    const chainBefore = await chainOfRequest(body.id, adminH);
+    const stepTwoApprover = chainBefore.find((s) => s.step === 2)?.approver_user_id;
+    expect(stepTwoApprover).toBeTruthy();
+    expect(stepTwoApprover).not.toBe(gm.id);
+
+    const exited = await app.inject({
+      method: "POST",
+      url: `/api/v1/employees/${tlEmp}/exit`,
+      headers: adminH,
+      payload: { exit_date: "2025-01-31", reason: "resigned" },
+    });
+    expect(exited.statusCode).toBe(200);
+
+    const exitAudit = await pool.query(
+      "SELECT after_state FROM audit_events WHERE action = 'employee.exit' AND entity_id = $1::uuid",
+      [tlEmp],
+    );
+    const offboarding = (
+      exitAudit.rows[0] as { after_state: { offboarding: { reassigned_approval_request_ids: string[] } } }
+    ).after_state.offboarding;
+    expect(offboarding.reassigned_approval_request_ids).toContain(body.id);
+
+    const got = await app.inject({ method: "GET", url: `/api/v1/leave/requests/${body.id}`, headers: adminH });
+    const after = got.json() as { current_approver_id: string; approval_chain: Array<{ step: number; approver_user_id: string }> };
+    // Reassigned to tl's own manager, gm -- step 2's approver untouched.
+    expect(after.current_approver_id).toBe(gm.id);
+    expect(after.approval_chain.find((s) => s.step === 1)?.approver_user_id).toBe(gm.id);
+    expect(after.approval_chain.find((s) => s.step === 2)?.approver_user_id).toBe(stepTwoApprover);
+  });
+
+  it("falls back to the org's HR manager when the exited approver had no manager of their own", async () => {
+    const { emp, tl, eId, adminId, types } = await chainFixture();
+    const adminH = await adminHeaders();
+    const from = plusDays(30);
+    await setBalance(adminH, eId, types["CL"] as string, yr(from), 12);
+    const filed = await fileLeave(emp.headers, { leave_type_id: types["CL"], from_date: from, to_date: from });
+    const body = filed.json() as { id: string; current_approver_id: string };
+    // No HR manager exists yet, so step 2 fell back to admin -- confirms
+    // the fixture (tl's own employee record has no reports_to either).
+    expect(body.current_approver_id).toBe(tl.id);
+
+    // An HR manager appears only after filing -- available for step 1's
+    // own fallback, and distinct from step 2's already-assigned admin.
+    const hr = await mkUser(["HR_MANAGER"], "hrLate");
+
+    await pool.query("UPDATE users SET auth_status = 'DISABLED' WHERE id = $1::uuid", [tl.id]);
+
+    const got = await app.inject({ method: "GET", url: `/api/v1/leave/requests/${body.id}`, headers: adminH });
+    const after = got.json() as { current_approver_id: string };
+    expect(after.current_approver_id).toBe(hr.id);
+    void adminId;
+  });
+
+  it("skips an HR manager who is themselves the applicant, falling back to admin", async () => {
+    const adminH = await adminHeaders();
+    // Two admins: the seeded one plus a second, so a fallback that must
+    // skip whichever admin already holds step 2 still has one left.
+    const admin2 = await mkUser(["ADMIN"], "admin2r3");
+
+    const hrApplicant = await mkUser(["HR_MANAGER"], "hrSelfR3");
+    const tl = await mkUser(["TEAM_LEAD"], "tlR3");
+    const tlEmp = await mkEmployee(adminH);
+    await activateEmployee(tlEmp);
+    await linkUser(tl.id, tlEmp);
+
+    const empId = await mkEmployee(adminH, { reports_to: tlEmp });
+    await activateEmployee(empId);
+    await linkUser(hrApplicant.id, empId);
+
+    const types = await typeMap(adminH);
+    const from = plusDays(30);
+    await setBalance(adminH, empId, types["CL"] as string, yr(from), 12);
+    const filed = await fileLeave(hrApplicant.headers, {
+      leave_type_id: types["CL"],
+      from_date: from,
+      to_date: from,
+    });
+    expect(filed.statusCode).toBe(201);
+    const body = filed.json() as { id: string; current_approver_id: string };
+    // Step 1 is tl; step 2 already fell back to *an* admin at filing time,
+    // since the only HR manager is the applicant themselves (excluded).
+    expect(body.current_approver_id).toBe(tl.id);
+    const chainBefore = await chainOfRequest(body.id, adminH);
+    const stepTwoAdmin = chainBefore.find((s) => s.step === 2)?.approver_user_id;
+    expect(stepTwoAdmin).toBeTruthy();
+
+    await pool.query("UPDATE users SET auth_status = 'DISABLED' WHERE id = $1::uuid", [tl.id]);
+
+    const got = await app.inject({ method: "GET", url: `/api/v1/leave/requests/${body.id}`, headers: adminH });
+    const after = got.json() as { current_approver_id: string };
+    // Never the HR manager (they're the applicant), never the applicant,
+    // never the admin already sitting at step 2 -- lands on the other admin.
+    expect(after.current_approver_id).not.toBe(hrApplicant.id);
+    expect(after.current_approver_id).not.toBe(stepTwoAdmin);
+    expect(after.current_approver_id).toBeTruthy();
+    const roleRow = await pool.query(
+      `SELECT r.code FROM users u
+       JOIN user_roles ur ON ur.user_id = u.id
+       JOIN roles r ON r.id = ur.role_id
+       WHERE u.id = $1::uuid`,
+      [after.current_approver_id],
+    );
+    const roleCodes3 = (roleRow.rows as Array<{ code: string }>).map((r) => r.code);
+    expect(roleCodes3.some((c) => c === "ADMIN" || c === "SUPER_ADMIN")).toBe(true);
+    void admin2;
+  });
+
+  it("skips a manager candidate that would duplicate the request's step-2 approver, falling further down the cascade", async () => {
+    const adminH = await adminHeaders();
+    // gm is both tl's own reporting manager AND the org's only HR manager
+    // -- so gm is already this request's step-2 approver by the time tl
+    // (step 1) needs reassigning. The naive "reassign to your manager"
+    // fallback would duplicate gm onto both steps; it must be skipped.
+    const gm = await mkUser(["HR_MANAGER"], "gmDup");
+    const gId = await mkEmployee(adminH);
+    await activateEmployee(gId);
+    await linkUser(gm.id, gId);
+
+    const tl = await mkUser(["TEAM_LEAD"], "tlDup");
+    const tlEmp = await mkEmployee(adminH, { reports_to: gId });
+    await activateEmployee(tlEmp);
+    await linkUser(tl.id, tlEmp);
+
+    const emp = await mkUser(["EMPLOYEE"], "empDup");
+    const eId = await mkEmployee(adminH, { reports_to: tlEmp });
+    await activateEmployee(eId);
+    await linkUser(emp.id, eId);
+
+    const types = await typeMap(adminH);
+    const from = plusDays(30);
+    await setBalance(adminH, eId, types["CL"] as string, yr(from), 12);
+    const filed = await fileLeave(emp.headers, { leave_type_id: types["CL"], from_date: from, to_date: from });
+    const body = filed.json() as { id: string; current_approver_id: string };
+    expect(body.current_approver_id).toBe(tl.id);
+    const chainBefore = await chainOfRequest(body.id, adminH);
+    expect(chainBefore.find((s) => s.step === 2)?.approver_user_id).toBe(gm.id);
+
+    await pool.query("UPDATE users SET auth_status = 'DISABLED' WHERE id = $1::uuid", [tl.id]);
+
+    const got = await app.inject({ method: "GET", url: `/api/v1/leave/requests/${body.id}`, headers: adminH });
+    const after = got.json() as { current_approver_id: string };
+    // Not gm (would duplicate step 2, whether reached via "tl's manager"
+    // or via the HR tier -- gm is the org's only HR manager either way);
+    // falls all the way through to admin instead.
+    expect(after.current_approver_id).not.toBe(gm.id);
+    expect(after.current_approver_id).not.toBe(tl.id);
+    expect(after.current_approver_id).toBeTruthy();
+    const roleRow = await pool.query(
+      `SELECT r.code FROM users u
+       JOIN user_roles ur ON ur.user_id = u.id
+       JOIN roles r ON r.id = ur.role_id
+       WHERE u.id = $1::uuid`,
+      [after.current_approver_id],
+    );
+    const roleCodes4 = (roleRow.rows as Array<{ code: string }>).map((r) => r.code);
+    expect(roleCodes4.some((c) => c === "ADMIN" || c === "SUPER_ADMIN")).toBe(true);
   });
 });
 

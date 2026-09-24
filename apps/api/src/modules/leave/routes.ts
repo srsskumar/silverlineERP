@@ -1235,9 +1235,10 @@ export async function registerLeaveRoutes(
           message: "Leave request not found",
         });
       }
-      // Fix round 2, item 1: a stale step-2 approver (exited, disabled, or
-      // no longer HR/admin) is re-resolved lazily on read, so a request
-      // does not sit stuck just because nobody has decided it since.
+      // Fix round 2/3, item 1: a stale current approver at *either* step
+      // (exited, disabled, or no longer eligible for that step) is
+      // re-resolved lazily on read, so a request does not sit stuck just
+      // because nobody has decided it since.
       if (row.status === "PENDING" && row.current_approver_id) {
         const reassignment = await reassignIfIneligible(opts.pool, row, {
           actorId: null,
@@ -1407,8 +1408,8 @@ export async function registerLeaveRoutes(
           [id, user.orgId],
         );
         const cur = curRes.rows[0] as RequestRow | undefined;
-        // Fix round 2, item 1: re-resolve a stale step-2 approver before
-        // checking who may decide -- same transaction, same row lock
+        // Fix round 2/3, item 1: re-resolve a stale approver (either step)
+        // before checking who may decide -- same transaction, same row lock
         // (FOR UPDATE above), so a newly-eligible approver can act on
         // this same request immediately rather than needing a prior read.
         if (cur && cur.status === "PENDING" && cur.current_approver_id) {
