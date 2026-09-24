@@ -2,7 +2,8 @@
 
 Companion to `apps/api/test/contract/{route-matrix,input-contract,pagination-contract,
 idempotency-replay-contract,cross-org-depth}.test.ts`.
-Scope: every route registered under `/api/v1` in `apps/api` (477 at the time of this sweep),
+Scope: every route registered under `/api/v1` in `apps/api` (477 at the time of this sweep, 479
+after the QA release 3 merge added two upstream routes — see that section below),
 enumerated mechanically from `app.routeRegistry` (an `onRoute` hook in `createApp.ts`, permission
 metadata tagged onto each guard by `requireAllPermissions` in `common/auth.ts` — see commit
 `eb0a3be`), never grepped. Checked other rounds' ledgers (`findings-a.md`, `findings-b.md`,
@@ -165,8 +166,36 @@ mismatch 409. Full `apps/api` suite green after the fix (see "Suite" below).
 - Exhaustive (all 237) live idempotency replay — see above; the mechanism is proven generically and
   by direct reproduction of the one gap it had (C-009, now fixed).
 
+## QA release 3 merge (2026-09-24)
+
+`qa/contract` branched from 98a1019, an older release point than the main this round merges onto
+(0649788, QA release 2 + Task 5f web admin screens). Diffing `apps/api/src/modules` between those
+two points shows exactly two new routes landed upstream since the branch point:
+
+- `PATCH /api/v1/shifts/:id` (allocation/routes.ts) — `guard('roster.manage')`, wrapped in
+  `mutate()`, version-fenced (If-Match) same as the existing PATCH /cost-heads/:id pattern.
+- `POST /api/v1/approval-policies/:id/deactivate` (approvals/routes.ts) —
+  `guard('approval.configure')`, wrapped in `mutate()`, version-fenced the same way.
+
+Both carry a tagged-permission preHandler and go through `mutate()`, so `app.routeRegistry` and the
+static idempotency scanner (`support.ts`) pick them up automatically with no `ROUTE_OVERRIDES` /
+`EMPTY_BODY_OK` / `IDEMPOTENCY_EXEMPT` / `RIGHT_ROLE_EXCEPTIONS` entry needed — every existing
+dimension (auth-state 401/403/right-role, empty/forbidden-body, wrong-content-type, bad-uuid-param,
+idempotency-classification-coverage) already exercises them the same as every sibling route. No new
+product bug found on either route. `EXPECTED_ROUTE_COUNT` bumped 477 -> 479 in route-matrix.test.ts
+to match; the "every permission-less route is deliberately classified" test and the
+idempotency-coverage test both still pass with zero unaccounted routes (neither new route is
+permission-less or idempotency-uncovered).
+
+Not touched by this merge: GET /api/v1/advances and POST /api/v1/advances (billing/routes.ts)
+predate 98a1019 and were already inside the original 477 count — not new routes, despite being
+newer-looking product surface.
+
 ## Suite
 
-Full apps/api suite run once at the end of this round on VM slot g: 85 test files, 2155 tests, all
-passed. Duration 342.4s. Ran immediately after the C-008 shared-DB-state reproduction pass on the
-same slot DB.
+Full apps/api suite run once at the end of the original round on VM slot g: 85 test files, 2155
+tests, all passed. Duration 342.4s. Ran immediately after the C-008 shared-DB-state reproduction
+pass on the same slot DB.
+
+QA release 3 merge re-run (VM slot c, this round): see the merge's own report for the fresh
+pass/fail counts and web tsc result.

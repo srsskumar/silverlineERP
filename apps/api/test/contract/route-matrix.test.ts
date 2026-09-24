@@ -65,8 +65,19 @@ afterAll(async () => {
 });
 
 /** Snapshot: forces a deliberate look at this file whenever a route is
- *  added or removed anywhere in the API (requirement 1 of the R6 brief). */
-const EXPECTED_ROUTE_COUNT = 477;
+ *  added or removed anywhere in the API (requirement 1 of the R6 brief).
+ *
+ *  477 when this sweep was written (branched from 98a1019). Bumped to 479
+ *  for QA release 3 (merging qa/contract onto a main that had moved on):
+ *  two routes were added upstream since the branch point --
+ *  PATCH /api/v1/shifts/:id (allocation/routes.ts, guard('roster.manage'))
+ *  and POST /api/v1/approval-policies/:id/deactivate (approvals/routes.ts,
+ *  guard('approval.configure')). Both are tagged-permission + mutate()
+ *  routes, so every dimension below (auth-state, input-contract,
+ *  idempotency-classification-coverage) already exercises them
+ *  mechanically via app.routeRegistry, with no per-route override needed --
+ *  see findings-contract.md's "QA release 3 merge" note. */
+const EXPECTED_ROUTE_COUNT = 479;
 
 interface Violation {
   route: string;
