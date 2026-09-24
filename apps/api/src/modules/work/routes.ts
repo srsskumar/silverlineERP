@@ -1,4 +1,5 @@
 import {dateStringSchema, businessDay} from "@silverline/shared";
+import { likeContains } from "../../common/like.js";
 import {validateCustomFields} from "../../common/customFields.js";
 import {encodeBlob, readBlob} from "../../common/blobStore.js";
 import {scanUpload} from "../../common/fileSafety.js";
@@ -1306,7 +1307,7 @@ export async function registerWorkRoutes(
       clauses.push(`workspace_id = $${values.length}::uuid`);
     }
     if (q) {
-      values.push(`%${q}%`);
+      values.push(likeContains(q));
       clauses.push(
         `(code ILIKE $${values.length} OR name ILIKE $${values.length})`,
       );
@@ -1803,7 +1804,7 @@ export async function registerWorkRoutes(
       clauses.push(slaFilterClause(sla));
     }
     if (q) {
-      values.push(`%${q}%`);
+      values.push(likeContains(q));
       clauses.push(
         `(title ILIKE $${values.length} OR description ILIKE $${values.length})`,
       );

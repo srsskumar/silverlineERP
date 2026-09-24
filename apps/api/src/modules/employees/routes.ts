@@ -1,4 +1,5 @@
 import {scanUpload} from "../../common/fileSafety.js";
+import { likeContains } from "../../common/like.js";
 import {encodeBlob, readBlob} from "../../common/blobStore.js";
 import {mutationRoute} from "../../common/mutationRoute.js";
 import { createHash } from "node:crypto";
@@ -545,7 +546,7 @@ export async function registerEmployeeRoutes(
       clauses.push(`district_id = $${values.length}::uuid`);
     }
     if (q) {
-      values.push(`%${q}%`);
+      values.push(likeContains(q));
       clauses.push(
         `(emp_no ILIKE $${values.length} OR first_name ILIKE $${values.length} OR last_name ILIKE $${values.length} OR phone ILIKE $${values.length})`,
       );

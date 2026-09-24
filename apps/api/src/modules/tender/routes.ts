@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { likeContains } from "../../common/like.js";
 import type { Pool, PoolClient } from 'pg';
 import {
   tenderSchema, tenderBaseSchema, tenderStatusSchema, corrigendumSchema, eligibilityItemSchema,
@@ -48,7 +49,7 @@ export async function registerTenderRoutes(app: FastifyInstance, opts: { pool: P
     let where = 't.org_id = $1';
     if (q.status) { values.push(q.status); where += ` AND t.status = $${values.length}`; }
     if (q.client_id) { values.push(q.client_id); where += ` AND t.client_id = $${values.length}::uuid`; }
-    if (q.search) { values.push(`%${q.search}%`); where += ` AND (t.tender_no ILIKE $${values.length} OR t.reference_number ILIKE $${values.length} OR t.department ILIKE $${values.length})`; }
+    if (q.search) { values.push(likeContains(q.search)); where += ` AND (t.tender_no ILIKE $${values.length} OR t.reference_number ILIKE $${values.length} OR t.department ILIKE $${values.length})`; }
     // §8.4 deadline view: what closes soonest among live tenders.
     const order = q.sort === 'closing' ? 't.closing_date NULLS LAST, t.id' : 't.created_at DESC, t.id DESC';
     const rows = (await pool.query(

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { likeContains } from "../../common/like.js";
 import type { Pool, PoolClient } from "pg";
 import {
   ApiError,
@@ -60,7 +61,7 @@ export async function registerCatalogueRoutes(
     if (q.include_archived !== "true") clauses.push("status = 'ACTIVE'");
     if (q.kind) { values.push(q.kind); clauses.push(`kind = $${values.length}`); }
     if (q.q) {
-      values.push(`%${q.q}%`);
+      values.push(likeContains(q.q));
       clauses.push(`(name ILIKE $${values.length} OR code ILIKE $${values.length})`);
     }
     const rows = await pool.query(

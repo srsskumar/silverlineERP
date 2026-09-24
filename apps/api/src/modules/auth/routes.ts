@@ -663,7 +663,8 @@ export async function registerAuthRoutes(
           GROUP BY u.id, u.username, u.email, u.auth_status, e.first_name, e.last_name, e.designation
           ORDER BY COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name, e.last_name)), ''), u.username)
           LIMIT 200`,
-        [me.orgId, me.id, q],
+        // Taken literally: % and _ are not wildcards to whoever typed them (D-007).
+        [me.orgId, me.id, q.replace(/[\\%_]/g, (c) => `\\${c}`)],
       );
       /*
        * Every candidate is returned, allowed or not, each carrying the

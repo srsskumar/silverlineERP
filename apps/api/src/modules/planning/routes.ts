@@ -1,4 +1,5 @@
 import {scopedReads} from '../../common/scopedReads.js';
+import { likeContains } from "../../common/like.js";
 import {effectiveCustomFields,validateCustomFields} from "../../common/customFields.js";
 import type { FastifyInstance,FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
@@ -83,7 +84,7 @@ export async function registerPlanningRoutes(app:FastifyInstance,opts:{pool:Pool
  app.get('/api/v1/projects/:id/people',{preHandler:guard('task.read')},async req=>{
   const id=(req.params as {id:string}).id,u=actor(req),{limit,offset,q}=page(req);await projectAccess(pool,req,id);
   const values:unknown[]=[u.orgId],scope=resolveScopes(u.scopes),clause=scope.global?'TRUE':await employeeScopeClause(pool,u.orgId,scope,values);
-  const textIndex=values.push(`%${q.q??''}%`),limitIndex=values.push(limit+1),offsetIndex=values.push(offset);
+  const textIndex=values.push(likeContains(q.q??'')),limitIndex=values.push(limit+1),offsetIndex=values.push(offset);
   // The name from the employee record, so an assignee picker, a board avatar
   // and a "reviewer" custom field print who somebody is rather than the
   // login handle they happen to sign in with -- two people can share a

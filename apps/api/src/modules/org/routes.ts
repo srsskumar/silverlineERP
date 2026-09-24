@@ -1,4 +1,5 @@
 import {mutationRoute} from "../../common/mutationRoute.js";
+import { likeContains } from "../../common/like.js";
 import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import { z } from "zod";
@@ -141,7 +142,7 @@ export async function registerOrgUnitRoutes(
       clauses.push(`parent_id = $${values.length}::uuid`);
     }
     if (q) {
-      values.push(`%${q}%`);
+      values.push(likeContains(q));
       clauses.push(`(code ILIKE $${values.length} OR name ILIKE $${values.length})`);
     }
     if (cursor) {
