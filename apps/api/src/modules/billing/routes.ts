@@ -93,9 +93,10 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
    * (`inOrg(..., true)`), so this sees exactly what a concurrent allocation
    * would see, and blocks behind the same lock rather than racing it.
    */
-  async function raBillLiveAllocated(db: Pool | PoolClient, id: string): Promise<number> {
+  /** Live allocation against an RA bill, in whole paise (exact, no float sum). */
+  async function raBillLiveAllocatedPaise(db: Pool | PoolClient, id: string): Promise<number> {
     const row = (await db.query(
-      `SELECT COALESCE(sum(a.amount + a.tds_amount + a.advance_adjusted), 0) AS total
+      `SELECT COALESCE(round(sum(a.amount + a.tds_amount + a.advance_adjusted) * 100), 0)::bigint AS total
          FROM payment_allocations a JOIN payments p ON p.id = a.payment_id
         WHERE a.document_type = 'RA_BILL' AND a.document_id = $1
           AND a.reversed_at IS NULL AND p.reversed_at IS NULL`, [id])).rows[0];
@@ -427,13 +428,17 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
           next === 'CERTIFIED' ? (body.certified_amount ?? Number(bill.net_payable))
           : next === 'PAID' ? Number(bill.certified_amount ?? bill.net_payable)
           : 0; // DRAFT or CANCELLED: nothing is payable any more.
-        const liveAllocated = await raBillLiveAllocated(db, id);
-        if (liveAllocated - newPayable > 0.005) {
+        // Review A, 4(d): compared in whole paise, not as floats with a
+        // half-paisa fudge -- the same way expense reimbursement settles.
+        const allocatedPaise = await raBillLiveAllocatedPaise(db, id);
+        const payablePaise = Math.round(Number(newPayable) * 100);
+        if (allocatedPaise > payablePaise) {
+          const rupees = (p: number) => (p / 100).toFixed(2);
           fail('RA_BILL_OVER_ALLOCATED',
-            `₹${liveAllocated.toFixed(2)} is already allocated against this bill, `
-            + `₹${(liveAllocated - newPayable).toFixed(2)} more than the ₹${newPayable.toFixed(2)} `
+            `₹${rupees(allocatedPaise)} is already allocated against this bill, `
+            + `₹${rupees(allocatedPaise - payablePaise)} more than the ₹${rupees(payablePaise)} `
             + `it would be payable for once it moves to ${next}. Unallocate at least `
-            + `₹${(liveAllocated - newPayable).toFixed(2)} first.`);
+            + `₹${rupees(allocatedPaise - payablePaise)} first.`);
         }
 
         if (next === 'CERTIFIED') {

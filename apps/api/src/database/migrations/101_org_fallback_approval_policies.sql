@@ -10,11 +10,13 @@
 -- NO_APPROVAL_POLICY refused it outright.
 --
 -- Backfills one minimal org-wide policy per organisation and document type
--- that lacks an active one: a single step, approver role ADMIN, no amount
--- band (the whole point is that it never leaves anything unrouted). Re-run
--- safe -- "missing" is computed against the same condition the partial
--- unique index uk_ap_org_default enforces (active AND project_id IS NULL),
--- so a second run finds nothing left to insert.
+-- that has never had one: a single step, approver role ADMIN, no amount
+-- band (the whole point is that it never leaves anything unrouted). An
+-- org-wide policy that exists but is inactive counts as configured, the
+-- same rule seed.ts applies -- an administrator who deliberately
+-- deactivated it must not find it resurrected (review A, 4(c)). Re-run
+-- safe: after one run every organisation has a row, so a second finds
+-- nothing left to insert.
 WITH doc_types AS (
   SELECT unnest(ARRAY['PURCHASE_REQUISITION', 'PURCHASE_ORDER']) AS document_type
 ), missing AS (
@@ -23,7 +25,7 @@ WITH doc_types AS (
    WHERE NOT EXISTS (
      SELECT 1 FROM approval_policies p
       WHERE p.org_id = o.id AND p.document_type = d.document_type
-        AND p.active AND p.project_id IS NULL
+        AND p.project_id IS NULL
    )
 ), inserted AS (
   INSERT INTO approval_policies(org_id, document_type, name, mode, project_id, active)

@@ -411,6 +411,31 @@ describe("over-allocation guard on status change (owner decision 2026-09-24, fix
     expect(retried.status, JSON.stringify(retried.body)).toBe(200);
   });
 
+  it("compares allocation and payable to the exact paisa (review A, 4(d))", async () => {
+    const { projectId, boqItemId } = await projectWithBoq();
+    const bill = await raiseBill(projectId, boqItemId, 1000);
+    await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "SUBMITTED" });
+    const net = Number((await billRow(bill.data.id)).net_payable);
+    // Three receipts whose float sum is not exact (0.1 + 0.2 + the rest).
+    const parts = [0.1, 0.2, Math.round((net - 0.3) * 100) / 100];
+    for (const part of parts) {
+      const a = await allocate((await makeReceipt(part)).id, bill.data.id, part);
+      expect(a.status, JSON.stringify(a.body)).toBe(201);
+    }
+    // One paisa short of what is allocated is refused, naming that paisa...
+    const short = await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`,
+      { status: "CERTIFIED", certified_amount: Math.round((net - 0.01) * 100) / 100 });
+    expect(short.status, JSON.stringify(short.body)).toBe(422);
+    expect(short.body.code).toBe("RA_BILL_OVER_ALLOCATED");
+    expect(short.body.message).toContain("₹0.01 more");
+    // ...and certifying at exactly the allocated figure goes through.
+    const exact = await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "CERTIFIED", certified_amount: net });
+    expect(exact.status, JSON.stringify(exact.body)).toBe(200);
+  });
+
   it("refuses to send a submitted bill back to draft while a receipt is allocated", async () => {
     const { projectId, boqItemId } = await projectWithBoq();
     const bill = await raiseBill(projectId, boqItemId, 1000);

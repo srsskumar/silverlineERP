@@ -306,6 +306,25 @@ describe("organisation-wide fallback approval ladders (owner decision 2026-09-24
       [w.orgId]);
     expect(poFallback.rowCount).toBeGreaterThan(0);
   });
+
+  it("migration 101 does not resurrect a deactivated fallback either (review A, 4(c))", async () => {
+    // Same state as the test above leaves: this org's PURCHASE_REQUISITION
+    // org-wide fallback exists but is deactivated. The migration must treat
+    // any org-wide policy, active or not, as "configured", as seed.ts does.
+    const sql = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)),
+        "../../src/database/migrations/101_org_fallback_approval_policies.sql"),
+      "utf8");
+    await w.pool.query(sql);
+    const live = await w.pool.query(
+      `SELECT 1 FROM approval_policies
+        WHERE org_id = $1 AND document_type = 'PURCHASE_REQUISITION' AND project_id IS NULL AND active`,
+      [w.orgId]);
+    expect(live.rowCount).toBe(0);
+    const res = await submit(50_000, "PURCHASE_REQUISITION", w.role.EMPLOYEE);
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("NO_APPROVAL_POLICY");
+  });
 });
 
 describe("policy deactivation", () => {
