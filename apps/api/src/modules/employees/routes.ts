@@ -1465,6 +1465,45 @@ export async function registerEmployeeRoutes(
         )
       ).rows.map((r: { id: string }) => r.id);
       /*
+       * Approval delegations end with the person (review A, item 2): both
+       * the authority they lent (as principal) and the authority they were
+       * lent (as delegate). Ones already expired are history and left as
+       * they are; anything current or future-dated is revoked here, in the
+       * same transaction as the exit, each with its own audit entry.
+       */
+      const revokedDelegations =
+        accountIds.length === 0
+          ? []
+          : ((
+              await db.query(
+                `UPDATE approval_delegations SET revoked_at = now(), revoked_by = $3::uuid
+                  WHERE org_id = $1 AND revoked_at IS NULL AND valid_to >= CURRENT_DATE
+                    AND (from_user_id = ANY($2::uuid[]) OR to_user_id = ANY($2::uuid[]))
+                  RETURNING id, from_user_id, to_user_id, valid_from, valid_to`,
+                [user.orgId, accountIds, user.id],
+              )
+            ).rows as Array<{ id: string; from_user_id: string; to_user_id: string; valid_from: unknown; valid_to: unknown }>);
+      for (const d of revokedDelegations) {
+        await writeAudit(db, {
+          orgId: user.orgId,
+          actorId: user.id, impersonatorId: user.impersonator?.id ?? null,
+          actorIp: meta.ip,
+          actorUserAgent: meta.userAgent,
+          action: "approval.delegate.revoke",
+          entityType: "approval_delegation",
+          entityId: d.id,
+          beforeState: { revoked_at: null },
+          afterState: {
+            from_user_id: d.from_user_id,
+            to_user_id: d.to_user_id,
+            revoked: true,
+            exited_employee_id: id,
+          },
+          reason: `Delegation ended by exit: ${reason}`,
+          requestId: req.requestId,
+        });
+      }
+      /*
        * Fix round 2/3, item 1(ii): pending leave *belonging to somebody
        * else* that this person was the current approver on -- at either
        * step -- is reassigned here, in the same transaction as the exit,
@@ -1629,6 +1668,7 @@ export async function registerEmployeeRoutes(
             unassigned_task_ids: openTasks.map((t) => t.id),
             notified_project_manager_ids: notifiedManagers,
             reassigned_approval_request_ids: reassignedApprovals,
+            revoked_delegation_ids: revokedDelegations.map((d) => d.id),
           },
         },
         reason,

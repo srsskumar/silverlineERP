@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { workDate, buildWorld, idem, uniq, createUser, PASSWORD, type CatalogueWorld, type Headers } from "./fixture.js";
+import { workDate, buildWorld, idem, uniq, createUser, createActiveEmployee, loginAs, PASSWORD, type CatalogueWorld, type Headers } from "./fixture.js";
 import { seedDatabase } from "../../src/database/seed.js";
 
 let w: CatalogueWorld;
@@ -1034,6 +1034,79 @@ describe("an ADMIN step and nobody left to clear it (review A, item 1)", () => {
     const left = await w.pool.query(
       "SELECT 1 FROM approval_instances WHERE document_id = $1", [documentId]);
     expect(left.rowCount).toBe(0);
+  });
+});
+
+describe("delegations end with their principal (review A, item 2)", () => {
+  async function freshUser(roles: Array<"ADMIN" | "TEAM_LEAD">, employeeId?: string) {
+    const username = `cat_dlg_${uniq()}`;
+    const id = await createUser(w.pool, w.orgId, { username, roles, employeeId });
+    return { id, headers: await loginAs(w.app, username) };
+  }
+  async function adminLadder() {
+    const policy = await post(w.admin, "/api/v1/approval-policies", {
+      document_type: "RETENTION_RELEASE", name: `Admin ladder ${uniq()}`,
+      levels: [{ sequence: 1, min_amount: 0, max_amount: null, approver_role: "ADMIN" }],
+    });
+    expect(policy.status, JSON.stringify(policy.body)).toBe(201);
+  }
+
+  it("a disabled principal's delegation no longer lends their ADMIN role", async () => {
+    await adminLadder();
+    const principal = await freshUser(["ADMIN"]);
+    const deputy = await freshUser(["TEAM_LEAD"]);
+    const today = workDate();
+    const delegation = await post(principal.headers, "/api/v1/approval-delegations", {
+      to_user_id: deputy.id, valid_from: today, valid_to: today, reason: "Cover",
+    });
+    expect(delegation.status, JSON.stringify(delegation.body)).toBe(201);
+    const res = await submit(10_000, "RETENTION_RELEASE", w.role.EMPLOYEE);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+
+    // Control: while the principal is active the deputy is offered it.
+    const before = await get(deputy.headers, "/api/v1/approvals/inbox");
+    expect((before.data as Array<{ id: string }>).map(r => r.id)).toContain(res.data.id);
+
+    await w.pool.query("UPDATE users SET auth_status = 'DISABLED' WHERE id = $1", [principal.id]);
+    const after = await get(deputy.headers, "/api/v1/approvals/inbox");
+    expect((after.data as Array<{ id: string }>).map(r => r.id)).not.toContain(res.data.id);
+    const decided = await post({ ...deputy.headers, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(decided.status, JSON.stringify(decided.body)).toBe(422);
+    expect(decided.body.code).toBe("NOT_THE_APPROVER");
+  });
+
+  it("an exit revokes the person's delegations both ways, with an audit entry for each", async () => {
+    const employeeId = await createActiveEmployee(w.app, w.admin, { district_id: w.chainA.district });
+    const leaver = await freshUser(["ADMIN"], employeeId);
+    const deputy = await freshUser(["TEAM_LEAD"]);
+    const lender = await freshUser(["ADMIN"]);
+    const today = workDate();
+    const lent = await post(leaver.headers, "/api/v1/approval-delegations", {
+      to_user_id: deputy.id, valid_from: today, valid_to: today, reason: "Cover",
+    });
+    expect(lent.status, JSON.stringify(lent.body)).toBe(201);
+    const borrowed = await post(lender.headers, "/api/v1/approval-delegations", {
+      to_user_id: leaver.id, valid_from: today, valid_to: today, reason: "Cover",
+    });
+    expect(borrowed.status, JSON.stringify(borrowed.body)).toBe(201);
+
+    const exit = await w.app.inject({
+      method: "POST", url: `/api/v1/employees/${employeeId}/exit`,
+      headers: { ...w.admin, ...idem() },
+      payload: { exit_date: workDate(), reason: "Resigned" },
+    });
+    expect(exit.statusCode, exit.body).toBe(200);
+
+    for (const id of [lent.data.id, borrowed.data.id]) {
+      const row = await w.pool.query(
+        "SELECT revoked_at, revoked_by FROM approval_delegations WHERE id = $1", [id]);
+      expect(row.rows[0].revoked_at, id).not.toBeNull();
+      expect(row.rows[0].revoked_by).toBe(w.adminId);
+      const audit = await w.pool.query(
+        `SELECT 1 FROM audit_events WHERE action = 'approval.delegate.revoke' AND entity_id = $1`, [id]);
+      expect(audit.rowCount, id).toBe(1);
+    }
   });
 });
 

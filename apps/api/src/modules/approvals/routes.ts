@@ -102,12 +102,18 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
    * must not let a delegate reach a project the principal could not
    * themselves reach, so the pure layer also needs the principal's own
    * resolved project scope.
+   *
+   * Only a principal whose own login is still ACTIVE lends anything (review
+   * A, item 2): authority borrowed from somebody who has exited or been
+   * disabled would otherwise outlive them -- an exited ADMIN's delegate
+   * kept clearing ADMIN steps.
    */
   async function delegationsFor(db: Pool | PoolClient, orgId: string): Promise<Delegation[]> {
     const rows = (await db.query(
       `SELECT d.from_user_id, d.to_user_id, d.valid_from, d.valid_to, d.document_types, d.revoked_at,
               COALESCE(array_agg(DISTINCT r.code) FILTER (WHERE r.code IS NOT NULL), '{}') AS from_user_roles
        FROM approval_delegations d
+       JOIN users fu ON fu.id = d.from_user_id AND fu.auth_status = 'ACTIVE'
        LEFT JOIN user_roles ur ON ur.user_id = d.from_user_id
        LEFT JOIN roles r ON r.id = ur.role_id
        WHERE d.org_id = $1 AND d.revoked_at IS NULL
