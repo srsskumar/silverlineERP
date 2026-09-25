@@ -14,6 +14,7 @@ import { Modal, View } from "react-native";
 import { useAuth } from "../../src/auth/AuthContext";
 import { getMyVillages, type MyVillage, type SurveyEntryInput } from "../../src/api/endpoints";
 import { readPayload } from "../../src/sync/queue";
+import { reviewRequest } from "../../src/survey/reviewLink";
 import { useLocalSearchParams } from "expo-router";
 import { DailyReturn } from "../../src/survey/DailyReturn";
 import { ControlPointForm } from "../../src/survey/ControlPointForm";
@@ -60,9 +61,11 @@ function SurveyScreen() {
    * Opened from the Sync queue on a conflicted return (fix round 2): the
    * queued draft, read back and reopened on its village for review.
    */
-  const { review: reviewId } = useLocalSearchParams<{ review?: string }>();
+  // Keyed per tap (final review, item 4): a second Review on the same op reopens it.
+  const request = reviewRequest(useLocalSearchParams<{ review?: string; at?: string }>());
   useEffect(() => {
-    if (!reviewId || !villages.length) return;
+    if (!request || !villages.length) return;
+    const reviewId = request.clientUuid;
     void readPayload(reviewId).then(p => {
       const payload = p as SurveyEntryInput | null;
       const village = payload && villages.find(v => v.id === payload.survey_village_id);
@@ -70,7 +73,8 @@ function SurveyScreen() {
         setSheet({ village, kind: "return", review: { clientUuid: reviewId, payload } });
       }
     }).catch(() => undefined);
-  }, [reviewId, villages.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request?.key, villages.length]);
 
   const close = (note?: string) => {
     setSheet(null);

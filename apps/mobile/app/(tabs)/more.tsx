@@ -21,6 +21,7 @@ import {
 } from "../../src/device/auth";
 import { registerForPushNotifications } from "../../src/device/push";
 import { discardOp, listOps, retryOp } from "../../src/sync/queue";
+import { reviewLink } from "../../src/survey/reviewLink";
 import { useSyncEngine } from "../../src/sync/engine";
 import {
   Badge,
@@ -277,10 +278,7 @@ function MoreScreen() {
                     <Button
                       title="Review"
                       variant="ghost"
-                      onPress={() => router.push({
-                        pathname: "/(tabs)/survey",
-                        params: { review: op.client_uuid },
-                      })}
+                      onPress={() => router.push(reviewLink(op.client_uuid))}
                     />
                   ) : null}
                   {op.state === "FAILED" &&
