@@ -104,12 +104,14 @@ describe("policy configuration", () => {
     });
 
     it("refuses a role at two levels when the organisation has only one holder of it", async () => {
-      // This fixture creates exactly one ADMIN-role user.
+      // This fixture creates exactly one HR_MANAGER-role user. (Not ADMIN:
+      // an ADMIN step is also met by the bootstrap SUPER_ADMIN since review
+      // A, item 1, so one ADMIN plus the super admin are two people.)
       const res = await post(w.admin, "/api/v1/approval-policies", {
-        document_type: "EXPENSE_CLAIM", name: `Only one admin ${uniq()}`,
+        document_type: "EXPENSE_CLAIM", name: `Only one HR manager ${uniq()}`,
         levels: [
-          { sequence: 1, min_amount: 0, max_amount: 50_000, approver_role: "ADMIN" },
-          { sequence: 2, min_amount: 50_000, max_amount: null, approver_role: "ADMIN" },
+          { sequence: 1, min_amount: 0, max_amount: 50_000, approver_role: "HR_MANAGER" },
+          { sequence: 2, min_amount: 50_000, max_amount: null, approver_role: "HR_MANAGER" },
         ],
       });
       expect(res.status).toBe(422);
@@ -124,15 +126,15 @@ describe("policy configuration", () => {
       // Placed before the next test, which adds a second *active* admin:
       // this needs the fixture's original single active admin to still be
       // the only active one.
-      const disabledAdminId = await createUser(w.pool, w.orgId,
-        { username: `cat_disabled_admin_${uniq()}`, roles: ["ADMIN"] });
-      await w.pool.query("UPDATE users SET auth_status = 'SUSPENDED' WHERE id = $1", [disabledAdminId]);
+      const disabledHrId = await createUser(w.pool, w.orgId,
+        { username: `cat_disabled_hr_${uniq()}`, roles: ["HR_MANAGER"] });
+      await w.pool.query("UPDATE users SET auth_status = 'SUSPENDED' WHERE id = $1", [disabledHrId]);
 
       const res = await post(w.admin, "/api/v1/approval-policies", {
-        document_type: "EXPENSE_CLAIM", name: `One active, one disabled admin ${uniq()}`,
+        document_type: "EXPENSE_CLAIM", name: `One active, one disabled HR manager ${uniq()}`,
         levels: [
-          { sequence: 1, min_amount: 0, max_amount: 50_000, approver_role: "ADMIN" },
-          { sequence: 2, min_amount: 50_000, max_amount: null, approver_role: "ADMIN" },
+          { sequence: 1, min_amount: 0, max_amount: 50_000, approver_role: "HR_MANAGER" },
+          { sequence: 2, min_amount: 50_000, max_amount: null, approver_role: "HR_MANAGER" },
         ],
       });
       expect(res.status).toBe(422);
@@ -387,8 +389,14 @@ describe("maker-checker and sequence", () => {
 
   it("refuses to let the raiser approve their own request", async () => {
     // The TEAM_LEAD raises it, and level 1 is the team lead's own rung.
+    // A second team lead exists while it is raised: with the requester the
+    // only holder, submission itself is refused (NO_ELIGIBLE_APPROVER,
+    // review A, item 1) -- this is about the decision-time refusal.
+    const otherTl = await createUser(w.pool, w.orgId,
+      { username: `cat_other_tl_${uniq()}`, roles: ["TEAM_LEAD"] });
     const res = await submit(20_000, "PURCHASE_ORDER", w.role.TEAM_LEAD);
-    expect(res.status).toBe(201);
+    await w.pool.query("UPDATE users SET auth_status = 'SUSPENDED' WHERE id = $1", [otherTl]);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
     const decision = await post({ ...w.role.TEAM_LEAD, ...(await instanceVersion(res.data.id)) },
       `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
     expect(decision.status).toBe(403);
@@ -980,6 +988,52 @@ describe("role boundaries", () => {
 
   it("keeps the Client Viewer out entirely", async () => {
     expect((await get(w.role.CLIENT_VIEWER, "/api/v1/approval-policies")).status).toBe(403);
+  });
+});
+
+describe("an ADMIN step and nobody left to clear it (review A, item 1)", () => {
+  it("lets the bootstrap SUPER_ADMIN clear an ADMIN step, and offers it in their inbox", async () => {
+    const roles = await w.pool.query(
+      `SELECT r.code FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = $1`, [w.adminId]);
+    expect(roles.rows.map(r => r.code)).toContain("SUPER_ADMIN");
+    const policy = await post(w.admin, "/api/v1/approval-policies", {
+      document_type: "RETENTION_RELEASE", name: `Admin only ${uniq()}`,
+      levels: [{ sequence: 1, min_amount: 0, max_amount: null, approver_role: "ADMIN" }],
+    });
+    expect(policy.status, JSON.stringify(policy.body)).toBe(201);
+    const res = await submit(10_000, "RETENTION_RELEASE", w.role.EMPLOYEE);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+
+    const inbox = await get(w.admin, "/api/v1/approvals/inbox");
+    expect(inbox.status).toBe(200);
+    expect((inbox.data as Array<{ id: string }>).map(r => r.id)).toContain(res.data.id);
+
+    const decided = await post({ ...w.admin, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(decided.status, JSON.stringify(decided.body)).toBe(200);
+    expect(decided.data.status).toBe("APPROVED");
+  });
+
+  it("refuses the sole administrator's own submission with a clear 422, not an orphaned request", async () => {
+    // The second tenant's only account is its SUPER_ADMIN: raising a request
+    // on an ADMIN ladder leaves nobody but the requester able to approve it.
+    const name = `Other org admin ladder ${uniq()}`;
+    const policy = await post(w.other.admin, "/api/v1/approval-policies", {
+      document_type: "RETENTION_RELEASE", name,
+      levels: [{ sequence: 1, min_amount: 0, max_amount: null, approver_role: "ADMIN" }],
+    });
+    expect(policy.status, JSON.stringify(policy.body)).toBe(201);
+    const documentId = randomUUID();
+    const res = await post(w.other.admin, "/api/v1/approvals", {
+      document_type: "RETENTION_RELEASE", document_id: documentId, amount: 10_000,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(422);
+    expect(res.body.code).toBe("NO_ELIGIBLE_APPROVER");
+    expect(res.body.message).toContain(name);
+    expect(res.body.message).toMatch(/administrator/);
+    const left = await w.pool.query(
+      "SELECT 1 FROM approval_instances WHERE document_id = $1", [documentId]);
+    expect(left.rowCount).toBe(0);
   });
 });
 

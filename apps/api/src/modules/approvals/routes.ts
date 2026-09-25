@@ -3,12 +3,14 @@ import type { Pool, PoolClient } from 'pg';
 import {
   approvalPolicySchema, approvalDecisionSchema, delegationSchema,
   resolveLadder, canAct, nextActionableStep, createsDelegationCycle, requiresReapproval,
+  holdsApproverRole, rolesSatisfyingApproverRole,
   type ApprovalDocumentType, type ApprovalStep, type Delegation, type LadderMode,
   businessDay,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
 import { resolveScopes } from '../../common/scopes.js';
+import { assertLadderHasEligibleApprovers } from '../../common/approvalRouting.js';
 
 /**
  * Approval engine (§41).
@@ -188,7 +190,8 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
       const holders = (await db.query(
         `SELECT count(DISTINCT ur.user_id)::int AS n
            FROM user_roles ur JOIN roles r ON r.id = ur.role_id JOIN users u ON u.id = ur.user_id
-          WHERE r.code = $1 AND u.org_id = $2 AND u.auth_status = 'ACTIVE'`, [role, orgId])).rows[0];
+          WHERE r.code = ANY($1::text[]) AND u.org_id = $2 AND u.auth_status = 'ACTIVE'`,
+        [rolesSatisfyingApproverRole(role), orgId])).rows[0];
       if (Number(holders.n) <= 1) {
         return `${role.replaceAll('_', ' ').toLowerCase()} is named as the approver for levels `
           + `${sequences.join(' and ')}, and this organisation currently has ${Number(holders.n)} `
@@ -360,6 +363,7 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
         fail('NO_APPROVER',
           `The policy leaves ${body.amount} outside every authority band. Check the slabs.`);
       }
+      await assertLadderHasEligibleApprovers(db, u.orgId, policy, ladder, u.id, String(body.document_type));
 
       let instance;
       try {
@@ -471,7 +475,11 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     // decision 2026-09-24), so the inbox has to offer it to them too, not
     // only a step assigned to them by name.
     const delegatedRoles = [...new Set(liveDelegationsToMe.flatMap(d => d.fromUserRoles ?? []))];
-    const roleMatch = [...new Set([...(u.roles ?? []), ...delegatedRoles])];
+    // An ADMIN step is met by a SUPER_ADMIN too (review A, item 1), so the
+    // prefilter offers ADMIN steps to anyone holding SUPER_ADMIN.
+    const heldRoles = [...(u.roles ?? []), ...delegatedRoles];
+    const roleMatch = [...new Set([...heldRoles,
+      ...(holdsApproverRole(heldRoles, 'ADMIN') ? ['ADMIN'] : [])])];
     const rows = (await pool.query(
       `SELECT i.*, s.id AS step_id, s.sequence, s.approver_role, s.approver_user_id, s.pending_since, s.sla_hours
        FROM approval_steps s JOIN approval_instances i ON i.id = s.instance_id
@@ -559,7 +567,7 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
             // they already hold.
             const laterRung = steps.find(s =>
               s.status === 'PENDING' && s.sequence > (step?.sequence ?? 0) &&
-              ((s.approverRole && (u.roles ?? []).includes(s.approverRole)) || s.approverUserId === u.id));
+              ((s.approverRole && holdsApproverRole(u.roles ?? [], s.approverRole)) || s.approverUserId === u.id));
             if (laterRung) {
               fail('OUT_OF_SEQUENCE',
                 `Level ${step!.sequence} must decide before your level ${laterRung.sequence}.`);
@@ -679,6 +687,8 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
 
         const ladder = resolveLadder(levels, Number(body.amount), policy.mode as LadderMode);
         if (!ladder.length) fail('NO_APPROVER', `The policy leaves ${body.amount} outside every authority band`);
+        await assertLadderHasEligibleApprovers(
+          db, u.orgId, policy, ladder, String(instance.requested_by), String(instance.document_type));
 
         // The replacement has to exist before the original can point at it:
         // chk_ai_superseded requires status, superseded_by and the reason to

@@ -4,6 +4,7 @@ import {
   nextActionableStep, canAct, requiresReapproval, overdueSteps,
   approvalPolicySchema, approvalDecisionSchema, delegationSchema,
   APPROVAL_ROLE_GRANTS, APPROVAL_STATUS_TONES, APPROVAL_STATUSES,
+  holdsApproverRole, rolesSatisfyingApproverRole,
   type ApprovalLevel, type ApprovalStep, type Delegation,
 } from './approvals.js';
 
@@ -142,6 +143,49 @@ describe('maker-checker', () => {
     });
     expect(decision.allowed).toBe(false);
     if (!decision.allowed) expect(decision.code).toBe('NOT_THE_APPROVER');
+  });
+});
+
+describe('an ADMIN step accepts a super admin (review A, item 1)', () => {
+  // The bootstrap administrator holds only SUPER_ADMIN, so an ADMIN step
+  // (the org-wide PR/PO fallback ladder's only one) must accept it, the way
+  // leave's step-2 cascade already treats ADMIN and SUPER_ADMIN alike.
+  const adminStep = step({ approverRole: 'ADMIN' });
+
+  it('lets a SUPER_ADMIN clear an ADMIN step', () => {
+    const decision = canAct({
+      step: adminStep, steps: [adminStep], actorUserId: 'root', actorRoles: ['SUPER_ADMIN'],
+      requesterUserId: 'u1', documentType: 'PURCHASE_ORDER',
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it('lets a delegate of a SUPER_ADMIN clear an ADMIN step', () => {
+    const decision = canAct({
+      step: adminStep, steps: [adminStep], actorUserId: 'deputy', actorRoles: [],
+      requesterUserId: 'u1', documentType: 'PURCHASE_ORDER', today: '2026-09-15',
+      delegations: [{
+        fromUserId: 'root', toUserId: 'deputy', validFrom: '2026-09-01', validTo: '2026-09-30',
+        documentTypes: null, revokedAt: null, fromUserRoles: ['SUPER_ADMIN'],
+      }],
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it('does not let an ADMIN clear a SUPER_ADMIN step', () => {
+    const top = step({ approverRole: 'SUPER_ADMIN' });
+    const decision = canAct({
+      step: top, steps: [top], actorUserId: 'a1', actorRoles: ['ADMIN'],
+      requesterUserId: 'u1', documentType: 'PURCHASE_ORDER',
+    });
+    expect(decision.allowed).toBe(false);
+  });
+
+  it('names the roles that satisfy a step', () => {
+    expect(rolesSatisfyingApproverRole('ADMIN')).toEqual(['ADMIN', 'SUPER_ADMIN']);
+    expect(rolesSatisfyingApproverRole('PROJECT_MANAGER')).toEqual(['PROJECT_MANAGER']);
+    expect(holdsApproverRole(['SUPER_ADMIN'], 'ADMIN')).toBe(true);
+    expect(holdsApproverRole(['ADMIN'], 'SUPER_ADMIN')).toBe(false);
   });
 });
 

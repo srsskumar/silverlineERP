@@ -294,6 +294,23 @@ function priorDeciderIdentities(steps: ApprovalStep[], beforeSequence: number): 
   return ids;
 }
 
+/**
+ * The roles that satisfy a role-based step (review A, item 1).
+ *
+ * An ADMIN step is also met by SUPER_ADMIN: the bootstrap administrator
+ * holds only SUPER_ADMIN, and leave's step-2 cascade already treats the two
+ * alike. The reverse does not hold -- a SUPER_ADMIN step stays super-admin
+ * only. Every other role is met by itself alone.
+ */
+export function rolesSatisfyingApproverRole(role: string): string[] {
+  return role === 'ADMIN' ? ['ADMIN', 'SUPER_ADMIN'] : [role];
+}
+
+/** Whether somebody holding `roles` satisfies a step asking for `role`. */
+export function holdsApproverRole(roles: readonly string[], role: string): boolean {
+  return rolesSatisfyingApproverRole(role).some(r => roles.includes(r));
+}
+
 function resolveEligibility(args: {
   step: ApprovalStep;
   actorUserId: string;
@@ -314,7 +331,7 @@ function resolveEligibility(args: {
   }
 
   if (step.approverRole) {
-    if (actorRoles.includes(step.approverRole)) {
+    if (holdsApproverRole(actorRoles, step.approverRole)) {
       return { allowed: true, viaDelegation: false };
     }
     // Nobody named holds this step -- any role holder does. So a delegate
@@ -328,7 +345,7 @@ function resolveEligibility(args: {
       !d.revokedAt && d.validFrom <= today && today <= d.validTo &&
       (!d.documentTypes || d.documentTypes.length === 0 || d.documentTypes.includes(documentType)));
     const viaRoleDelegation = live.find(d =>
-      d.toUserId === actorUserId && (d.fromUserRoles ?? []).includes(step.approverRole!) &&
+      d.toUserId === actorUserId && holdsApproverRole(d.fromUserRoles ?? [], step.approverRole!) &&
       principalCanReachProject(projectId, d.fromUserScope));
     if (viaRoleDelegation) return { allowed: true, viaDelegation: true, onBehalfOf: viaRoleDelegation.fromUserId };
     return {
