@@ -239,3 +239,33 @@ describe("moving a stage keeps what the call did not mention (SG-015)", () => {
     expect(r.data.remarks).toBeNull();
   });
 });
+
+describe("a member crewed on two stages sees the one that is running (final review, item 2)", () => {
+  it("lists the IN_PROGRESS stage rather than the earlier, finished one", async () => {
+    const mandal = String((await w.pool.query(
+      "SELECT id FROM org_units WHERE org_id=$1 AND type='mandal' LIMIT 1", [w.orgId])).rows[0].id);
+    const v = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Two stage village", village_code: uniq("TSV"), mandal_id: mandal,
+      total_extent_ac: 30,
+    });
+    const id = String(v.data.id);
+    for (const stage_code of ["GROUND_TRUTHING", "GT_QC"]) {
+      const c = await post(w.admin, `/api/v1/survey/villages/${id}/crew`,
+        { employee_id: w.directEmployee, stage_code });
+      expect(c.status, JSON.stringify(c.body)).toBe(201);
+    }
+    const gt = await post(w.admin, `/api/v1/survey/villages/${id}/stage`, {
+      stage_code: "GROUND_TRUTHING", state: "COMPLETED", started_on: "2026-01-05",
+      completed_on: "2026-01-20", gt_govt_staff_allocated: 1, gt_crew_allocated: 1,
+    });
+    expect(gt.status, JSON.stringify(gt.body)).toBe(200);
+    const qc = await post(w.admin, `/api/v1/survey/villages/${id}/stage`, {
+      stage_code: "GT_QC", state: "IN_PROGRESS", started_on: "2026-01-21",
+    });
+    expect(qc.status, JSON.stringify(qc.body)).toBe(200);
+    const r = await get(w.directUser, "/api/v1/survey/me/villages");
+    const row = r.data.find((x: any) => x.id === id);
+    expect(row.stage_code).toBe("GT_QC");
+    expect(row.stage_state).toBe("IN_PROGRESS");
+  });
+});
