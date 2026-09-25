@@ -269,3 +269,37 @@ describe("a member crewed on two stages sees the one that is running (final revi
     expect(row.stage_state).toBe("IN_PROGRESS");
   });
 });
+
+describe("two running stages with the same display order (final review, tie-break)", () => {
+  it("lists the same one every time: the lower stage code", async () => {
+    const mandal = String((await w.pool.query(
+      "SELECT id FROM org_units WHERE org_id=$1 AND type='mandal' LIMIT 1", [w.orgId])).rows[0].id);
+    const v = await post(w.admin, `/api/v1/survey/projects/${programmeId}/villages`, {
+      village_name: "Tie village", village_code: uniq("TIE"), mandal_id: mandal, total_extent_ac: 10,
+    });
+    const id = String(v.data.id);
+    const codes = ["QA_TIE_B", "QA_TIE_A"];
+    for (const code of codes) {
+      await w.pool.query(
+        `INSERT INTO survey_stages(org_id, code, label, display_order) VALUES($1,$2,$2,100)
+         ON CONFLICT DO NOTHING`, [w.orgId, code]);
+    }
+    try {
+      for (const stage_code of codes) {
+        const c = await post(w.admin, `/api/v1/survey/villages/${id}/crew`,
+          { employee_id: w.directEmployee, stage_code });
+        expect(c.status, JSON.stringify(c.body)).toBe(201);
+        const s = await post(w.admin, `/api/v1/survey/villages/${id}/stage`,
+          { stage_code, state: "IN_PROGRESS", started_on: "2026-01-05" });
+        expect(s.status, JSON.stringify(s.body)).toBe(200);
+      }
+      for (let i = 0; i < 3; i += 1) {
+        const r = await get(w.directUser, "/api/v1/survey/me/villages");
+        expect(r.data.find((x: any) => x.id === id).stage_code).toBe("QA_TIE_A");
+      }
+    } finally {
+      await w.pool.query("UPDATE survey_stages SET active = false WHERE org_id = $1 AND code = ANY($2)",
+        [w.orgId, codes]);
+    }
+  });
+});

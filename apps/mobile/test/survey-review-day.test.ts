@@ -187,6 +187,25 @@ describe("reviewing a conflicted return on a later day", () => {
     assert.equal(o.rows()[0].client_uuid, r.clientUuid);
   });
 
+  it("says the correction is queued when only removing the old copy fails", async () => {
+    const s = daysServer({ today: TUE, manager: true }), o = outbox();
+    const r = await mondayConflict(s, o);
+    const filed = (await s.deps.getFiled(V, MON))!;
+    let queued = 0;
+    const out = await submitReview({
+      review: r, village: VILLAGE, measures: MEASURES,
+      draft: conflictReview(r.payload, filed, MEASURES).draft, kit: [], filed,
+      workDate: TUE, canManage: true,
+      enqueue: async () => { queued += 1; return "Saved."; },
+      discard: async () => { throw new Error("locked"); },
+    });
+    assert.equal(queued, 1);
+    assert.equal(out.ok, true);
+    if (!out.ok) return;
+    assert.match(out.message, /correction is queued/);
+    assert.doesNotMatch(out.message, /kept in the Sync queue/);
+  });
+
   it("a same-day review is not blocked, for crew too", () => {
     const plan = reviewDay({ entry_date: TUE }, TUE, false);
     assert.deepEqual([plan.date, plan.blocked], [TUE, false]);

@@ -17,6 +17,9 @@ import type { SurveyEntryInput, SurveyMeasure, VillageRover } from "../api/endpo
 import type { ReturnDraft } from "./returnForm";
 import { returnSubmission, type FiledEntry, type QueuedSurveyOp } from "./fieldCrew";
 
+export const DISCARD_FAILED =
+  "Your correction is queued. The conflicted copy could not be removed; discard it in the Sync queue.";
+
 export const PAST_DAY_NOTICE =
   "Corrections to a past day need your PM; your figures are kept in the Sync queue.";
 
@@ -58,6 +61,15 @@ export async function submitReview(args: {
   }
   // Throws if the replacement cannot be queued; the original then stays.
   const message = await args.enqueue(built.op);
-  await args.discard(args.review.clientUuid);
+  /*
+   * The replacement is queued. If only the discard fails, that is said as
+   * it is: the correction will go, and the old copy is left to remove by
+   * hand, not "kept" as though nothing had been queued.
+   */
+  try {
+    await args.discard(args.review.clientUuid);
+  } catch {
+    return { ok: true, message: `${message} ${DISCARD_FAILED}` };
+  }
   return { ok: true, message };
 }

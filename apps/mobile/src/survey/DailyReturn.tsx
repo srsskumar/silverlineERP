@@ -183,7 +183,9 @@ export function DailyReturn({
         });
         if (out.ok) onFiled(out.message); else setProblems(out.problems);
       } catch (e) {
-        // The replacement was not queued: the original stays in the Sync queue.
+        // Only the enqueue throws here (a failed discard is reported by
+        // submitReview), so the replacement was not queued and the original
+        // is still in the Sync queue.
         setProblems([e instanceof Error ? e.message : "The correction could not be queued. Your figures are kept in the Sync queue."]);
       } finally {
         setBusy(false);
