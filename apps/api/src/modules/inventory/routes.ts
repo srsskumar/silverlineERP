@@ -4,12 +4,13 @@ import {scopedReads} from "../../common/scopedReads.js";
 import type { FastifyInstance,FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import { vendorSchema,itemSchema,stockSchema,invoiceSchema,invoiceLinesUpdateSchema,computeInvoice,assetSchema,assetLookupSchema,assetAssignSchema,assetBulkAssignSchema,assetTransferSchema,assetAllocationEditSchema,assetLookupCode,assetTransitionSchema,assetAuditSchema,assetLocation,percentOf,type InvoiceLineInput as GstInvoiceLineInput } from '@silverline/shared';
-import { buildAuthenticate,requirePermission,scopesForPermission } from '../../common/auth.js';
+import { buildAuthenticate,requirePermission,requireAnyPermission,scopesForPermission } from '../../common/auth.js';
 import { actor,parse,page,inOrg,mutate,version,fail,projectAccess,employeeAccess } from '../../common/domain.js';
 import { itemDeltaSql,itemOnHand,lowStockLevel,notifyLowStockCrossing } from '../../common/stockLedger.js';
 
 export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Pool;jwtSecret:string}) {
- const {pool}=opts,auth=buildAuthenticate(opts),guard=(p:string)=>requirePermission(auth,p);
+ const {pool}=opts,auth=buildAuthenticate(opts),guard=(p:string)=>requirePermission(auth,p),
+   guardAny=(perms:string[])=>requireAnyPermission(auth,perms);
  async function assetClause(req:FastifyRequest,values:unknown[],column:string){
   const u=actor(req),permission=u.permissions.includes('asset.manage')?'asset.manage':u.permissions.includes('inventory.read')?'inventory.read':null;
   const scope=permission?resolveScopes(await scopesForPermission(req,permission)):null;if(scope?.global)return 'TRUE';
@@ -309,7 +310,13 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
      c.cgst.toFixed(2),c.sgst.toFixed(2),c.igst.toFixed(2),c.lineTotal.toFixed(2)]);
   }
  }
- app.post('/api/v1/invoices',{preHandler:guard('inventory.manage')},async(req,reply)=>{
+ // invoice.create OR invoice.manage, not inventory.manage (owner decision
+ // 2026-09-24; narrowed by fix round 1, I4 -- a controller ruling against
+ // the original broad invoice.manage grant this carried). Every other write
+ // on a vendor invoice -- PATCH .../lines, .../status, .../dispute,
+ // .../match -- stays invoice.manage only: creating one is the one action a
+ // role like INVENTORY_MANAGER needs without also gaining the rest.
+ app.post('/api/v1/invoices',{preHandler:guardAny(['invoice.create','invoice.manage'])},async(req,reply)=>{
   const i=parse(invoiceSchema,req.body),u=actor(req);
   const row=await mutate(pool,req,'invoice.create','invoice',async db=>{
    await inOrg(db,'vendors',i.vendor_id,u.orgId);

@@ -341,6 +341,216 @@ describe("bill lifecycle", () => {
   });
 });
 
+describe("over-allocation guard on status change (owner decision 2026-09-24, fix round 1, C1)", () => {
+  async function makeReceipt(amount: number) {
+    const res = await post(w.admin, "/api/v1/payments", {
+      direction: "RECEIVABLE", payment_no: uniq("RCP"), paid_on: "2026-09-10", amount, mode: "NEFT",
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    return res.data;
+  }
+
+  async function allocate(paymentId: string, billId: string, amount: number) {
+    return post(w.admin, `/api/v1/payments/${paymentId}/allocations`, {
+      document_type: "RA_BILL", document_id: billId, amount,
+    });
+  }
+
+  async function reverse(paymentId: string) {
+    const p = await w.pool.query("SELECT version FROM payments WHERE id = $1", [paymentId]);
+    const res = await post({ ...w.admin, "if-match": String(p.rows[0].version) },
+      `/api/v1/payments/${paymentId}/reverse`, { reason: "Unallocating for the test" });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+  }
+
+  async function billRow(id: string) {
+    return (await w.pool.query("SELECT * FROM ra_bills WHERE id = $1", [id])).rows[0];
+  }
+
+  it("caps a SUBMITTED bill's allocation at net_payable, not gross_value", async () => {
+    const { projectId, boqItemId } = await projectWithBoq();
+    await put(w.admin, `/api/v1/projects/${projectId}/billing-policy`, { retention_pct: 5 });
+    const bill = await raiseBill(projectId, boqItemId, 1000);
+    expect(bill.status, JSON.stringify(bill.body)).toBe(201);
+    await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "SUBMITTED" });
+
+    const row = await billRow(bill.data.id);
+    const gross = Number(row.gross_value), net = Number(row.net_payable);
+    expect(net).toBeLessThan(gross); // retention actually shrank the claim
+
+    const atGross = await allocate((await makeReceipt(gross)).id, bill.data.id, gross);
+    expect(atGross.status, JSON.stringify(atGross.body)).toBe(422);
+
+    const atNet = await allocate((await makeReceipt(net)).id, bill.data.id, net);
+    expect(atNet.status, JSON.stringify(atNet.body)).toBe(201);
+  });
+
+  it("refuses to certify below what is already allocated", async () => {
+    const { projectId, boqItemId } = await projectWithBoq();
+    const bill = await raiseBill(projectId, boqItemId, 1000); // gross 450,000, no deductions
+    await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "SUBMITTED" });
+    const net = Number((await billRow(bill.data.id)).net_payable);
+
+    const receipt = await makeReceipt(net);
+    const alloc = await allocate(receipt.id, bill.data.id, net);
+    expect(alloc.status, JSON.stringify(alloc.body)).toBe(201);
+
+    const lower = net - 50_000;
+    const certified = await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "CERTIFIED", certified_amount: lower });
+    expect(certified.status, JSON.stringify(certified.body)).toBe(422);
+    expect(certified.body.code).toBe("RA_BILL_OVER_ALLOCATED");
+    expect(certified.body.message).toContain("50000.00");
+
+    // Unallocating first clears the way.
+    await reverse(receipt.id);
+    const retried = await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "CERTIFIED", certified_amount: lower });
+    expect(retried.status, JSON.stringify(retried.body)).toBe(200);
+  });
+
+  it("refuses to send a submitted bill back to draft while a receipt is allocated", async () => {
+    const { projectId, boqItemId } = await projectWithBoq();
+    const bill = await raiseBill(projectId, boqItemId, 1000);
+    await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "SUBMITTED" });
+    const net = Number((await billRow(bill.data.id)).net_payable);
+    const receipt = await makeReceipt(net / 2);
+    await allocate(receipt.id, bill.data.id, net / 2);
+
+    const toDraft = await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "DRAFT" });
+    expect(toDraft.status, JSON.stringify(toDraft.body)).toBe(422);
+    expect(toDraft.body.code).toBe("RA_BILL_OVER_ALLOCATED");
+
+    await reverse(receipt.id);
+    const retried = await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "DRAFT" });
+    expect(retried.status, JSON.stringify(retried.body)).toBe(200);
+  });
+
+  it("refuses to cancel a submitted bill while a receipt is allocated", async () => {
+    const { projectId, boqItemId } = await projectWithBoq();
+    const bill = await raiseBill(projectId, boqItemId, 1000);
+    await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "SUBMITTED" });
+    const net = Number((await billRow(bill.data.id)).net_payable);
+    const receipt = await makeReceipt(net);
+    await allocate(receipt.id, bill.data.id, net);
+
+    const cancelled = await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "CANCELLED", reason: "Client withdrew the claim" });
+    expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(422);
+    expect(cancelled.body.code).toBe("RA_BILL_OVER_ALLOCATED");
+
+    await reverse(receipt.id);
+    const retried = await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "CANCELLED", reason: "Client withdrew the claim" });
+    expect(retried.status, JSON.stringify(retried.body)).toBe(200);
+  });
+
+  it("refuses to cancel a certified bill while a receipt is allocated", async () => {
+    const { projectId, boqItemId } = await projectWithBoq();
+    const bill = await raiseBill(projectId, boqItemId, 1000);
+    const certified = await certify(bill.data.id);
+    const receipt = await makeReceipt(Number(certified.certified_amount));
+    await allocate(receipt.id, bill.data.id, Number(certified.certified_amount));
+
+    const cancelled = await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "CANCELLED", reason: "Contract terminated" });
+    expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(422);
+    expect(cancelled.body.code).toBe("RA_BILL_OVER_ALLOCATED");
+
+    await reverse(receipt.id);
+    const retried = await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "CANCELLED", reason: "Contract terminated" });
+    expect(retried.status, JSON.stringify(retried.body)).toBe(200);
+  });
+
+  it("never leaves the bill over-allocated when a receipt races certification", async () => {
+    const { projectId, boqItemId } = await projectWithBoq();
+    const bill = await raiseBill(projectId, boqItemId, 1000); // gross/net 450,000, no deductions
+    await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "SUBMITTED" });
+    const net = Number((await billRow(bill.data.id)).net_payable);
+
+    // Already allocated up to what a lower certification would still cover.
+    const lower = net - 50_000;
+    const firstReceipt = await makeReceipt(lower);
+    const firstAlloc = await allocate(firstReceipt.id, bill.data.id, lower);
+    expect(firstAlloc.status, JSON.stringify(firstAlloc.body)).toBe(201);
+
+    // Fired together: one more receipt for the remaining slack under the OLD
+    // (net_payable) cap, racing a certification that would shrink the cap
+    // below what that second receipt claims.
+    const secondReceipt = await makeReceipt(net - lower);
+    const [certifyRes, allocRes] = await Promise.all([
+      post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+        `/api/v1/ra-bills/${bill.data.id}/status`, { status: "CERTIFIED", certified_amount: lower }),
+      allocate(secondReceipt.id, bill.data.id, net - lower),
+    ]);
+
+    // Whichever wins the row lock first, the other must lose -- both
+    // succeeding would over-allocate the bill.
+    const succeeded = [certifyRes.status, allocRes.status].filter(s => s < 300);
+    expect(succeeded.length, JSON.stringify({ certifyRes, allocRes })).toBeLessThanOrEqual(1);
+
+    const finalBill = await billRow(bill.data.id);
+    const finalPayable = finalBill.status === "CERTIFIED"
+      ? Number(finalBill.certified_amount) : Number(finalBill.net_payable);
+    const finalAllocated = Number((await w.pool.query(
+      `SELECT COALESCE(sum(a.amount),0) AS total FROM payment_allocations a
+        JOIN payments p ON p.id = a.payment_id
+       WHERE a.document_type='RA_BILL' AND a.document_id=$1
+         AND a.reversed_at IS NULL AND p.reversed_at IS NULL`, [bill.data.id])).rows[0].total);
+    expect(finalAllocated).toBeLessThanOrEqual(finalPayable + 0.005);
+  });
+
+  it("counts TDS/advance toward what is already settled, not just cash (fix round 2, item 1(b), defence in depth)", async () => {
+    // APAR-2 (packages/shared/src/financial-control.ts's
+    // paymentAllocationSchema) already refuses a caller setting tds_amount
+    // or advance_adjusted on an RA_BILL allocation through the API -- the
+    // only path that writes payment_allocations with caller-controlled
+    // fields (see ledgers.test.ts's "never lets the bulk payment-run path
+    // ..." for the other one). This bypasses that schema on purpose, the
+    // way a data import or a fix script would, to prove the certify-time
+    // check itself does not silently under-count such a row if one ever
+    // exists: settlementPosition/checkAllocation treat tds_amount and
+    // advance_adjusted as settled money, same as cash, and the over-
+    // allocation guard has to agree or it would let a bill certify below
+    // what is genuinely already closed out.
+    const { projectId, boqItemId } = await projectWithBoq();
+    const bill = await raiseBill(projectId, boqItemId, 1000); // gross/net 450,000, no deductions
+    await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "SUBMITTED" });
+
+    const receipt = await w.pool.query(
+      `INSERT INTO payments(org_id, created_by, payment_no, direction, paid_on, amount, mode)
+       VALUES($1,$2,$3,'RECEIVABLE','2026-09-10',400000,'NEFT') RETURNING id`,
+      [w.orgId, w.adminId, uniq("RCP")]);
+    await w.pool.query(
+      `INSERT INTO payment_allocations(org_id, created_by, payment_id, document_type, document_id,
+         amount, tds_amount)
+       VALUES($1,$2,$3,'RA_BILL',$4,400000,50000)`,
+      [w.orgId, w.adminId, receipt.rows[0].id, bill.data.id]);
+
+    // 400,000 cash + 50,000 TDS = 450,000 already settled. Certifying at
+    // 440,000 would leave the bill claiming less than is already closed
+    // out -- refused, even though the raw cash column alone (400,000)
+    // would fit comfortably under 440,000.
+    const tooLow = await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "CERTIFIED", certified_amount: 440_000 });
+    expect(tooLow.status, JSON.stringify(tooLow.body)).toBe(422);
+    expect(tooLow.body.code).toBe("RA_BILL_OVER_ALLOCATED");
+
+    const enough = await post({ ...w.admin, ...(await billVersion(bill.data.id)) },
+      `/api/v1/ra-bills/${bill.data.id}/status`, { status: "CERTIFIED", certified_amount: 450_000 });
+    expect(enough.status, JSON.stringify(enough.body)).toBe(200);
+  });
+});
+
 describe("retention", () => {
   async function certifiedWithRetention(dlpEndDate: string | null) {
     const { projectId, boqItemId } = await projectWithBoq();

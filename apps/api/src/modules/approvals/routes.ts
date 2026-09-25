@@ -8,6 +8,7 @@ import {
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
+import { resolveScopes } from '../../common/scopes.js';
 
 /**
  * Approval engine (§41).
@@ -88,22 +89,111 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     }
   }
 
-  /** Live delegations in the org, as the pure layer wants them. */
+  /**
+   * Live delegations in the org, as the pure layer wants them.
+   *
+   * `from_user_roles` is what lets `canAct` honour delegation on a
+   * role-based step ("any PROJECT_MANAGER") and not only a named-approver
+   * one: the delegate inherits the principal's eligibility, so the pure
+   * layer needs to know what roles the principal actually held.
+   * `from_user_scope` is I2 (fix round 1): the same role-based delegation
+   * must not let a delegate reach a project the principal could not
+   * themselves reach, so the pure layer also needs the principal's own
+   * resolved project scope.
+   */
   async function delegationsFor(db: Pool | PoolClient, orgId: string): Promise<Delegation[]> {
     const rows = (await db.query(
-      `SELECT from_user_id, to_user_id, valid_from, valid_to, document_types, revoked_at
-       FROM approval_delegations WHERE org_id = $1 AND revoked_at IS NULL`, [orgId])).rows;
-    return rows.map(r => ({
-      fromUserId: String(r.from_user_id),
-      toUserId: String(r.to_user_id),
-      validFrom: String(r.valid_from).slice(0, 10),
-      validTo: String(r.valid_to).slice(0, 10),
-      documentTypes: Array.isArray(r.document_types) && r.document_types.length ? r.document_types : null,
-      revokedAt: r.revoked_at ? String(r.revoked_at) : null,
-    }));
+      `SELECT d.from_user_id, d.to_user_id, d.valid_from, d.valid_to, d.document_types, d.revoked_at,
+              COALESCE(array_agg(DISTINCT r.code) FILTER (WHERE r.code IS NOT NULL), '{}') AS from_user_roles
+       FROM approval_delegations d
+       LEFT JOIN user_roles ur ON ur.user_id = d.from_user_id
+       LEFT JOIN roles r ON r.id = ur.role_id
+       WHERE d.org_id = $1 AND d.revoked_at IS NULL
+       GROUP BY d.id`, [orgId])).rows;
+    if (!rows.length) return [];
+    const fromUserIds = [...new Set(rows.map(r => String(r.from_user_id)))];
+    const scopeRows = (await db.query(
+      `SELECT user_id, scope_type, scope_id FROM user_roles WHERE user_id = ANY($1::uuid[])`,
+      [fromUserIds])).rows;
+    const scopesByUser = new Map<string, { scope_type: string | null; scope_id: string | null }[]>();
+    for (const r of scopeRows) {
+      const id = String(r.user_id);
+      (scopesByUser.get(id) ?? scopesByUser.set(id, []).get(id)!).push(
+        { scope_type: r.scope_type, scope_id: r.scope_id });
+    }
+    return rows.map(r => {
+      const resolved = resolveScopes(scopesByUser.get(String(r.from_user_id)) ?? []);
+      return {
+        fromUserId: String(r.from_user_id),
+        toUserId: String(r.to_user_id),
+        validFrom: String(r.valid_from).slice(0, 10),
+        validTo: String(r.valid_to).slice(0, 10),
+        documentTypes: Array.isArray(r.document_types) && r.document_types.length ? r.document_types : null,
+        revokedAt: r.revoked_at ? String(r.revoked_at) : null,
+        fromUserRoles: Array.isArray(r.from_user_roles) ? r.from_user_roles.map(String) : [],
+        fromUserScope: { global: resolved.global, projects: resolved.projects },
+      };
+    });
   }
 
   /** The policy that governs a document: project override first, then org. */
+  /**
+   * Whether a ladder names the same only-possible person at two levels (fix
+   * round 2, item 2(a)).
+   *
+   * Segregation of duties (I3, fix round 1) refuses the same physical
+   * person -- and any delegate acting on their behalf -- a second level of
+   * one instance, unconditionally. Two patterns make that certain rather
+   * than incidental:
+   *
+   *  - the same approver_user_id named at two levels: always the same
+   *    person, so the ladder could never clear no matter who else is
+   *    involved;
+   *  - the same approver_role at two levels when the organisation
+   *    currently has at most one holder of it: nobody else could stand in
+   *    by role, and I3 also refuses that one holder's own delegate (the
+   *    principal behind a delegation counts as having "decided" too).
+   *
+   * A role held by two or more people is left alone -- a different person
+   * legitimately clearing each level is exactly how the ladder is meant to
+   * work, and who holds a role can change after the policy is saved.
+   */
+  async function ladderUnresolvableReason(
+    db: Pool | PoolClient, orgId: string,
+    levels: { sequence: number; approver_role?: string | null; approver_user_id?: string | null }[],
+  ): Promise<string | null> {
+    const byUser = new Map<string, number[]>();
+    const byRole = new Map<string, number[]>();
+    for (const l of levels) {
+      if (l.approver_user_id) {
+        byUser.set(l.approver_user_id, [...(byUser.get(l.approver_user_id) ?? []), l.sequence]);
+      }
+      if (l.approver_role) {
+        byRole.set(l.approver_role, [...(byRole.get(l.approver_role) ?? []), l.sequence]);
+      }
+    }
+    for (const [userId, sequences] of byUser) {
+      if (sequences.length < 2) continue;
+      const named = (await db.query('SELECT username FROM users WHERE id = $1', [userId])).rows[0];
+      return `${named?.username ?? 'The same person'} is named as the approver for levels `
+        + `${sequences.join(' and ')}. The same person can never decide two levels of one request.`;
+    }
+    for (const [role, sequences] of byRole) {
+      if (sequences.length < 2) continue;
+      const holders = (await db.query(
+        `SELECT count(DISTINCT ur.user_id)::int AS n
+           FROM user_roles ur JOIN roles r ON r.id = ur.role_id JOIN users u ON u.id = ur.user_id
+          WHERE r.code = $1 AND u.org_id = $2`, [role, orgId])).rows[0];
+      if (Number(holders.n) <= 1) {
+        return `${role.replaceAll('_', ' ').toLowerCase()} is named as the approver for levels `
+          + `${sequences.join(' and ')}, and this organisation currently has ${Number(holders.n)} `
+          + `holder${Number(holders.n) === 1 ? '' : 's'} of that role. The same person can never `
+          + `decide two levels of one request.`;
+      }
+    }
+    return null;
+  }
+
   async function policyFor(db: Pool | PoolClient, orgId: string, documentType: string, projectId?: string | null) {
     const rows = (await db.query(
       `SELECT * FROM approval_policies
@@ -136,6 +226,7 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
       approverRole: r.approver_role,
       approverUserId: r.approver_user_id,
       actedByUserId: r.acted_by,
+      actedOnBehalfOf: r.acted_on_behalf_of ? String(r.acted_on_behalf_of) : null,
       slaHours: r.sla_hours === null ? null : Number(r.sla_hours),
       pendingSince: r.pending_since ? String(r.pending_since) : null,
     }));
@@ -177,6 +268,10 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     const u = actor(req), input = parse(approvalPolicySchema, req.body);
     const row = await mutate(pool, req, 'approval.policy.create', 'approval_policy', async db => {
       if (input.project_id) await inOrg(db, 'projects', input.project_id, u.orgId);
+      // Fix round 2, item 2(a): refuse a ladder that could never clear,
+      // before touching the policy this would otherwise replace.
+      const unresolvable = await ladderUnresolvableReason(db, u.orgId, input.levels);
+      if (unresolvable) fail('LADDER_UNRESOLVABLE', unresolvable);
       // Replacing rather than stacking: two active policies for one document
       // type would make routing ambiguous, and the unique index refuses it.
       await db.query(
@@ -348,13 +443,30 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     };
   });
 
-  /** The acting user's queue, delegations included. */
+  /**
+   * The acting user's queue, delegations and project scope included.
+   *
+   * DECISION (2026-09-24): a project-scoped approver (§4.1 -- TEAM_LEAD and
+   * PROJECT_MANAGER default to an assigned-project scope) must see only
+   * documents in a project their own approval.act scope covers, plus
+   * org-wide (project-less) documents they are otherwise eligible for --
+   * not every pending step across the organisation. A global scope (most
+   * other roles, and anyone with an explicit null-scope assignment) is
+   * unaffected.
+   */
   app.get('/api/v1/approvals/inbox', { preHandler: guard('approval.act') }, async req => {
     const u = actor(req);
+    const scopes = resolveScopes(u.scopes);
     const delegations = await delegationsFor(pool, u.orgId);
-    const principals = delegations
-      .filter(d => d.toUserId === u.id && d.validFrom <= today() && today() <= d.validTo)
-      .map(d => d.fromUserId);
+    const liveDelegationsToMe = delegations
+      .filter(d => d.toUserId === u.id && d.validFrom <= today() && today() <= d.validTo);
+    const principals = liveDelegationsToMe.map(d => d.fromUserId);
+    // A role-based step ("any PROJECT_MANAGER") names no one person; canAct
+    // already lets a live delegate of any role holder act on it (owner
+    // decision 2026-09-24), so the inbox has to offer it to them too, not
+    // only a step assigned to them by name.
+    const delegatedRoles = [...new Set(liveDelegationsToMe.flatMap(d => d.fromUserRoles ?? []))];
+    const roleMatch = [...new Set([...(u.roles ?? []), ...delegatedRoles])];
     const rows = (await pool.query(
       `SELECT i.*, s.id AS step_id, s.sequence, s.approver_role, s.approver_user_id, s.pending_since, s.sla_hours
        FROM approval_steps s JOIN approval_instances i ON i.id = s.instance_id
@@ -362,14 +474,35 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
          AND (s.approver_role = ANY($2::text[]) OR s.approver_user_id = ANY($3::uuid[]))
          -- maker-checker: never show somebody their own request
          AND i.requested_by <> $4
+         -- project scope: org-wide documents always show; a scoped approver
+         -- (not global) sees a project one only when it is theirs.
+         AND ($5::boolean OR i.project_id IS NULL OR i.project_id = ANY($6::uuid[]))
        ORDER BY s.pending_since NULLS LAST, i.created_at`,
-      [u.orgId, u.roles ?? [], [u.id, ...principals], u.id])).rows;
-    // Only the step that is actually next may be acted on.
+      [u.orgId, roleMatch, [u.id, ...principals], u.id, scopes.global, scopes.projects])).rows;
+    // Only a step this actor could actually decide right now belongs in the
+    // inbox -- reusing canAct() itself (fix round 2, item 2(c)) rather than
+    // re-deriving a second opinion of its rules, so sequence, delegation and
+    // segregation of duties (I2/I3) all filter the list exactly as they
+    // would refuse the decision. Without this, an item only a policy fix --
+    // not this person, and not any delegate of theirs -- could ever clear
+    // (the same person named twice, or the sole holder of a role at two
+    // levels) sat in the inbox looking actionable and 422'd on click.
     const actionable = [];
     for (const row of rows) {
       const steps = await stepsFor(pool, String(row.id));
-      const next = nextActionableStep(steps);
-      if (next && next.sequence === Number(row.sequence)) actionable.push(row);
+      const step = steps.find(s => s.id === String(row.step_id)) ?? null;
+      const decision = canAct({
+        step, steps,
+        actorUserId: u.id,
+        actorRoles: u.roles ?? [],
+        requesterUserId: String(row.requested_by),
+        delegations,
+        documentType: row.document_type as ApprovalDocumentType,
+        today: today(),
+        hasSelfApproveOverride: u.permissions.includes('approval.self_approve'),
+        projectId: row.project_id ? String(row.project_id) : null,
+      });
+      if (decision.allowed) actionable.push(row);
     }
     return { data: actionable };
   });
@@ -386,6 +519,16 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     return {
       data: await mutate(pool, req, `approval.${input.decision.toLowerCase()}`, 'approval_instance', async db => {
         const instance = await inOrg(db, 'approval_instances', id, u.orgId, true);
+        // I1 (owner decision 2026-09-24, fix round 1): the same project
+        // scope the inbox filters by (resolveScopes over the approval.act
+        // scope this guard already resolved) applies to deciding one
+        // directly by id -- otherwise the inbox's filtering is cosmetic,
+        // not a boundary. Refused as FORBIDDEN, matching projectAccess()'s
+        // own wording for "this exists, but not in your scope" elsewhere.
+        const scopes = resolveScopes(u.scopes);
+        if (!scopes.global && instance.project_id && !scopes.projects.includes(String(instance.project_id))) {
+          fail('FORBIDDEN', 'This request is for a project outside your scope', 403);
+        }
         version(req, instance as { version: number }, 'approval request');
         if (instance.status !== 'PENDING') {
           fail('NOT_PENDING', `This request is already ${String(instance.status).toLowerCase()}`);
@@ -402,6 +545,7 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
           documentType: instance.document_type as ApprovalDocumentType,
           today: today(),
           hasSelfApproveOverride: u.permissions.includes('approval.self_approve'),
+          projectId: instance.project_id ? String(instance.project_id) : null,
         });
         if (!decision.allowed) {
           if (decision.code === 'NOT_THE_APPROVER') {
@@ -416,11 +560,27 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
                 `Level ${step!.sequence} must decide before your level ${laterRung.sequence}.`);
             }
           }
+          if (decision.code === 'SEGREGATION_OF_DUTIES') {
+            // Fix round 2, item 2(b): this is a policy design problem, not
+            // something the requester or the approver can work around --
+            // naming the policy and saying who can fix it stops them
+            // resubmitting the same request expecting a different answer.
+            const policy = (await db.query(
+              `SELECT p.name FROM approval_policies p
+                 JOIN approval_instances i ON i.policy_id = p.id
+                WHERE i.id = $1`, [id])).rows[0];
+            fail('SEGREGATION_OF_DUTIES',
+              `${decision.reason} Ask an administrator to change the `
+              + `"${policy?.name ?? 'approval'}" policy so each level can be decided by a different person.`);
+          }
           fail(decision.code, decision.reason, decision.code === 'SELF_APPROVAL' ? 403 : 422);
         }
 
         const current = steps.find(s => s.sequence === step!.sequence)!;
-        const onBehalf = decision.viaDelegation ? current.approverUserId : null;
+        // A named-approver step's principal is current.approverUserId; a
+        // role-based step ("any PROJECT_MANAGER") has none, so canAct itself
+        // says whose authority a delegated match actually used.
+        const onBehalf = decision.viaDelegation ? (decision.onBehalfOf ?? null) : null;
         await db.query(
           `UPDATE approval_steps SET status = $2, acted_by = $3, acted_at = now(),
              acted_on_behalf_of = $4, comments = $5

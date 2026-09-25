@@ -25,11 +25,36 @@ import { ApprovalPolicyForm } from './ApprovalPolicyForm';
  * insert. A document type with no policy fails every submission with
  * NO_APPROVAL_POLICY (see ErrorCard's link back to this screen).
  *
- * DECISION (2026-09-24): not auto-seeding an org-wide fallback ladder for
- * every document type. Suggested here rather than done, because what the
- * default ladder *should* be (who approves what, at which amount) is a
- * business decision for the owner, not something safe to guess from code.
+ * DECISION (2026-09-24): PURCHASE_REQUISITION and PURCHASE_ORDER now get a
+ * minimal org-wide fallback (one ADMIN step, no amount band) auto-seeded for
+ * every organisation -- migration 101 for an existing install, seed.ts for a
+ * fresh one -- so a project with no policy of its own still routes rather
+ * than dead-ending on NO_APPROVAL_POLICY. It shows up here like any other
+ * policy (Scope: "Org-wide") and is editable the same way: posting a
+ * replacement supersedes it. Deactivating the only active policy left for a
+ * document type is what the confirmation below warns about explicitly.
  */
+
+/**
+ * The confirmation text for turning `policy` off.
+ *
+ * When it is the only active policy left for its document type -- org-wide
+ * or project -- deactivating it leaves that document type with nowhere to
+ * route at all: every submission for it fails NO_APPROVAL_POLICY until
+ * someone adds another. That case gets a sharper warning than "some
+ * submissions may be affected."
+ */
+function confirmDeactivateMessage(policy: ApprovalPolicy, allRows: ApprovalPolicy[]): string {
+  const label = DOCUMENT_TYPE_LABELS[policy.document_type] ?? policy.document_type;
+  const activeForType = allRows.filter((r) => r.document_type === policy.document_type && r.active);
+  if (activeForType.length <= 1) {
+    return `"${policy.name}" is the only active policy for ${label}. Deactivating it leaves every `
+      + `${label.toLowerCase()} submission refused with NO_APPROVAL_POLICY until another policy is added. `
+      + `Deactivate anyway?`;
+  }
+  return `Deactivate "${policy.name}"? Submissions for ${label} routed through it will fail until another policy covers them.`;
+}
+
 export function ApprovalPoliciesManager() {
   const { session } = useAuth();
   // Defense in depth: app/approvals/policies/page.tsx already requires
@@ -117,7 +142,7 @@ export function ApprovalPoliciesManager() {
                               variant="ghost" size="sm"
                               loading={deactivate.isPending && deactivate.variables?.id === p.id}
                               onClick={() => {
-                                if (window.confirm(`Deactivate "${p.name}"? Submissions for ${DOCUMENT_TYPE_LABELS[p.document_type] ?? p.document_type} will fail until another policy covers it.`)) {
+                                if (window.confirm(confirmDeactivateMessage(p, rows))) {
                                   deactivate.mutate(p);
                                 }
                               }}
@@ -137,7 +162,9 @@ export function ApprovalPoliciesManager() {
       )}
 
       <p className="text-2xs text-text-subtle">
-        Nothing here is auto-seeded — see{' '}
+        Requisitions and purchase orders get a minimal org-wide fallback (ADMIN, no amount band)
+        automatically; every other document type needs a policy added here before it can be
+        submitted. See{' '}
         <Link href="/approvals" className="underline">Approvals</Link>{' '}
         for requests already in flight.
       </p>

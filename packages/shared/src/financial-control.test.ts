@@ -293,6 +293,27 @@ describe('finance grants', () => {
     expect(FINANCE_ROLE_GRANTS.PROJECT_MANAGER).toEqual(['payment.read', 'period.read', 'invoice.read']);
   });
 
+  it('gives the inventory manager invoice.create, not the broader invoice.manage (fix round 1, I4, controller ruling)', () => {
+    // POST /api/v1/invoices moved off inventory.manage; invoice.create is
+    // the narrow replacement -- enough to keep creating a vendor invoice,
+    // not enough to also edit its lines, change its status, dispute it or
+    // record a three-way match, which invoice.manage would have handed it.
+    expect(FINANCE_ROLE_GRANTS.INVENTORY_MANAGER).toContain('invoice.create');
+    expect(FINANCE_ROLE_GRANTS.INVENTORY_MANAGER).not.toContain('invoice.manage');
+  });
+
+  it('grants invoice.create to every role that already holds invoice.manage', () => {
+    // invoice.manage already implies invoice.create at the route (POST
+    // /invoices accepts either), so every holder gets the narrow grant too
+    // -- visible in the role's own permission list, not only in the route's
+    // OR-gate.
+    for (const [role, perms] of Object.entries(FINANCE_ROLE_GRANTS)) {
+      if (perms.includes('invoice.manage')) {
+        expect(perms, role).toContain('invoice.create');
+      }
+    }
+  });
+
   it('names every granted permission in the permission list', () => {
     const known = new Set<string>(FINANCE_PERMISSIONS);
     for (const perms of Object.values(FINANCE_ROLE_GRANTS)) {

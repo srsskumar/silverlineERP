@@ -129,6 +129,27 @@ export interface Delegation {
   validTo: string;
   documentTypes?: ApprovalDocumentType[] | null;
   revokedAt?: string | null;
+  /**
+   * Role codes the delegating user holds.
+   *
+   * A named-approver step ("boss, specifically") only ever needed
+   * `fromUserId`/`toUserId` — `effectiveApprovers` walks the chain by user
+   * id. A role-based step ("any PROJECT_MANAGER") names no one person, so
+   * the same delegation only helps there if the delegate can be shown to
+   * stand in for *someone who holds that role*. This is what lets `canAct`
+   * check that without a database lookup of its own.
+   */
+  fromUserRoles?: string[];
+  /**
+   * The delegating user's own project scope (fix round 1, I2).
+   *
+   * A role-based delegation must not let a delegate reach further than the
+   * principal themselves could: `global` true means every project;
+   * otherwise `projects` is the exhaustive list. Absent (an older caller
+   * that has not supplied it) is treated as unrestricted -- see
+   * `principalCanReachProject`.
+   */
+  fromUserScope?: { global: boolean; projects: string[] };
 }
 
 /**
@@ -221,6 +242,8 @@ export interface ApprovalStep {
   approverRole: string | null;
   approverUserId: string | null;
   actedByUserId?: string | null;
+  /** Set when actedByUserId acted on delegated authority -- whose. */
+  actedOnBehalfOf?: string | null;
 }
 
 /**
@@ -234,8 +257,88 @@ export function nextActionableStep(steps: ApprovalStep[]): ApprovalStep | null {
 }
 
 export type ApprovalDecision =
-  | { allowed: true; viaDelegation: boolean }
+  | { allowed: true; viaDelegation: boolean; onBehalfOf?: string | null }
   | { allowed: false; code: string; reason: string };
+
+/**
+ * Whether a project the delegate would be deciding for is one the principal
+ * whose authority they are borrowing could themselves access.
+ *
+ * Only meaningful for a role-based step (fix round 1, I2): a named-approver
+ * step already ties one specific person to one specific instance when the
+ * ladder is drawn, so there is nothing for a delegate to over-reach into.
+ * "Any PROJECT_MANAGER" carries no such instance-specific tie, so without
+ * this a delegate with a broader scope than their principal could use a
+ * borrowed role to decide a project the principal never managed. Absent
+ * `projectId` (an org-wide document) or `fromUserScope` (not supplied by an
+ * older caller), this is permissive by design -- both mean "nothing to
+ * narrow by".
+ */
+function principalCanReachProject(
+  projectId: string | null | undefined, scope: Delegation['fromUserScope'],
+): boolean {
+  if (!projectId) return true;
+  if (!scope) return true;
+  return scope.global || scope.projects.includes(projectId);
+}
+
+/** Who has already decided an earlier level of this instance. */
+function priorDeciderIdentities(steps: ApprovalStep[], beforeSequence: number): Set<string> {
+  const ids = new Set<string>();
+  for (const s of steps) {
+    if (s.sequence >= beforeSequence) continue;
+    if (s.status !== 'APPROVED' && s.status !== 'REJECTED') continue; // a skipped step decided nothing
+    if (s.actedByUserId) ids.add(s.actedByUserId);
+    if (s.actedOnBehalfOf) ids.add(s.actedOnBehalfOf);
+  }
+  return ids;
+}
+
+function resolveEligibility(args: {
+  step: ApprovalStep;
+  actorUserId: string;
+  actorRoles: string[];
+  delegations?: Delegation[];
+  documentType: ApprovalDocumentType;
+  today: string;
+  projectId?: string | null;
+}): ApprovalDecision {
+  const { step, actorUserId, actorRoles, documentType, today, projectId } = args;
+  if (step.approverUserId) {
+    const permitted = effectiveApprovers(step.approverUserId, args.delegations ?? [], documentType, today);
+    const match = permitted.find(p => p.userId === actorUserId);
+    if (!match) {
+      return { allowed: false, code: 'NOT_THE_APPROVER', reason: 'This step is assigned to somebody else' };
+    }
+    return { allowed: true, viaDelegation: match.viaDelegation, onBehalfOf: match.viaDelegation ? step.approverUserId : null };
+  }
+
+  if (step.approverRole) {
+    if (actorRoles.includes(step.approverRole)) {
+      return { allowed: true, viaDelegation: false };
+    }
+    // Nobody named holds this step -- any role holder does. So a delegate
+    // inherits it exactly as they would a named approver's step, provided
+    // the person they stand in for actually held the role (and, I2, could
+    // themselves reach this document's project): a deputy covering a PM's
+    // leave should be able to act on "any PROJECT_MANAGER" the same as they
+    // act on a step assigned to that PM by name -- but only for a project
+    // the PM they are covering for actually manages.
+    const live = (args.delegations ?? []).filter(d =>
+      !d.revokedAt && d.validFrom <= today && today <= d.validTo &&
+      (!d.documentTypes || d.documentTypes.length === 0 || d.documentTypes.includes(documentType)));
+    const viaRoleDelegation = live.find(d =>
+      d.toUserId === actorUserId && (d.fromUserRoles ?? []).includes(step.approverRole!) &&
+      principalCanReachProject(projectId, d.fromUserScope));
+    if (viaRoleDelegation) return { allowed: true, viaDelegation: true, onBehalfOf: viaRoleDelegation.fromUserId };
+    return {
+      allowed: false, code: 'NOT_THE_APPROVER',
+      reason: `This step needs the ${step.approverRole.replaceAll('_', ' ').toLowerCase()} role`,
+    };
+  }
+
+  return { allowed: false, code: 'NO_APPROVER', reason: 'This step names no approver' };
+}
 
 /**
  * Whether this actor may act on this step right now.
@@ -244,6 +347,16 @@ export type ApprovalDecision =
  * approver cannot approve their own request unless an emergency override is
  * explicitly granted and audited. The override is deliberately awkward to
  * reach — it is a permission, not a flag on the request.
+ *
+ * Segregation of duties (fix round 1, I3) is the last gate, applied to
+ * whatever eligibility resolves to: one person may decide at most one level
+ * of a given instance, whether they acted as themselves or as someone
+ * else's delegate. Checked against both identities an earlier step could
+ * carry -- who physically decided it, and whose authority they borrowed to
+ * do it -- against both identities behind the current attempt, so neither a
+ * PM who cleared their own level and then reaches for a delegated ADMIN
+ * role, nor the ADMIN's other delegate finishing what the PM started, gets
+ * two levels of the same instance between them.
  */
 export function canAct(args: {
   step: ApprovalStep | null;
@@ -255,8 +368,10 @@ export function canAct(args: {
   documentType: ApprovalDocumentType;
   today?: string;
   hasSelfApproveOverride?: boolean;
+  /** The document's project, for I2's principal-scope check on a role-based delegation. */
+  projectId?: string | null;
 }): ApprovalDecision {
-  const { step, steps, actorUserId, actorRoles, requesterUserId, documentType } = args;
+  const { step, steps, actorUserId, requesterUserId } = args;
   if (!step) return { allowed: false, code: 'NOTHING_PENDING', reason: 'There is no step waiting for a decision' };
 
   const actionable = nextActionableStep(steps);
@@ -277,26 +392,22 @@ export function canAct(args: {
   }
 
   const today = args.today ?? new Date().toISOString().slice(0, 10);
-  if (step.approverUserId) {
-    const permitted = effectiveApprovers(step.approverUserId, args.delegations ?? [], documentType, today);
-    const match = permitted.find(p => p.userId === actorUserId);
-    if (!match) {
-      return { allowed: false, code: 'NOT_THE_APPROVER', reason: 'This step is assigned to somebody else' };
-    }
-    return { allowed: true, viaDelegation: match.viaDelegation };
+  const result = resolveEligibility({
+    step, actorUserId, actorRoles: args.actorRoles, delegations: args.delegations,
+    documentType: args.documentType, today, projectId: args.projectId,
+  });
+  if (!result.allowed) return result;
+
+  const priorIdentities = priorDeciderIdentities(steps, step.sequence);
+  const currentIdentities = [actorUserId, ...(result.viaDelegation && result.onBehalfOf ? [result.onBehalfOf] : [])];
+  if (currentIdentities.some(id => priorIdentities.has(id))) {
+    return {
+      allowed: false, code: 'SEGREGATION_OF_DUTIES',
+      reason: 'The same person has already decided an earlier level of this request, directly or as a delegate',
+    };
   }
 
-  if (step.approverRole) {
-    if (!actorRoles.includes(step.approverRole)) {
-      return {
-        allowed: false, code: 'NOT_THE_APPROVER',
-        reason: `This step needs the ${step.approverRole.replaceAll('_', ' ').toLowerCase()} role`,
-      };
-    }
-    return { allowed: true, viaDelegation: false };
-  }
-
-  return { allowed: false, code: 'NO_APPROVER', reason: 'This step names no approver' };
+  return result;
 }
 
 /**

@@ -14,7 +14,10 @@ export type Row=Record<string,any>;
 export function useRows(path:string,enabled=true){const {status}=useAuth();return useQuery({queryKey:['v2',path],queryFn:async()=>{const r=await apiRequestRaw('/api/v1/'+path);const b=r.body as {data?:Row[];has_more?:boolean;next_offset?:number};return {rows:Array.isArray(b)?b:b.data??[],hasMore:b.has_more??false};},enabled:enabled&&status==='authenticated'});}
 export function Workbench({title,description,children}:{title:string;description:string;children:ReactNode}){return <AppShell><div className="mx-auto max-w-7xl space-y-6"><div><p className="text-xs font-semibold uppercase tracking-wider text-primary">Silverline operations</p><h1 className="mt-2 text-3xl font-semibold text-text">{title}</h1><p className="mt-2 max-w-3xl text-text-muted">{description}</p></div>{children}</div></AppShell>;}
 export function Panel({title,children}:{title:string;children:ReactNode}){return <section className="rounded-xl border border-border bg-surface p-5 shadow-sm"><h2 className="mb-4 text-lg font-semibold">{title}</h2>{children}</section>;}
-export function Can({permission,children}:{permission:string;children:ReactNode}){const {session}=useAuth();return session?.permissions.includes(permission)?<>{children}</>:null;}
+// `permission` takes an array for an OR-gate (fix round 1, I4): POST
+// /api/v1/invoices accepts invoice.create OR invoice.manage, and a single
+// string could not express "either of these" for the panel that posts to it.
+export function Can({permission,children}:{permission:string|string[];children:ReactNode}){const {session}=useAuth();const wanted=Array.isArray(permission)?permission:[permission];return wanted.some(p=>session?.permissions.includes(p))?<>{children}</>:null;}
 export interface Field {
  key:string;label:string;
  type?:'text'|'date'|'number'|'password'|'email'|'checkbox'|'textarea'|'select'|'multi_select'|'employee'|'user';

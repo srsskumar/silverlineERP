@@ -152,6 +152,26 @@ describe('ApprovalPolicyForm', () => {
     // role code — never free text.
     expect(options.every((v) => v === '' || /^[A-Z][A-Z_]*$/.test(v))).toBe(true);
   });
+
+  it('refuses the same named approver at two levels before the round trip (fix round 2, item 2(a))', async () => {
+    mount(<ApprovalPolicyForm onClose={vi.fn()} onSaved={vi.fn()} />);
+
+    fireEvent.change(await screen.findByLabelText(/^Name/), { target: { value: 'Same approver twice' } });
+    fireEvent.change(screen.getByPlaceholderText('Min amount'), { target: { value: '0' } });
+    fireEvent.change(screen.getByPlaceholderText('Approver user ID (optional)'),
+      { target: { value: '11111111-1111-1111-1111-111111111111' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add level' }));
+    const minAmounts = screen.getAllByPlaceholderText('Min amount');
+    fireEvent.change(minAmounts[1], { target: { value: '50000' } });
+    const approvers = screen.getAllByPlaceholderText('Approver user ID (optional)');
+    fireEvent.change(approvers[1], { target: { value: '11111111-1111-1111-1111-111111111111' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save policy' }));
+
+    expect(await screen.findByText(/The same person can never decide two levels/)).toBeInTheDocument();
+    expect(sent).toHaveLength(0);
+  });
 });
 
 describe('fix round 1 item 5 — editing a policy locks document type and project', () => {
@@ -215,6 +235,51 @@ describe('ApprovalPoliciesManager deactivate', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Deactivate' }));
     expect(sent).toHaveLength(0);
+  });
+});
+
+describe('warns before deactivating the last active policy for a document type (owner decision 2026-09-24)', () => {
+  it('names the document type and the NO_APPROVAL_POLICY consequence when it is the only active one', async () => {
+    handlers['GET /api/v1/approval-policies'] = () => jsonResponse({
+      data: [{
+        id: 'policy-9', document_type: 'PURCHASE_REQUISITION', name: 'Org default -- Purchase Requisition',
+        mode: 'CUMULATIVE', project_id: null, active: true, version: 1, levels: [{ sequence: 1 }],
+      }],
+    });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+    mount(<ApprovalPoliciesManager />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Deactivate' }));
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    const message = confirmSpy.mock.calls[0][0] as string;
+    expect(message).toContain('only active policy');
+    expect(message).toContain('Requisition');
+  });
+
+  it('uses the ordinary message when another active policy still covers the document type', async () => {
+    handlers['GET /api/v1/approval-policies'] = () => jsonResponse({
+      data: [
+        {
+          id: 'policy-org', document_type: 'PURCHASE_REQUISITION', name: 'Org default -- Purchase Requisition',
+          mode: 'CUMULATIVE', project_id: null, active: true, version: 1, levels: [{ sequence: 1 }],
+        },
+        {
+          id: 'policy-project', document_type: 'PURCHASE_REQUISITION', name: 'Site 7 ladder',
+          mode: 'CUMULATIVE', project_id: 'proj-7', active: true, version: 1, levels: [{ sequence: 1 }],
+        },
+      ],
+    });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+    mount(<ApprovalPoliciesManager />);
+
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Deactivate' }))[0]);
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    const message = confirmSpy.mock.calls[0][0] as string;
+    expect(message).not.toContain('only active policy');
   });
 });
 

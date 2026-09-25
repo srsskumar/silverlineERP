@@ -72,16 +72,30 @@ async function makePayment(amount: number, over: Record<string, unknown> = {}) {
 
 /** A certified RA bill whose net payable is `amount`. */
 async function makeCertifiedBill(amount: number): Promise<string> {
+  return makeRaBill(amount, "CERTIFIED");
+}
+
+/**
+ * An RA bill of `amount` in the given lifecycle status (owner decision
+ * 2026-09-24: receipts may be allocated before certification).
+ */
+async function makeRaBill(amount: number, status: string): Promise<string> {
   const ws = await w.pool.query("SELECT id FROM workspaces WHERE org_id=$1 LIMIT 1", [w.orgId]);
   const project = await w.pool.query(
     `INSERT INTO projects(org_id, workspace_id, code, name, status)
      VALUES($1,$2,$3,'Receipt project','ACTIVE') RETURNING id`,
     [w.orgId, ws.rows[0].id, uniq("PRJ")]);
+  const certified = status === "CERTIFIED" || status === "PAID";
+  const certifiedAt = certified ? new Date() : null;
+  const certifiedBy = certified ? w.adminId : null;
+  const certifiedAmount = certified ? amount : null;
+  const cancelledReason = status === "CANCELLED" ? "test cancel" : null;
   const bill = await w.pool.query(
     `INSERT INTO ra_bills(org_id, project_id, bill_no, period_from, period_to, gross_value,
-       net_payable, status, certified_at, certified_by, certified_amount)
-     VALUES($1,$2,1,'2026-08-01','2026-08-31',$3,$3,'CERTIFIED',now(),$4,$3) RETURNING id`,
-    [w.orgId, project.rows[0].id, amount, w.adminId]);
+       net_payable, status, certified_at, certified_by, certified_amount, cancelled_reason)
+     VALUES($1,$2,1,'2026-08-01','2026-08-31',$3,$3,$4,$5,$6,$7,$8)
+     RETURNING id`,
+    [w.orgId, project.rows[0].id, amount, status, certifiedAt, certifiedBy, certifiedAmount, cancelledReason]);
   return String(bill.rows[0].id);
 }
 
@@ -239,6 +253,31 @@ describe("payment allocation", () => {
     expect(cash.status, JSON.stringify(cash.body)).toBe(201);
     const s = await get(w.admin, `/api/v1/documents/ra-bill/${bill}/settlement`);
     expect(s.data.outstanding).toBe(0);
+  });
+
+  it("allocates a receipt to an RA bill that is submitted, certified or paid (owner decision 2026-09-24)", async () => {
+    // A client may pay before the engineer certifies. Refusing the receipt
+    // until certification forced the cash to sit unallocated for no reason.
+    for (const status of ["SUBMITTED", "CERTIFIED", "PAID"] as const) {
+      const bill = await makeRaBill(1000, status);
+      const payment = await makePayment(1000, { direction: "RECEIVABLE" });
+      const res = await post(w.admin, `/api/v1/payments/${payment.id}/allocations`, {
+        document_type: "RA_BILL", document_id: bill, amount: 1000,
+      });
+      expect(res.status, `${status}: ${JSON.stringify(res.body)}`).toBe(201);
+    }
+  });
+
+  it("still refuses a receipt against a draft or cancelled RA bill, with the stable code", async () => {
+    for (const status of ["DRAFT", "CANCELLED"] as const) {
+      const bill = await makeRaBill(1000, status);
+      const payment = await makePayment(1000, { direction: "RECEIVABLE" });
+      const res = await post(w.admin, `/api/v1/payments/${payment.id}/allocations`, {
+        document_type: "RA_BILL", document_id: bill, amount: 1000,
+      });
+      expect(res.status, `${status}: ${JSON.stringify(res.body)}`).toBe(422);
+      expect(res.body.code, status).toBe("DOCUMENT_NOT_PAYABLE");
+    }
   });
 
   it("does not let two receipts settle the same bill at once", async () => {

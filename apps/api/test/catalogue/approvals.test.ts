@@ -9,7 +9,11 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { workDate, buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { workDate, buildWorld, idem, uniq, createUser, PASSWORD, type CatalogueWorld, type Headers } from "./fixture.js";
+import { seedDatabase } from "../../src/database/seed.js";
 
 let w: CatalogueWorld;
 
@@ -83,6 +87,200 @@ describe("policy configuration", () => {
     const res = await submit(1000, "RETENTION_RELEASE");
     expect(res.status).toBe(422);
     expect(res.body.code).toBe("NO_APPROVAL_POLICY");
+  });
+
+  describe("refuses a ladder that could never clear (fix round 2, item 2(a))", () => {
+    it("refuses the same named approver at two levels", async () => {
+      const res = await post(w.admin, "/api/v1/approval-policies", {
+        document_type: "EXPENSE_CLAIM", name: `Same approver twice ${uniq()}`,
+        levels: [
+          { sequence: 1, min_amount: 0, max_amount: 50_000, approver_user_id: w.roleUserId.PROJECT_MANAGER },
+          { sequence: 2, min_amount: 50_000, max_amount: null, approver_user_id: w.roleUserId.PROJECT_MANAGER },
+        ],
+      });
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe("LADDER_UNRESOLVABLE");
+      expect(res.body.message).toContain("levels 1 and 2");
+    });
+
+    it("refuses a role at two levels when the organisation has only one holder of it", async () => {
+      // This fixture creates exactly one ADMIN-role user.
+      const res = await post(w.admin, "/api/v1/approval-policies", {
+        document_type: "EXPENSE_CLAIM", name: `Only one admin ${uniq()}`,
+        levels: [
+          { sequence: 1, min_amount: 0, max_amount: 50_000, approver_role: "ADMIN" },
+          { sequence: 2, min_amount: 50_000, max_amount: null, approver_role: "ADMIN" },
+        ],
+      });
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe("LADDER_UNRESOLVABLE");
+      expect(res.body.message).toContain("levels 1 and 2");
+    });
+
+    it("allows a role at two levels once a second holder exists", async () => {
+      await createUser(w.pool, w.orgId, { username: `cat_second_admin_${uniq()}`, roles: ["ADMIN"] });
+      const res = await post(w.admin, "/api/v1/approval-policies", {
+        document_type: "EXPENSE_CLAIM", name: `Two admins ${uniq()}`,
+        levels: [
+          { sequence: 1, min_amount: 0, max_amount: 50_000, approver_role: "ADMIN" },
+          { sequence: 2, min_amount: 50_000, max_amount: null, approver_role: "ADMIN" },
+        ],
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+    });
+
+    it("leaves two different named approvers, or two different roles, alone", async () => {
+      const res = await post(w.admin, "/api/v1/approval-policies", {
+        document_type: "EXPENSE_CLAIM", name: `Different people ${uniq()}`,
+        levels: [
+          { sequence: 1, min_amount: 0, max_amount: 50_000, approver_role: "TEAM_LEAD" },
+          { sequence: 2, min_amount: 50_000, max_amount: null, approver_user_id: w.roleUserId.PROJECT_MANAGER },
+        ],
+      });
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+    });
+  });
+});
+
+describe("organisation-wide fallback approval ladders (owner decision 2026-09-24)", () => {
+  // Placed before any describe below touches PURCHASE_ORDER or
+  // PURCHASE_REQUISITION, so these run against exactly what seedDatabase()
+  // left behind: nothing configured through the API, only the org-wide
+  // default migration 101 (and seed.ts, for a brand new org) backfills.
+
+  it("a fresh DB has the fallback for both document types, one ADMIN step, no amount band", async () => {
+    const rows = await w.pool.query(
+      `SELECT p.document_type, l.approver_role, l.min_amount, l.max_amount
+         FROM approval_policies p JOIN approval_levels l ON l.policy_id = p.id
+        WHERE p.org_id = $1 AND p.active AND p.project_id IS NULL
+          AND p.document_type IN ('PURCHASE_REQUISITION', 'PURCHASE_ORDER')
+        ORDER BY p.document_type`, [w.orgId]);
+    expect(rows.rows.map(r => r.document_type)).toEqual(["PURCHASE_ORDER", "PURCHASE_REQUISITION"]);
+    for (const row of rows.rows) {
+      expect(row.approver_role, JSON.stringify(row)).toBe("ADMIN");
+      expect(Number(row.min_amount)).toBe(0);
+      expect(row.max_amount).toBeNull();
+    }
+  });
+
+  it("routes a project-less requisition to the seeded org-wide ADMIN ladder", async () => {
+    const res = await submit(50_000, "PURCHASE_REQUISITION", w.role.EMPLOYEE);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const steps = await w.pool.query(
+      "SELECT approver_role FROM approval_steps WHERE instance_id=$1", [res.data.id]);
+    expect(steps.rows.map(r => r.approver_role)).toEqual(["ADMIN"]);
+  });
+
+  it("a project with its own policy still uses it, not the org-wide fallback", async () => {
+    const own = await post(w.admin, "/api/v1/approval-policies", {
+      document_type: "PURCHASE_REQUISITION", name: `Project ladder ${uniq()}`,
+      project_id: w.activeProject,
+      levels: [{ sequence: 1, min_amount: 0, max_amount: null, approver_role: "PROJECT_MANAGER" }],
+    });
+    expect(own.status, JSON.stringify(own.body)).toBe(201);
+
+    const withProject = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_REQUISITION", document_id: randomUUID(), amount: 50_000,
+      project_id: w.activeProject,
+    });
+    expect(withProject.status, JSON.stringify(withProject.body)).toBe(201);
+    const projectSteps = await w.pool.query(
+      "SELECT approver_role FROM approval_steps WHERE instance_id=$1", [withProject.data.id]);
+    expect(projectSteps.rows.map(r => r.approver_role)).toEqual(["PROJECT_MANAGER"]);
+
+    // A different, project-less requisition still falls back to org-wide.
+    const orgWide = await submit(50_000, "PURCHASE_REQUISITION", w.role.EMPLOYEE);
+    expect(orgWide.status, JSON.stringify(orgWide.body)).toBe(201);
+    const orgSteps = await w.pool.query(
+      "SELECT approver_role FROM approval_steps WHERE instance_id=$1", [orgWide.data.id]);
+    expect(orgSteps.rows.map(r => r.approver_role)).toEqual(["ADMIN"]);
+  });
+
+  it("running migration 101 a second time creates no duplicate fallback policies", async () => {
+    const count = async () => {
+      const r = await w.pool.query(
+        `SELECT count(*)::int AS n FROM approval_policies
+          WHERE org_id = $1 AND active AND project_id IS NULL
+            AND document_type IN ('PURCHASE_REQUISITION', 'PURCHASE_ORDER')`, [w.orgId]);
+      return r.rows[0].n as number;
+    };
+    const before = await count();
+    const sql = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)),
+        "../../src/database/migrations/101_org_fallback_approval_policies.sql"),
+      "utf8");
+    await w.pool.query(sql);
+    await w.pool.query(sql);
+    expect(await count()).toBe(before);
+  });
+
+  it("keeps the fallback scoped to its own organisation (cross-org isolation)", async () => {
+    // The catalogue's test database is shared across every suite file in the
+    // worker, and `organizations` is never truncated between them, so this
+    // cannot assert "the other org has no policy of its own" as a given.
+    // Instead it is made certain, deterministically: give the other tenant
+    // its own active org-wide PURCHASE_REQUISITION ladder and switch this
+    // org's off. If policy lookup ever crossed the org boundary -- the
+    // `WHERE org_id = $1` in policyFor()/submitForApproval() -- this org's
+    // submission would silently route through the other tenant's ladder
+    // instead of refusing.
+    await w.pool.query(
+      `UPDATE approval_policies SET active = false
+        WHERE org_id = $1 AND document_type = 'PURCHASE_REQUISITION' AND active AND project_id IS NULL`,
+      [w.otherOrgId]);
+    const otherPolicy = await w.pool.query(
+      `INSERT INTO approval_policies(org_id, document_type, name, mode, project_id, active)
+       VALUES($1, 'PURCHASE_REQUISITION', 'Other org ladder', 'CUMULATIVE', NULL, true) RETURNING id`,
+      [w.otherOrgId]);
+    await w.pool.query(
+      `INSERT INTO approval_levels(org_id, policy_id, sequence, min_amount, max_amount, approver_role)
+       VALUES($1, $2, 1, 0, NULL, 'ADMIN')`,
+      [w.otherOrgId, otherPolicy.rows[0].id]);
+
+    await w.pool.query(
+      `UPDATE approval_policies SET active = false
+        WHERE org_id = $1 AND document_type = 'PURCHASE_REQUISITION' AND active AND project_id IS NULL`,
+      [w.orgId]);
+
+    const res = await submit(50_000, "PURCHASE_REQUISITION", w.role.EMPLOYEE);
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("NO_APPROVAL_POLICY");
+  });
+
+  it("does not resurrect a fallback an administrator deliberately deactivated (fix round 1, minor)", async () => {
+    // The previous test left w.orgId's PURCHASE_REQUISITION org-wide
+    // fallback row deactivated but still in the table -- exactly the state
+    // "Deactivate" in the web admin screen leaves behind. Re-seeding must
+    // see that row and skip, not read "no *active* policy" as "none was
+    // ever configured" and insert a fresh one on top of the deliberate
+    // deactivation.
+    const before = await w.pool.query(
+      `SELECT count(*)::int AS n FROM approval_policies
+        WHERE org_id = $1 AND document_type = 'PURCHASE_REQUISITION' AND project_id IS NULL`,
+      [w.orgId]);
+    expect(before.rows[0].n).toBeGreaterThan(0); // the deactivated row from the previous test
+
+    await seedDatabase(w.pool, { bcryptRounds: 4 });
+
+    const after = await w.pool.query(
+      `SELECT active FROM approval_policies
+        WHERE org_id = $1 AND document_type = 'PURCHASE_REQUISITION' AND project_id IS NULL
+        ORDER BY created_at`,
+      [w.orgId]);
+    expect(after.rows.every(r => r.active === false), JSON.stringify(after.rows)).toBe(true);
+
+    // Still refused -- the deactivation held.
+    const res = await submit(50_000, "PURCHASE_REQUISITION", w.role.EMPLOYEE);
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("NO_APPROVAL_POLICY");
+
+    // PURCHASE_ORDER's own fallback, never touched, is unaffected by the
+    // re-seed either way -- this isn't a blanket skip of the whole loop.
+    const poFallback = await w.pool.query(
+      `SELECT 1 FROM approval_policies
+        WHERE org_id = $1 AND document_type = 'PURCHASE_ORDER' AND active AND project_id IS NULL`,
+      [w.orgId]);
+    expect(poFallback.rowCount).toBeGreaterThan(0);
   });
 });
 
@@ -344,6 +542,65 @@ describe("delegation", () => {
     expect(step.rows[0].acted_on_behalf_of).toBe(w.roleUserId.PROJECT_MANAGER);
   });
 
+  it("lets a delegate act on a role-based step, not only one naming them by user id (owner decision 2026-09-24)", async () => {
+    // ladderPolicy()'s level 2 is "any PROJECT_MANAGER", not a named user.
+    // HR_MANAGER holds no such role directly -- only through the PM's own
+    // delegation, the same cover a PM on leave would set up for level 1's
+    // named case above. A different physical person from whoever clears
+    // level 1 (fix round 1, I3's segregation of duties otherwise refuses
+    // the same person a second level of the same instance), and a role not
+    // otherwise paired with PROJECT_MANAGER or ADMIN elsewhere in this file
+    // (the delegation created here is never revoked, so it outlives the
+    // test -- pairing it with either would collide with the cycle checks
+    // further down).
+    const today = workDate();
+    const delegation = await post(w.role.PROJECT_MANAGER, "/api/v1/approval-delegations", {
+      to_user_id: w.roleUserId.HR_MANAGER, valid_from: today, valid_to: today, reason: "Covering for the PM",
+    });
+    expect(delegation.status, JSON.stringify(delegation.body)).toBe(201);
+
+    const res = await submit(100_000); // level 1: TEAM_LEAD, level 2: PROJECT_MANAGER
+    const level1 = await post({ ...w.role.TEAM_LEAD, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(level1.status, JSON.stringify(level1.body)).toBe(200);
+
+    const level2 = await post({ ...w.role.HR_MANAGER, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(level2.status, JSON.stringify(level2.body)).toBe(200);
+    expect(level2.data.status).toBe("APPROVED");
+
+    const steps = await w.pool.query(
+      "SELECT sequence, acted_by, acted_on_behalf_of FROM approval_steps WHERE instance_id=$1 ORDER BY sequence",
+      [res.data.id]);
+    expect(steps.rows[1].acted_by).toBe(w.roleUserId.HR_MANAGER);
+    // The audit shows whose role-based authority HR_MANAGER acted under.
+    expect(steps.rows[1].acted_on_behalf_of).toBe(w.roleUserId.PROJECT_MANAGER);
+  });
+
+  it("still blocks a delegate from approving their own document even on a role-based step", async () => {
+    const today = workDate();
+    const delegation = await post(w.role.PROJECT_MANAGER, "/api/v1/approval-delegations", {
+      to_user_id: w.roleUserId.TEAM_LEAD, valid_from: today, valid_to: today, reason: "Covering for the PM",
+    });
+    expect(delegation.status, JSON.stringify(delegation.body)).toBe(201);
+
+    // A single-level, PROJECT_MANAGER-only policy: TEAM_LEAD is eligible
+    // here only through the delegation above, never by their own role.
+    const policy = await post(w.admin, "/api/v1/approval-policies", {
+      document_type: "ADVANCE", name: `Role-only self-approval check ${uniq()}`,
+      levels: [{ sequence: 1, min_amount: 0, max_amount: null, approver_role: "PROJECT_MANAGER" }],
+    });
+    expect(policy.status, JSON.stringify(policy.body)).toBe(201);
+
+    const res = await submit(5_000, "ADVANCE", w.role.TEAM_LEAD); // TEAM_LEAD raises their own advance
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+
+    const decision = await post({ ...w.role.TEAM_LEAD, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(decision.status).toBe(403);
+    expect(decision.body.code).toBe("SELF_APPROVAL");
+  });
+
   it("refuses a delegation that would close a cycle", async () => {
     // Both roles hold approval.delegate — delegating authority is a narrower
     // grant than exercising it, so most approvers cannot delegate at all.
@@ -395,6 +652,101 @@ describe("delegation", () => {
       `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
     expect(decision.status).toBe(422);
     expect(decision.body.code).toBe("NOT_THE_APPROVER");
+  });
+});
+
+describe("segregation of duties (fix round 1, I3)", () => {
+  it("a PM at L1 who is also an ADMIN delegate can't approve L2", async () => {
+    const policy = await post(w.admin, "/api/v1/approval-policies", {
+      document_type: "ADVANCE", name: `PM then ADMIN ${uniq()}`,
+      levels: [
+        { sequence: 1, min_amount: 0, max_amount: 500_000, approver_role: "PROJECT_MANAGER" },
+        { sequence: 2, min_amount: 500_000, max_amount: null, approver_role: "ADMIN" },
+      ],
+    });
+    expect(policy.status, JSON.stringify(policy.body)).toBe(201);
+
+    const today = workDate();
+    const delegation = await post(w.role.ADMIN, "/api/v1/approval-delegations", {
+      to_user_id: w.roleUserId.PROJECT_MANAGER, valid_from: today, valid_to: today, reason: "Covering for admin",
+    });
+    expect(delegation.status, JSON.stringify(delegation.body)).toBe(201);
+
+    const res = await submit(600_000, "ADVANCE", w.role.EMPLOYEE);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+
+    const level1 = await post({ ...w.role.PROJECT_MANAGER, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(level1.status, JSON.stringify(level1.body)).toBe(200);
+
+    // Same physical person, now reaching for L2 only through the ADMIN
+    // delegation -- must still be refused.
+    const level2 = await post({ ...w.role.PROJECT_MANAGER, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(level2.status, JSON.stringify(level2.body)).toBe(422);
+    expect(level2.body.code).toBe("SEGREGATION_OF_DUTIES");
+    expect(level2.body.message).toContain("administrator");
+    expect(level2.body.message).toContain("PM then ADMIN");
+  });
+
+  it("keeps a segregation-blocked item out of the inbox of whoever it would refuse (fix round 2, item 2(c))", async () => {
+    const policy = await post(w.admin, "/api/v1/approval-policies", {
+      document_type: "ADVANCE", name: `PM then ADMIN ${uniq()}`,
+      levels: [
+        { sequence: 1, min_amount: 0, max_amount: 500_000, approver_role: "PROJECT_MANAGER" },
+        { sequence: 2, min_amount: 500_000, max_amount: null, approver_role: "ADMIN" },
+      ],
+    });
+    expect(policy.status, JSON.stringify(policy.body)).toBe(201);
+
+    const today = workDate();
+    const delegation = await post(w.role.ADMIN, "/api/v1/approval-delegations", {
+      to_user_id: w.roleUserId.PROJECT_MANAGER, valid_from: today, valid_to: today, reason: "Covering for admin",
+    });
+    expect(delegation.status, JSON.stringify(delegation.body)).toBe(201);
+
+    const res = await submit(600_000, "ADVANCE", w.role.EMPLOYEE);
+    const level1 = await post({ ...w.role.PROJECT_MANAGER, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(level1.status, JSON.stringify(level1.body)).toBe(200);
+
+    // PM cleared level 1; level 2 is now pending and PM's ADMIN delegation
+    // would otherwise make it look actionable to them -- but canAct() would
+    // refuse it (SEGREGATION_OF_DUTIES), so it must not be in their inbox.
+    const pmInbox = await get(w.role.PROJECT_MANAGER, "/api/v1/approvals/inbox");
+    expect(pmInbox.status, JSON.stringify(pmInbox.body)).toBe(200);
+    expect(pmInbox.data.some((r: any) => r.id === res.data.id)).toBe(false);
+
+    // The real ADMIN still sees it.
+    const adminInbox = await get(w.role.ADMIN, "/api/v1/approvals/inbox");
+    expect(adminInbox.data.some((r: any) => r.id === res.data.id)).toBe(true);
+  });
+
+  it("still lets the real ADMIN, or another of its delegates, decide L2", async () => {
+    const policy = await post(w.admin, "/api/v1/approval-policies", {
+      document_type: "ADVANCE", name: `PM then ADMIN ${uniq()}`,
+      levels: [
+        { sequence: 1, min_amount: 0, max_amount: 500_000, approver_role: "PROJECT_MANAGER" },
+        { sequence: 2, min_amount: 500_000, max_amount: null, approver_role: "ADMIN" },
+      ],
+    });
+    expect(policy.status, JSON.stringify(policy.body)).toBe(201);
+
+    const res = await submit(600_000, "ADVANCE", w.role.EMPLOYEE);
+    const level1 = await post({ ...w.role.PROJECT_MANAGER, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(level1.status, JSON.stringify(level1.body)).toBe(200);
+
+    const level2 = await post({ ...w.role.ADMIN, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
+    expect(level2.status, JSON.stringify(level2.body)).toBe(200);
+
+    const steps = await w.pool.query(
+      "SELECT sequence, acted_by, acted_on_behalf_of FROM approval_steps WHERE instance_id=$1 ORDER BY sequence",
+      [res.data.id]);
+    expect(steps.rows[0].acted_by).toBe(w.roleUserId.PROJECT_MANAGER);
+    expect(steps.rows[1].acted_by).toBe(w.roleUserId.ADMIN);
+    expect(steps.rows[1].acted_on_behalf_of).toBeNull();
   });
 });
 
@@ -452,6 +804,137 @@ describe("recall and visibility", () => {
     const res = await submit(600_000, "PURCHASE_ORDER", w.role.EMPLOYEE);
     const inbox = await get(w.role.ADMIN, "/api/v1/approvals/inbox");
     expect(inbox.data.some((r: any) => r.id === res.data.id)).toBe(false);
+  });
+});
+
+describe("inbox project scope (owner decision 2026-09-24)", () => {
+  beforeAll(async () => { await ladderPolicy(); }); // level 1: TEAM_LEAD, level 2: PROJECT_MANAGER
+
+  async function loginAs(username: string, password: string): Promise<Headers> {
+    const res = await w.app.inject({
+      method: "POST", url: "/api/v1/auth/login", payload: { username, password },
+    });
+    const body = res.json() as { access_token?: string };
+    return { authorization: `Bearer ${body.access_token}` };
+  }
+
+  /** A fresh PROJECT_MANAGER whose own scope is one project, not the organisation. */
+  async function scopedProjectManager(projectId: string): Promise<Headers & { userId: string }> {
+    const username = `cat_scoped_pm_${uniq()}`;
+    const userId = await createUser(w.pool, w.orgId, { username, roles: ["PROJECT_MANAGER"] });
+    await w.pool.query(
+      "UPDATE user_roles SET scope_type = 'project', scope_id = $1 WHERE user_id = $2",
+      [projectId, userId]);
+    const headers = await loginAs(username, PASSWORD);
+    return { ...headers, userId };
+  }
+
+  /** Clears level 1 (TEAM_LEAD, global scope) so the instance waits at level 2 (PROJECT_MANAGER). */
+  async function toLevel2(instanceId: string) {
+    const cleared = await post({ ...w.role.TEAM_LEAD, ...(await instanceVersion(instanceId)) },
+      `/api/v1/approvals/${instanceId}/decision`, { decision: "APPROVE" });
+    expect(cleared.status, JSON.stringify(cleared.body)).toBe(200);
+  }
+
+  it("shows a project-scoped approver their own project's items and org-wide ones, not another project's", async () => {
+    const mine = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_ORDER", document_id: randomUUID(), amount: 100_000, project_id: w.activeProject,
+    });
+    expect(mine.status, JSON.stringify(mine.body)).toBe(201);
+    await toLevel2(mine.data.id);
+
+    const someoneElses = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_ORDER", document_id: randomUUID(), amount: 100_000, project_id: w.inactiveProject,
+    });
+    expect(someoneElses.status, JSON.stringify(someoneElses.body)).toBe(201);
+    await toLevel2(someoneElses.data.id);
+
+    const orgWide = await submit(100_000); // no project_id at all
+    await toLevel2(orgWide.data.id);
+
+    const scoped = await scopedProjectManager(w.activeProject);
+    const inbox = await get(scoped, "/api/v1/approvals/inbox");
+    expect(inbox.status, JSON.stringify(inbox.body)).toBe(200);
+    const ids = inbox.data.map((r: any) => r.id);
+    expect(ids).toContain(mine.data.id);
+    expect(ids).toContain(orgWide.data.id);
+    expect(ids).not.toContain(someoneElses.data.id);
+  });
+
+  it("refuses to decide an out-of-scope document by id, matching the inbox (owner decision 2026-09-24, fix round 1, I1)", async () => {
+    const mine = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_ORDER", document_id: randomUUID(), amount: 100_000, project_id: w.activeProject,
+    });
+    await toLevel2(mine.data.id);
+    const someoneElses = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_ORDER", document_id: randomUUID(), amount: 100_000, project_id: w.inactiveProject,
+    });
+    await toLevel2(someoneElses.data.id);
+
+    const scoped = await scopedProjectManager(w.activeProject);
+    const blocked = await post({ ...scoped, ...(await instanceVersion(someoneElses.data.id)) },
+      `/api/v1/approvals/${someoneElses.data.id}/decision`, { decision: "APPROVE" });
+    expect(blocked.status, JSON.stringify(blocked.body)).toBe(403);
+    expect(blocked.body.code).toBe("FORBIDDEN");
+
+    // Still free to decide their own project's item.
+    const allowed = await post({ ...scoped, ...(await instanceVersion(mine.data.id)) },
+      `/api/v1/approvals/${mine.data.id}/decision`, { decision: "APPROVE" });
+    expect(allowed.status, JSON.stringify(allowed.body)).toBe(200);
+  });
+
+  it("still shows a globally-scoped approver items from every project", async () => {
+    const a = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_ORDER", document_id: randomUUID(), amount: 100_000, project_id: w.activeProject,
+    });
+    expect(a.status, JSON.stringify(a.body)).toBe(201);
+    await toLevel2(a.data.id);
+    const b = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_ORDER", document_id: randomUUID(), amount: 100_000, project_id: w.inactiveProject,
+    });
+    expect(b.status, JSON.stringify(b.body)).toBe(201);
+    await toLevel2(b.data.id);
+
+    // The seeded per-role fixture users hold a null (global) scope.
+    const inbox = await get(w.role.PROJECT_MANAGER, "/api/v1/approvals/inbox");
+    const ids = inbox.data.map((r: any) => r.id);
+    expect(ids).toContain(a.data.id);
+    expect(ids).toContain(b.data.id);
+  });
+
+  it("a role-based delegate carries the principal's project scope, not their own (fix round 1, I2)", async () => {
+    // ADMIN (globally scoped) holds no PROJECT_MANAGER role of its own, so
+    // its only route onto a PROJECT_MANAGER-role step is standing in for
+    // the scoped principal below -- and only for a project that principal
+    // actually manages.
+    const principal = await scopedProjectManager(w.activeProject);
+    const today = workDate();
+    const delegation = await post(principal, "/api/v1/approval-delegations", {
+      to_user_id: w.roleUserId.ADMIN, valid_from: today, valid_to: today, reason: "Covering for the scoped PM",
+    });
+    expect(delegation.status, JSON.stringify(delegation.body)).toBe(201);
+
+    const inScope = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_ORDER", document_id: randomUUID(), amount: 100_000, project_id: w.activeProject,
+    });
+    await toLevel2(inScope.data.id);
+    const outOfScope = await post(w.role.EMPLOYEE, "/api/v1/approvals", {
+      document_type: "PURCHASE_ORDER", document_id: randomUUID(), amount: 100_000, project_id: w.inactiveProject,
+    });
+    await toLevel2(outOfScope.data.id);
+
+    const allowed = await post({ ...w.role.ADMIN, ...(await instanceVersion(inScope.data.id)) },
+      `/api/v1/approvals/${inScope.data.id}/decision`, { decision: "APPROVE" });
+    expect(allowed.status, JSON.stringify(allowed.body)).toBe(200);
+
+    // ADMIN itself is globally scoped (fix round 1, I1's own check would let
+    // it through); only I2's principal-scope check inside canAct refuses
+    // this one, because the *principal* -- not the delegate -- cannot reach
+    // w.inactiveProject.
+    const blocked = await post({ ...w.role.ADMIN, ...(await instanceVersion(outOfScope.data.id)) },
+      `/api/v1/approvals/${outOfScope.data.id}/decision`, { decision: "APPROVE" });
+    expect(blocked.status, JSON.stringify(blocked.body)).toBe(422);
+    expect(blocked.body.code).toBe("NOT_THE_APPROVER");
   });
 });
 

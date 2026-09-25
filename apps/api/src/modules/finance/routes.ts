@@ -65,15 +65,26 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
     const forUpdate = lock ? ' FOR UPDATE' : '';
     if (type === 'RA_BILL') {
       const row = (await db.query(
-        `SELECT certified_amount, gross_value, status FROM ra_bills WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
+        `SELECT certified_amount, gross_value, net_payable, status FROM ra_bills WHERE id = $1 AND org_id = $2${forUpdate}`, [id, orgId])).rows[0];
       if (!row) fail('NOT_FOUND', 'RA bill not found', 404);
-      // Only a certified bill is a receivable (D-008). A draft one is still a
-      // measurement: receipting it at its gross leaves money allocated to a
-      // figure the client may certify lower, or cancel.
+      // A submitted, certified or paid bill is a receivable (owner decision
+      // 2026-09-24): a client may pay before the engineer certifies, and the
+      // receipt should not have to wait on that. A draft one is still a
+      // measurement with no claim behind it yet, and a cancelled one never
+      // owed anything -- both stay refused, under the same stable code.
+      const certifiedOrPaid = ['CERTIFIED', 'PAID'].includes(String(row.status));
+      // Before certification the claim is net_payable -- gross less the
+      // TDS/retention the bill already carries at raise time -- not the raw
+      // gross_value (fix round 1, C1). Capping at gross let a SUBMITTED
+      // bill's allocation exceed what certification could ever confirm as
+      // payable, even before a client certifies a lower figure still.
+      const invoiced = certifiedOrPaid
+        ? Number(row.certified_amount ?? row.gross_value)
+        : Number(row.net_payable ?? row.gross_value);
       return {
-        invoiced: Number(row.certified_amount ?? row.gross_value), dueDate: null,
-        notPayable: ['CERTIFIED', 'PAID'].includes(String(row.status)) ? undefined
-          : `This RA bill is ${String(row.status).toLowerCase()}. Only a certified bill can take a receipt.`,
+        invoiced, dueDate: null,
+        notPayable: ['SUBMITTED', 'CERTIFIED', 'PAID'].includes(String(row.status)) ? undefined
+          : `This RA bill is ${String(row.status).toLowerCase()}. A submitted, certified or paid bill can take a receipt.`,
       };
     }
     if (type === 'VENDOR_INVOICE') {

@@ -1198,6 +1198,26 @@ export const approvalPolicySchema = z
     if (!check.valid) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: check.problem!, path: ['levels'] });
     }
+    // Fix round 2, item 2(a): the same named approver at two levels is
+    // always the same person -- segregation of duties (I3) refuses them a
+    // second level unconditionally, so this ladder could never clear. Caught
+    // here, before the round trip; the API repeats the check (and also
+    // catches a role with too few holders, which needs a database lookup
+    // this form does not have) as the source of truth.
+    const seen = new Map<string, number>();
+    value.levels.forEach((l, i) => {
+      if (!l.approver_user_id) return;
+      const first = seen.get(l.approver_user_id);
+      if (first !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'The same approver is named at two levels. The same person can never decide two levels of one request.',
+          path: ['levels', i, 'approver_user_id'],
+        });
+      } else {
+        seen.set(l.approver_user_id, i);
+      }
+    });
   });
 export type ApprovalPolicyFormInput = z.infer<typeof approvalPolicySchema>;
 

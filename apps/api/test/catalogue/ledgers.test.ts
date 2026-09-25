@@ -294,6 +294,40 @@ describe("execute a payment run (B-002)", () => {
     expect(audit.rows[0].n).toBe(1);
   });
 
+  it("never lets the bulk payment-run path allocate to an RA bill or carry a TDS/advance deduction (fix round 2, item 1(a))", async () => {
+    // APAR-2 (packages/shared/src/financial-control.ts's paymentAllocationSchema)
+    // refuses tds_amount/advance_adjusted on an RA_BILL allocation, but that
+    // check only runs where the caller controls those fields. This is the
+    // one other path that writes payment_allocations
+    // (apps/api/src/modules/ledgers/routes.ts's execute route): it never
+    // asks for a document type (payment_run_lines is hard-wired to
+    // VENDOR_INVOICE when a run is built) and its INSERT names only
+    // `amount`, so tds_amount/advance_adjusted take their column defaults.
+    // Confirmed end to end rather than by reading the code alone.
+    const inv = await invoice({ total: 40000, due_date: "2026-01-01" });
+    const built = await buildRun(w.role.PAYROLL_OFFICER);
+    expect(built.ids).toContain(inv.id);
+    await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/decision`, { action: "APPROVE" });
+    const exec = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
+      `/api/v1/payment-runs/${built.run.id}/execute`,
+      { paid_on: "2026-09-16", bank_reference: "UTR-APAR2" });
+    expect(exec.status, JSON.stringify(exec.body)).toBe(200);
+
+    const allocations = await w.pool.query(
+      `SELECT a.document_type, a.tds_amount, a.advance_adjusted
+         FROM payment_allocations a
+         JOIN payment_run_lines l ON l.payment_id = a.payment_id
+        WHERE l.run_id = $1`,
+      [built.run.id]);
+    expect(allocations.rows.length).toBeGreaterThan(0);
+    for (const row of allocations.rows) {
+      expect(row.document_type).toBe("VENDOR_INVOICE");
+      expect(Number(row.tds_amount)).toBe(0);
+      expect(Number(row.advance_adjusted)).toBe(0);
+    }
+  });
+
   it("refuses a run that is still a draft", async () => {
     const built = await buildRun(w.role.PAYROLL_OFFICER);
     const res = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },

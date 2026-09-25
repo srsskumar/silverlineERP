@@ -66,6 +66,42 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
     return new Map(rows.map(r => [String(r.boq_item_id), { qty: Number(r.qty), amount: Number(r.amount) }]));
   }
 
+  /**
+   * What is settled against a bill through its receipts (owner decision
+   * 2026-09-24, fix round 1, C1; fixed round 2, item 1(b)).
+   *
+   * A receipt may be allocated to a bill from SUBMITTED onward (finance's
+   * documentValue), so a certification, a reversion to DRAFT or a
+   * cancellation can each leave live money allocated against a payable that
+   * just shrank or vanished -- money over-allocated against a lower
+   * certified figure, or stranded against a bill that no longer claims
+   * anything at all.
+   *
+   * Sums exactly what `settlementPosition`/`checkAllocation`
+   * (packages/shared/src/financial-control.ts) count as settled: cash
+   * (amount) plus the non-cash deductions that still close out the
+   * document (tds_amount, advance_adjusted) -- not retention_amount or
+   * other_deduction, which stay outstanding rather than settling anything.
+   * APAR-2 (the payment-allocation schema) already refuses a caller setting
+   * tds_amount/advance_adjusted on an RA_BILL allocation in the first
+   * place, so both are 0 on every row this reads today; counting them
+   * anyway is defence in depth against whatever future path -- a bulk
+   * import, a data fix -- writes to payment_allocations without going
+   * through that schema.
+   *
+   * Read inside the same transaction that holds the bill's row lock
+   * (`inOrg(..., true)`), so this sees exactly what a concurrent allocation
+   * would see, and blocks behind the same lock rather than racing it.
+   */
+  async function raBillLiveAllocated(db: Pool | PoolClient, id: string): Promise<number> {
+    const row = (await db.query(
+      `SELECT COALESCE(sum(a.amount + a.tds_amount + a.advance_adjusted), 0) AS total
+         FROM payment_allocations a JOIN payments p ON p.id = a.payment_id
+        WHERE a.document_type = 'RA_BILL' AND a.document_id = $1
+          AND a.reversed_at IS NULL AND p.reversed_at IS NULL`, [id])).rows[0];
+    return Number(row.total);
+  }
+
   /* ------------------------------------------------------------------ BOQ */
 
   app.get('/api/v1/projects/:id/boq', { preHandler: guard('boq.read') }, async req => {
@@ -377,6 +413,27 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
         }
         if (next === 'CANCELLED' && !body.reason) {
           fail('VALIDATION_ERROR', 'Record why the bill is being cancelled');
+        }
+
+        // C1 (owner decision 2026-09-24, fix round 1): a receipt may already
+        // be allocated against this bill (finance lets one land from
+        // SUBMITTED onward). Certifying at a lower figure than what is
+        // already allocated over-allocates it; sending it back to DRAFT or
+        // cancelling it strands live money against a bill that no longer
+        // claims anything. The bill row is already locked (`inOrg(...,
+        // true)` above), so this and a concurrent allocation serialise on it
+        // rather than race.
+        const newPayable =
+          next === 'CERTIFIED' ? (body.certified_amount ?? Number(bill.net_payable))
+          : next === 'PAID' ? Number(bill.certified_amount ?? bill.net_payable)
+          : 0; // DRAFT or CANCELLED: nothing is payable any more.
+        const liveAllocated = await raBillLiveAllocated(db, id);
+        if (liveAllocated - newPayable > 0.005) {
+          fail('RA_BILL_OVER_ALLOCATED',
+            `₹${liveAllocated.toFixed(2)} is already allocated against this bill, `
+            + `₹${(liveAllocated - newPayable).toFixed(2)} more than the ₹${newPayable.toFixed(2)} `
+            + `it would be payable for once it moves to ${next}. Unallocate at least `
+            + `₹${(liveAllocated - newPayable).toFixed(2)} first.`);
         }
 
         if (next === 'CERTIFIED') {
