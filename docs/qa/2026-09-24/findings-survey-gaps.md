@@ -161,3 +161,14 @@ SQLite file (a headless background task while the UI runtime is alive)
 would not be serialised by it. The cap can in theory drop the one body
 the server kept, which turns a correction into a review. It never loses
 data.
+
+## Final-review fixes
+
+| # | Sev | What was wrong | Fix | Commit |
+|---|---|---|---|---|
+| 1 | important | Reviewing a conflicted return used **today's** date. The sheet reopened with the tab's work date, the form loaded today's entry, `returnSubmission` built today's `entry_date` and op key, and `review.payload.entry_date` was ignored. `discardOp` then removed the original correction. Monday's conflict reviewed on Tuesday became a new Tuesday return (or landed on Tuesday's), and Monday's correction was lost | New `reviewDay`/`submitReview` (`src/survey/reviewSubmit.ts`): the form, the filed entry with its pinned base, and the submission are all for `review.payload.entry_date`. A past day needs a manager (the API refuses anyone else with PAST_DAY_AMENDMENT). For crew, the review says up front "Corrections to a past day need your PM; your figures are kept in the Sync queue", disables saving, queues nothing and keeps the op. The original op is discarded only after a replacement for the **same day** is queued successfully. If queuing fails, the original stays. Tests use the real queue and executor with a fake server that keeps one entry per day and refuses past-day amendments to non-managers: as a manager Monday is amended; as crew it is refused up front; there is never a Tuesday entry and never a lost op | 51e8f06 |
+| 2 | minor | `/survey/me/villages` used `DISTINCT ON (sv.id) ORDER BY display_order`, so a member crewed on two stages saw the earlier (finished) one and was never offered "Finish your stage" for the running one | The member's IN_PROGRESS stage sorts first; API test in `survey-field-crew.test.ts` | 5f4a730 |
+| 3 | minor | After a stage completion synced, the cached village list still showed "Finish your stage" | The engine reports the entities it sent, and the root layout invalidates `["survey","my-villages"]` (and `["survey","filed"]` after a return) | f651ed8 |
+| 4 | minor | The review effect was keyed on the op id alone, so a second Review tap on the same op did nothing | The link carries a per-tap nonce; the effect keys on op + nonce | 9ac03bb |
+
+For item 4 the test was written together with the code, not run red first.
