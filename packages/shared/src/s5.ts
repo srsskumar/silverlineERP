@@ -198,6 +198,9 @@ export const NOTIFICATION_TYPES = [
   // no migration to be storable -- only this catalogue, which is what the
   // API layer (and the Inbox filter chips) validate against.
   "TASK_REASSIGN_NEEDED",
+  // A pending leave request's approver was re-resolved (exit, disable, lost
+  // role) and it now rests with somebody new, who is told (review A, 4(b)).
+  "LEAVE_APPROVER_ASSIGNED",
 ] as const;
 
 export const notificationTypeSchema = z.enum(NOTIFICATION_TYPES);

@@ -53,7 +53,7 @@ import {
 import { parseIfMatch } from '../../common/ifMatch.js';
 import { orgTodaySql } from "../../common/orgTime.js";
 import { emitNotification } from "../s5/notify.js";
-import { reassignIfIneligible } from "../leave/approverResolution.js";
+import { reassignStalePendingSteps } from "../leave/approverResolution.js";
 
 export interface EmployeeRoutesOptions {
   pool: Pool;
@@ -1514,12 +1514,21 @@ export async function registerEmployeeRoutes(
        * this person actually held (their own reporting manager first for
        * a step-1 slot, HR-then-admin for a step-2 slot).
        */
+      // Review A, item 3: not only requests waiting on this person now, but
+      // also ones still at step 1 that already name them for step 2 -- those
+      // would otherwise land on a disabled account the moment step 1 clears.
       const reassignedApprovals: string[] = [];
       if (accountIds.length > 0) {
         const stuck = await db.query(
           `SELECT id, org_id, employee_id, status, current_approver_id, approval_chain
-             FROM leave_requests
-            WHERE org_id = $1 AND status = 'PENDING' AND current_approver_id = ANY($2::uuid[])`,
+             FROM leave_requests lr
+            WHERE org_id = $1 AND status = 'PENDING'
+              AND (current_approver_id = ANY($2::uuid[])
+                   OR EXISTS (
+                     SELECT 1 FROM jsonb_array_elements(lr.approval_chain) s
+                      WHERE s->>'status' = 'PENDING'
+                        AND s->>'approver_user_id' = ANY($2::uuid[]::text[])))
+            FOR UPDATE`,
           [user.orgId, accountIds],
         );
         for (const stuckReq of stuck.rows as Array<{
@@ -1530,7 +1539,7 @@ export async function registerEmployeeRoutes(
           current_approver_id: string | null;
           approval_chain: unknown;
         }>) {
-          const result = await reassignIfIneligible(db, stuckReq, {
+          const result = await reassignStalePendingSteps(db, stuckReq, {
             actorId: user.id,
             impersonatorId: user.impersonator?.id ?? null,
             actorIp: meta.ip,

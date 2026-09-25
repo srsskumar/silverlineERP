@@ -1235,6 +1235,22 @@ export async function registerLeaveRoutes(
           message: "Leave request not found",
         });
       }
+      // Review A, item 4(a): who may see it is settled first -- a caller
+      // who is refused must not have triggered a reassignment write.
+      const own = await linkedEmployeeId(user.id);
+      const canSee =
+        row.employee_id === own ||
+        user.permissions.includes(LEAVE_READ) ||
+        user.permissions.includes(LEAVE_DECIDE);
+      if (!canSee) {
+        return sendError(reply, req.requestId, {
+          status: 403,
+          code: "FORBIDDEN",
+          message:
+            "That leave request is not yours and you are not its approver, so you cannot see it.",
+        });
+      }
+      if(row.employee_id!==own){user.scopes=await scopesForPermission(req,user.permissions.includes(LEAVE_READ)?LEAVE_READ:LEAVE_DECIDE);await employeeAccess(opts.pool,req,row.employee_id);}
       // Fix round 2/3, item 1: a stale current approver at *either* step
       // (exited, disabled, or no longer eligible for that step) is
       // re-resolved lazily on read, so a request does not sit stuck just
@@ -1251,20 +1267,6 @@ export async function registerLeaveRoutes(
           row.version = row.version + 1;
         }
       }
-      const own = await linkedEmployeeId(user.id);
-      const canSee =
-        row.employee_id === own ||
-        user.permissions.includes(LEAVE_READ) ||
-        user.permissions.includes(LEAVE_DECIDE);
-      if (!canSee) {
-        return sendError(reply, req.requestId, {
-          status: 403,
-          code: "FORBIDDEN",
-          message:
-            "That leave request is not yours and you are not its approver, so you cannot see it.",
-        });
-      }
-      if(row.employee_id!==own){user.scopes=await scopesForPermission(req,user.permissions.includes(LEAVE_READ)?LEAVE_READ:LEAVE_DECIDE);await employeeAccess(opts.pool,req,row.employee_id);}
       return reply.status(200).send(toRequestDetail(row));
     },
   );
@@ -1549,6 +1551,24 @@ export async function registerLeaveRoutes(
               code: "VERSION_CONFLICT",
               message: "Version mismatch (concurrent update)",
             };
+          } else if (finalRow.status === "PENDING" && decision === "APPROVE") {
+            // Review A, item 3: the next step's approver was named when the
+            // chain was drawn, possibly weeks ago. Advancing hands the request
+            // to them only if they can still decide it -- otherwise it is
+            // re-resolved here, in the same transaction, exactly as a stale
+            // current approver is on read or on a decision attempt.
+            const reassignment = await reassignIfIneligible(client, finalRow, {
+              actorId: user.id,
+              impersonatorId: user.impersonator?.id ?? null,
+              actorIp: req.ip,
+              reason: "Next approver no longer eligible (re-resolved on advance)",
+              requestId: req.requestId,
+            });
+            if (reassignment.reassigned) {
+              finalRow.current_approver_id = reassignment.approverId;
+              finalRow.approval_chain = reassignment.chain;
+              finalRow.version = finalRow.version + 1;
+            }
           } else if (nextStatus === "APPROVED") {
             // Atomic ledger debit for paid types that track a balance
             // (LOP skips the debit). Same transaction as the approval, and

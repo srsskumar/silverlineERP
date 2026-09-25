@@ -2672,3 +2672,95 @@ describe("leave request list + get", () => {
     expect(anon.statusCode).toBe(401);
   });
 });
+
+describe("leave: the next step's approver is re-checked when the request advances (review A, items 3 and 4)", () => {
+  async function stepOneFiled() {
+    const fx = await chainFixture();
+    const adminH = await adminHeaders();
+    const hrEmp = await mkEmployee(adminH);
+    await activateEmployee(hrEmp);
+    const hr = await mkUser(["HR_MANAGER"], "hrNext");
+    await linkUser(hr.id, hrEmp);
+    const from = workingPlusDays(30);
+    await setBalance(adminH, fx.eId, fx.types["CL"] as string, yr(from), 12);
+    const filed = await fileLeave(fx.emp.headers, { leave_type_id: fx.types["CL"], from_date: from, to_date: from });
+    expect(filed.statusCode).toBe(201);
+    const body = filed.json() as { id: string; approval_chain?: Array<{ approver_user_id: string }> };
+    const chain = (await pool.query("SELECT approval_chain FROM leave_requests WHERE id = $1::uuid", [body.id]))
+      .rows[0].approval_chain as Array<{ approver_user_id: string }>;
+    expect(chain[1]?.approver_user_id).toBe(hr.id);
+    return { ...fx, adminH, hr, hrEmp, reqId: body.id };
+  }
+
+  async function approveStep1(tlHeaders: Record<string, string>, reqId: string) {
+    // An exit-time reassignment bumps the version, so read it rather than assume 1.
+    const v = (await pool.query("SELECT version FROM leave_requests WHERE id = $1::uuid", [reqId])).rows[0].version;
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/leave/requests/${reqId}/decision`,
+      headers: { ...tlHeaders, "If-Match": String(v) },
+      payload: { decision: "APPROVE" },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    return res.json() as { current_approver_id: string; status: string };
+  }
+
+  it("hands step 2 to the next eligible person when its named approver was disabled while step 1 was pending", async () => {
+    const { tl, adminId, hr, reqId } = await stepOneFiled();
+    await pool.query("UPDATE users SET auth_status = 'DISABLED' WHERE id = $1::uuid", [hr.id]);
+    const advanced = await approveStep1(tl.headers, reqId);
+    expect(advanced.status).toBe("PENDING");
+    expect(advanced.current_approver_id).toBe(adminId);
+    // Review A, 4(b): the new approver is told.
+    const told = await pool.query(
+      `SELECT 1 FROM notifications WHERE recipient_id = $1::uuid AND type = 'LEAVE_APPROVER_ASSIGNED'
+          AND entity_id = $2::uuid`, [adminId, reqId]);
+    expect(told.rowCount).toBe(1);
+  });
+
+  it("an HR exit while step 1 is pending moves step 2 off them, and the request reaches the next approver's list", async () => {
+    const { tl, adminId, adminH, hrEmp, reqId, eId } = await stepOneFiled();
+    const exited = await app.inject({
+      method: "POST",
+      url: `/api/v1/employees/${hrEmp}/exit`,
+      headers: adminH,
+      payload: { exit_date: "2025-01-31", reason: "resigned" },
+    });
+    expect(exited.statusCode, exited.body).toBe(200);
+    const exitAudit = await pool.query(
+      "SELECT after_state FROM audit_events WHERE action = 'employee.exit' AND entity_id = $1::uuid",
+      [hrEmp],
+    );
+    expect((exitAudit.rows[0] as { after_state: { offboarding: { reassigned_approval_request_ids: string[] } } })
+      .after_state.offboarding.reassigned_approval_request_ids).toContain(reqId);
+    const chain = (await pool.query("SELECT approval_chain FROM leave_requests WHERE id = $1::uuid", [reqId]))
+      .rows[0].approval_chain as Array<{ approver_user_id: string; status: string }>;
+    expect(chain[1]).toMatchObject({ approver_user_id: adminId, status: "PENDING" });
+
+    const advanced = await approveStep1(tl.headers, reqId);
+    expect(advanced.current_approver_id).toBe(adminId);
+    const queue = await app.inject({
+      method: "GET",
+      url: "/api/v1/leave/requests?approver_me=true",
+      headers: adminH,
+    });
+    expect(queue.statusCode).toBe(200);
+    const rows = (queue.json() as { data: Array<{ id: string; employee_id: string }> }).data;
+    expect(rows.some((r) => r.id === reqId && r.employee_id === eId)).toBe(true);
+  });
+
+  it("GET :id refuses a caller who may not see the request before re-resolving anything (4(a))", async () => {
+    const { tl, hr, reqId } = await stepOneFiled();
+    await approveStep1(tl.headers, reqId);
+    await pool.query("UPDATE users SET auth_status = 'DISABLED' WHERE id = $1::uuid", [hr.id]);
+    const before = (await pool.query("SELECT version, current_approver_id FROM leave_requests WHERE id = $1::uuid", [reqId])).rows[0];
+    const stranger = await mkUser(["CLIENT_VIEWER"], "nosyStale");
+    const denied = await app.inject({ method: "GET", url: `/api/v1/leave/requests/${reqId}`, headers: stranger.headers });
+    expect(denied.statusCode).toBe(403);
+    const after = (await pool.query("SELECT version, current_approver_id FROM leave_requests WHERE id = $1::uuid", [reqId])).rows[0];
+    expect(after).toEqual(before);
+    const audit = await pool.query(
+      "SELECT 1 FROM audit_events WHERE action = 'leave.request.reassign_approver' AND entity_id = $1::uuid", [reqId]);
+    expect(audit.rowCount).toBe(0);
+  });
+});

@@ -11,6 +11,7 @@
 import type { Pool } from "pg";
 import { S3_PERMISSIONS } from "@silverline/shared";
 import { writeAudit } from "../../common/audit.js";
+import { emitNotification } from "../s5/notify.js";
 
 const LEAVE_DECIDE = S3_PERMISSIONS.LEAVE_DECIDE;
 
@@ -255,16 +256,9 @@ export interface ReassignResult {
 export async function reassignIfIneligible(
   db: Pick<Pool, "query">,
   req: ReassignableRequest,
-  ctx: {
-    actorId: string | null;
-    impersonatorId?: string | null;
-    actorIp?: string | null;
-    actorUserAgent?: string | null;
-    requestId?: string | null;
-    reason: string;
-  },
+  ctx: ReassignContext,
 ): Promise<ReassignResult> {
-  const chain = (Array.isArray(req.approval_chain) ? req.approval_chain : []) as ApprovalStepLike[];
+  const chain = chainOf(req);
   if (req.status !== "PENDING" || !req.current_approver_id) {
     return { reassigned: false, approverId: req.current_approver_id, chain };
   }
@@ -274,13 +268,82 @@ export async function reassignIfIneligible(
   if (idx < 0) {
     return { reassigned: false, approverId: req.current_approver_id, chain };
   }
-  const isFinalStep = idx === chain.length - 1;
+  return reassignStep(db, req, chain, idx, await requesterUserIdOf(db, req), ctx);
+}
 
+/**
+ * Every still-PENDING step of a request re-checked, not only the current one
+ * (review A, item 3). The exit flow needs this: a request still at step 1
+ * already names its step-2 approver, and when that person exits the chain
+ * would otherwise hand the request to a disabled account the moment step 1
+ * is approved. Steps are re-checked in order, each against the chain as the
+ * previous one left it, so the "never the same person on both steps" rule
+ * sees the other step's final holder.
+ */
+export async function reassignStalePendingSteps(
+  db: Pick<Pool, "query">,
+  req: ReassignableRequest,
+  ctx: ReassignContext,
+): Promise<ReassignResult> {
+  let chain = chainOf(req);
+  let current = req.current_approver_id;
+  let reassigned = false;
+  if (req.status !== "PENDING") return { reassigned, approverId: current, chain };
+  const requesterUserId = await requesterUserIdOf(db, req);
+  for (let idx = 0; idx < chain.length; idx++) {
+    if (chain[idx].status !== "PENDING") continue;
+    const result = await reassignStep(
+      db, { ...req, current_approver_id: current, approval_chain: chain }, chain, idx, requesterUserId, ctx);
+    if (result.reassigned) {
+      reassigned = true;
+      chain = result.chain;
+      current = result.approverId;
+    }
+  }
+  return { reassigned, approverId: current, chain };
+}
+
+export interface ReassignContext {
+  actorId: string | null;
+  impersonatorId?: string | null;
+  actorIp?: string | null;
+  actorUserAgent?: string | null;
+  requestId?: string | null;
+  reason: string;
+}
+
+function chainOf(req: ReassignableRequest): ApprovalStepLike[] {
+  return (Array.isArray(req.approval_chain) ? req.approval_chain : []) as ApprovalStepLike[];
+}
+
+async function requesterUserIdOf(db: Pick<Pool, "query">, req: ReassignableRequest): Promise<string | null> {
   const requesterLink = await db.query(
     "SELECT id FROM users WHERE employee_id = $1::uuid AND org_id = $2 LIMIT 1",
     [req.employee_id, req.org_id],
   );
-  const requesterUserId = (requesterLink.rows[0] as { id: string } | undefined)?.id ?? null;
+  return (requesterLink.rows[0] as { id: string } | undefined)?.id ?? null;
+}
+
+/**
+ * Re-resolve one PENDING step of the chain when its holder is no longer
+ * eligible. `current_approver_id` moves with it only when that step is the
+ * one currently waiting (its holder is the current approver); a later step
+ * only has its name in the chain replaced. The write is guarded on the
+ * chain and current approver being exactly what was read, so a decision or
+ * another reassignment that landed first wins and this reports no change.
+ */
+async function reassignStep(
+  db: Pick<Pool, "query">,
+  req: ReassignableRequest,
+  chain: ApprovalStepLike[],
+  idx: number,
+  requesterUserId: string | null,
+  ctx: ReassignContext,
+): Promise<ReassignResult> {
+  const holder = chain[idx].approver_user_id;
+  const isFinalStep = idx === chain.length - 1;
+  const firstPending = chain.findIndex((s) => s.status === "PENDING");
+  const isCurrent = idx === firstPending && holder === req.current_approver_id;
 
   // Never double up one person across both steps: whoever holds the
   // request's *other* step is off-limits for the one being reassigned.
@@ -291,15 +354,15 @@ export async function reassignIfIneligible(
   if (requesterUserId) exclude.add(requesterUserId);
 
   const stillEligible = isFinalStep
-    ? await isEligibleStep2Approver(db, req.org_id, req.current_approver_id, requesterUserId)
-    : await isEligibleStep1Approver(db, req.org_id, req.current_approver_id, requesterUserId);
+    ? await isEligibleStep2Approver(db, req.org_id, holder, requesterUserId)
+    : await isEligibleStep1Approver(db, req.org_id, holder, requesterUserId);
   if (stillEligible) {
     return { reassigned: false, approverId: req.current_approver_id, chain };
   }
 
   const fresh = isFinalStep
     ? await step2FallbackCascade(db, req.org_id, exclude)
-    : await step1FallbackCascade(db, req.org_id, req.current_approver_id, exclude);
+    : await step1FallbackCascade(db, req.org_id, holder, exclude);
   if (!fresh) {
     // Nobody eligible at all right now (org has no HR manager or admin
     // left, or every candidate would duplicate the other step) -- leave
@@ -309,12 +372,14 @@ export async function reassignIfIneligible(
   }
 
   const newChain = chain.map((s, i) => (i === idx ? { ...s, approver_user_id: fresh } : s));
+  const nextCurrent = isCurrent ? fresh : req.current_approver_id;
   const upd = await db.query(
     `UPDATE leave_requests SET approval_chain = $2, current_approver_id = $3::uuid,
        updated_at = NOW(), version = version + 1
-     WHERE id = $1::uuid AND status = 'PENDING' AND current_approver_id = $4::uuid
+     WHERE id = $1::uuid AND status = 'PENDING' AND approval_chain = $4::jsonb
+       AND current_approver_id IS NOT DISTINCT FROM $5::uuid
      RETURNING id`,
-    [req.id, JSON.stringify(newChain), fresh, req.current_approver_id],
+    [req.id, JSON.stringify(newChain), nextCurrent, JSON.stringify(chain), req.current_approver_id],
   );
   if ((upd.rowCount ?? 0) === 0) {
     // Lost a race (a decision or another reassignment landed first);
@@ -330,10 +395,23 @@ export async function reassignIfIneligible(
     action: "leave.request.reassign_approver",
     entityType: "leave_request",
     entityId: req.id,
-    beforeState: { approver_user_id: req.current_approver_id },
-    afterState: { approver_user_id: fresh },
+    beforeState: { step: chain[idx].step, approver_user_id: holder },
+    afterState: { step: chain[idx].step, approver_user_id: fresh },
     reason: ctx.reason,
     requestId: ctx.requestId ?? null,
   });
-  return { reassigned: true, approverId: fresh, chain: newChain };
+  // Review A, item 4(b): the person it now rests with is told, rather than
+  // having to happen across it. Best-effort, like every inbox write.
+  await emitNotification(db, {
+    orgId: req.org_id,
+    recipientId: fresh,
+    type: "LEAVE_APPROVER_ASSIGNED",
+    title: "Leave request assigned to you",
+    body: isCurrent
+      ? "A leave request that was waiting on someone no longer able to decide it is now yours to decide."
+      : `You are now the step ${chain[idx].step} approver on a pending leave request.`,
+    entityType: "leave_request",
+    entityId: req.id,
+  });
+  return { reassigned: true, approverId: nextCurrent, chain: newChain };
 }
