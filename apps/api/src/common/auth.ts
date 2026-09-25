@@ -318,7 +318,7 @@ export function requireAnyPermission(
   authenticate: (req: FastifyRequest) => Promise<void>,
   permissions: readonly string[],
 ) {
-  return async function guard(req: FastifyRequest): Promise<void> {
+  async function guard(req: FastifyRequest): Promise<void> {
     await authenticate(req);
     const held = permissions.find(p => req.authUser?.permissions.includes(p));
     if (!held) {
@@ -332,7 +332,12 @@ export function requireAnyPermission(
     req.authUser!.scopes = await scopesForPermission(req, held);
     if((held.startsWith('payroll.')||held.startsWith('inventory.')||held==='webhook.manage'||held==='admin.configure'||held==='users.manage'||held==='users.read')&&req.authUser!.scopes.length&&!req.authUser!.scopes.some(s=>!s.scope_type||!s.scope_id))throw new ApiError({status:403,code:'FORBIDDEN',message:'This organization-wide action requires organization-wide permission'});
     await enforceRecordScope(req, held);
-  };
+  }
+  // Same contract-registry metadata as requireAllPermissions, plus the "any"
+  // mode, so the route matrix picks a negative tester holding none of them.
+  (guard as { requiredPermissions?: readonly string[] }).requiredPermissions = permissions;
+  (guard as { permissionMode?: "all" | "any" }).permissionMode = "any";
+  return guard;
 }
 
 /** A global low-privilege role must not widen a different role's permission. */

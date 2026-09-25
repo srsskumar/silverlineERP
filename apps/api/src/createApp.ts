@@ -56,6 +56,8 @@ export interface RouteRegistryEntry {
   url: string;
   /** Permission codes required by the route's tagged preHandler guard(s); empty when the route only runs bare `authenticate` or checks a permission inline in its handler body. */
   permissions: string[];
+  /** True when the tagged guard accepts any one of `permissions` (requireAnyPermission) rather than needing all of them. */
+  anyOf?: boolean;
 }
 
 declare module "fastify" {
@@ -249,7 +251,9 @@ export async function buildApp(
       (routeOptions.preHandler as unknown) ?? [],
     );
     const permissions = new Set<string>();
+    let anyOf = false;
     for (const h of handlers) {
+      if ((h as { permissionMode?: string }).permissionMode === "any") anyOf = true;
       const tagged = (h as { requiredPermissions?: readonly string[] })
         .requiredPermissions;
       tagged?.forEach((p) => permissions.add(p));
@@ -260,6 +264,7 @@ export async function buildApp(
         method: method as string,
         url: routeOptions.url,
         permissions: [...permissions],
+        ...(anyOf ? { anyOf: true } : {}),
       });
     }
   });

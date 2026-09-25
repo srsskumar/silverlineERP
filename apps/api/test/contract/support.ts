@@ -390,7 +390,9 @@ export const IDEMPOTENCY_EXEMPT = new Set<string>([
  *  everything and would defeat the point. `undefined` if every role has at
  *  least one (extremely permissive permission -- worth knowing about, the
  *  caller should treat that as its own finding rather than skip silently). */
-export function roleLacking(idx: RolePermissionIndex, permissions: string[]): string | undefined {
+export function roleLacking(idx: RolePermissionIndex, permissions: string[], anyOf = false): string | undefined {
+  // An any-of gate (requireAnyPermission) lets a role holding even one of the
+  // set through, so only a role holding none of them is a valid negative tester.
   // Missing *any one* of the required set is enough: `requireAllPermissions`
   // 403s on the first permission it doesn't find, so a role short of even
   // one of them is a valid negative tester. Prefer a role with none of them
@@ -400,7 +402,7 @@ export function roleLacking(idx: RolePermissionIndex, permissions: string[]): st
   for (const [role, perms] of idx.byRole) {
     if (role === "SUPER_ADMIN" || role === "ADMIN") continue;
     if (permissions.every((p) => !perms.has(p))) return role;
-    if (!partial && !permissions.every((p) => perms.has(p))) partial = role;
+    if (!anyOf && !partial && !permissions.every((p) => perms.has(p))) partial = role;
   }
   return partial;
 }

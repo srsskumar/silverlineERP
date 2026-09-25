@@ -194,7 +194,7 @@ describe("auth-state matrix", () => {
       const permission = mode.mode === "inline-permission" ? [mode.permission!] : route.permissions;
 
       // wrong role (missing the permission)
-      const wrong = roleLacking(idx, permission);
+      const wrong = roleLacking(idx, permission, mode.mode !== "inline-permission" && route.anyOf === true);
       if (!wrong) {
         noNegativeCoverage.push(`${route.method} ${route.url} [${permission.join(",")}]`);
       } else {
