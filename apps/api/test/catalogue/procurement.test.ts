@@ -8,7 +8,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
+import { buildWorld, createUser, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
 
 let w: CatalogueWorld;
 
@@ -140,8 +140,14 @@ describe("requisition", () => {
       lines: [{ description: "Cement", unit: "bag", quantity: 10, estimated_rate: 400 }],
     });
     expect(pr.status).toBe(201);
+    // A second PM exists while it is submitted: with the raiser the only one,
+    // submission itself is refused (NO_ELIGIBLE_APPROVER, review A, item 1),
+    // and this is about the decision-time refusal.
+    const otherPm = await createUser(w.pool, w.orgId, { username: `cat_other_pm_${uniq()}`, roles: ["PROJECT_MANAGER"] });
     const submitted = await post({ ...w.role.PROJECT_MANAGER, ...(await ver("purchase_requisitions", pr.data.id)) },
       `/api/v1/requisitions/${pr.data.id}/submit`, {});
+    await w.pool.query("UPDATE users SET auth_status = 'SUSPENDED' WHERE id = $1", [otherPm]);
+    expect(submitted.status, JSON.stringify(submitted.body)).toBe(200);
     const decision = await post(
       { ...w.role.PROJECT_MANAGER, ...(await ver("approval_instances", submitted.data.approval_id)) },
       `/api/v1/approvals/${submitted.data.approval_id}/decision`, { decision: "APPROVE" });

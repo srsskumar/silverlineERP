@@ -10,7 +10,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:net";
-import { buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
+import { buildWorld, createUser, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
 
 let w: CatalogueWorld;
 
@@ -314,9 +314,14 @@ describe("submission and maker-checker", () => {
       lines: [{ category: "TRAVEL", expense_date: "2026-05-01", description: "Taxi", amount: 400 }],
     });
     expect(claim.status, JSON.stringify(claim.body)).toBe(201);
+    // A second PM exists while it is submitted: with the raiser the only one,
+    // submission itself is refused (NO_ELIGIBLE_APPROVER, review A, item 1),
+    // and this is about the decision-time refusal.
+    const otherPm = await createUser(w.pool, w.orgId, { username: `cat_other_pm_${uniq()}`, roles: ["PROJECT_MANAGER"] });
     const submitted = await post(
       { ...w.role.PROJECT_MANAGER, ...(await ver("expense_claims", claim.data.id)) },
       `/api/v1/expense-claims/${claim.data.id}/submit`, {});
+    await w.pool.query("UPDATE users SET auth_status = 'SUSPENDED' WHERE id = $1", [otherPm]);
     expect(submitted.status, JSON.stringify(submitted.body)).toBe(200);
 
     const res = await post(
