@@ -117,6 +117,28 @@ describe("policy configuration", () => {
       expect(res.body.message).toContain("levels 1 and 2");
     });
 
+    it("still refuses when the only other holder of the role is disabled (fix round 3)", async () => {
+      // A disabled user keeps their user_roles row -- the holder count has
+      // to filter auth_status itself, or a role with one active and one
+      // disabled holder is wrongly treated as resolvable by two people.
+      // Placed before the next test, which adds a second *active* admin:
+      // this needs the fixture's original single active admin to still be
+      // the only active one.
+      const disabledAdminId = await createUser(w.pool, w.orgId,
+        { username: `cat_disabled_admin_${uniq()}`, roles: ["ADMIN"] });
+      await w.pool.query("UPDATE users SET auth_status = 'SUSPENDED' WHERE id = $1", [disabledAdminId]);
+
+      const res = await post(w.admin, "/api/v1/approval-policies", {
+        document_type: "EXPENSE_CLAIM", name: `One active, one disabled admin ${uniq()}`,
+        levels: [
+          { sequence: 1, min_amount: 0, max_amount: 50_000, approver_role: "ADMIN" },
+          { sequence: 2, min_amount: 50_000, max_amount: null, approver_role: "ADMIN" },
+        ],
+      });
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe("LADDER_UNRESOLVABLE");
+    });
+
     it("allows a role at two levels once a second holder exists", async () => {
       await createUser(w.pool, w.orgId, { username: `cat_second_admin_${uniq()}`, roles: ["ADMIN"] });
       const res = await post(w.admin, "/api/v1/approval-policies", {

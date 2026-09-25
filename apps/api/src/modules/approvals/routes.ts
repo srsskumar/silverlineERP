@@ -157,6 +157,11 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
    * A role held by two or more people is left alone -- a different person
    * legitimately clearing each level is exactly how the ladder is meant to
    * work, and who holds a role can change after the policy is saved.
+   *
+   * The holder count only counts users.auth_status = 'ACTIVE' (fix round
+   * 3), matching admin/routes.ts's keepAdministrator: a disabled user keeps
+   * their user_roles row, so without this a role with one active and one
+   * disabled holder was wrongly treated as resolvable by two people.
    */
   async function ladderUnresolvableReason(
     db: Pool | PoolClient, orgId: string,
@@ -183,7 +188,7 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
       const holders = (await db.query(
         `SELECT count(DISTINCT ur.user_id)::int AS n
            FROM user_roles ur JOIN roles r ON r.id = ur.role_id JOIN users u ON u.id = ur.user_id
-          WHERE r.code = $1 AND u.org_id = $2`, [role, orgId])).rows[0];
+          WHERE r.code = $1 AND u.org_id = $2 AND u.auth_status = 'ACTIVE'`, [role, orgId])).rows[0];
       if (Number(holders.n) <= 1) {
         return `${role.replaceAll('_', ' ').toLowerCase()} is named as the approver for levels `
           + `${sequences.join(' and ')}, and this organisation currently has ${Number(holders.n)} `
