@@ -71,6 +71,23 @@ function plusDays(days: number): string {
 }
 
 /**
+ * `plusDays`, nudged forward a day at a time until it isn't a Sunday: a
+ * single-Sunday *paid* leave request is refused outright (422
+ * ALL_DAYS_EXCLUDED, D-012), so a probe that files one lone day must not
+ * land it on a Sunday by accident of the run's calendar. This fixture
+ * configures no holidays.
+ */
+function nonSundayPlusDays(days: number): string {
+  let d = days;
+  let date = plusDays(d);
+  while (new Date(`${date}T00:00:00Z`).getUTCDay() === 0) {
+    d += 1;
+    date = plusDays(d);
+  }
+  return date;
+}
+
+/**
  * Calendar days in [from, to] that are not a Sunday (D-012 sandwich rule for
  * PAID leave; this fixture configures no holidays, so Sunday is the only
  * exclusion). Used instead of a hardcoded day count so this does not depend

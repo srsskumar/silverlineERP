@@ -815,7 +815,7 @@ describe("leave request create", () => {
   it("creates happy-path with TL step1 + admin step2 chain", async () => {
     const { emp, tl, adminId, eId, types } = await chainFixture();
     const adminH = await adminHeaders();
-    const from = workingPlusDays(30);
+    const from = plusDays(30);
     const to = plusDays(34);
     await setBalance(adminH, eId, types["CL"] as string, yr(from), 12);
     const res = await fileLeave(emp.headers, {
@@ -868,7 +868,7 @@ describe("leave request create", () => {
     const res = await fileLeave(emp.headers, {
       leave_type_id: types["CL"],
       from_date: plusDays(34),
-      to_date: workingPlusDays(30),
+      to_date: plusDays(30),
     });
     expect(res.statusCode).toBe(422);
     expect((res.json() as { code: string }).code).toBe("DATE_RANGE");
@@ -903,7 +903,7 @@ describe("leave request create", () => {
   it("rejects over-balance requests with the exact available (422 INSUFFICIENT_BALANCE)", async () => {
     const { emp, eId, types } = await chainFixture();
     const adminH = await adminHeaders();
-    const from = workingPlusDays(30);
+    const from = plusDays(30);
     await setBalance(adminH, eId, types["CL"] as string, yr(from), 2);
     const res = await fileLeave(emp.headers, {
       leave_type_id: types["CL"],
@@ -919,7 +919,7 @@ describe("leave request create", () => {
   it("rejects overlap with a PENDING request (422 LEAVE_OVERLAP)", async () => {
     const { emp, eId, types } = await chainFixture();
     const adminH = await adminHeaders();
-    const from = workingPlusDays(30);
+    const from = plusDays(30);
     await setBalance(adminH, eId, types["CL"] as string, yr(from), 30);
     const first = await fileLeave(emp.headers, {
       leave_type_id: types["CL"],
@@ -945,7 +945,7 @@ describe("leave request create", () => {
   it("rejects overlap with an APPROVED request", async () => {
     const { emp, tl, eId, types } = await chainFixture();
     const adminH = await adminHeaders();
-    const from = workingPlusDays(30);
+    const from = plusDays(30);
     await setBalance(adminH, eId, types["CL"] as string, yr(from), 30);
     const first = await fileLeave(emp.headers, {
       leave_type_id: types["CL"],
@@ -979,7 +979,7 @@ describe("leave request create", () => {
   it("rejects dates covered by attendance records (422 ATTENDANCE_CONFLICT)", async () => {
     const { emp, eId, types } = await chainFixture();
     const adminH = await adminHeaders();
-    const from = workingPlusDays(30);
+    const from = plusDays(30);
     await setBalance(adminH, eId, types["CL"] as string, yr(from), 30);
     await pool.query(
       "INSERT INTO attendance_records (employee_id, work_date) VALUES ($1::uuid, $2::date)",
@@ -1012,7 +1012,7 @@ describe("leave request create", () => {
     const tId = await mkEmployee(adminH); // reports_to null → no step1
     await activateEmployee(tId);
     await linkUser(lead.id, tId);
-    const from = workingPlusDays(30);
+    const from = plusDays(30);
     await setBalance(adminH, tId, types["EL"] as string, yr(from), 15);
     const res = await fileLeave(lead.headers, {
       leave_type_id: types["EL"],
@@ -1102,7 +1102,7 @@ describe("leave request create", () => {
 
   it("skips the balance check for LOP", async () => {
     const { emp, eId, types } = await chainFixture();
-    const from = workingPlusDays(30);
+    const from = plusDays(30);
     // No balance row at all — LOP must still file.
     const res = await fileLeave(emp.headers, {
       leave_type_id: types["LOP"],
@@ -1217,7 +1217,7 @@ describe("GET /leave/preview (fix round 1, item 2)", () => {
     const res = await previewLeave(emp.headers, {
       leave_type_id: types["CL"] as string,
       from_date: plusDays(34),
-      to_date: workingPlusDays(30),
+      to_date: plusDays(30),
     });
     expect(res.statusCode).toBe(422);
     expect((res.json() as { code: string }).code).toBe("DATE_RANGE");
@@ -1227,7 +1227,7 @@ describe("GET /leave/preview (fix round 1, item 2)", () => {
     const { emp } = await chainFixture();
     const res = await previewLeave(emp.headers, {
       leave_type_id: randomUUID(),
-      from_date: workingPlusDays(30),
+      from_date: plusDays(30),
       to_date: plusDays(31),
     });
     expect(res.statusCode).toBe(404);
@@ -1238,7 +1238,7 @@ describe("GET /leave/preview (fix round 1, item 2)", () => {
     const otherEmp = await mkEmployee(await adminHeaders());
     const res = await previewLeave(emp.headers, {
       leave_type_id: types["CL"] as string,
-      from_date: workingPlusDays(30),
+      from_date: plusDays(30),
       to_date: plusDays(31),
       employee_id: otherEmp,
     });
@@ -1249,7 +1249,7 @@ describe("GET /leave/preview (fix round 1, item 2)", () => {
     const { adminH, eId, types } = await chainFixture();
     const res = await previewLeave(adminH, {
       leave_type_id: types["CL"] as string,
-      from_date: workingPlusDays(30),
+      from_date: plusDays(30),
       to_date: plusDays(31),
       employee_id: eId,
     });
@@ -2161,7 +2161,7 @@ describe("leave decisions", () => {
   it("advances the chain on step-1 approve and debits the ledger on final approve", async () => {
     const { emp, tl, eId, types } = await chainFixture();
     const adminH = await adminHeaders();
-    const from = workingPlusDays(30);
+    const from = plusDays(30);
     const to = plusDays(34);
     await setBalance(adminH, eId, types["CL"] as string, yr(from), 12);
     const created = await fileLeave(emp.headers, {
@@ -2230,7 +2230,7 @@ describe("leave decisions", () => {
       eId,
     ]);
     const adminH = await adminHeaders();
-    const from = workingPlusDays(30);
+    const from = plusDays(30);
     const to = plusDays(34);
     await setBalance(adminH, eId, types["CL"] as string, yr(from), 12);
     const created = await fileLeave(emp.headers, {
@@ -2340,7 +2340,7 @@ describe("leave decisions", () => {
   it("never debits LOP on final approval", async () => {
     const { emp, tl, eId, types } = await chainFixture();
     const adminH = await adminHeaders();
-    const from = workingPlusDays(30);
+    const from = plusDays(30);
     const created = await fileLeave(emp.headers, {
       leave_type_id: types["LOP"],
       from_date: from,
