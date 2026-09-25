@@ -1,6 +1,7 @@
 import {clearPayslipFiles} from "../src/ui/Payslip";
 import {AppErrorBoundary, RouteErrorBoundary} from "../src/ui/ErrorBoundary";
 import {registerBackgroundSync} from "../src/sync/background";
+import { onStaleQueries } from "../src/sync/afterSync";
 import { useEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
@@ -26,6 +27,11 @@ function Gate({ children }: { children: React.ReactNode }) {
   if (!ready) return null;
   return <>{children}</>;
 }
+
+// Queued work that synced marks what it changed as stale (final review, item 3).
+onStaleQueries(keys => {
+  for (const queryKey of keys) void queryClient.invalidateQueries({ queryKey });
+});
 
 export default function RootLayout() {
   return (

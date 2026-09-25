@@ -24,6 +24,7 @@ import { enqueueOp, flushQueue, rewriteOp, type OpExecutor } from "./queue";
 import { reviewMessage } from "./queueCore";
 import { punchBody } from "./replay";
 import { runSurveyEntryOp } from "./surveyEntryOp";
+import { notifySynced } from "./afterSync";
 import { ApiError } from "../api/client";
 import { getRefreshToken } from "../device/auth";
 import { countPendingOps, countReadyOps, getAccount, getDb, type PendingOpRow } from "./db";
@@ -217,10 +218,15 @@ export async function syncNow(): Promise<boolean> {
       return false;
     }
     const account = await getAccount();
+    const sent: string[] = [];
     const outcome = await flushQueue(async op => {
       if (account !== await getAccount() || !(await getRefreshToken())) throw new Error('Session changed; retry after signing in');
-      return defaultExecutor(op);
+      const r = await defaultExecutor(op);
+      sent.push(op.entity);
+      return r;
     });
+    // Screens holding what this work changed re-read it (final review, item 3).
+    notifySynced(sent);
     emit(outcome.failed || outcome.deferred ? "error" : "idle");
     return !(outcome.failed||outcome.deferred);
   } catch {

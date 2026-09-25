@@ -1875,7 +1875,12 @@ export async function registerSurveyRoutes(
        WHERE c.org_id = $1 AND usr.id = $2
          AND c.released_on IS NULL
          AND p.status = 'ACTIVE'
-       ORDER BY sv.id, s.display_order`, [u.orgId, u.id, workDate])).rows;
+       -- One row per village: the member's running stage first (final
+       -- review, item 2), so "Finish your stage" is offered on the stage
+       -- actually under way rather than an earlier one already done. The
+       -- stage code breaks a tie, since display_order defaults to 100.
+       ORDER BY sv.id, (own.state = 'IN_PROGRESS') DESC NULLS LAST, s.display_order, s.code`,
+      [u.orgId, u.id, workDate])).rows;
     return {
       data: rows.map(r => ({
         ...r,

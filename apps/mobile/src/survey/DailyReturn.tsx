@@ -39,6 +39,8 @@ import {
 } from "./fieldCrew";
 import { supersedeSurveyEntry } from "../sync/surveyEntryOp";
 import { discardOp } from "../sync/queue";
+import { reviewDay, submitReview } from "./reviewSubmit";
+import { useAuth } from "../auth/AuthContext";
 
 function ReasonPicker({
   value,
@@ -78,6 +80,14 @@ export function DailyReturn({
   review?: { clientUuid: string; payload: SurveyEntryInput } | null;
 }) {
   const t = useTheme();
+  const { canDo } = useAuth();
+  /*
+   * The day this form is for (final-review fix 1): a reviewed conflict is
+   * for ITS day, which is not today once the day has turned. A past day
+   * needs a manager; crew are told up front and nothing is queued.
+   */
+  const plan = review ? reviewDay(review.payload, workDate, canDo("survey.manage")) : null;
+  const formDate = plan?.date ?? workDate;
   const [draft, setDraft] = useState<ReturnDraft>(emptyDraft);
   const [problems, setProblems] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -103,8 +113,8 @@ export function DailyReturn({
    * turns the filing into an amendment of the day already in.
    */
   const filed = useQuery({
-    queryKey: ["survey", "filed", village.id, workDate],
-    queryFn: () => getFiledEntry(village.id, workDate),
+    queryKey: ["survey", "filed", village.id, formDate],
+    queryFn: () => getFiledEntry(village.id, formDate),
     enabled: village.filed_today || Boolean(review),
   });
   useEffect(() => {
@@ -157,6 +167,31 @@ export function DailyReturn({
 
   const file = async () => {
     setProblems([]);
+    if (review) {
+      setBusy(true);
+      try {
+        const out = await submitReview({
+          review, village, measures, draft, kit: kit.data ?? [], filed: filed.data ?? null,
+          workDate, canManage: canDo("survey.manage"),
+          enqueue: op => submitQueued({
+            entity: op.entity, op: op.op,
+            payload: op.payload as unknown as Record<string, unknown>,
+            ...(op.baseVersion !== undefined ? { baseVersion: op.baseVersion } : {}),
+            supersede: supersedeSurveyEntry,
+          }),
+          discard: id => discardOp(id),
+        });
+        if (out.ok) onFiled(out.message); else setProblems(out.problems);
+      } catch (e) {
+        // Only the enqueue throws here (a failed discard is reported by
+        // submitReview), so the replacement was not queued and the original
+        // is still in the Sync queue.
+        setProblems([e instanceof Error ? e.message : "The correction could not be queued. Your figures are kept in the Sync queue."]);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     const built = returnSubmission({
       village, workDate, measures, draft, kit: kit.data ?? [], filed: filed.data ?? null,
     });
@@ -175,8 +210,6 @@ export function DailyReturn({
         // rather than queueing behind it (fix round 2).
         supersede: supersedeSurveyEntry,
       });
-      // The reviewed conflict is answered by this filing; its row goes.
-      if (review) await discardOp(review.clientUuid).catch(() => undefined);
       onFiled(message);
     } catch (e) {
       setProblems([e instanceof Error ? e.message : "The return could not be filed."]);
@@ -203,8 +236,13 @@ export function DailyReturn({
       </Muted>
       <Row style={{ marginTop: space.sm, marginBottom: space.md }}>
         <Badge text={village.stage_label} tone="info" />
-        <Subtle>Return for {day(workDate)}</Subtle>
+        <Subtle>Return for {day(formDate)}</Subtle>
       </Row>
+
+      {plan?.blocked ? (
+        <Banner tone="danger" icon="lock-closed-outline" title="This is an earlier day"
+          message={plan.notice ?? ""} />
+      ) : null}
 
       {review ? (
         <Banner
@@ -429,6 +467,7 @@ export function DailyReturn({
         title={correcting ? "Save the correction" : "File the day's return"}
         icon="cloud-upload-outline"
         loading={busy}
+        disabled={Boolean(plan?.blocked)}
         onPress={file}
         style={{ marginBottom: space.xxl }}
       />
