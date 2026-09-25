@@ -1,8 +1,8 @@
 # Overnight report: QA sweep, 24–25 Sep 2026
 
-Status: DRAFT (finalised after deploy 3). The ledger with every ruling is `.superpowers/sdd/2026-09-24-full-qa-sweep/progress.md`. Detailed findings are in `docs/qa/2026-09-24/findings-*.md`.
+Status: FINAL. **Deploy 3 is live** on dev-thor (main 378847c, 25 Sep ~05:48 UTC). Health checks return 200 (API direct, via nginx, and the web login page). Migrations 101, 102, 110, 111 and 112 were applied after a verified backup (pre-migrate-20260925T054445Z.dump). The ledger with every ruling is `.superpowers/sdd/2026-09-24-full-qa-sweep/progress.md`. Detailed findings are in `docs/qa/2026-09-24/findings-*.md`.
 
-## What's live / what ships in deploy 3
+## What's live (deploy 3 = release/qa-2026-09-24-d)
 - **Deploy 1 (7bd6f7d)** and **deploy 2 (0649788)** are live on dev-thor.
 - **Deploy 3 (release/qa-2026-09-24-d)** contains:
   - the API contract sweep: 484 routes, each tested with no, bad and expired tokens, the wrong role, the wrong org, malformed input, pagination and idempotency;
@@ -48,3 +48,18 @@ Status: DRAFT (finalised after deploy 3). The ledger with every ruling is `.supe
 - SG-016: the entry PATCH ignores rovers.
 - The shared `pastDate()` check is still on IST.
 - A rare error while settling a sync can leave one survey op in SENDING until restart (recovered on open).
+
+## Verification before deploy 3
+- Full suites on the deployed commit: shared 1051, API 2356 passing (0 failing) plus tsc, web 990 plus tsc plus next build, mobile 517 plus tsc.
+- Every branch went through TDD fixes and per-task reviews (survey lane 2's offline outbox took 5 rounds). Two final whole-release reviews (API and migrations; survey, web and mobile) found no Critical issues. All Important findings were fixed and re-reviewed before deploy.
+- Live checks after deploy:
+  - invoice.create is granted to ADMIN, SUPER_ADMIN, INVENTORY_MANAGER and PAYROLL_OFFICER.
+  - AUDITOR can no longer release legal holds.
+  - There are 107 org-wide PR/PO fallback ladders.
+  - The January leave job correctly did nothing (September).
+  - The new routes require authentication.
+- Backup restore drill (24 Sep): 162/162 tables restored, 177,125 rows, nothing missing.
+- VM disk was cleaned from 93% to 77% (regenerable build caches only; every backup kept).
+
+## Known test fragility
+- A few API tests anchored to "today" (hr-gaps HR-6, ut-lp attendance-conflict) fail when run on an IST Sunday. The code is correct; the tests need date control. This is logged for a follow-up.
