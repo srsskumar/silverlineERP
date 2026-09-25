@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
   "installCommand": "cd ../.. && npm install --include=dev",
   "buildCommand": "cd ../.. && npx turbo run build --filter=api...",
   "outputDirectory": "public",
@@ -13,6 +14,12 @@
     {
       "source": "/(.*)",
       "destination": "/api/index"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/v1/jobs/run",
+      "schedule": "0 1 * * *"
     }
   ],
   "regions": [

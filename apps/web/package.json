@@ -1,6 +1,9 @@
 {
   "name": "web",
   "version": "0.1.0",
+  "engines": {
+    "node": "22.x"
+  },
   "private": true,
   "scripts": {
     "predev": "node scripts/vendor-maplibre-worker.mjs",

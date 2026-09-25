@@ -1,6 +1,9 @@
 {
   "name": "api",
   "version": "0.1.0",
+  "engines": {
+    "node": "22.x"
+  },
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json && node ../../scripts/copy-api-assets.mjs",
