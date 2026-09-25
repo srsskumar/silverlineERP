@@ -417,8 +417,8 @@ describe("UT-AUTH-06 evaluate self-approval", () => {
       payload: {
         employee_id: employeeId,
         leave_type_id: await casualLeaveTypeId(),
-        from_date: futureDate(11),
-        to_date: futureDate(11),
+        from_date: nonSundayFutureDate(11),
+        to_date: nonSundayFutureDate(11),
         reason: "Catalogue self-decision probe",
       },
     });
@@ -454,8 +454,8 @@ describe("UT-AUTH-06 evaluate self-approval", () => {
       payload: {
         employee_id: w.siteEmployee,
         leave_type_id: await casualLeaveTypeId(),
-        from_date: futureDate(20),
-        to_date: futureDate(20),
+        from_date: nonSundayFutureDate(20),
+        to_date: nonSundayFutureDate(20),
         reason: "Catalogue approver probe",
       },
     });
@@ -485,8 +485,8 @@ describe("UT-AUTH-06 evaluate self-approval", () => {
       payload: {
         employee_id: w.directEmployee,
         leave_type_id: await casualLeaveTypeId(),
-        from_date: futureDate(21),
-        to_date: futureDate(21),
+        from_date: nonSundayFutureDate(21),
+        to_date: nonSundayFutureDate(21),
         reason: "Catalogue out-of-scope approver probe",
       },
     });

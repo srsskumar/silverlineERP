@@ -60,6 +60,19 @@ export function workDate(at: Date = NOW): string {
   }).format(at);
 }
 
+/**
+ * `day` (YYYY-MM-DD) moved `step` days at a time (+1 forward, -1 back) until
+ * it is not a Sunday. A single-day *paid* leave request on a Sunday is
+ * refused outright (422 ALL_DAYS_EXCLUDED, D-012), so fixtures that file one
+ * must not land on a Sunday by accident of the run's calendar. The catalogue
+ * fixture seeds no holidays, so Sunday is the only exclusion to avoid.
+ */
+export function offSunday(day: string, step: 1 | -1 = 1): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  while (d.getUTCDay() === 0) d.setUTCDate(d.getUTCDate() + step);
+  return d.toISOString().slice(0, 10);
+}
+
 /** First day of the month containing `at`, in the organization timezone. */
 export function monthStart(at: Date = NOW): string {
   return `${workDate(at).slice(0, 7)}-01`;
@@ -549,7 +562,7 @@ async function buildOtherOrg(
   );
 
   await grantLeaveBalance(app, headers, employee, leaveTypeId);
-  const leaveFrom = workDate(new Date(NOW.getTime() + 60 * 86_400_000));
+  const leaveFrom = offSunday(workDate(new Date(NOW.getTime() + 60 * 86_400_000)));
   const leaveRequestId = await post(app, headers, "/api/v1/leave/requests", {
     leave_type_id: leaveTypeId,
     employee_id: employee,

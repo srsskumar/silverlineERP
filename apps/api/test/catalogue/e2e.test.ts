@@ -918,8 +918,8 @@ describe("E2E-16 employee or unauthorized user attempts own/out-of-scope approva
       payload: {
         employee_id: employeeId,
         leave_type_id: types.CL,
-        from_date: plusDays(40),
-        to_date: plusDays(40),
+        from_date: nonSundayPlusDays(40),
+        to_date: nonSundayPlusDays(40),
         reason: "Self approval attempt",
       },
     });

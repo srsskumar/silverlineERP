@@ -22,6 +22,7 @@ import {
   leaveTypeIds,
   loginAs,
   NOW,
+  offSunday,
   post,
   uniq,
   uniquePhone,
@@ -396,7 +397,7 @@ describe("on_leave_today is a badge, not a status (owner decision 2026-09-24 #2)
     const past = new Date(NOW);
     past.setDate(past.getDate() - 20);
     const leave = await fileLeave(headers, {
-      employee_id: employeeId, from_date: workDate(past), to_date: workDate(past),
+      employee_id: employeeId, from_date: offSunday(workDate(past), -1), to_date: offSunday(workDate(past), -1),
       reason: "Past leave for the badge test",
     });
     expect((await approveAll(leave.id)).statusCode).toBe(200);
@@ -487,8 +488,8 @@ describe("HR-14 exit disables the login, withdraws leave, unassigns open tasks a
     const { employeeId, userId, headers } = await worker();
     const leave = await fileLeave(headers, {
       employee_id: employeeId,
-      from_date: `${Number(workDate().slice(0, 4)) + 1}-04-06`,
-      to_date: `${Number(workDate().slice(0, 4)) + 1}-04-06`,
+      from_date: offSunday(`${Number(workDate().slice(0, 4)) + 1}-04-06`),
+      to_date: offSunday(`${Number(workDate().slice(0, 4)) + 1}-04-06`),
     });
     await w.app.inject({
       method: "PATCH", url: `/api/v1/projects/${w.activeProject}`,

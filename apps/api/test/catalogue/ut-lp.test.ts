@@ -418,8 +418,8 @@ describe("UT-LP-03 approve and reject through configured chain", () => {
     const created = await fileLeave(headers, {
       employee_id: employeeId,
       leave_type_id: types.CL,
-      from_date: plusDays(90),
-      to_date: plusDays(90),
+      from_date: nonSundayPlusDays(90),
+      to_date: nonSundayPlusDays(90),
       reason: "Chain probe",
     });
     expect(created.statusCode).toBe(201);
@@ -485,8 +485,8 @@ describe("UT-LP-03 approve and reject through configured chain", () => {
     const created = await fileLeave(headers, {
       employee_id: employeeId,
       leave_type_id: types.CL,
-      from_date: plusDays(95),
-      to_date: plusDays(95),
+      from_date: nonSundayPlusDays(95),
+      to_date: nonSundayPlusDays(95),
       reason: "Full chain",
     });
     const request = created.json() as { id: string };
@@ -579,8 +579,8 @@ describe("UT-LP-03 approve and reject through configured chain", () => {
     const created = await fileLeave(headers, {
       employee_id: employeeId,
       leave_type_id: types.CL,
-      from_date: plusDays(105),
-      to_date: plusDays(105),
+      from_date: nonSundayPlusDays(105),
+      to_date: nonSundayPlusDays(105),
       reason: "Double decision",
     });
     const request = created.json() as { id: string };
