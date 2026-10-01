@@ -142,7 +142,7 @@ describe("an employee's personal file", () => {
 
   it("is closed to a team lead whose directory does not reach that employee", async () => {
     const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
-    const { employeeId } = await createEmployeeWithDocument(admin);
+    const { employeeId, documentId } = await createEmployeeWithDocument(admin);
     // A team lead holds document.read and employee.read, but on a project
     // scope that this employee is not on: the second permission's scope is
     // the one the record check runs under.
@@ -161,5 +161,20 @@ describe("an employee's personal file", () => {
     const headers = await headersFor(lead.username);
     const list = await app.inject({ method: "GET", url: `/api/v1/employees/${employeeId}/documents`, headers });
     expect(list.statusCode, list.body).toBe(403);
+
+    // The download route used to skip this check entirely and serve the
+    // file regardless of scope -- the bytes mattered more than the list.
+    const download = await app.inject({
+      method: "GET", url: `/api/v1/employees/${employeeId}/documents/${documentId}/download`, headers,
+    });
+    expect(download.statusCode, download.body).toBe(403);
+
+    const upload = await app.inject({
+      method: "POST", url: `/api/v1/employees/${employeeId}/documents`,
+      headers: { ...headers, "idempotency-key": randomUUID() },
+      payload: { doc_type: "id_proof", file_name: "planted.pdf", content_base64: PDF },
+    });
+    expect(upload.statusCode, upload.body).toBe(403);
+    expect((await pool.query("SELECT count(*)::int AS n FROM employee_documents WHERE employee_id = $1", [employeeId])).rows[0].n).toBe(1);
   });
 });

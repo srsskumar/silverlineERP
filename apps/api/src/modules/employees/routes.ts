@@ -530,6 +530,32 @@ export async function registerEmployeeRoutes(
     return res.rows[0] as EmployeeRow | undefined;
   }
 
+  /**
+   * Whether this one employee falls inside the caller's own scope -- the
+   * same PRD §4.1 restriction the employee list already applies (line
+   * ~557), extended to a single record. Documents, their list and their
+   * download used to skip this and check only org membership, so a team
+   * lead's reach into someone's uploaded papers was wider than their reach
+   * into the person's own record -- the opposite of what the comment two
+   * screens up already promises.
+   */
+  async function employeeInScope(
+    orgId: string,
+    user: { scopes?: Array<{ scope_type: string | null; scope_id: string | null }> },
+    id: string,
+  ): Promise<boolean> {
+    const scopes = resolveScopes(user.scopes ?? []);
+    if (scopes.global) return true;
+    const values: unknown[] = [orgId];
+    const scopeClause = await employeeScopeClause(opts.pool, orgId, scopes, values);
+    values.push(id);
+    const res = await opts.pool.query(
+      `SELECT 1 FROM employees WHERE org_id = $1 AND ${scopeClause} AND id = $${values.length}::uuid`,
+      values,
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
   // GET /api/v1/employees — masked list
   app.get("/api/v1/employees", { preHandler: canRead }, async (req, reply) => {
     const parsed = listQuerySchema.safeParse(req.query);
@@ -1936,6 +1962,7 @@ export async function registerEmployeeRoutes(
 
   app.get('/api/v1/employees/:id/documents/:documentId/download',{preHandler:canReadDocs},async(req,reply)=>{
     const {id,documentId}=req.params as {id:string;documentId:string},user=req.authUser!;
+    if(!(await employeeInScope(user.orgId,user,id)))throw new ApiError({status:403,code:'FORBIDDEN',message:'This employee is outside your directory scope'});
     const row=(await opts.pool.query('SELECT * FROM employee_documents WHERE id=$1 AND employee_id=$2 AND org_id=$3',[documentId,id,user.orgId])).rows[0];
     if(!row)throw new ApiError({status:404,code:'NOT_FOUND',message:'Document not found'});
     const binary=await readBlob(row);
@@ -1973,6 +2000,13 @@ export async function registerEmployeeRoutes(
           status: 404,
           code: "NOT_FOUND",
           message: "Employee not found",
+        });
+      }
+      if (!(await employeeInScope(user.orgId, user, id))) {
+        return sendError(reply, req.requestId, {
+          status: 403,
+          code: "FORBIDDEN",
+          message: "This employee is outside your directory scope",
         });
       }
       const { limit, cursor } = parsed.data;
@@ -2066,6 +2100,13 @@ export async function registerEmployeeRoutes(
           status: 404,
           code: "NOT_FOUND",
           message: "Employee not found",
+        });
+      }
+      if (!(await employeeInScope(user.orgId, user, id))) {
+        return sendError(reply, req.requestId, {
+          status: 403,
+          code: "FORBIDDEN",
+          message: "This employee is outside your directory scope",
         });
       }
       const { doc_type, file_name, content_base64 } = parsed.data;
