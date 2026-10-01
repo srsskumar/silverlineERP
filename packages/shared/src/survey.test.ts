@@ -492,28 +492,24 @@ describe('tasks driving survey state', () => {
     });
   });
 
-  it('reads a linked stage from the task and ignores its own columns', () => {
-    // The whole point of the choice: one fact, one home. The stale columns
-    // below must not win, or the two disagree within a week.
+  it('reads a linked stage from its own columns, not the task (owner decision 2026-10-01 #7)', () => {
+    // SG-D3: the stage row governs even when a task is linked. The task's
+    // own status must not override it, or the dashboard and the internal
+    // screens disagree again (SG-009).
     const r = resolveStage({
       stageCode: 'GROUND_TRUTHING', linked: true,
       taskStatus: 'DONE',
       taskStartedAt: '2026-09-02T06:00:00Z', taskCompletedAt: '2026-09-11T14:00:00Z',
-      ownState: 'NOT_STARTED', ownStartedOn: null, ownCompletedOn: null,
+      ownState: 'IN_PROGRESS', ownStartedOn: '2026-09-02', ownCompletedOn: null,
     });
     expect(r).toMatchObject({
-      state: 'COMPLETED', startedOn: '2026-09-02', completedOn: '2026-09-11', source: 'TASK',
+      state: 'IN_PROGRESS', startedOn: '2026-09-02', completedOn: null, source: 'STAGE',
     });
   });
 
-  it('uses when the work happened, not when it was planned', () => {
-    // The summary sheet reports the actual GT start and completion dates.
-    const r = resolveStage({
-      stageCode: 'GROUND_TRUTHING', linked: true, taskStatus: 'IN_PROGRESS',
-      taskStartedAt: '2026-09-05T09:30:00Z', taskCompletedAt: null,
-    });
-    expect(r.startedOn).toBe('2026-09-05');
-    expect(r.completedOn).toBeNull();
+  it('reports NOT_STARTED for a linked stage with no own state, same as an unlinked one', () => {
+    expect(resolveStage({ stageCode: 'X', linked: true, taskStatus: 'DONE' }).state)
+      .toBe('NOT_STARTED');
   });
 
   it('reports a linked stage with no task status as not started', () => {
@@ -521,16 +517,17 @@ describe('tasks driving survey state', () => {
       .toBe('NOT_STARTED');
   });
 
-  it('feeds the village state, so a linked village completes when its tasks do', () => {
+  it('feeds the village state from the stage rows, so a linked village completes when its stages do', () => {
     const stages = resolveStages(STAGE_CODES.map(code => ({
-      stageCode: code, linked: true, taskStatus: 'DONE',
+      stageCode: code, linked: true, taskStatus: 'TO_DO', ownState: 'COMPLETED',
     })));
     expect(villageState(village({ stages }), STAGE_CODES)).toBe('COMPLETED');
   });
 
-  it('keeps a village open while one linked stage is still blocked', () => {
+  it('keeps a village open while one stage is still blocked, regardless of its task', () => {
     const stages = resolveStages(STAGE_CODES.map((code, i) => ({
-      stageCode: code, linked: true, taskStatus: i === 0 ? 'BLOCKED' : 'DONE',
+      stageCode: code, linked: true, taskStatus: 'DONE',
+      ownState: i === 0 ? 'ON_HOLD' : 'COMPLETED',
     })));
     expect(villageState(village({ stages }), STAGE_CODES)).toBe('IN_PROGRESS');
   });

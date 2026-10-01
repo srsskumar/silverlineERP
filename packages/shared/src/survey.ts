@@ -1378,7 +1378,7 @@ export interface LinkedStage {
   taskStatus?: string | null;
   taskStartedAt?: string | null;
   taskCompletedAt?: string | null;
-  /** The stage row's own columns, used only when no task is linked. */
+  /** The stage row's own columns -- these always govern (owner decision 2026-10-01 #7). */
   ownState?: StageState | null;
   ownStartedOn?: string | null;
   ownCompletedOn?: string | null;
@@ -1398,23 +1398,15 @@ const day = (v: string | null | undefined): string | null =>
   v ? String(v).slice(0, 10) : null;
 
 /**
- * One stage's state, from whichever source governs it.
- *
- * The summary sheet reports a start and a completion date per stage, so the
- * task's actual timestamps are what those become — not its planned dates,
- * which are when somebody intended to do the work rather than when it
- * happened.
+ * One stage's state: always the stage row's own columns (owner decision
+ * 2026-10-01 #7, SG-D3). A linked task is informational only -- its status
+ * does not override the stage's own state, so the dashboard (which always
+ * read the row) and the internal screens (which used to prefer the task)
+ * can no longer disagree (SG-009). Reading only the row is safe and complete
+ * because a database trigger (116_sync_task_linked_stage.sql) keeps a
+ * task-linked stage's own row mirroring its task's status and actual dates.
  */
 export function resolveStage(stage: LinkedStage): ResolvedStage {
-  if (stage.linked) {
-    return {
-      stageCode: stage.stageCode,
-      state: stageStateFromTask(stage.taskStatus),
-      startedOn: day(stage.taskStartedAt),
-      completedOn: day(stage.taskCompletedAt),
-      source: 'TASK',
-    };
-  }
   return {
     stageCode: stage.stageCode,
     state: stage.ownState ?? 'NOT_STARTED',
@@ -2217,6 +2209,7 @@ export function billingDecisionRequired(status: BillingStatus): boolean {
  * does not go back to submitted or become returned, because the covering
  * letter, the receipt and the department's file all say it was paid.
  */
+// Confirmed as the spec (owner decision 2026-10-01 #8); see docs/REQUIREMENTS_LAND_SURVEY.md §59.7.3.
 export const BILLING_TRANSITIONS: Record<BillingStatus, BillingStatus[]> = {
   SUBMITTED: ['APPROVED', 'REJECTED', 'PAID'],
   // Back to submitted undoes a decision pressed on the wrong row (SV-023).

@@ -396,9 +396,14 @@ describe("billing only what is finished", () => {
     expect(r.data.lines[0].cumulativeQuantity).toBe(0);
   });
 
-  it("counts a stage the task board finished, not just one set by hand", async () => {
-    // Most programmes run their stages as tasks. Reading only the stage row
-    // would bill nothing at all for those, which is nearly all of them.
+  it("does not bill a stage the task board finished if its own row disagrees (owner decision 2026-10-01 #7, SG-D3)", async () => {
+    // Before this decision the task governed and this billed 320. Now the
+    // stage row governs: NOT_STARTED on the row means not billable, no
+    // matter what the linked task's board says. (The 116 trigger mirrors a
+    // task's changes onto the row, so in practice the two only disagree like
+    // this when the row is edited after the card last moved -- the task here
+    // is inserted already DONE, which the trigger, being AFTER UPDATE, does
+    // not see.)
     const { programmeId, projectId, boqItemId } = await programme();
     const v = await village(programmeId);
     await record(v, day(6), 320);
@@ -419,27 +424,28 @@ describe("billing only what is finished", () => {
       stage_id: await stageId("GROUND_TRUTHING"),
     });
     const r = await proposal(projectId);
-    // The row still says NOT_STARTED. The task governs, and the task is done.
-    expect(r.data.lines[0].cumulativeQuantity).toBe(320);
+    expect(r.data.lines[0].cumulativeQuantity).toBe(0);
   });
 
-  it("leaves out a task finished without an end date, and says how much", async () => {
-    // A card dragged to Done without an end time. A bill is a claim as at a
-    // date and that completion cannot be placed before or after it. Silently
-    // under-billing is the worse failure: nobody notices money never claimed.
+  it("leaves out a stage completed with no date, and says how much (owner decision 2026-10-01 #7 moves this from the task's dating to the stage row's own)", async () => {
     const { programmeId, projectId, boqItemId } = await programme();
     const v = await village(programmeId);
     await record(v, day(4), 275);
 
+    // The stage row itself says COMPLETED, with no completed_on -- the
+    // undated case now lives on the row, not on a linked task's end date.
+    // chk_survey_stage_completed (migration 050) only allows an undated
+    // COMPLETED row when a task is linked, so link one -- deliberately not
+    // DONE, to show the task's status plays no part.
     const task = await w.pool.query(
       `INSERT INTO tasks(org_id, project_id, title, status, created_by)
-       VALUES($1,$2,'Ground truthing','DONE',$3) RETURNING id`,
+       VALUES($1,$2,'Ground truthing','TO_DO',$3) RETURNING id`,
       [w.orgId, projectId, w.adminId]);
     await w.pool.query(
-      `INSERT INTO survey_village_stages(org_id, survey_village_id, stage_id, state, task_id)
-       VALUES($1,$2,$3,'NOT_STARTED',$4)
+      `INSERT INTO survey_village_stages(org_id, survey_village_id, stage_id, state, completed_on, task_id)
+       VALUES($1,$2,$3,'COMPLETED',NULL,$4)
        ON CONFLICT (survey_village_id, stage_id)
-       DO UPDATE SET task_id = EXCLUDED.task_id`,
+       DO UPDATE SET state = 'COMPLETED', completed_on = NULL, task_id = EXCLUDED.task_id`,
       [w.orgId, v, await stageId("GROUND_TRUTHING"), task.rows[0].id]);
 
     await link(projectId, {

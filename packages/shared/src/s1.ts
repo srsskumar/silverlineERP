@@ -57,23 +57,26 @@ export const S1_ROLE_GRANTS: Record<RoleCode, string[]> = {
     S1_PERMISSIONS.EMPLOYEE_READ,
     S1_PERMISSIONS.ORG_UNITS_READ,
     S1_PERMISSIONS.DOCUMENT_READ,
+    S1_PERMISSIONS.HOLIDAY_READ,
   ],
   TEAM_LEAD: [
     S1_PERMISSIONS.EMPLOYEE_READ,
     S1_PERMISSIONS.ORG_UNITS_READ,
     S1_PERMISSIONS.DOCUMENT_READ,
+    S1_PERMISSIONS.HOLIDAY_READ,
   ],
   // PRD §4: PAYROLL_OFFICER is payroll-only and INVENTORY_MANAGER has no
-  // business perms (no inventory module yet) — neither holds employee codes.
-  PAYROLL_OFFICER: [],
-  INVENTORY_MANAGER: [],
-  EMPLOYEE: [],
+  // business perms (no inventory module yet) -- holiday.read added for both
+  // by owner decision 2026-10-01 #1; neither holds employee codes.
+  PAYROLL_OFFICER: [S1_PERMISSIONS.HOLIDAY_READ],
+  INVENTORY_MANAGER: [S1_PERMISSIONS.HOLIDAY_READ],
+  EMPLOYEE: [S1_PERMISSIONS.HOLIDAY_READ],
   CLIENT_VIEWER: [],
   // ORG_UNITS_READ alongside EMPLOYEE_READ, same as every other role below
-  // that reads employees (HR_MANAGER/PROJECT_MANAGER/TEAM_LEAD) — without it
+  // that reads employees (HR_MANAGER/PROJECT_MANAGER/TEAM_LEAD) -- without it
   // the district filter on /employees 403s for an auditor (P-002).
-  AUDITOR: [S1_PERMISSIONS.EMPLOYEE_READ, S1_PERMISSIONS.ORG_UNITS_READ],
- SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[], GOVT_OBSERVER:[],
+  AUDITOR: [S1_PERMISSIONS.EMPLOYEE_READ, S1_PERMISSIONS.ORG_UNITS_READ, S1_PERMISSIONS.HOLIDAY_READ],
+ SALES_BD_EXECUTIVE:[S1_PERMISSIONS.HOLIDAY_READ], BID_TENDER_MANAGER:[S1_PERMISSIONS.HOLIDAY_READ], GOVT_OBSERVER:[],
 };
 
 // ---------------------------------------------------------------------------

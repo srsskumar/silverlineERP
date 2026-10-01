@@ -275,9 +275,9 @@ export async function registerSurveyRoutes(
        JOIN survey_villages sv ON sv.id = t.survey_village_id
        WHERE t.org_id = $1 AND sv.survey_project_id = $2 ${scopeClause}`, scope)).rows;
 
-    // Stage state comes from the linked task where there is one, and from the
-    // stage row's own columns where there is not. `task_id` says which, so the
-    // two can never both be in play for the same stage.
+    // Stage state always comes from the stage row's own columns (owner
+    // decision 2026-10-01 #7, SG-D3); the linked task's fields are still read
+    // but resolveStage() treats them as informational only.
     const stages = (await db.query(
       `SELECT vs.survey_village_id, s.code AS stage_code, vs.remarks,
               vs.state AS own_state, vs.started_on AS own_started_on,
@@ -736,6 +736,22 @@ export async function registerSurveyRoutes(
         'You are not on this village’s crew. A control point is recorded or corrected by '
         + 'the crew on the village, their reporting manager, a team leader, the project '
         + 'manager or an administrator.', 403);
+    }
+  }
+
+  const RETURN_NOT_ASSIGNED_REASON =
+    'You are not on this village’s crew. A daily return is filed or amended by '
+    + 'the crew on the village, their reporting manager, a team leader, the '
+    + 'project manager or an administrator.';
+
+  /** The same five-person authority as requireOwnCrew, worded for a return. */
+  async function requireCrewForReturn(
+    db: Pool | PoolClient,
+    u: { orgId: string; id: string; permissions: string[]; roles?: string[] },
+    villageId: string,
+  ) {
+    if (!authorityCovers(await workAuthority(db, u, villageId), null)) {
+      fail('NOT_YOUR_VILLAGE', RETURN_NOT_ASSIGNED_REASON, 403);
     }
   }
 
@@ -1501,18 +1517,13 @@ export async function registerSurveyRoutes(
         if (input.state !== 'NOT_STARTED') {
           const pipeline = await stagePipeline(db, u.orgId);
           const current = (await db.query(
-            `SELECT s.code, vs.state, vs.task_id, t.status AS task_status
+            `SELECT s.code, vs.state
              FROM survey_village_stages vs
              JOIN survey_stages s ON s.id = vs.stage_id
-             LEFT JOIN tasks t ON t.id = vs.task_id
              WHERE vs.survey_village_id = $1`, [id])).rows;
           const states: Record<string, StageState> = {};
           for (const row of current) {
-            states[String(row.code)] = row.task_id
-              ? resolveStage({
-                stageCode: String(row.code), linked: true, taskStatus: row.task_status,
-              }).state
-              : (row.state as StageState);
+            states[String(row.code)] = row.state as StageState;
           }
           const blocker = stageBlockedBy(input.stage_code, states, pipeline);
           if (blocker) {
@@ -2462,6 +2473,7 @@ export async function registerSurveyRoutes(
     const u = actor(req), input = parse(surveyEntrySchema, req.body);
     const row = await mutate(pool, req, 'survey.entry.create', 'survey_entry', async db => {
       const village = await villageOr404(db, u.orgId, input.survey_village_id, u);
+      await requireCrewForReturn(db, u, input.survey_village_id);
       const m = await measures(db, u.orgId);
 
       for (const code of Object.keys(input.values)) {
@@ -2697,6 +2709,9 @@ export async function registerSurveyRoutes(
    * still theirs. An earlier day needs survey.manage, because by then the
    * figure has been rolled up, reported on and possibly billed, and changing
    * it is a decision about the record rather than a typo.
+   *
+   * (Owner decision 2026-10-01 #6: amending stays on this same gate -- no
+   * separate survey.amend permission is added.)
    */
   app.patch('/api/v1/survey/entries/:id', { preHandler: guard('survey.enter') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
@@ -2710,6 +2725,7 @@ export async function registerSurveyRoutes(
         // village too, and amending it is exactly the write GCP PATCH was
         // fixed against, so it gets the same check.
         await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+        await requireCrewForReturn(db, u, String(row.survey_village_id));
         version(req, row as { version: number });
 
         const entryDay = String(row.entry_date).slice(0, 10);
@@ -3159,29 +3175,20 @@ export async function registerSurveyRoutes(
     });
 
   /**
-   * A village's stage states, resolved the same way everything else does.
-   *
-   * Where a stage is driven by a task the task is the truth; where it is
-   * not, the stage row is. Reading the row alone would report a village as
-   * unfinished when its board says otherwise.
+   * A village's stage states, read from the stage rows directly (owner
+   * decision 2026-10-01 #7, SG-D3): a linked task's status is
+   * informational only and never overrides the stage's own state.
    */
   async function stageStatesOf(
     db: Pool | PoolClient, villageId: string,
   ): Promise<Record<string, StageState>> {
     const rows = (await db.query(
-      `SELECT s.code, vs.state, vs.task_id, t.status AS task_status
+      `SELECT s.code, vs.state
          FROM survey_village_stages vs
          JOIN survey_stages s ON s.id = vs.stage_id
-         LEFT JOIN tasks t ON t.id = vs.task_id
         WHERE vs.survey_village_id = $1`, [villageId])).rows;
     const out: Record<string, StageState> = {};
-    for (const row of rows) {
-      out[String(row.code)] = row.task_id
-        ? resolveStage({
-          stageCode: String(row.code), linked: true, taskStatus: row.task_status,
-        }).state
-        : (row.state as StageState);
-    }
+    for (const row of rows) out[String(row.code)] = row.state as StageState;
     return out;
   }
 
@@ -4286,20 +4293,17 @@ export async function registerSurveyRoutes(
                       /*
                        * Whether the village has earned this milestone yet.
                        *
-                       * Resolved through the task where the stage is driven
-                       * by one, exactly as the rest of the module does it —
-                       * reading the stage row alone would call a village
-                       * unfinished when its board says otherwise.
+                       * Read from the stage row itself, exactly as
+                       * stageStatesOf() and the claim guard do (owner
+                       * decision 2026-10-01 #7, SG-D3): a linked task's
+                       * status never overrides the row.
                        */
                       EXISTS (
                         SELECT 1 FROM survey_village_stages vs
                           JOIN survey_stages st ON st.id = vs.stage_id
-                          LEFT JOIN tasks tk ON tk.id = vs.task_id
                          WHERE vs.survey_village_id = sv.id
                            AND st.code = $4
-                           AND CASE WHEN vs.task_id IS NOT NULL
-                                    THEN tk.status = 'DONE'
-                                    ELSE vs.state = 'COMPLETED' END
+                           AND vs.state = 'COMPLETED'
                       ) AS earned,
                       (SELECT count(DISTINCT prior.milestone)
                          FROM survey_village_billing prior

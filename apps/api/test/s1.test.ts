@@ -1197,11 +1197,12 @@ describe("holidays", () => {
   // Review finding, Task 5e fix round 1: include_inactive was honoured for
   // any holiday.read holder, so a plain reader could see retired holidays
   // by calling the API directly even though only the web UI's "Show
-  // retired holidays" toggle checked holiday.manage. No built-in role
-  // splits holiday.read from holiday.manage (only SUPER_ADMIN/ADMIN/
-  // HR_MANAGER hold either, and HR_MANAGER holds both), so this needs a
-  // custom role -- exactly the case RBAC exists to allow, and the one the
-  // server, not the UI, has to defend.
+  // retired holidays" toggle checked holiday.manage. Since migration 113
+  // (owner decision 2026-10-01 #1) several built-in staff roles hold
+  // holiday.read without holiday.manage; this test still uses its own
+  // custom role so it pins exactly that split without depending on any
+  // built-in role's grant list -- the case the server, not the UI, has to
+  // defend.
   it("keeps include_inactive to holiday.manage holders, even with only holiday.read", async () => {
     const admin = await adminHeaders();
     const created = await app.inject({
