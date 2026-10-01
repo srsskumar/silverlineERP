@@ -1858,6 +1858,12 @@ describe("a crew member reports the rover in their own hands", () => {
       `INSERT INTO survey_project_employees(org_id, survey_project_id, employee_id, project_role)
        VALUES($1,$2,$3,'GT_USER') ON CONFLICT DO NOTHING`,
       [w.orgId, programmeId, crewEmployee]);
+    // Programme enrollment alone grants nothing under the crew gate
+    // (requireCrewForReturn) -- this actor also has to be on scopedVillage's
+    // crew, the same way survey-authority.test.ts's beforeAll crews vecCrew
+    // onto a village, to be allowed to file or amend a return there.
+    await post(w.admin, `/api/v1/survey/villages/${scopedVillage}/crew`,
+      { employee_id: crewEmployee, stage_code: "GROUND_TRUTHING" });
   });
 
   it("refuses a rover issued to somebody else", async () => {
@@ -2096,6 +2102,18 @@ describe("correcting a day already recorded", () => {
       mandal_id: mandal, total_extent_ac: 100,
     });
     village = String(v.data.id);
+
+    // By this point in the file, the rover-ownership describe above has
+    // repointed w.role.EMPLOYEE at a real employee record. Under the new
+    // crew gate (requireCrewForReturn), that employee also needs crew
+    // status on this describe's own village, or "refuses an earlier day to
+    // somebody who only records them" below would be refused by the crew
+    // gate (NOT_YOUR_VILLAGE) instead of exercising the PAST_DAY_AMENDMENT
+    // rule it is actually testing.
+    const employeeId = String((await w.pool.query(
+      "SELECT employee_id FROM users WHERE id = $1", [w.roleUserId.EMPLOYEE])).rows[0].employee_id);
+    await post(w.admin, `/api/v1/survey/villages/${village}/crew`,
+      { employee_id: employeeId, stage_code: "GROUND_TRUTHING" });
   });
 
   async function recorded(date: string, acres: number) {
