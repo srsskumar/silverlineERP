@@ -148,7 +148,7 @@ measured against.
 
 **59.7.2** Every write goes through `mutate()` and is audited, as elsewhere.
 
-### §59.7.2 Survey billing claim lifecycle (owner decision 2026-10-01 #8)
+### §59.7.3 Survey billing claim lifecycle (owner decision 2026-10-01 #8)
 
 Confirmed, closing the gap this document previously left open:
 
