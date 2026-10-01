@@ -190,6 +190,37 @@ describe("building a database from nothing", () => {
       expect(perms.rows.map(r => r.code), code).toContain(code);
     }
   });
+
+  it("grants holiday.read to the staff roles created by migration alone (113)", async () => {
+    // SALES_BD_EXECUTIVE and BID_TENDER_MANAGER are created by
+    // 031_commercial_permissions.sql, so this half of 113's grant is not a
+    // no-op here and can be checked right after migrate(), the same shape as
+    // 100's own check (fd4a046).
+    const granted = await pool.query(
+      `SELECT r.code AS role_code
+         FROM role_permissions rp
+         JOIN roles r ON r.id = rp.role_id
+        WHERE r.code IN ('SALES_BD_EXECUTIVE', 'BID_TENDER_MANAGER') AND r.org_id IS NULL
+          AND rp.permission_code = 'holiday.read'
+        ORDER BY r.code`,
+    );
+    expect(granted.rows.map(r => r.role_code)).toEqual(["BID_TENDER_MANAGER", "SALES_BD_EXECUTIVE"]);
+  });
+
+  it("grants holiday.read to every staff role once fully seeded (113, owner decision 2026-10-01 #1)", async () => {
+    // EMPLOYEE, PROJECT_MANAGER, TEAM_LEAD, PAYROLL_OFFICER, INVENTORY_MANAGER
+    // and AUDITOR only exist once seedDatabase() runs (same as 097's own
+    // AUDITOR check), so this is checked after a full build.
+    const granted = await pool.query(
+      `SELECT r.code AS role_code
+         FROM role_permissions rp
+         JOIN roles r ON r.id = rp.role_id
+        WHERE r.code IN ('EMPLOYEE', 'PROJECT_MANAGER', 'TEAM_LEAD', 'PAYROLL_OFFICER',
+                          'INVENTORY_MANAGER', 'AUDITOR', 'SALES_BD_EXECUTIVE', 'BID_TENDER_MANAGER')
+          AND r.org_id IS NULL AND rp.permission_code = 'holiday.read'`,
+    );
+    expect(granted.rows).toHaveLength(8);
+  });
 });
 
 describe("097 on an already-deployed database (P-002)", () => {
