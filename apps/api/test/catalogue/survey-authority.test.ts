@@ -213,6 +213,79 @@ describe.skip("completing a stage", () => {
   });
 });
 
+// workDate() takes a Date, not an offset -- this mirrors the local `day`
+// helper survey-billing.test.ts already defines for the same reason
+// (fixture.ts has no "N days back" export).
+const daysAgo = (n: number) => {
+  const d = new Date(`${workDate()}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - n);
+  return d.toISOString().slice(0, 10);
+};
+
+const fileReturn = (h: Headers, village: string, date: string) =>
+  post(h, "/api/v1/survey/entries",
+    { survey_village_id: village, entry_date: date, teams_deployed: 1, dgps_base: 1 });
+
+describe("filing a daily return (SV-014/SG-D1, owner decision 2026-10-01 #5)", () => {
+  it("is allowed for the crew member assigned to the village", async () => {
+    const r = await fileReturn(crew.headers, villageA, daysAgo(1));
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+  it("is allowed for that crew member's reporting manager", async () => {
+    const r = await fileReturn(manager.headers, villageA, daysAgo(2));
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+  });
+  it("is allowed for a team leader, the project's PM and an admin", async () => {
+    let offset = 3;
+    for (const h of [teamLead.headers, ownPm.headers, scopedPm.headers, w.admin]) {
+      const r = await fileReturn(h, villageA, daysAgo(offset++));
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+    }
+  });
+  it("is refused for a surveyor on the programme who is not on the crew", async () => {
+    const r = await fileReturn(bystander.headers, villageA, daysAgo(10));
+    expect(r.status, JSON.stringify(r.body)).toBe(403);
+    expect(r.body.code).toBe("NOT_YOUR_VILLAGE");
+  });
+  it("is refused for another village's crew member", async () => {
+    const r = await fileReturn(otherCrew.headers, villageA, daysAgo(11));
+    expect(r.status, JSON.stringify(r.body)).toBe(403);
+    expect(r.body.code).toBe("NOT_YOUR_VILLAGE");
+  });
+  it("is refused for a project manager of some other project", async () => {
+    const r = await fileReturn(elsewherePm.headers, villageA, daysAgo(12));
+    expect(r.status, JSON.stringify(r.body)).toBe(403);
+    expect(r.body.code).toBe("NOT_YOUR_VILLAGE");
+  });
+});
+
+// Amending uses PATCH with If-Match, the same shape as the GCP edit test
+// above (line 240-251) -- a freshly-created entry is always version 1.
+const amend = (h: Headers, entryId: string, payload: unknown) =>
+  send("PATCH", { ...h, "if-match": "1" } as Headers, `/api/v1/survey/entries/${entryId}`, payload);
+
+describe("amending a daily return (SG-D1 extends to amendment too)", () => {
+  // Distinct days on villageA so neither entry collides with the other, or
+  // with the entries the filing describe block above already recorded on
+  // villageA at daysAgo(1)..daysAgo(12).
+  it("is refused for a bystander, regardless of the day (crew-gate runs before the day check)", async () => {
+    const filed = await fileReturn(crew.headers, villageA, daysAgo(30));
+    expect(filed.status, JSON.stringify(filed.body)).toBe(201);
+    const r = await amend(bystander.headers, filed.data.id, { teams_deployed: 2 });
+    expect(r.status, JSON.stringify(r.body)).toBe(403);
+    expect(r.body.code).toBe("NOT_YOUR_VILLAGE");
+  });
+  it("is allowed for the crew member who filed it, same day", async () => {
+    // Same-day only: an earlier day would also need survey.manage
+    // (PAST_DAY_AMENDMENT), which is a separate, pre-existing check this
+    // test is not exercising.
+    const filed = await fileReturn(crew.headers, villageA, workDate());
+    expect(filed.status, JSON.stringify(filed.body)).toBe(201);
+    const r = await amend(crew.headers, filed.data.id, { teams_deployed: 2 });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+  });
+});
+
 describe("recording a control point", () => {
   it("is allowed for the assigned crew member", async () => {
     expect((await gcp(crew.headers, villageA)).status).toBe(201);

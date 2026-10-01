@@ -739,6 +739,22 @@ export async function registerSurveyRoutes(
     }
   }
 
+  const RETURN_NOT_ASSIGNED_REASON =
+    'You are not on this village’s crew. A daily return is filed or amended by '
+    + 'the crew on the village, their reporting manager, a team leader, the '
+    + 'project manager or an administrator.';
+
+  /** The same five-person authority as requireOwnCrew, worded for a return. */
+  async function requireCrewForReturn(
+    db: Pool | PoolClient,
+    u: { orgId: string; id: string; permissions: string[]; roles?: string[] },
+    villageId: string,
+  ) {
+    if (!authorityCovers(await workAuthority(db, u, villageId), null)) {
+      fail('NOT_YOUR_VILLAGE', RETURN_NOT_ASSIGNED_REASON, 403);
+    }
+  }
+
   /* ------------------------------------------------------- programmes */
 
   app.get('/api/v1/survey/projects', { preHandler: guard('survey.read') }, async req => {
@@ -2462,6 +2478,7 @@ export async function registerSurveyRoutes(
     const u = actor(req), input = parse(surveyEntrySchema, req.body);
     const row = await mutate(pool, req, 'survey.entry.create', 'survey_entry', async db => {
       const village = await villageOr404(db, u.orgId, input.survey_village_id, u);
+      await requireCrewForReturn(db, u, input.survey_village_id);
       const m = await measures(db, u.orgId);
 
       for (const code of Object.keys(input.values)) {
@@ -2697,6 +2714,9 @@ export async function registerSurveyRoutes(
    * still theirs. An earlier day needs survey.manage, because by then the
    * figure has been rolled up, reported on and possibly billed, and changing
    * it is a decision about the record rather than a typo.
+   *
+   * (Owner decision 2026-10-01 #6: amending stays on this same gate -- no
+   * separate survey.amend permission is added.)
    */
   app.patch('/api/v1/survey/entries/:id', { preHandler: guard('survey.enter') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
@@ -2710,6 +2730,7 @@ export async function registerSurveyRoutes(
         // village too, and amending it is exactly the write GCP PATCH was
         // fixed against, so it gets the same check.
         await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+        await requireCrewForReturn(db, u, String(row.survey_village_id));
         version(req, row as { version: number });
 
         const entryDay = String(row.entry_date).slice(0, 10);
