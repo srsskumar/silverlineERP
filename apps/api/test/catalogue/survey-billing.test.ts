@@ -399,7 +399,11 @@ describe("billing only what is finished", () => {
   it("does not bill a stage the task board finished if its own row disagrees (owner decision 2026-10-01 #7, SG-D3)", async () => {
     // Before this decision the task governed and this billed 320. Now the
     // stage row governs: NOT_STARTED on the row means not billable, no
-    // matter what the linked task's board says.
+    // matter what the linked task's board says. (The 116 trigger mirrors a
+    // task's changes onto the row, so in practice the two only disagree like
+    // this when the row is edited after the card last moved -- the task here
+    // is inserted already DONE, which the trigger, being AFTER UPDATE, does
+    // not see.)
     const { programmeId, projectId, boqItemId } = await programme();
     const v = await village(programmeId);
     await record(v, day(6), 320);

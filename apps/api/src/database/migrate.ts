@@ -111,7 +111,10 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "110_invoice_manage_grants", file: "110_invoice_manage_grants.sql" },
   { version: "111_leave_year_open_runs", file: "111_leave_year_open_runs.sql" },
   { version: "112_auditor_legalhold_release", file: "112_auditor_legalhold_release.sql" },
+  { version: "113_holiday_read_for_staff", file: "113_holiday_read_for_staff.sql" },
+  { version: "114_document_pending_deletion", file: "114_document_pending_deletion.sql" },
   { version: "115_backfill_task_linked_stage_state", file: "115_backfill_task_linked_stage_state.sql" },
+  { version: "116_sync_task_linked_stage", file: "116_sync_task_linked_stage.sql" },
 ];
 
 /**

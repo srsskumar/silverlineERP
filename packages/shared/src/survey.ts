@@ -1402,7 +1402,9 @@ const day = (v: string | null | undefined): string | null =>
  * 2026-10-01 #7, SG-D3). A linked task is informational only -- its status
  * does not override the stage's own state, so the dashboard (which always
  * read the row) and the internal screens (which used to prefer the task)
- * can no longer disagree (SG-009).
+ * can no longer disagree (SG-009). Reading only the row is safe and complete
+ * because a database trigger (116_sync_task_linked_stage.sql) keeps a
+ * task-linked stage's own row mirroring its task's status and actual dates.
  */
 export function resolveStage(stage: LinkedStage): ResolvedStage {
   return {
