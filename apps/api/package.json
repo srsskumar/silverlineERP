@@ -20,7 +20,9 @@
     "profile:setup": "tsx test/profile-setup.ts",
     "audit:survey": "tsx src/scripts/audit-survey.ts",
     "reconcile:survey": "tsx src/scripts/reconcile-survey.ts",
-    "create-super-admin": "tsx src/scripts/create-super-admin.ts"
+    "create-super-admin": "tsx src/scripts/create-super-admin.ts",
+    "reset-for-e2e": "tsx src/scripts/reset-for-e2e.ts",
+    "create-role-users": "tsx src/scripts/create-role-users.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",
