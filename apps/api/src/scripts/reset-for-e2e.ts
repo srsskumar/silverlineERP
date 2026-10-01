@@ -103,10 +103,37 @@ async function main(): Promise<void> {
 
     await pool.query("BEGIN");
     try {
+      // employees and users are deliberately kept out of the truncate set
+      // (they get a targeted delete below, to preserve ADMIN/SUPER_ADMIN
+      // rows), but either can hold its own FK into a table that IS being
+      // truncated -- employees.designation_id -> designations is one,
+      // found by running this the first time. Rather than hand-maintain
+      // that list and get it wrong again, find every such column from
+      // pg_constraint and clear it before truncating, instead of
+      // hard-coding the ones known about today.
+      const tableNames = TRUNCATE_TABLES.split(",").map(t => t.trim());
+      const crossFks = await pool.query(
+        `SELECT conrelid::regclass::text AS referencing_table,
+                a.attname AS referencing_column
+           FROM pg_constraint c
+           JOIN unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord) ON true
+           JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+          WHERE c.contype = 'f'
+            AND conrelid::regclass::text IN ('employees', 'users')
+            AND confrelid::regclass::text = ANY($1::text[])`,
+        [tableNames],
+      );
+      for (const row of crossFks.rows as Array<{ referencing_table: string; referencing_column: string }>) {
+        console.log(`Clearing ${row.referencing_table}.${row.referencing_column} (points into a table being truncated)`);
+        await pool.query(`UPDATE ${row.referencing_table} SET ${row.referencing_column} = NULL`);
+      }
+
       await pool.query(`TRUNCATE TABLE ${TRUNCATE_TABLES}`);
       // A kept employee's own manager chain could point at a non-kept
       // employee about to be deleted; clear it first rather than let the
-      // FK on employees.reports_to refuse the delete below.
+      // FK on employees.reports_to refuse the delete below. (This one is
+      // employees -> employees, so the query above never finds it --
+      // confrelid is "employees" itself, not a truncated table.)
       await pool.query("UPDATE employees SET reports_to = NULL WHERE id = ANY($1::uuid[])", [keptEmployeeIds]);
       const deletedUsers = await pool.query(
         "DELETE FROM users WHERE NOT (id = ANY($1::uuid[]))",
