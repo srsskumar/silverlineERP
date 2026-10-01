@@ -111,6 +111,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "110_invoice_manage_grants", file: "110_invoice_manage_grants.sql" },
   { version: "111_leave_year_open_runs", file: "111_leave_year_open_runs.sql" },
   { version: "112_auditor_legalhold_release", file: "112_auditor_legalhold_release.sql" },
+  { version: "115_backfill_task_linked_stage_state", file: "115_backfill_task_linked_stage_state.sql" },
 ];
 
 /**

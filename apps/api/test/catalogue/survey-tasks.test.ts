@@ -1,15 +1,16 @@
 /**
  * Survey work on the task board (§59, extending §S4).
  *
- * The choice being tested is that the task's status is what a village's state
- * means. The thing to prove is that there is exactly one source: moving a
- * task must move the survey report, and the stage row's own columns must stay
- * out of it.
+ * The board is generated from the programme and carries who and when-planned,
+ * but since owner decision 2026-10-01 #7 (SG-D3) it does not carry state: the
+ * stage row is what a village's state means, linked task or not. The thing to
+ * prove is still that there is exactly one source -- now the row: moving a
+ * task must not move the survey report.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { STAGE_PIPELINE } from "@silverline/shared";
-import { workDate, buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
+import { buildWorld, idem, uniq, type CatalogueWorld, type Headers } from "./fixture.js";
 
 let w: CatalogueWorld;
 let programmeId: string;
@@ -160,84 +161,135 @@ describe("generating the board", () => {
   });
 });
 
-describe("the task is the single source of the village's state", () => {
+/**
+ * Set a stage through the survey API, asserting that it took.
+ *
+ * Since owner decision 2026-10-01 #7 (SG-D3) this is the only thing that
+ * moves a stage: the row governs, linked task or not.
+ */
+async function setStage(surveyVillageId: string, body: Record<string, unknown>) {
+  const r = await post(w.admin, `/api/v1/survey/villages/${surveyVillageId}/stage`, body);
+  expect(r.status, `${String(body.stage_code)}: ${JSON.stringify(r.body)}`).toBe(200);
+}
+
+describe("the stage row is the single source of the village's state (owner decision 2026-10-01 #7)", () => {
+  /*
+   * This block used to prove the opposite: that the linked task governed and
+   * the stage row's own columns were ignored. The owner reversed that (SG-D3)
+   * because the dashboard always read the row and the internal screens read
+   * the task, and the two disagreed (SG-009). Each test below now proves the
+   * row governs and the board is informational.
+   */
   it("starts every village not started", async () => {
     expect((await villageRow("ADAKULA")).state).toBe("NOT_STARTED");
   });
 
-  it("moves the survey report when a stage task moves", async () => {
+  it("does not move the survey report when a stage task moves, only when the stage does", async () => {
     const adakula = await villageRow("ADAKULA");
     await setTaskStatus(await stageTaskId(adakula.id, "GROUND_TRUTHING"), "IN_PROGRESS",
       { start: "2026-09-02T06:00:00Z" });
 
-    const after = await villageRow("ADAKULA");
-    expect(after.stages.GROUND_TRUTHING).toBe("IN_PROGRESS");
-    expect(after.state).toBe("IN_PROGRESS");
+    // The card moved; the stage did not.
+    const moved = await villageRow("ADAKULA");
+    expect(moved.stages.GROUND_TRUTHING).toBe("NOT_STARTED");
+    expect(moved.state).toBe("NOT_STARTED");
+
+    // Starting ground truthing through the survey API is what moves it.
+    await setStage(adakula.id, {
+      stage_code: "GROUND_TRUTHING", state: "IN_PROGRESS", started_on: "2026-09-02",
+      gt_govt_staff_allocated: 2, gt_crew_allocated: 3,
+    });
+    const started = await villageRow("ADAKULA");
+    expect(started.stages.GROUND_TRUTHING).toBe("IN_PROGRESS");
+    expect(started.state).toBe("IN_PROGRESS");
   });
 
-  it("puts the task's actual dates on the summary sheet", async () => {
-    // The summary reports GT start and completion, and those are when the
-    // work happened rather than when it was planned.
-    //
-    // The completion date is the board's to give: a database trigger stamps
-    // actual_end_at at the moment a task moves to DONE. That is the whole
-    // point of the choice — a completion date cannot be back-written through
-    // the survey row, because the survey row does not hold it.
+  it("puts the stage row's dates on the summary sheet, not the task's", async () => {
+    // The task moving to DONE stamps actual_end_at (a database trigger). That
+    // date is no longer the summary's: until the stage itself is completed,
+    // the sheet says ground truthing is still in progress.
     const adakula = await villageRow("ADAKULA");
     await setTaskStatus(await stageTaskId(adakula.id, "GROUND_TRUTHING"), "DONE");
 
-    const summary = await get(w.admin, `/api/v1/survey/projects/${programmeId}/summary`);
-    const row = summary.data.find((x: any) => x.village === "ADAKULA");
-    expect(row.gt_status).toBe("COMPLETED");
-    // The start date was supplied before the trigger had anything to stamp,
-    // so it survives.
+    let summary = await get(w.admin, `/api/v1/survey/projects/${programmeId}/summary`);
+    let row = summary.data.find((x: any) => x.village === "ADAKULA");
+    expect(row.gt_status).toBe("IN_PROGRESS");
     expect(row.gt_started_on).toBe("2026-09-02");
-    expect(row.gt_completed_on).toBe(workDate());
-  });
+    expect(row.gt_completed_on).toBeNull();
 
-  it("lets a wrongly dated completion be corrected on the task, not the survey row", async () => {
-    // Field work is reported late, so the stamped date is sometimes wrong.
-    // The correction belongs where the fact lives.
-    const adakula = await villageRow("ADAKULA");
-    await w.pool.query("UPDATE tasks SET actual_end_at = $2 WHERE id = $1",
-      [await stageTaskId(adakula.id, "GROUND_TRUTHING"), "2026-09-11T14:00:00Z"]);
-
-    const summary = await get(w.admin, `/api/v1/survey/projects/${programmeId}/summary`);
-    const row = summary.data.find((x: any) => x.village === "ADAKULA");
+    await setStage(adakula.id, {
+      stage_code: "GROUND_TRUTHING", state: "COMPLETED", completed_on: "2026-09-11",
+    });
+    summary = await get(w.admin, `/api/v1/survey/projects/${programmeId}/summary`);
+    row = summary.data.find((x: any) => x.village === "ADAKULA");
+    expect(row.gt_status).toBe("COMPLETED");
+    // The start date given when the stage began survives the completion.
+    expect(row.gt_started_on).toBe("2026-09-02");
     expect(row.gt_completed_on).toBe("2026-09-11");
   });
 
-  it("ignores the stage row's own columns once a task governs it", async () => {
-    // The whole reason for the choice: one fact, one home. A stale value
-    // written directly must not win.
+  it("corrects a wrongly dated completion on the survey row, not the task", async () => {
+    // Field work is reported late, so a recorded date is sometimes wrong.
+    // Editing the task's end date changes nothing; the stage row holds it.
     const adakula = await villageRow("ADAKULA");
-    await w.pool.query(
-      `UPDATE survey_village_stages vs SET state = 'NOT_STARTED', completed_on = NULL
-       FROM survey_stages s
-       WHERE s.id = vs.stage_id AND vs.survey_village_id = $1 AND s.code = 'GROUND_TRUTHING'`,
-      [adakula.id]);
+    await w.pool.query("UPDATE tasks SET actual_end_at = $2 WHERE id = $1",
+      [await stageTaskId(adakula.id, "GROUND_TRUTHING"), "2026-09-20T14:00:00Z"]);
+
+    let summary = await get(w.admin, `/api/v1/survey/projects/${programmeId}/summary`);
+    let row = summary.data.find((x: any) => x.village === "ADAKULA");
+    expect(row.gt_completed_on).toBe("2026-09-11");
+
+    await setStage(adakula.id, {
+      stage_code: "GROUND_TRUTHING", state: "COMPLETED", completed_on: "2026-09-12",
+    });
+    summary = await get(w.admin, `/api/v1/survey/projects/${programmeId}/summary`);
+    row = summary.data.find((x: any) => x.village === "ADAKULA");
+    expect(row.gt_completed_on).toBe("2026-09-12");
+  });
+
+  it("ignores the linked task's status once the stage row says otherwise", async () => {
+    // One fact, one home -- now the row. A card dragged back on the board
+    // must not un-complete a stage the survey record says is done.
+    const adakula = await villageRow("ADAKULA");
+    await setTaskStatus(await stageTaskId(adakula.id, "GROUND_TRUTHING"), "TO_DO");
 
     const after = await villageRow("ADAKULA");
     expect(after.stages.GROUND_TRUTHING).toBe("COMPLETED");
+    expect(after.stage_dates.GROUND_TRUTHING.completed).toBe("2026-09-12");
   });
 
-  it("reads a stage under review as still in progress", async () => {
+  it("does not move a stage when its task goes under review", async () => {
     const adakula = await villageRow("ADAKULA");
     await setTaskStatus(await stageTaskId(adakula.id, "VECTORIZATION"), "IN_REVIEW");
-    expect((await villageRow("ADAKULA")).stages.VECTORIZATION).toBe("IN_PROGRESS");
+    expect((await villageRow("ADAKULA")).stages.VECTORIZATION).toBe("NOT_STARTED");
   });
 
-  it("reads a blocked stage as on hold", async () => {
+  it("reads on hold from the stage row, not from a blocked task", async () => {
     const adakula = await villageRow("ADAKULA");
     await setTaskStatus(await stageTaskId(adakula.id, "FINAL_DELIVERABLES"), "BLOCKED");
-    expect((await villageRow("ADAKULA")).stages.FINAL_DELIVERABLES).toBe("ON_HOLD");
+    expect((await villageRow("ADAKULA")).stages.FINAL_DELIVERABLES).toBe("NOT_STARTED");
+
+    // GT_QC's predecessor (ground truthing) is complete, so it may be held.
+    await setStage(adakula.id, { stage_code: "GT_QC", state: "ON_HOLD" });
+    expect((await villageRow("ADAKULA")).stages.GT_QC).toBe("ON_HOLD");
   });
 
-  it("completes the village only when every stage task is done", async () => {
+  it("completes the village only when every stage row is complete, whatever the board says", async () => {
     const adakula = await villageRow("ADAKULA");
-    for (const code of STAGE_PIPELINE.map(st => st.code)) {
+    const forward = STAGE_PIPELINE.filter(st => !st.offSequence).map(st => st.code);
+
+    // Every card on the board done: the village is still not complete.
+    for (const code of forward) {
       await setTaskStatus(await stageTaskId(adakula.id, code), "DONE",
         { end: "2026-09-12T10:00:00Z" });
+    }
+    expect((await villageRow("ADAKULA")).state).toBe("IN_PROGRESS");
+
+    // Every stage completed through the survey API, in pipeline order.
+    for (const code of forward) {
+      await setStage(adakula.id, {
+        stage_code: code, state: "COMPLETED", completed_on: "2026-09-12",
+      });
     }
     const after = await villageRow("ADAKULA");
     expect(after.state).toBe("COMPLETED");
