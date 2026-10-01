@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Rebuilds the web app for local-origin browser QA and serves it on
+# 127.0.0.1:8081, proxying to the same API the production site uses. Does
+# not touch /opt/silverline-web/current or the production nginx site.
+#
+# Run after a normal `sudo silverline-deploy` so the API is already up to
+# date; this script only rebuilds the static web export.
+set -euo pipefail
+cd /opt/silverline
+
+QA_ORIGIN="http://127.0.0.1:8081"
+echo "==> building web for QA (API origin: $QA_ORIGIN)"
+sudo -u dev-thor env NEXT_VERIFY_BUILD=1 NEXT_PUBLIC_API_URL="$QA_ORIGIN" npm run build --workspace=web
+
+WEB_RELEASES=/opt/silverline-web-qa/releases
+RELEASE="$WEB_RELEASES/$(date -u +%Y%m%dT%H%M%SZ)"
+echo "==> staging QA web release $RELEASE"
+mkdir -p "$WEB_RELEASES"
+cp -a /opt/silverline/apps/web/.next-verify "$RELEASE"
+rm -f "$RELEASE/_headers" "$RELEASE/_redirects"
+ln -sfn "$RELEASE" /opt/silverline-web-qa/current
+
+echo "==> installing the QA nginx site"
+SITE=/etc/nginx/sites-available/silverline-qa
+if ! cmp -s /opt/silverline/scripts/vm/nginx-silverline-qa.conf "$SITE" 2>/dev/null; then
+  cp -f "$SITE" "$SITE.bak" 2>/dev/null || true
+  install -m 644 /opt/silverline/scripts/vm/nginx-silverline-qa.conf "$SITE"
+  ln -sfn "$SITE" /etc/nginx/sites-enabled/silverline-qa
+  if ! nginx -t 2>&1; then
+    echo "QA nginx config failed nginx -t; restoring previous" >&2
+    [ -f "$SITE.bak" ] && install -m 644 "$SITE.bak" "$SITE"
+    exit 1
+  fi
+  systemctl reload nginx
+fi
+echo "==> QA site ready at http://127.0.0.1:8081"
