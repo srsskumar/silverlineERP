@@ -2209,6 +2209,7 @@ export function billingDecisionRequired(status: BillingStatus): boolean {
  * does not go back to submitted or become returned, because the covering
  * letter, the receipt and the department's file all say it was paid.
  */
+// Confirmed as the spec (owner decision 2026-10-01 #8); see docs/REQUIREMENTS_LAND_SURVEY.md §59.7.2.
 export const BILLING_TRANSITIONS: Record<BillingStatus, BillingStatus[]> = {
   SUBMITTED: ['APPROVED', 'REJECTED', 'PAID'],
   // Back to submitted undoes a decision pressed on the wrong row (SV-023).

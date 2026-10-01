@@ -148,6 +148,23 @@ measured against.
 
 **59.7.2** Every write goes through `mutate()` and is audited, as elsewhere.
 
+### §59.7.2 Survey billing claim lifecycle (owner decision 2026-10-01 #8)
+
+Confirmed, closing the gap this document previously left open:
+
+    SUBMITTED -> APPROVED | REJECTED | PAID
+    APPROVED  -> PAID | REJECTED | SUBMITTED
+    REJECTED  -> SUBMITTED
+    PAID      -> (terminal; only an admin reversal moves it, back to APPROVED)
+
+An admin may reverse a PAID claim, which returns it to APPROVED -- the
+department accepted the work; only the payment is being undone. Reversing
+further back to SUBMITTED is not a one-step admin action; a REJECTED claim
+is resubmitted (SUBMITTED) by the normal claim flow.
+
+Implemented in `packages/shared/src/survey.ts` (`BILLING_STATUSES`,
+`BILLING_TRANSITIONS`, `BILLING_REVERSAL_TARGET`).
+
 ## 59.8 Explicitly out of scope
 
 - Reading DGPS instrument output directly. Quantities are entered.
