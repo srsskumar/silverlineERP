@@ -26,3 +26,4 @@ ios/
 .gstack/
 .env.supabase
 .env.deploy
+.worktrees/
