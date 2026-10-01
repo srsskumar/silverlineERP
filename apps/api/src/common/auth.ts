@@ -131,7 +131,15 @@ export function buildAuthenticate(ctx: AuthContext) {
     // External viewers require explicit project assignments, including legacy accounts.
     if(clientOnly)scopes=scopes.filter(s=>s.scope_type==='project'&&s.scope_id);
     if(clientOnly&&!scopes.length)scopes=[{scope_type:'restricted',scope_id:row.id}];
-    if(clientOnly&&(req.url.startsWith('/api/v1/custom-fields')||/\/projects\/[^/]+\/(people|dependencies)/.test(req.url)||/\/tasks\/[^/]+\/(comments|evidence|activity|planning)/.test(req.url)))throw new ApiError({status:403,code:'FORBIDDEN',message:'Client access is limited to project progress'});
+    // req.url is the raw, still-percent-encoded request target; find-my-way
+    // decodes it before matching a route, so e.g. /tasks/<id>/%63omments
+    // reaches the comments handler while this regex, reading req.url
+    // directly, never sees "comments" and lets a client viewer through.
+    // req.routeOptions.url is Fastify's own record of which route pattern
+    // actually matched -- set by Fastify itself, not derived from the
+    // attacker's string, so it can't be spoofed by any encoding of req.url.
+    const routePattern = req.routeOptions.url ?? req.url;
+    if(clientOnly&&(routePattern.startsWith('/api/v1/custom-fields')||/\/projects\/:id\/(people|dependencies)/.test(routePattern)||/\/tasks\/:id\/(comments|evidence|activity|planning)/.test(routePattern)))throw new ApiError({status:403,code:'FORBIDDEN',message:'Client access is limited to project progress'});
     /*
      * Who needs an authenticator is now the organisation's decision (§34).
      *
@@ -191,7 +199,7 @@ export function buildAuthenticate(ctx: AuthContext) {
        * it. Their password, their authenticator, and anything that would let
        * the borrowed session outlive the impersonation stay theirs.
        */
-      if (impersonationBlocks(req.url)) {
+      if (impersonationBlocks(req.routeOptions.url ?? req.url)) {
         throw new ApiError({
           status: 403,
           code: 'IMPERSONATION_FORBIDDEN',

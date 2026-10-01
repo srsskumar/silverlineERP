@@ -205,6 +205,27 @@ describe("what the borrowed session may do", () => {
   });
 
   /*
+   * The block list used to read req.url, the still-encoded request target,
+   * while find-my-way decodes it before choosing a handler. "%70assword"
+   * reaches the password route but never matches the literal string
+   * "password" in req.url, so the borrowed session could change it. The
+   * check now reads req.routeOptions.url, Fastify's own record of which
+   * route matched, which no encoding of the request line can affect.
+   */
+  it("cannot change the password through a percent-encoded path", async () => {
+    const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
+    const employeeId = await createUser(`imp_encoded_${randomUUID().slice(0, 8)}`, ["EMPLOYEE"]);
+    const token = (await viewAs(admin, employeeId)).json() as { access_token: string };
+    const borrowed = { authorization: `Bearer ${token.access_token}` };
+
+    const res = await app.inject({
+      method: "POST", url: "/api/v1/auth/%70assword", headers: borrowed, payload: {},
+    });
+    expect(res.statusCode, res.body).toBe(403);
+    expect(JSON.stringify(res.json())).toContain("IMPERSONATION_FORBIDDEN");
+  });
+
+  /*
    * Belt and braces. The refresh secret behind a borrowed session is
    * generated, hashed and discarded, so there is nothing anybody could
    * present -- this asserts the session cannot be extended, by any route.

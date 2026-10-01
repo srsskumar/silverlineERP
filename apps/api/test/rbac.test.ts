@@ -442,6 +442,39 @@ describe("RBAC matrix", () => {
     expect(createTask.statusCode).toBe(403);
   });
 
+  /*
+   * The block on a task's comments/evidence/activity/planning used to test
+   * a regex against req.url, the still-percent-encoded request target.
+   * find-my-way decodes it before routing, so "%63omments" reaches the
+   * comments handler while never matching the literal word "comments" in
+   * req.url. The check now reads req.routeOptions.url, Fastify's own
+   * record of which route pattern matched, which encoding cannot affect.
+   */
+  it("CLIENT_VIEWER: cannot reach task comments through a percent-encoded path", async () => {
+    const admin = await adminHeaders();
+    const workspaceId = await mkWorkspace(admin);
+    const projectId = await mkProject(admin, workspaceId);
+    const task = await mkTask(admin, projectId);
+    const viewer = await mkUser(
+      [{ role: "CLIENT_VIEWER", scopeType: "project", scopeId: projectId }],
+      "viewer_enc",
+    );
+
+    const plain = await app.inject({
+      method: "GET",
+      url: `/api/v1/tasks/${task.id}/comments`,
+      headers: viewer.headers,
+    });
+    expect(plain.statusCode).toBe(403);
+
+    const encoded = await app.inject({
+      method: "GET",
+      url: `/api/v1/tasks/${task.id}/%63omments`,
+      headers: viewer.headers,
+    });
+    expect(encoded.statusCode, encoded.body).toBe(403);
+  });
+
   it("AUDITOR: read-only evidence (POST /tasks 403, GET /audit 200)", async () => {
     const auditor = await mkUser([{ role: "AUDITOR" }], "auditor");
     const createTask = await app.inject({
