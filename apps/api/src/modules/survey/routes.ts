@@ -6170,22 +6170,11 @@ export async function registerSurveyRoutes(
            LEFT JOIN org_units ou ON ou.id = c.org_unit_id
           WHERE ${where}
           ORDER BY c.side, ou.name NULLS FIRST, c.name`, values)).rows;
-      // The department and a client are shown who to ask a question of, not
-      // how to reach them directly — the same "where the work has got to,
-      // never whose desk it is on" line the dashboard draws for crew names.
-      // Dropped for an observer rather than withheld from the query, so the
-      // name, designation and what they cover still come through.
-      //
-      // Owner decision 2026-09-24 (SV-003): anybody holding an observer role
-      // is masked, even alongside a staff role, and the free-text notes go
-      // too -- "ring after 10 on 98480…" is where a number ends up when the
-      // phone field is the one being hidden.
-      const masked = masksPhones(u);
-      return {
-        data: masked
-          ? rows.map(({ phone: _phone, email: _email, notes: _notes, ...rest }) => rest)
-          : rows,
-      };
+      // Owner decision 2026-09-24 (SV-003) masked phone/email/notes for any
+      // observer role here. Reversed by owner decision 2026-10-01: an
+      // observer sees the same contact details as staff -- who to ring is
+      // not withheld on this list.
+      return { data: rows };
     });
 
   app.post('/api/v1/survey/projects/:id/contacts',

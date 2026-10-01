@@ -447,7 +447,7 @@ describe("a day filed before the crew was ever on the ground", () => {
 });
 
 describe("what an observer is shown of a contact", () => {
-  it("drops phone and email from the government observer's copy", async () => {
+  it("shows the government observer the same phone and email as staff (owner decision 2026-10-01 reverses SV-003)", async () => {
     const c = await post(w.admin, `/api/v1/survey/projects/${programmeId}/contacts`, {
       side: "GOVT", name: "Test Tahsildar", designation: "Tahsildar", phone: "9100000000",
       email: "tahsildar@example.invalid",
@@ -459,8 +459,8 @@ describe("what an observer is shown of a contact", () => {
     const row = (asObserver.data as Array<Record<string, unknown>>)
       .find((x) => x.id === c.data.id);
     expect(row, JSON.stringify(asObserver.data)).toBeTruthy();
-    expect(row).not.toHaveProperty("phone");
-    expect(row).not.toHaveProperty("email");
+    expect(row!.phone).toBe("9100000000");
+    expect(row!.email).toBe("tahsildar@example.invalid");
     expect(row!.name).toBe("Test Tahsildar");
 
     const asStaff = await get(w.admin, `/api/v1/survey/projects/${programmeId}/contacts`);
