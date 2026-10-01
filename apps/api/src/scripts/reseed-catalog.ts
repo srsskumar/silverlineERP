@@ -1,17 +1,19 @@
 import "../common/env.js";
 import { Pool } from "pg";
-import { DOCUMENT_TYPE_SEEDS, PROJECT_CATEGORY_SEEDS } from "@silverline/shared";
+import { DOCUMENT_TYPE_SEEDS, PROJECT_CATEGORY_SEEDS, MEASURE_SEEDS, STAGE_PIPELINE } from "@silverline/shared";
 
 /**
  * Re-seed the per-org catalog rows that reset-for-e2e.ts wipes along with
- * everything else -- document_types, leave_types, project_categories --
- * for every organisation that still has an ADMIN/SUPER_ADMIN user.
+ * everything else -- document_types, leave_types, project_categories,
+ * survey_measures, survey_stages -- for every organisation that still has
+ * an ADMIN/SUPER_ADMIN user.
  *
- * None of these three tables have a REST API to create them (only
+ * None of these tables have a REST API to create them (only
  * src/database/seed.ts inserts them, and only for the one hardcoded demo
- * org). Without this, a reset org's documents and leave modules are dead:
- * every document/leave-request create 404s at the type lookup, with no
- * way for an org admin to fix it themselves.
+ * org). Without this, a reset org's documents, leave and survey modules
+ * are all dead: every document/leave-request create 404s at the type
+ * lookup, and crewing a village fails UNKNOWN_STAGE, with no way for an
+ * org admin to fix any of it themselves.
  *
  * Re-runnable: every insert here is the same ON CONFLICT ... DO UPDATE
  * seed.ts itself uses, so running this twice converges rather than
@@ -82,7 +84,39 @@ async function main(): Promise<void> {
           [org.id, c.code, c.name],
         );
       }
-      console.log(`${org.name}: ${DOCUMENT_TYPE_SEEDS.length} document type(s), ${LEAVE_TYPE_SEEDS.length} leave type(s), ${PROJECT_CATEGORY_SEEDS.length} project category/categories.`);
+      for (const m of MEASURE_SEEDS) {
+        await pool.query(
+          `INSERT INTO survey_measures (org_id, code, label, group_label, unit, basis, display_order)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
+           ON CONFLICT (org_id, code) DO UPDATE SET
+             label = EXCLUDED.label, group_label = EXCLUDED.group_label, unit = EXCLUDED.unit,
+             basis = EXCLUDED.basis, display_order = EXCLUDED.display_order, updated_at = NOW()`,
+          [org.id, m.code, m.label, m.groupLabel, m.unit, m.basis, m.displayOrder],
+        );
+      }
+      for (const s of STAGE_PIPELINE) {
+        await pool.query(
+          `INSERT INTO survey_stages (org_id, code, label, display_order, tracks_daily_progress)
+           VALUES ($1,$2,$3,$4,$5)
+           ON CONFLICT (org_id, code) DO UPDATE SET
+             label = EXCLUDED.label, display_order = EXCLUDED.display_order,
+             tracks_daily_progress = EXCLUDED.tracks_daily_progress`,
+          [org.id, s.code, s.label, s.displayOrder, Boolean(s.tracksDailyProgress)],
+        );
+      }
+      // The chain, once every stage exists -- same two-pass approach as
+      // seed.ts, since a stage can require one not yet inserted.
+      for (const s of STAGE_PIPELINE) {
+        if (!s.requires) continue;
+        await pool.query(
+          `UPDATE survey_stages child SET requires_stage_id = parent.id
+           FROM survey_stages parent
+           WHERE child.org_id = $1 AND child.code = $2
+             AND parent.org_id = $1 AND parent.code = $3`,
+          [org.id, s.code, s.requires],
+        );
+      }
+      console.log(`${org.name}: ${DOCUMENT_TYPE_SEEDS.length} document type(s), ${LEAVE_TYPE_SEEDS.length} leave type(s), ${PROJECT_CATEGORY_SEEDS.length} project category/categories, ${MEASURE_SEEDS.length} survey measure(s), ${STAGE_PIPELINE.length} survey stage(s).`);
     }
     console.log(`\nDone across ${orgs.rowCount} organisation(s).`);
   } finally {
