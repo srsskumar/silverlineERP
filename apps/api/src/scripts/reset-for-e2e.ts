@@ -118,6 +118,13 @@ async function main(): Promise<void> {
       // is null, DELETE's row-level check passes. Discovered from
       // pg_constraint rather than hard-coded, so a schema change doesn't
       // silently stop being handled.
+      // Also covers employees.exit_approved_by/created_by/updated_by ->
+      // users: those don't block a TRUNCATE (nothing truncates users), but
+      // do block the row-level DELETE FROM users below once a kept
+      // employee's own history points at a user being removed -- found by
+      // running this a second time. Nulling them is harmless: this is a
+      // full data wipe, and "who approved this exit" doesn't need to
+      // survive it.
       const tableNames = TRUNCATE_TABLES.split(",").map(t => t.trim());
       const crossFks = await pool.query(
         `SELECT conrelid::regclass::text AS referencing_table,
@@ -129,7 +136,7 @@ async function main(): Promise<void> {
           WHERE c.contype = 'f'
             AND conrelid::regclass::text IN ('employees', 'users')
             AND confrelid::regclass::text = ANY($1::text[])`,
-        [tableNames],
+        [[...tableNames, "users"]],
       );
       const deleteInstead = new Set<string>();
       for (const row of crossFks.rows as Array<{
@@ -137,7 +144,7 @@ async function main(): Promise<void> {
       }>) {
         console.log(`Clearing ${row.referencing_table}.${row.referencing_column} (points into ${row.referenced_table})`);
         await pool.query(`UPDATE ${row.referencing_table} SET ${row.referencing_column} = NULL`);
-        deleteInstead.add(row.referenced_table);
+        if (row.referenced_table !== "users") deleteInstead.add(row.referenced_table);
       }
 
       const truncateOnly = tableNames.filter(t => !deleteInstead.has(t));
