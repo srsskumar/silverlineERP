@@ -464,6 +464,36 @@ describe("due-for-purge report and explicit purge (owner decision 2026-09-24 #3)
     expect(row.retain_until).toBeTruthy();
   });
 
+  it("flags the row for later deletion rather than deleting it (owner decision 2026-10-01 #4)", async () => {
+    const doc = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const r = await post(w.admin, "/api/v1/documents/purge",
+      { ids: [doc.id], reason: "Flag for later deletion" });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+
+    // Gone from every ordinary read path, same as a hard delete looked from
+    // the outside...
+    expect((await get(w.admin, `/api/v1/documents/${doc.id}`)).status).toBe(404);
+    const list = await get(w.admin, "/api/v1/documents");
+    expect(list.data.map((d: any) => d.id)).not.toContain(doc.id);
+
+    // ...but the row itself is still there, flagged, for a later deletion
+    // step to act on.
+    const row = (await w.pool.query(
+      "SELECT pending_deletion, pending_deletion_reason, pending_deletion_by FROM documents WHERE id = $1",
+      [doc.id],
+    )).rows[0];
+    expect(row.pending_deletion).toBe(true);
+    expect(row.pending_deletion_reason).toBe("Flag for later deletion");
+    expect(row.pending_deletion_by).toBe(w.adminId);
+  });
+
+  it("excludes an already-flagged document from a fresh due-for-purge report", async () => {
+    const doc = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    await post(w.admin, "/api/v1/documents/purge", { ids: [doc.id], reason: "First flag" });
+    const due = await get(w.admin, "/api/v1/documents/due-for-purge");
+    expect(due.data.map((d: any) => d.id)).not.toContain(doc.id);
+  });
+
   it("carries owner and source through the purge audit for an owned, sourced document", async () => {
     const doc = await post(w.admin, "/api/v1/documents", {
       type_code: "MEDICAL_FITNESS", owner_type: "employee", owner_id: w.directEmployee,

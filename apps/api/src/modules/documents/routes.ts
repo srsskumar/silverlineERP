@@ -170,7 +170,7 @@ export async function registerDocumentRoutes(
     const canSeeConfidential = u.permissions.includes('document.confidential');
 
     const values: unknown[] = [u.orgId];
-    let where = 'd.org_id = $1';
+    let where = 'd.org_id = $1 AND NOT d.pending_deletion';
     if (q.owner_type) { values.push(q.owner_type); where += ` AND d.owner_type = $${values.length}`; }
     if (q.owner_id) { values.push(q.owner_id); where += ` AND d.owner_id = $${values.length}`; }
     if (q.type_code) { values.push(q.type_code); where += ` AND t.code = $${values.length}`; }
@@ -212,7 +212,7 @@ export async function registerDocumentRoutes(
     const within = Math.max(1, Math.min(365, Number(q.within_days) || 60));
     const canSeeConfidential = u.permissions.includes('document.confidential');
 
-    const rows = (await pool.query(`${SELECT} WHERE d.org_id = $1`, [u.orgId])).rows;
+    const rows = (await pool.query(`${SELECT} WHERE d.org_id = $1 AND NOT d.pending_deletion`, [u.orgId])).rows;
 
     const queue = renewalQueue(rows.map(r => ({
       row: r,
@@ -242,7 +242,7 @@ export async function registerDocumentRoutes(
     const u = actor(req), id = (req.params as { id: string }).id;
     await inOrg(pool, 'documents', id, u.orgId);
     const row = (await pool.query(
-      `${SELECT} WHERE d.id = $1 AND d.org_id = $2`, [id, u.orgId])).rows[0];
+      `${SELECT} WHERE d.id = $1 AND d.org_id = $2 AND NOT d.pending_deletion`, [id, u.orgId])).rows[0];
     if (!row) fail('NOT_FOUND', 'Not found', 404);
     const canSeeConfidential = u.permissions.includes('document.confidential');
 
@@ -500,7 +500,7 @@ export async function registerDocumentRoutes(
     const u = actor(req);
     const { limit, cursor } = parse(cursorPageQuerySchema, req.query);
     const asOf = await orgToday(pool, u.orgId);
-    const rows = (await pool.query(`${SELECT} WHERE d.org_id = $1`, [u.orgId])).rows;
+    const rows = (await pool.query(`${SELECT} WHERE d.org_id = $1 AND NOT d.pending_deletion`, [u.orgId])).rows;
     const due = rows
       .map(r => ({
         row: r,
@@ -579,7 +579,7 @@ export async function registerDocumentRoutes(
                 t.retention_years, t.code AS type_code, t.basis,
                 (SELECT id FROM documents s WHERE s.supersedes_id = d.id) AS successor_id
            FROM documents d JOIN document_types t ON t.id = d.type_id
-          WHERE d.id = ANY($1::uuid[]) AND d.org_id = $2 FOR UPDATE OF d`,
+          WHERE d.id = ANY($1::uuid[]) AND d.org_id = $2 AND NOT d.pending_deletion FOR UPDATE OF d`,
         [ids, u.orgId])).rows;
 
       const asOf = await orgToday(db, u.orgId);
@@ -618,10 +618,13 @@ export async function registerDocumentRoutes(
           refused.push({ field: String(row.id), message: check.reason ?? 'Not yet due for purge' });
           continue;
         }
-        // Carried straight into the audit row below (§46.6.3, controller
-        // ruling: purge removes only the register row -- never the source
-        // content -- so the audit trail is what has to let anyone later
-        // reconstruct exactly what was removed and where its content lived).
+        // Carried straight into the audit row below (§46.6.3; owner
+        // decision 2026-10-01 #4 supersedes the earlier "register row
+        // only" ruling -- purge now flags the row for a later deletion
+        // step rather than deleting it, but never touches the source
+        // content either way), so the audit trail is what has to let
+        // anyone later reconstruct exactly what was flagged and where its
+        // content lives.
         row.retain_until = check.retainUntil ?? null;
       }
       if (refused.length > 0) {
@@ -647,7 +650,11 @@ export async function registerDocumentRoutes(
         retain_until: r.retain_until ?? null,
       }));
       if (purged.length > 0) {
-        await db.query('DELETE FROM documents WHERE id = ANY($1::uuid[])', [rows.map(r => r.id)]);
+        await db.query(
+          `UPDATE documents SET pending_deletion = true, pending_deletion_at = now(),
+             pending_deletion_reason = $2, pending_deletion_by = $3
+           WHERE id = ANY($1::uuid[])`,
+          [rows.map(r => r.id), input.reason, u.id]);
       }
       return {
         purged, skipped, reason: input.reason, purged_by: u.id,
