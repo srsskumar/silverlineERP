@@ -107,14 +107,22 @@ async function main(): Promise<void> {
       // (they get a targeted delete below, to preserve ADMIN/SUPER_ADMIN
       // rows), but either can hold its own FK into a table that IS being
       // truncated -- employees.designation_id -> designations is one,
-      // found by running this the first time. Rather than hand-maintain
-      // that list and get it wrong again, find every such column from
-      // pg_constraint and clear it before truncating, instead of
-      // hard-coding the ones known about today.
+      // found by running this the first time.
+      //
+      // TRUNCATE's FK check is structural, not data-based: it refuses a
+      // table with an incoming FK from a table outside the TRUNCATE list
+      // regardless of whether any row actually points at it, so nulling
+      // the referencing column first (tried first, still failed the same
+      // way) does not help. The tables on the other end of such an FK get
+      // DELETEd instead of TRUNCATEd below -- once the referencing column
+      // is null, DELETE's row-level check passes. Discovered from
+      // pg_constraint rather than hard-coded, so a schema change doesn't
+      // silently stop being handled.
       const tableNames = TRUNCATE_TABLES.split(",").map(t => t.trim());
       const crossFks = await pool.query(
         `SELECT conrelid::regclass::text AS referencing_table,
-                a.attname AS referencing_column
+                a.attname AS referencing_column,
+                confrelid::regclass::text AS referenced_table
            FROM pg_constraint c
            JOIN unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord) ON true
            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
@@ -123,12 +131,21 @@ async function main(): Promise<void> {
             AND confrelid::regclass::text = ANY($1::text[])`,
         [tableNames],
       );
-      for (const row of crossFks.rows as Array<{ referencing_table: string; referencing_column: string }>) {
-        console.log(`Clearing ${row.referencing_table}.${row.referencing_column} (points into a table being truncated)`);
+      const deleteInstead = new Set<string>();
+      for (const row of crossFks.rows as Array<{
+        referencing_table: string; referencing_column: string; referenced_table: string;
+      }>) {
+        console.log(`Clearing ${row.referencing_table}.${row.referencing_column} (points into ${row.referenced_table})`);
         await pool.query(`UPDATE ${row.referencing_table} SET ${row.referencing_column} = NULL`);
+        deleteInstead.add(row.referenced_table);
       }
 
-      await pool.query(`TRUNCATE TABLE ${TRUNCATE_TABLES}`);
+      const truncateOnly = tableNames.filter(t => !deleteInstead.has(t));
+      await pool.query(`TRUNCATE TABLE ${truncateOnly.join(", ")}`);
+      for (const table of deleteInstead) {
+        console.log(`Deleting ${table} (TRUNCATE refuses it structurally while employees/users reference it)`);
+        await pool.query(`DELETE FROM ${table}`);
+      }
       // A kept employee's own manager chain could point at a non-kept
       // employee about to be deleted; clear it first rather than let the
       // FK on employees.reports_to refuse the delete below. (This one is
