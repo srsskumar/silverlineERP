@@ -1378,7 +1378,7 @@ export interface LinkedStage {
   taskStatus?: string | null;
   taskStartedAt?: string | null;
   taskCompletedAt?: string | null;
-  /** The stage row's own columns, used only when no task is linked. */
+  /** The stage row's own columns -- these always govern (owner decision 2026-10-01 #7). */
   ownState?: StageState | null;
   ownStartedOn?: string | null;
   ownCompletedOn?: string | null;
@@ -1398,23 +1398,13 @@ const day = (v: string | null | undefined): string | null =>
   v ? String(v).slice(0, 10) : null;
 
 /**
- * One stage's state, from whichever source governs it.
- *
- * The summary sheet reports a start and a completion date per stage, so the
- * task's actual timestamps are what those become — not its planned dates,
- * which are when somebody intended to do the work rather than when it
- * happened.
+ * One stage's state: always the stage row's own columns (owner decision
+ * 2026-10-01 #7, SG-D3). A linked task is informational only -- its status
+ * does not override the stage's own state, so the dashboard (which always
+ * read the row) and the internal screens (which used to prefer the task)
+ * can no longer disagree (SG-009).
  */
 export function resolveStage(stage: LinkedStage): ResolvedStage {
-  if (stage.linked) {
-    return {
-      stageCode: stage.stageCode,
-      state: stageStateFromTask(stage.taskStatus),
-      startedOn: day(stage.taskStartedAt),
-      completedOn: day(stage.taskCompletedAt),
-      source: 'TASK',
-    };
-  }
   return {
     stageCode: stage.stageCode,
     state: stage.ownState ?? 'NOT_STARTED',

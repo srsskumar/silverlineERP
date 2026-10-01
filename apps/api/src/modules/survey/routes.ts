@@ -275,9 +275,9 @@ export async function registerSurveyRoutes(
        JOIN survey_villages sv ON sv.id = t.survey_village_id
        WHERE t.org_id = $1 AND sv.survey_project_id = $2 ${scopeClause}`, scope)).rows;
 
-    // Stage state comes from the linked task where there is one, and from the
-    // stage row's own columns where there is not. `task_id` says which, so the
-    // two can never both be in play for the same stage.
+    // Stage state always comes from the stage row's own columns (owner
+    // decision 2026-10-01 #7, SG-D3); the linked task's fields are still read
+    // but resolveStage() treats them as informational only.
     const stages = (await db.query(
       `SELECT vs.survey_village_id, s.code AS stage_code, vs.remarks,
               vs.state AS own_state, vs.started_on AS own_started_on,
@@ -1517,18 +1517,13 @@ export async function registerSurveyRoutes(
         if (input.state !== 'NOT_STARTED') {
           const pipeline = await stagePipeline(db, u.orgId);
           const current = (await db.query(
-            `SELECT s.code, vs.state, vs.task_id, t.status AS task_status
+            `SELECT s.code, vs.state
              FROM survey_village_stages vs
              JOIN survey_stages s ON s.id = vs.stage_id
-             LEFT JOIN tasks t ON t.id = vs.task_id
              WHERE vs.survey_village_id = $1`, [id])).rows;
           const states: Record<string, StageState> = {};
           for (const row of current) {
-            states[String(row.code)] = row.task_id
-              ? resolveStage({
-                stageCode: String(row.code), linked: true, taskStatus: row.task_status,
-              }).state
-              : (row.state as StageState);
+            states[String(row.code)] = row.state as StageState;
           }
           const blocker = stageBlockedBy(input.stage_code, states, pipeline);
           if (blocker) {
@@ -3180,29 +3175,20 @@ export async function registerSurveyRoutes(
     });
 
   /**
-   * A village's stage states, resolved the same way everything else does.
-   *
-   * Where a stage is driven by a task the task is the truth; where it is
-   * not, the stage row is. Reading the row alone would report a village as
-   * unfinished when its board says otherwise.
+   * A village's stage states, read from the stage rows directly (owner
+   * decision 2026-10-01 #7, SG-D3): a linked task's status is
+   * informational only and never overrides the stage's own state.
    */
   async function stageStatesOf(
     db: Pool | PoolClient, villageId: string,
   ): Promise<Record<string, StageState>> {
     const rows = (await db.query(
-      `SELECT s.code, vs.state, vs.task_id, t.status AS task_status
+      `SELECT s.code, vs.state
          FROM survey_village_stages vs
          JOIN survey_stages s ON s.id = vs.stage_id
-         LEFT JOIN tasks t ON t.id = vs.task_id
         WHERE vs.survey_village_id = $1`, [villageId])).rows;
     const out: Record<string, StageState> = {};
-    for (const row of rows) {
-      out[String(row.code)] = row.task_id
-        ? resolveStage({
-          stageCode: String(row.code), linked: true, taskStatus: row.task_status,
-        }).state
-        : (row.state as StageState);
-    }
+    for (const row of rows) out[String(row.code)] = row.state as StageState;
     return out;
   }
 
@@ -4307,20 +4293,17 @@ export async function registerSurveyRoutes(
                       /*
                        * Whether the village has earned this milestone yet.
                        *
-                       * Resolved through the task where the stage is driven
-                       * by one, exactly as the rest of the module does it —
-                       * reading the stage row alone would call a village
-                       * unfinished when its board says otherwise.
+                       * Read from the stage row itself, exactly as
+                       * stageStatesOf() and the claim guard do (owner
+                       * decision 2026-10-01 #7, SG-D3): a linked task's
+                       * status never overrides the row.
                        */
                       EXISTS (
                         SELECT 1 FROM survey_village_stages vs
                           JOIN survey_stages st ON st.id = vs.stage_id
-                          LEFT JOIN tasks tk ON tk.id = vs.task_id
                          WHERE vs.survey_village_id = sv.id
                            AND st.code = $4
-                           AND CASE WHEN vs.task_id IS NOT NULL
-                                    THEN tk.status = 'DONE'
-                                    ELSE vs.state = 'COMPLETED' END
+                           AND vs.state = 'COMPLETED'
                       ) AS earned,
                       (SELECT count(DISTINCT prior.milestone)
                          FROM survey_village_billing prior

@@ -794,11 +794,10 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
        * one thing that differs per line — which a lateral handles without
        * giving any of it up.
        *
-       * A stage is complete according to whichever source governs it, the
-       * same rule resolveStage() applies everywhere else: the linked task
-       * when there is one, the stage row's own columns when there is not.
-       * Reading only the row would bill nothing at all for a programme whose
-       * stages are run from the task board, which is most of them.
+       * A stage is complete when its own row says COMPLETED (owner decision
+       * 2026-10-01 #7, SG-D3) -- a linked task's status no longer overrides
+       * it, so a village whose board shows the task Done but whose stage
+       * row disagrees is not billed until the stage row itself is updated.
        *
        * Dates come out in UTC because that is the date the screens show —
        * a bill that disagrees with the stage date on the village page would
@@ -807,10 +806,10 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
        *
        * A village counts only once its gating stage is complete *and dated*:
        * a bill is a claim as at a date, and an undated completion cannot be
-       * placed before or after it. A task dragged to Done without an end
-       * time is exactly that, so those are counted separately rather than
-       * dropped in silence — quietly under-billing is the worse failure, and
-       * the fix is for somebody to set the date.
+       * placed before or after it. A stage row marked COMPLETED with no
+       * completed_on is exactly that, so those are counted separately rather
+       * than dropped in silence — quietly under-billing is the worse failure,
+       * and the fix is for somebody to set the date.
        */
       const measured = new Map((await pool.query(
         `SELECT l.id AS link_id,
@@ -821,14 +820,8 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
              WITH counted AS (
                SELECT e.survey_village_id,
                       ev.quantity,
-                      CASE WHEN vs.task_id IS NOT NULL
-                           THEN (t.status = 'DONE')
-                           ELSE (vs.state = 'COMPLETED')
-                      END AS finished,
-                      CASE WHEN vs.task_id IS NOT NULL
-                           THEN (t.actual_end_at AT TIME ZONE 'UTC')::date
-                           ELSE vs.completed_on
-                      END AS finished_on
+                      (vs.state = 'COMPLETED') AS finished,
+                      vs.completed_on AS finished_on
                  FROM survey_entries e
                  JOIN survey_entry_values ev
                    ON ev.entry_id = e.id AND ev.measure_id = l.measure_id
@@ -836,7 +829,6 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
                  JOIN survey_projects sp ON sp.id = sv.survey_project_id
                  LEFT JOIN survey_village_stages vs
                    ON vs.survey_village_id = sv.id AND vs.stage_id = l.stage_id
-                 LEFT JOIN tasks t ON t.id = vs.task_id
                 WHERE e.org_id = l.org_id
                   AND sp.project_id = b.project_id
                   AND e.entry_date <= $3::date
