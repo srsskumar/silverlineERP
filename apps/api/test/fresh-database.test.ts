@@ -129,6 +129,24 @@ describe("building a database from nothing", () => {
     expect(granted.rows.map((r) => r.role_code)).toEqual(['BID_TENDER_MANAGER', 'SALES_BD_EXECUTIVE']);
   });
 
+  it("grants holiday.read to the staff roles created by migration alone (113)", async () => {
+    // SALES_BD_EXECUTIVE and BID_TENDER_MANAGER are created by
+    // 031_commercial_permissions.sql, so this half of 113's grant is not a
+    // no-op here and can be checked right after migrate(), the same shape as
+    // 100's own check (fd4a046). It must run before "seeds on top of it":
+    // once seedDatabase() has run, the seed's own grant map would supply
+    // holiday.read too and mask a broken 113.
+    const granted = await pool.query(
+      `SELECT r.code AS role_code
+         FROM role_permissions rp
+         JOIN roles r ON r.id = rp.role_id
+        WHERE r.code IN ('SALES_BD_EXECUTIVE', 'BID_TENDER_MANAGER') AND r.org_id IS NULL
+          AND rp.permission_code = 'holiday.read'
+        ORDER BY r.code`,
+    );
+    expect(granted.rows.map(r => r.role_code)).toEqual(["BID_TENDER_MANAGER", "SALES_BD_EXECUTIVE"]);
+  });
+
   it("seeds on top of it", async () => {
     const { orgId } = await seedDatabase(pool, { bcryptRounds: 4 });
     expect(orgId).toBeTruthy();
@@ -189,22 +207,6 @@ describe("building a database from nothing", () => {
     for (const code of SURVEY_PERMISSIONS) {
       expect(perms.rows.map(r => r.code), code).toContain(code);
     }
-  });
-
-  it("grants holiday.read to the staff roles created by migration alone (113)", async () => {
-    // SALES_BD_EXECUTIVE and BID_TENDER_MANAGER are created by
-    // 031_commercial_permissions.sql, so this half of 113's grant is not a
-    // no-op here and can be checked right after migrate(), the same shape as
-    // 100's own check (fd4a046).
-    const granted = await pool.query(
-      `SELECT r.code AS role_code
-         FROM role_permissions rp
-         JOIN roles r ON r.id = rp.role_id
-        WHERE r.code IN ('SALES_BD_EXECUTIVE', 'BID_TENDER_MANAGER') AND r.org_id IS NULL
-          AND rp.permission_code = 'holiday.read'
-        ORDER BY r.code`,
-    );
-    expect(granted.rows.map(r => r.role_code)).toEqual(["BID_TENDER_MANAGER", "SALES_BD_EXECUTIVE"]);
   });
 
   it("grants holiday.read to every staff role once fully seeded (113, owner decision 2026-10-01 #1)", async () => {

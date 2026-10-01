@@ -9,9 +9,10 @@
 -- would no longer move the village, the bill or the claim.
 --
 -- A trigger rather than code in a route, because tasks change status from
--- more than one place (the board's status change, the cycle rollover in
--- planning, and whatever is written next); a trigger is the one place that
--- sees every one of them.
+-- more than one place (the board's status change, task edits, and whatever
+-- is written next); a trigger is the one place that sees every one of them.
+-- (The planning cycle rollover only moves cycle_id, never status or dates,
+-- so it does not fire this.)
 --
 -- AFTER UPDATE, so track_task_dates() (BEFORE UPDATE, 009/015) has already
 -- stamped actual_start_at / actual_end_at for this same change and the stage
@@ -21,7 +22,7 @@
 --
 -- Fires only when the status or an actual date changed; a title, assignee or
 -- description edit does nothing. A task with no linked stage (most tasks) is
--- a single indexed lookup and nothing else (idx_survey_village_stages_task,
+-- a single indexed lookup and nothing else (uq_survey_village_stages_task,
 -- 050).
 --
 -- The row still governs: a stage set through the survey API keeps what it

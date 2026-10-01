@@ -334,7 +334,10 @@ describe("controls", () => {
     expect(after.task_id).toBeNull();
   });
 
-  it("falls back to the stage row's own columns once the task is gone", async () => {
+  it("still reads the stage row's own columns once the task is gone", async () => {
+    // Not a fallback: since owner decision 2026-10-01 #7 the stage row is
+    // always the source of a stage's state and dates, task or no task. This
+    // checks that deleting the task leaves the row writable and read as-is.
     const annavaram = await villageRow("Annavaram");
     await post(w.admin, `/api/v1/survey/villages/${annavaram.id}/stage`, {
       stage_code: "GROUND_TRUTHING", state: "COMPLETED",

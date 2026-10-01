@@ -148,8 +148,7 @@ measured against.
 
 **59.7.2** Every write goes through `mutate()` and is audited, as elsewhere.
 
-### §59.7.3 Survey billing claim lifecycle (owner decision 2026-10-01 #8)
-
+**59.7.3** Survey billing claim lifecycle (owner decision 2026-10-01 #8).
 Confirmed, closing the gap this document previously left open:
 
     SUBMITTED -> APPROVED | REJECTED | PAID
@@ -170,8 +169,6 @@ Implemented in `packages/shared/src/survey.ts` (`BILLING_STATUSES`,
 - Reading DGPS instrument output directly. Quantities are entered.
 - Storing or rendering cadastral geometry. The organisation already has
   geo-fences; land parcel polygons are a different problem.
-- Billing against survey output. The survey project may be linked to an
-  ordinary project when that is wanted.
 
 ## 59.9 Filing from the field
 

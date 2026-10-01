@@ -188,7 +188,7 @@ export function DueForPurgePanel() {
             loading={purge.isPending}
             onClick={() => {
               if (window.confirm(
-                `Permanently purge ${selected.size} document(s)? This cannot be undone.\n\n${REGISTER_ONLY_NOTICE}`,
+                `Purge ${selected.size} document(s)? They will be removed from the register and flagged for deletion. There is no way to restore them from this screen.\n\n${REGISTER_ONLY_NOTICE}`,
               )) {
                 purge.mutate();
               }

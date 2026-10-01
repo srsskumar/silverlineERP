@@ -494,6 +494,67 @@ describe("due-for-purge report and explicit purge (owner decision 2026-09-24 #3)
     expect(due.data.map((d: any) => d.id)).not.toContain(doc.id);
   });
 
+  it("lets a chain be purged newest-first: a flagged successor no longer blocks its predecessor (final review I1)", async () => {
+    const a = await orgDoc({ expires_on: dayOffset(-365 * 20) });
+    const renewed = await post(w.admin, `/api/v1/documents/${a.id}/renew`,
+      { expires_on: dayOffset(-365 * 4) });
+    expect(renewed.status, JSON.stringify(renewed.body)).toBe(201);
+    const b = renewed.data;
+
+    const purgeB = await post(w.admin, "/api/v1/documents/purge",
+      { ids: [b.id], reason: "Chain sweep, newest first" });
+    expect(purgeB.status, JSON.stringify(purgeB.body)).toBe(200);
+    expect(purgeB.data.purged_count).toBe(1);
+
+    // A is now the newest revision still on the register, so it shows as due...
+    const due = await get(w.admin, "/api/v1/documents/due-for-purge?limit=100");
+    expect(due.data.map((d: any) => d.id)).toContain(a.id);
+
+    // ...and purging it succeeds instead of pointing at a revision already purged.
+    const purgeA = await post(w.admin, "/api/v1/documents/purge",
+      { ids: [a.id], reason: "Chain sweep, older revision" });
+    expect(purgeA.status, JSON.stringify(purgeA.body)).toBe(200);
+    expect(purgeA.data.purged_count).toBe(1);
+    expect(purgeA.data.purged[0].id).toBe(a.id);
+  });
+
+  it("404s an edit of a purged (flagged) document (final review I2)", async () => {
+    const doc = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const headers = { ...w.admin, ...(await ver(doc.id)) };
+    await post(w.admin, "/api/v1/documents/purge", { ids: [doc.id], reason: "Flag before edit" });
+    const r = await patch(headers, `/api/v1/documents/${doc.id}`, { title: "Edited after purge" });
+    expect(r.status, JSON.stringify(r.body)).toBe(404);
+  });
+
+  it("404s a renewal of a purged (flagged) document (final review I2)", async () => {
+    const doc = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    await post(w.admin, "/api/v1/documents/purge", { ids: [doc.id], reason: "Flag before renew" });
+    const r = await post(w.admin, `/api/v1/documents/${doc.id}/renew`, { expires_on: dayOffset(400) });
+    expect(r.status, JSON.stringify(r.body)).toBe(404);
+  });
+
+  it("404s a legal hold on a purged (flagged) document (final review I2)", async () => {
+    const doc = await orgDoc({ expires_on: dayOffset(-365 * 4) });
+    const headers = { ...w.admin, ...(await ver(doc.id)) };
+    await post(w.admin, "/api/v1/documents/purge", { ids: [doc.id], reason: "Flag before hold" });
+    const r = await post(headers, `/api/v1/documents/${doc.id}/legal-hold`,
+      { legal_hold: true, reason: "Too late" });
+    expect(r.status, JSON.stringify(r.body)).toBe(404);
+  });
+
+  it("does not resurface a flagged predecessor through its live successor's detail view (final review I2)", async () => {
+    const old = await orgDoc({ expires_on: dayOffset(-365 * 20) });
+    const renewed = await post(w.admin, `/api/v1/documents/${old.id}/renew`,
+      { expires_on: dayOffset(400) });
+    expect(renewed.status, JSON.stringify(renewed.body)).toBe(201);
+    // Flagged directly: the purge route itself refuses a predecessor whose
+    // successor is live, so this state is only reachable from underneath.
+    await w.pool.query("UPDATE documents SET pending_deletion = true WHERE id = $1", [old.id]);
+    const r = await get(w.admin, `/api/v1/documents/${renewed.data.id}`);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.data.supersedes).toBeNull();
+  });
+
   it("carries owner and source through the purge audit for an owned, sourced document", async () => {
     const doc = await post(w.admin, "/api/v1/documents", {
       type_code: "MEDICAL_FITNESS", owner_type: "employee", owner_id: w.directEmployee,

@@ -799,7 +799,9 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
        * it, so a village whose board shows the task Done but whose stage
        * row disagrees is not billed until the stage row itself is updated.
        *
-       * Dates come out in UTC because that is the date the screens show —
+       * Dates are the stage row's own completed_on: a calendar day in the
+       * organisation's configured timezone (115/116 date a task-linked
+       * stage that way), the same day the screens show via iso(..., orgId) —
        * a bill that disagrees with the stage date on the village page would
        * be a second thing to reconcile, which is the problem this feature
        * exists to remove.

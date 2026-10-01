@@ -25,6 +25,20 @@ import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/d
  * Every state is derived on read. A stored status is a status that is wrong at
  * midnight.
  */
+
+/**
+ * inOrg(), plus: a document flagged by purge (pending_deletion) is gone as
+ * far as every mutating route is concerned. Before purge flagged rather than
+ * deleted, these routes 404'd against a purged id simply because the row was
+ * not there; this keeps that behaviour now that the row still is.
+ */
+async function liveDocument(
+  db: Pool | PoolClient, orgId: string, id: string, lock = false,
+): Promise<Record<string, any>> {
+  const row = await inOrg(db, 'documents', id, orgId, lock);
+  if (row.pending_deletion) fail('NOT_FOUND', 'Not found', 404);
+  return row;
+}
 export async function registerDocumentRoutes(
   app: FastifyInstance, opts: { pool: Pool; jwtSecret: string },
 ) {
@@ -65,7 +79,7 @@ export async function registerDocumentRoutes(
            u.username AS created_by_username
     FROM documents d
     JOIN document_types t ON t.id = d.type_id
-    LEFT JOIN documents s ON s.supersedes_id = d.id
+    LEFT JOIN documents s ON s.supersedes_id = d.id AND NOT s.pending_deletion
     LEFT JOIN users u ON u.id = d.created_by`;
 
   /** Attach the derived state, and withhold what the reader may not see. */
@@ -247,9 +261,12 @@ export async function registerDocumentRoutes(
     const canSeeConfidential = u.permissions.includes('document.confidential');
 
     // The revision this one replaced, so the history reads from one screen.
+    // A predecessor flagged by purge stays out of it: purge removed it from
+    // the register, and a live successor must not hand it back.
     const previous = row.supersedes_id
       ? (await pool.query(
-        `${SELECT} WHERE d.id = $1 AND d.org_id = $2`, [row.supersedes_id, u.orgId])).rows[0]
+        `${SELECT} WHERE d.id = $1 AND d.org_id = $2 AND NOT d.pending_deletion`,
+        [row.supersedes_id, u.orgId])).rows[0]
       : null;
 
     return {
@@ -304,7 +321,7 @@ export async function registerDocumentRoutes(
     const input = parse(documentPatchSchema, req.body);
     return {
       data: await mutate(pool, req, 'document.update', 'document', async db => {
-        const row = await inOrg(db, 'documents', id, u.orgId, true);
+        const row = await liveDocument(db, u.orgId, id, true);
         version(req, row as { version: number });
 
         // A superseded row is the record of what was in force before. Editing
@@ -366,7 +383,7 @@ export async function registerDocumentRoutes(
         // concurrent renewals and the unique index on supersedes_id refuses
         // the second outright, so optimistic concurrency here would be
         // friction that guards nothing.
-        const old = await inOrg(db, 'documents', id, u.orgId, true);
+        const old = await liveDocument(db, u.orgId, id, true);
 
         const already = (await db.query(
           'SELECT id FROM documents WHERE supersedes_id = $1', [id])).rows[0];
@@ -433,7 +450,7 @@ export async function registerDocumentRoutes(
       const action = input.legal_hold ? 'document.legalhold' : 'document.legalhold.release';
       return {
         data: await mutate(pool, req, action, 'document', async db => {
-          const row = await inOrg(db, 'documents', id, u.orgId, true);
+          const row = await liveDocument(db, u.orgId, id, true);
           version(req, row as { version: number });
           return (await db.query(
             `UPDATE documents SET legal_hold = $2, legal_hold_reason = $3,
@@ -472,6 +489,14 @@ export async function registerDocumentRoutes(
 
         // A superseded row still has a successor pointing at it; breaking that
         // link would leave the successor claiming to replace nothing.
+        //
+        // Unlike purge's successor check, a successor flagged by purge still
+        // counts here, on purpose: this route hard-deletes, and the flagged
+        // row still physically references this one through the supersedes_id
+        // foreign key, so deleting past it would only trade this clear 409
+        // for a generic constraint error. Purge only flags, so it can safely
+        // look past a flagged successor; here the flagged successor has to be
+        // deleted first, which this route allows.
         const successor = (await db.query(
           'SELECT id FROM documents WHERE supersedes_id = $1', [id])).rows[0];
         if (successor) {
@@ -492,9 +517,10 @@ export async function registerDocumentRoutes(
    *
    * No scheduled deletion exists anywhere in this codebase, and this route
    * does not add one -- it only answers the question an admin has to see
-   * answered before purging anything. Nothing here deletes a row; only
-   * POST /documents/purge does that, and only once an admin has picked from
-   * this list and confirmed.
+   * answered before purging anything. Nothing here touches a row; only
+   * POST /documents/purge acts on one -- flagging it pending deletion, not
+   * deleting it (owner decision 2026-10-01 #4) -- and only once an admin has
+   * picked from this list and confirmed.
    */
   app.get('/api/v1/documents/due-for-purge', { preHandler: guard('document.delete') }, async req => {
     const u = actor(req);
@@ -564,10 +590,12 @@ export async function registerDocumentRoutes(
    * The confirm is the request itself: an admin selects rows off the
    * due-for-purge report above and sends this with a reason, which is
    * required and is what makes the batch's audit row explain itself later.
-   * Refuses the whole selection -- nothing is deleted -- the moment any one
-   * of the chosen documents is on legal hold, not yet past retention, or
-   * superseded, so a mixed selection cannot half-succeed and leave the
-   * admin unsure what was actually destroyed.
+   * Purge flags the selected rows pending deletion (owner decision
+   * 2026-10-01 #4); it does not delete them. Refuses the whole selection --
+   * nothing is flagged -- the moment any one of the chosen documents is on
+   * legal hold, not yet past retention, or superseded by a revision still on
+   * the register, so a mixed selection cannot half-succeed and leave the
+   * admin unsure what was actually removed from the register.
    */
   app.post('/api/v1/documents/purge', { preHandler: guard('document.delete') }, async req => {
     const u = actor(req), input = parse(documentPurgeSchema, req.body);
@@ -577,7 +605,8 @@ export async function registerDocumentRoutes(
         `SELECT d.id, d.title, d.legal_hold, d.issued_on, d.expires_on,
                 d.owner_type, d.owner_id, d.source_type, d.source_id,
                 t.retention_years, t.code AS type_code, t.basis,
-                (SELECT id FROM documents s WHERE s.supersedes_id = d.id) AS successor_id
+                (SELECT id FROM documents s
+                  WHERE s.supersedes_id = d.id AND NOT s.pending_deletion) AS successor_id
            FROM documents d JOIN document_types t ON t.id = d.type_id
           WHERE d.id = ANY($1::uuid[]) AND d.org_id = $2 AND NOT d.pending_deletion FOR UPDATE OF d`,
         [ids, u.orgId])).rows;
