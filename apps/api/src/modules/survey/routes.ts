@@ -2035,6 +2035,17 @@ export async function registerSurveyRoutes(
         'survey_rover_allocation', async db => {
           const village = await villageOr404(db, u.orgId, id, u);
           await requireStaffing(db, u, String(village.survey_project_id), 'allocate its instruments');
+          // The single-rover route checks this per asset_id (inOrg); the
+          // bulk one took the same ids straight into the loop below without
+          // it, which would let an id from another organisation's fleet be
+          // allocated to this village.
+          const uniqueAssetIds = [...new Set(input.asset_ids)];
+          const owned = await db.query(
+            'SELECT id FROM assets WHERE id = ANY($1::uuid[]) AND org_id = $2',
+            [uniqueAssetIds, u.orgId]);
+          if (owned.rowCount !== uniqueAssetIds.length) {
+            fail('NOT_FOUND', 'One or more instruments do not belong to this organization', 404);
+          }
           const allocated: string[] = [];
           const clashes: Array<{ asset_id: string; asset_code: string; with_village: string }> = [];
 
