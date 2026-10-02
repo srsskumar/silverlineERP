@@ -31,6 +31,24 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
   const auth = buildAuthenticate(opts);
   const guard = (p: string) => requirePermission(auth, p);
 
+  /**
+   * A line's item_id is handed in by whoever is drafting the document, not
+   * looked up from something already trusted -- unlike vendor_id, project_id
+   * and requisition_id on the same requests, which every route here already
+   * runs through inOrg. Left unchecked, a line could point at another
+   * organisation's catalog entry, which a join later shows back as if it
+   * were this org's own item.
+   */
+  async function assertItemsInOrg(db: Pool | PoolClient, orgId: string, itemIds: (string | null | undefined)[]) {
+    const ids = [...new Set(itemIds.filter((id): id is string => Boolean(id)))];
+    if (!ids.length) return;
+    const found = await db.query(
+      'SELECT id FROM inventory_items WHERE id = ANY($1::uuid[]) AND org_id = $2', [ids, orgId]);
+    if (found.rowCount !== ids.length) {
+      fail('INVALID_ITEM', 'One or more items do not belong to this organization');
+    }
+  }
+
   /** Cumulative accepted and rejected quantity per order line, from the GRNs. */
   async function receiptsFor(db: Pool | PoolClient, purchaseOrderId: string) {
     const rows = (await db.query(
@@ -81,6 +99,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
     if (input.project_id) await projectAccess(pool, req, input.project_id);
     const row = await mutate(pool, req, 'requisition.create', 'requisition', async db => {
       if (input.project_id) await inOrg(db, 'projects', input.project_id, u.orgId);
+      await assertItemsInOrg(db, u.orgId, input.lines.map(l => l.item_id));
       const estimated = input.lines.reduce((t, l) => t + l.quantity * (l.estimated_rate ?? 0), 0);
       const pr = (await db.query(
         `INSERT INTO purchase_requisitions(org_id, created_by, requisition_no, project_id,
@@ -182,6 +201,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
           `${vendor.name} has been deactivated. Reactivate the vendor, or order from another one.`);
       }
       if (input.project_id) await inOrg(db, 'projects', input.project_id, u.orgId);
+      await assertItemsInOrg(db, u.orgId, input.lines.map(l => l.item_id));
 
       // §6.6: an order may not exceed the requisition that authorised it.
       let override: { reason: string } | null = null;
@@ -282,7 +302,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
 
   app.post('/api/v1/purchase-orders/:id/status', { preHandler: guard('po.manage') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const body = req.body as { status?: string; reason?: string };
+    const body = (req.body ?? {}) as { status?: string; reason?: string };
     const next = String(body.status ?? '') as PoStatus;
     return {
       data: await mutate(pool, req, 'po.status', 'purchase_order', async db => {
@@ -549,6 +569,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
     const u = actor(req), input = parse(rfqSchema, req.body);
     if (input.project_id) await projectAccess(pool, req, input.project_id);
     const row = await mutate(pool, req, 'rfq.create', 'rfq', async db => {
+      await assertItemsInOrg(db, u.orgId, input.lines.map(l => l.item_id));
       for (const vendorId of input.vendor_ids) {
         const vendor = await inOrg(db, 'vendors', vendorId, u.orgId);
         // Inviting a blacklisted vendor wastes everyone's time and invites the
@@ -680,7 +701,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
    */
   app.post('/api/v1/rfqs/:id/award', { preHandler: guard('rfq.manage') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const body = req.body as { vendor_id?: string; reason?: string };
+    const body = (req.body ?? {}) as { vendor_id?: string; reason?: string };
     if (!body.vendor_id) fail('VALIDATION_ERROR', 'Name the vendor being awarded');
     return {
       data: await mutate(pool, req, 'rfq.award', 'rfq', async db => {
@@ -719,7 +740,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
    */
   app.post('/api/v1/purchase-orders/:id/amend', { preHandler: guard('po.amend') }, async (req, reply) => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const body = req.body as {
+    const body = (req.body ?? {}) as {
       reason?: string;
       lines?: { po_line_id: string; quantity?: number; unit_rate?: number }[];
       delivery_date?: string;
