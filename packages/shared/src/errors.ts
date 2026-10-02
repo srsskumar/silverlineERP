@@ -176,7 +176,15 @@ function humanise(issue: z.ZodIssue, label: string): string {
       if (issue.type === "array") {
         return `Choose at least ${issue.minimum} ${Number(issue.minimum) === 1 ? "item" : "items"}`;
       }
-      if (issue.type === "number") return `${label} must be at least ${issue.minimum}`;
+      if (issue.type === "number") {
+        // .positive()/.nonnegative() report the same "too_small" issue as
+        // .min() but with inclusive:false -- for those, "at least 0" is the
+        // one value the check actually rejects, so it told the caller the
+        // refused value was the minimum they needed.
+        return issue.inclusive
+          ? `${label} must be at least ${issue.minimum}`
+          : `${label} must be more than ${issue.minimum}`;
+      }
       return said;
     case "too_big":
       if (issue.type === "string") {
