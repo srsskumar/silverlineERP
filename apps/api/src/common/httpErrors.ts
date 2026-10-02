@@ -55,6 +55,21 @@ export async function registerErrorHandler(app: FastifyInstance): Promise<void> 
         fieldErrors: [{ field: "id", message: "Malformed resource id" }],
       });
     }
+    // 22007/22008 (invalid_datetime_format / datetime_field_overflow):
+    // a date that matches the shared schema's YYYY-MM-DD shape but names no
+    // real calendar day, e.g. 2026-02-31. The regex checks the shape, not
+    // the calendar; Postgres is what actually knows February has 28 days.
+    // 22003 (numeric_value_out_of_range): an amount/quantity bigger than the
+    // column's NUMERIC precision. Both are a client-supplied value Postgres
+    // refused, never a server bug — envelope as 422, not 500.
+    if (["22007", "22008", "22003"].includes(String((err as { code?: unknown }).code))) {
+      return sendError(reply, requestId, {
+        status: 422,
+        code: "VALIDATION_ERROR",
+        message: "Validation failed",
+        fieldErrors: [{ field: "value", message: "That date or number is not valid" }],
+      });
+    }
     if (status >= 500) {
       req.log.error({ error_type:err instanceof Error?err.name:"Error",code:databaseCode,requestId }, "unhandled error");
       return sendError(reply, requestId, {
