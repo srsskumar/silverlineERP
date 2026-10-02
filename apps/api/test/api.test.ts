@@ -2,7 +2,7 @@ import { VOLATILE_TABLES } from "./tables.js";
 import {testDatabaseUrl} from "./database.js";
 import { decryptPii } from "../src/common/crypto.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 import { authenticator } from "otplib";
 import { Pool } from "pg";
 import type { FastifyInstance } from "fastify";

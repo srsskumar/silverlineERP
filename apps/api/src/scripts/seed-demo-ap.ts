@@ -18,7 +18,7 @@
  *     npx tsx src/scripts/seed-demo-ap.ts
  */
 import { randomUUID } from "node:crypto";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 import { Pool } from "pg";
 
 const API = process.env["DEMO_API_URL"] ?? "http://localhost:3101";

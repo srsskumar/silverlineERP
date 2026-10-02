@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 import type { Pool } from "pg";
 import { login, TIMING_DUMMY_HASH, UnknownUserError } from "../src/modules/auth/service.js";
 

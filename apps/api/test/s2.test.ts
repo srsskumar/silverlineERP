@@ -3,7 +3,7 @@ import {testDatabaseUrl} from "./database.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 import { Pool } from "pg";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/createApp.js";

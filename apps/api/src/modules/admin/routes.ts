@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
-import bcrypt from 'bcryptjs';
+import bcrypt from 'bcrypt';
 import { z } from 'zod';
 import { buildAuthenticate,requirePermission } from '../../common/auth.js';
 import { actor,parse,page,mutate,inOrg,fail } from '../../common/domain.js';

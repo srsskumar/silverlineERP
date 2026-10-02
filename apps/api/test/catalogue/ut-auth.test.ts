@@ -7,7 +7,7 @@
 
 import { Writable } from "node:stream";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { authenticator } from "otplib";
 import { MFA_DEFAULT_REQUIRED_ROLES } from "@silverline/shared";

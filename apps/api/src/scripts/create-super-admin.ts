@@ -1,6 +1,6 @@
 import "../common/env.js";
 import { Pool } from "pg";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 
 /**
  * Create, or reset, a SUPER_ADMIN user for one organisation.

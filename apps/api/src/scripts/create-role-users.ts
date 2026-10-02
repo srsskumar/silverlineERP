@@ -1,6 +1,6 @@
 import "../common/env.js";
 import { Pool } from "pg";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 
 /**
  * Create one test user (and a backing employee record) per non-admin

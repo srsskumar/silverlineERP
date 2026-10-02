@@ -1,5 +1,5 @@
 import "../common/env.js";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 import { Pool } from "pg";
 import {
   ALL_PERMISSIONS,

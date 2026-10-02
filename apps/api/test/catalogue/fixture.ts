@@ -24,7 +24,7 @@ import { VOLATILE_TABLES } from "../tables.js";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 import { Pool } from "pg";
 import type { FastifyInstance, InjectOptions } from "fastify";
 import { ROLE_CODES, type RoleCode } from "@silverline/shared";

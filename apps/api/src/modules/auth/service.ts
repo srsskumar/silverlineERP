@@ -1,6 +1,6 @@
 import {encryptPii,decryptPii} from "../../common/crypto.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { authenticator } from "otplib";
 import type { Pool, PoolClient } from "pg";

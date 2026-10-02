@@ -20,7 +20,7 @@
 
 import "../common/env.js";
 import { createHash, randomUUID } from "node:crypto";
-import bcrypt from "bcryptjs";
+import bcrypt from "bcrypt";
 import { Pool, type PoolClient } from "pg";
 import { encryptPii, piiIndex } from "../common/crypto.js";
 import { defaultTaskWorkflow } from "@silverline/shared";
