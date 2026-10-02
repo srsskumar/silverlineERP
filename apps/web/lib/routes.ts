@@ -4,7 +4,7 @@ export function staticHref(href:string):string {
   [/^\/projects\/([^/]+)\/tasks\/([^/?]+)$/,'task'],
   [/^\/projects\/([^/?]+)\/board$/,'board'],
   [/^\/attendance\/records\/([^/?]+)$/,'attendance'],
-  [/^\/employees\/([^/?]+)$/,'employee'],[/^\/leave\/([^/?]+)$/,'leave'],[/^\/payroll\/([^/?]+)$/,'payroll'],[/^\/projects\/([^/?]+)$/,'project'],
+  [/^\/employees\/([^/?]+)$/,'employee'],[/^\/leave\/([^/?]+)$/,'leave'],[/^\/payroll\/([^/?]+)$/,'payroll'],[/^\/projects\/([^/?]+)$/,'project'],[/^\/payments\/([^/?]+)$/,'payment'],
  ];
  for(const [pattern,type] of patterns){const m=href.match(pattern);if(!m||['new','import','balances','exceptions'].includes(m[1]))continue;
   return `/record?${new URLSearchParams({type,id:m[2]??m[1],...(m[2]?{project:m[1]}:{})})}`;

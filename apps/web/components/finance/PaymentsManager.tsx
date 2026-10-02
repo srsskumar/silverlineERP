@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import Link from 'next/link';
+import Link from '@/components/AppLink';
 import { useQuery } from '@tanstack/react-query';
 import { listPayments } from '@/lib/payments';
 import { useAuth } from '@/components/AuthProvider';
