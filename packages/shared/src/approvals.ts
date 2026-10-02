@@ -518,6 +518,13 @@ export const approvalPolicySchema = z.object({
   }
 });
 
+export const approvalSubmissionSchema = z.object({
+  document_type: z.enum(APPROVAL_DOCUMENT_TYPES),
+  document_id: z.string().uuid(),
+  amount: z.coerce.number().finite().min(0),
+  project_id: z.string().uuid().nullable().optional(),
+});
+
 export const approvalDecisionSchema = z.object({
   decision: z.enum(['APPROVE', 'REJECT']),
   comments: z.string().trim().max(2000).optional(),

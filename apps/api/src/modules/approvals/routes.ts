@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import {
-  approvalPolicySchema, approvalDecisionSchema, delegationSchema,
+  approvalPolicySchema, approvalSubmissionSchema, approvalDecisionSchema, delegationSchema,
   resolveLadder, canAct, nextActionableStep, createsDelegationCycle, requiresReapproval,
   holdsApproverRole, rolesSatisfyingApproverRole,
   type ApprovalDocumentType, type ApprovalStep, type Delegation, type LadderMode,
@@ -350,12 +350,9 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
    */
   app.post('/api/v1/approvals', { preHandler: guard('approval.read') }, async (req, reply) => {
     const u = actor(req);
-    const body = req.body as { document_type?: string; document_id?: string; amount?: number; project_id?: string | null };
-    if (!body.document_type || !body.document_id || body.amount === undefined) {
-      fail('VALIDATION_ERROR', 'document_type, document_id and amount are required');
-    }
+    const body = parse(approvalSubmissionSchema, req.body);
     const row = await mutate(pool, req, 'approval.submit', 'approval_instance', async db => {
-      const policy = await policyFor(db, u.orgId, body.document_type!, body.project_id);
+      const policy = await policyFor(db, u.orgId, body.document_type, body.project_id);
       if (!policy) {
         // Named so the web admin screen's error card can point straight at
         // Approvals → Policies without parsing this sentence.
@@ -639,7 +636,7 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
   /** The requester pulls a request back before it is decided. */
   app.post('/api/v1/approvals/:id/recall', { preHandler: guard('approval.read') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const body = req.body as { reason?: string };
+    const body = (req.body ?? {}) as { reason?: string };
     if (!body.reason) fail('VALIDATION_ERROR', 'Say why the request is being withdrawn');
     return {
       data: await mutate(pool, req, 'approval.recall', 'approval_instance', async db => {
@@ -670,7 +667,7 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
    */
   app.post('/api/v1/approvals/:id/revalidate', { preHandler: guard('approval.read') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const body = req.body as { amount?: number };
+    const body = (req.body ?? {}) as { amount?: number };
     if (body.amount === undefined) fail('VALIDATION_ERROR', 'Send the document’s new amount');
     return {
       data: await mutate(pool, req, 'approval.revalidate', 'approval_instance', async db => {
