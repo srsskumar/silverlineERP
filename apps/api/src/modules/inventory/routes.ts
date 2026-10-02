@@ -351,11 +351,18 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
     ({gstEnabled,gstRate}=gstFieldsFromComputed(computed));
    }
 
+   // The column defaults to ISSUED, which is the status /invoices/:id/status
+   // requires invoice.issue to reach from anywhere else in the lifecycle.
+   // invoice.create is held by roles (INVENTORY_MANAGER, per the comment
+   // above) that are deliberately not given invoice.issue -- without this,
+   // creating one was a second, ungated door to the same status.
+   const lifecycleStatus=u.permissions.includes('invoice.issue')?'ISSUED':'DRAFT';
    const r=await db.query(
-    `INSERT INTO invoices(org_id,serial_number,vendor_id,hsn,gst_enabled,gst_rate,subtotal,tax,total,payment_mode,reference,created_by,purchase_order_id)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+    `INSERT INTO invoices(org_id,serial_number,vendor_id,hsn,gst_enabled,gst_rate,subtotal,tax,total,payment_mode,reference,created_by,purchase_order_id,lifecycle_status)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
     [u.orgId,i.serial_number,i.vendor_id,i.hsn,gstEnabled,gstRate.toFixed(2),
-     subtotal.toFixed(2),tax.toFixed(2),total.toFixed(2),i.payment_mode,i.reference,u.id,i.purchase_order_id??null]);
+     subtotal.toFixed(2),tax.toFixed(2),total.toFixed(2),i.payment_mode,i.reference,u.id,i.purchase_order_id??null,
+     lifecycleStatus]);
 
    if(i.lines?.length&&computed)await writeInvoiceLines(db,u.orgId,r.rows[0].id,i.lines,computed);
    return r.rows[0];
