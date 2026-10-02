@@ -150,11 +150,19 @@ export interface LoginResult {
 async function findLoginUser(
   ctx: ServiceContext, identifier: string,
 ): Promise<UserRow | undefined> {
+  // username is unique per organisation (uk_users_username is (org_id,
+  // username)), not globally -- two orgs can each have their own "admin".
+  // This used to break the tie by taking whichever account was created
+  // first, which let the oldest org's account log in while the newer one's
+  // correct password was silently compared against the wrong hash and
+  // refused, with nothing in the error to say why. LIMIT 2, so an ambiguous
+  // name is visible rather than silently resolved -- the same rule the
+  // mobile-number lookup below already applies.
   const byName = await ctx.pool.query(
-    "SELECT * FROM users WHERE username = $1 ORDER BY created_at ASC LIMIT 1",
+    "SELECT * FROM users WHERE username = $1 LIMIT 2",
     [identifier],
   );
-  if (byName.rows[0]) return byName.rows[0] as UserRow;
+  if (byName.rowCount === 1) return byName.rows[0] as UserRow;
 
   const digits = indianMobile(identifier);
   if (!digits) return undefined;

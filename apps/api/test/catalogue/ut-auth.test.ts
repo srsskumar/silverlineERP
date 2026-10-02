@@ -864,6 +864,28 @@ describe("signing in with a mobile number", () => {
       username: uniq("dup"), phone: "+919100077001",
     })).rejects.toThrow();
   });
+
+  it("refuses a username two different organisations each gave to their own account", async () => {
+    // username is unique per org (uk_users_username is (org_id, username)),
+    // not globally -- unlike a phone number, nothing stops a second
+    // organisation from giving one of its own accounts the same name. The
+    // lookup used to break the tie by taking whichever was created first,
+    // so the second organisation's correct password was silently compared
+    // against the first organisation's hash and refused with nothing to
+    // say why.
+    const shared = uniq("shared");
+    const otherOrg = (await w.pool.query(
+      "INSERT INTO organizations (name) VALUES ($1) RETURNING id", [`Other org ${shared}`],
+    )).rows[0].id as string;
+    await createUser(w.pool, w.orgId, { username: shared, password: "FirstOrg@2026xy" });
+    await createUser(w.pool, otherOrg, { username: shared, password: "SecondOrg@2026z" });
+
+    for (const pw of ["FirstOrg@2026xy", "SecondOrg@2026z"]) {
+      const r = await login({ username: shared, password: pw });
+      expect(r.statusCode, pw).toBe(401);
+      expect(r.json().code).toBe("INVALID_CREDENTIALS");
+    }
+  });
 });
 
 describe("setting your own password", () => {

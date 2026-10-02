@@ -21,8 +21,16 @@ const TARGET_ROLES = [
   "GOVT_OBSERVER", "CLIENT_VIEWER",
 ] as const;
 
-function usernameFor(role: string): string {
-  return `qa-${role.toLowerCase().replace(/_/g, "-")}`;
+/*
+ * username is unique per organisation (uk_users_username is (org_id,
+ * username)), not globally, and login looks a username up across every
+ * org -- the same "qa-team-lead" in two orgs makes one of them permanently
+ * unreachable by username, silently, since the lookup used to break the
+ * tie by picking whichever org's row was created first. Suffixed by a
+ * short slice of the org id so a run across many orgs can never collide.
+ */
+function usernameFor(role: string, orgId: string): string {
+  return `qa-${role.toLowerCase().replace(/_/g, "-")}-${orgId.replace(/-/g, "").slice(0, 6)}`;
 }
 
 async function main(): Promise<void> {
@@ -73,7 +81,15 @@ async function main(): Promise<void> {
 
     for (const org of orgs.rows as Array<{ id: string; name: string }>) {
       for (const [i, role] of TARGET_ROLES.entries()) {
-        const username = usernameFor(role);
+        const username = usernameFor(role, org.id);
+        // A row left over from before usernames were org-suffixed: carry its
+        // id and employee link forward under the new name rather than
+        // leaving it behind as an orphaned, ambiguous duplicate.
+        const oldUsername = `qa-${role.toLowerCase().replace(/_/g, "-")}`;
+        await pool.query(
+          "UPDATE users SET username = $1 WHERE org_id = $2 AND username = $3",
+          [username, org.id, oldUsername],
+        );
         const empNo = `QA-${role}`;
         // Globally unique across orgs/roles, stable across re-runs: ten
         // digits so it always matches the phone column's VARCHAR(20) and
@@ -110,7 +126,7 @@ async function main(): Promise<void> {
       }
       console.log(`${org.name}: ${TARGET_ROLES.length} role user(s) ready.`);
     }
-    console.log(`\nDone. ${created} created, ${updated} updated, across ${orgs.rowCount} organisation(s). Username pattern: qa-<role>, e.g. ${usernameFor("PROJECT_MANAGER")}.`);
+    console.log(`\nDone. ${created} created, ${updated} updated, across ${orgs.rowCount} organisation(s). Username pattern: qa-<role>-<org id prefix>, e.g. ${usernameFor("PROJECT_MANAGER", orgs.rows[0].id)}.`);
   } finally {
     await pool.end();
   }
