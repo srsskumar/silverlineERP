@@ -174,6 +174,7 @@ export async function registerBillingRoutes(app: FastifyInstance, opts: { pool: 
     await projectAccess(pool, req, input.project_id);
     const row = await mutate(pool, req, 'advance.create', 'advance', async db => {
       await inOrg(db, 'projects', input.project_id, u.orgId);
+      if (input.bank_guarantee_id) await inOrg(db, 'bank_guarantee_instruments', input.bank_guarantee_id, u.orgId);
       return (await db.query(
         `INSERT INTO project_advances(org_id, created_by, project_id, advance_type, amount,
            paid_on, recovery_pct, bank_guarantee_id, remarks)
