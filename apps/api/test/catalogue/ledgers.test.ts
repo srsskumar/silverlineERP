@@ -189,7 +189,7 @@ describe("payables ageing", () => {
 describe("payment run", () => {
   it("refuses a disputed invoice, an unmatched one and a held one", async () => {
     const disputed = await invoice({ total: 10000, due_date: "2026-01-01" });
-    await post(w.admin, `/api/v1/invoices/${disputed.id}/dispute`,
+    await post({ ...w.admin, ...(await ver("invoices", disputed.id)) }, `/api/v1/invoices/${disputed.id}/dispute`,
       { disputed: true, reason: "Rate not as agreed" });
     const unmatched = await invoice({ total: 20000, due_date: "2026-01-01", match_status: "EXCEPTION" });
     const onHold = await invoice({ total: 30000, due_date: "2026-01-01" });
@@ -616,7 +616,8 @@ describe("one invoice, one payment", () => {
     const disputed = await invoice({ total: 8000, due_date: "2026-02-01" });
     const built = await buildRun();
     expect(built.ids).toContain(disputed.id);
-    await post(w.admin, `/api/v1/invoices/${disputed.id}/dispute`, { disputed: true, reason: "Short supply" });
+    await post({ ...w.admin, ...(await ver("invoices", disputed.id)) },
+      `/api/v1/invoices/${disputed.id}/dispute`, { disputed: true, reason: "Short supply" });
     const res = await post({ ...w.admin, ...(await ver("payment_runs", built.run.id)) },
       `/api/v1/payment-runs/${built.run.id}/decision`, { action: "APPROVE" });
     expect(res.status).toBe(409);

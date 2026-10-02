@@ -999,8 +999,8 @@ describe("vendor invoice lines (finding B-004)", () => {
       purchase_order_id: po.id,
       lines: [{ po_line_id: poLines[0].id, description: "Cement OPC 53", hsn_sac: "25232910", quantity: 10, unit_rate: 400, gst_rate_pct: 0 }],
     });
-    const dispute = await post(w.admin, `/api/v1/invoices/${inv.data.id}/dispute`,
-      { disputed: true, reason: "Wrong item delivered" });
+    const dispute = await post({ ...w.admin, ...(await ver("invoices", inv.data.id)) },
+      `/api/v1/invoices/${inv.data.id}/dispute`, { disputed: true, reason: "Wrong item delivered" });
     expect(dispute.status, JSON.stringify(dispute.body)).toBe(200);
 
     const res = await patchInvoiceLines(w.admin, inv.data.id, {

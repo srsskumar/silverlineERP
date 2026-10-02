@@ -293,6 +293,16 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
         await db.query(
           'UPDATE payment_allocations SET reversed_at = now() WHERE payment_id = $1 AND reversed_at IS NULL',
           [id]);
+        // A reversed payment is no longer the cash a statement line
+        // confirmed; leaving the line RECONCILED against it would keep
+        // reporting money that was taken back as settled.
+        await db.query(
+          `UPDATE bank_transactions SET reconciliation_status = 'UNMATCHED',
+             payment_id = NULL, reconciled_at = NULL, reconciled_by = NULL,
+             exception_note = 'Unreconciled: the matched payment was reversed',
+             version = version + 1, updated_at = now(), updated_by = $2
+           WHERE payment_id = $1 AND reconciliation_status IN ('RECONCILED', 'PARTIALLY_MATCHED')`,
+          [id, u.id]);
         return (await db.query(
           `UPDATE payments SET reversed_at=now(), reversed_by=$2, reversal_reason=$3,
              version=version+1, updated_at=now(), updated_by=$2 WHERE id=$1 RETURNING *`,
@@ -303,12 +313,25 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
 
   /* --------------------------------------------------------- allocation */
 
+  // A receipt from a client and a payment to a vendor are not
+  // interchangeable cash, whatever document id is handed in. RA_BILL and
+  // ADVANCE are what the project is owed; VENDOR_INVOICE and EXPENSE_CLAIM
+  // are what this org owes out.
+  const DOCUMENT_TYPE_DIRECTION: Record<string, 'RECEIVABLE' | 'PAYABLE'> = {
+    RA_BILL: 'RECEIVABLE', ADVANCE: 'RECEIVABLE',
+    VENDOR_INVOICE: 'PAYABLE', EXPENSE_CLAIM: 'PAYABLE',
+  };
+
   app.post('/api/v1/payments/:id/allocations', { preHandler: guard('payment.allocate') }, async (req, reply) => {
     const u = actor(req), id = (req.params as { id: string }).id;
     const input = parse(paymentAllocationSchema, req.body);
     const row = await mutate(pool, req, 'payment.allocate', 'payment_allocation', async db => {
       const payment = await inOrg(db, 'payments', id, u.orgId, true);
       if (payment.reversed_at) fail('PAYMENT_REVERSED', 'A reversed payment cannot be allocated');
+      if (DOCUMENT_TYPE_DIRECTION[input.document_type] !== payment.direction) {
+        fail('DIRECTION_MISMATCH',
+          `A ${String(payment.direction).toLowerCase()} payment cannot settle a ${input.document_type.replace('_', ' ').toLowerCase()}`);
+      }
 
       const already = (await db.query(
         'SELECT * FROM payment_allocations WHERE payment_id = $1 AND reversed_at IS NULL', [id]))
@@ -464,6 +487,16 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
         }
         const payment = await inOrg(db, 'payments', body.payment_id, u.orgId);
         if (payment.reversed_at) fail('PAYMENT_REVERSED', 'That payment has been reversed');
+        // One payment is one piece of cash; it cannot also reconcile a second
+        // statement line without the bank balance being counted twice.
+        const elsewhere = await db.query(
+          `SELECT 1 FROM bank_transactions
+             WHERE payment_id = $1 AND id <> $2
+               AND reconciliation_status IN ('RECONCILED', 'PARTIALLY_MATCHED')`,
+          [body.payment_id, id]);
+        if (elsewhere.rowCount) {
+          fail('ALREADY_RECONCILED', 'This payment is already reconciled against another statement line');
+        }
         // The statement is the bank's record and the payment is ours; if they
         // disagree the difference is the point, so it is reported rather than
         // rounded away.
@@ -495,6 +528,7 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
     return {
       data: await mutate(pool, req, 'invoice.status', 'invoice', async db => {
         const invoice = await inOrg(db, 'invoices', id, u.orgId, true);
+        version(req, invoice as { version: number });
         const from = String(invoice.lifecycle_status ?? 'ISSUED') as InvoiceLifecycle;
         if (!(INVOICE_TRANSITIONS[from] ?? []).includes(input.status)) {
           fail('INVALID_TRANSITION',
@@ -505,8 +539,16 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
         if (input.status === 'ISSUED' && !u.permissions.includes('invoice.issue')) {
           fail('FORBIDDEN', 'Issuing an invoice needs the invoice.issue permission', 403);
         }
-        if (input.status === 'CANCELLED' && !input.reason) {
-          fail('VALIDATION_ERROR', 'Say why the invoice is being cancelled');
+        if (input.status === 'CANCELLED') {
+          if (!input.reason) fail('VALIDATION_ERROR', 'Say why the invoice is being cancelled');
+          // A cancelled invoice never owed anything (documentValue's own
+          // rule, above) -- but money already allocated against this one is
+          // still sitting there, now settling a bill that no longer exists.
+          const live = await allocationsFor(db, 'VENDOR_INVOICE', id);
+          if (live.length) {
+            fail('ALLOCATIONS_EXIST',
+              'Payments are still allocated against this invoice. Reverse them before cancelling.');
+          }
         }
         return (await db.query(
           `UPDATE invoices SET lifecycle_status=$2, cancelled_reason=$3, version=version+1 WHERE id=$1 RETURNING *`,
@@ -521,7 +563,8 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
     const input = parse(disputeSchema, req.body);
     return {
       data: await mutate(pool, req, 'invoice.dispute', 'invoice', async db => {
-        await inOrg(db, 'invoices', id, u.orgId, true);
+        const invoice = await inOrg(db, 'invoices', id, u.orgId, true);
+        version(req, invoice as { version: number });
         // A flag, not a status: the invoice a client disputes is exactly the
         // one that also goes overdue, and both facts have to be visible.
         return (await db.query(

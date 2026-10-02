@@ -488,17 +488,27 @@ describe("bank reconciliation", () => {
 describe("invoice lifecycle", () => {
   it("will not take an issued invoice back to draft", async () => {
     const id = await makeInvoice(100);
-    const res = await post(w.admin, `/api/v1/invoices/${id}/status`, { status: "DRAFT" });
+    const res = await post({ ...w.admin, ...(await ver("invoices", id)) },
+      `/api/v1/invoices/${id}/status`, { status: "DRAFT" });
     expect(res.status).toBe(422);
     expect(res.body.code).toBe("INVALID_TRANSITION");
   });
 
+  it("will not act on a stale version", async () => {
+    const id = await makeInvoice(100);
+    const stale = await post(w.admin, `/api/v1/invoices/${id}/status`,
+      { status: "CANCELLED", reason: "stale" });
+    expect(stale.status).toBe(422);
+    expect(stale.body.code).toBe("VERSION_REQUIRED");
+  });
+
   it("demands a reason to cancel", async () => {
     const id = await makeInvoice(100);
-    const blind = await post(w.admin, `/api/v1/invoices/${id}/status`, { status: "CANCELLED" });
+    const blind = await post({ ...w.admin, ...(await ver("invoices", id)) },
+      `/api/v1/invoices/${id}/status`, { status: "CANCELLED" });
     expect(blind.status).toBe(422);
-    const res = await post(w.admin, `/api/v1/invoices/${id}/status`,
-      { status: "CANCELLED", reason: "Raised against the wrong vendor" });
+    const res = await post({ ...w.admin, ...(await ver("invoices", id)) },
+      `/api/v1/invoices/${id}/status`, { status: "CANCELLED", reason: "Raised against the wrong vendor" });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.data.cancelled_reason).toContain("wrong vendor");
     // Bumped (fix round 2) so a PATCH /invoices/:id/lines If-Match taken
@@ -506,11 +516,26 @@ describe("invoice lifecycle", () => {
     expect(res.data.version).toBe(2);
   });
 
+  it("will not cancel an invoice with live payments still allocated", async () => {
+    const id = await makeInvoice(1000);
+    const payment = (await post(w.admin, "/api/v1/payments", {
+      direction: "PAYABLE", payment_no: uniq("PAYC"), paid_on: "2026-01-10",
+      amount: 400, mode: "NEFT", party_type: "VENDOR", party_id: w.vendorId,
+    })).data;
+    await post(w.admin, `/api/v1/payments/${payment.id}/allocations`,
+      { document_type: "VENDOR_INVOICE", document_id: id, amount: 400 });
+    const res = await post({ ...w.admin, ...(await ver("invoices", id)) },
+      `/api/v1/invoices/${id}/status`, { status: "CANCELLED", reason: "should be refused" });
+    expect(res.status, JSON.stringify(res.body)).toBe(422);
+    expect(res.body.code).toBe("ALLOCATIONS_EXIST");
+  });
+
   it("carries disputed alongside the status rather than instead of it", async () => {
     // The invoice a client disputes is exactly the one that goes overdue, and
     // a single enum could only say one of those things.
     const id = await makeInvoice(1000, "2026-01-01");
-    const res = await post(w.admin, `/api/v1/invoices/${id}/dispute`,
+    const res = await post({ ...w.admin, ...(await ver("invoices", id)) },
+      `/api/v1/invoices/${id}/dispute`,
       { disputed: true, reason: "Quantities do not match the delivery note" });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.data.disputed).toBe(true);
@@ -521,7 +546,10 @@ describe("invoice lifecycle", () => {
 
   it("demands to know what is being disputed", async () => {
     const id = await makeInvoice(100);
-    expect((await post(w.admin, `/api/v1/invoices/${id}/dispute`, { disputed: true })).status).toBe(422);
+    const res = await post({ ...w.admin, ...(await ver("invoices", id)) },
+      `/api/v1/invoices/${id}/dispute`, { disputed: true });
+    expect(res.status).toBe(422);
+    expect(res.body.code).not.toBe("VERSION_REQUIRED");
   });
 });
 
@@ -529,7 +557,7 @@ describe("outstanding ledger", () => {
   it("ages what is outstanding, and keeps disputed in its own column", async () => {
     const overdue = await makeInvoice(1000, "2020-01-01");
     const disputed = await makeInvoice(2000, "2020-01-01");
-    await post(w.admin, `/api/v1/invoices/${disputed}/dispute`,
+    await post({ ...w.admin, ...(await ver("invoices", disputed)) }, `/api/v1/invoices/${disputed}/dispute`,
       { disputed: true, reason: "Rate not as agreed" });
 
     const res = await get(w.admin, "/api/v1/finance/outstanding?as_of=2026-09-15");
