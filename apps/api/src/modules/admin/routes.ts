@@ -37,6 +37,10 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
   const phone=i.phone?formatIndianMobile(i.phone):null;
   const row=await mutate(pool,req,'user.create','user',async db=>{if(i.employee_id)await inOrg(db,'employees',i.employee_id,u.orgId);
    if(phone&&(await db.query('SELECT 1 FROM users WHERE org_id=$1 AND mobile_digits=$2',[u.orgId,phone.slice(3)])).rowCount)fail('MOBILE_IN_USE','Another account already signs in with that mobile number',409);
+   // One person, one login: a second account against the same employee row
+   // would let the same person act under two sets of roles at once, each
+   // with its own audit trail pretending to be a different actor.
+   if(i.employee_id&&(await db.query('SELECT 1 FROM users WHERE org_id=$1 AND employee_id=$2',[u.orgId,i.employee_id])).rowCount)fail('EMPLOYEE_ALREADY_LINKED','This employee already has a login account',409);
    // Whoever creates the account knows the password they set, so asking the
    // person to replace it is worth offering -- but it is an offer, not a
    // rule. A crew member handed a phone at the start of a shift should not
