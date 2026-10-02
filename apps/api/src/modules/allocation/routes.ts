@@ -131,7 +131,7 @@ export async function registerAllocationRoutes(app: FastifyInstance, opts: { poo
 
   app.post('/api/v1/allocations/:id/status', { preHandler: guard('allocation.manage') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const body = req.body as { state?: AllocationState };
+    const body = (req.body ?? {}) as { state?: AllocationState };
     return {
       data: await mutate(pool, req, 'allocation.status', 'resource_allocation', async db => {
         const allocation = await inOrg(db, 'resource_allocations', id, u.orgId, true);
@@ -315,6 +315,7 @@ export async function registerAllocationRoutes(app: FastifyInstance, opts: { poo
     const row = await mutate(pool, req, 'roster.create', 'roster_entry', async db => {
       await workingEmployee(db, input.employee_id, u.orgId);
       await inOrg(db, 'work_shifts', input.shift_id, u.orgId);
+      if (input.project_id) await inOrg(db, 'projects', input.project_id, u.orgId);
       const clash = await db.query(
         'SELECT 1 FROM roster_entries WHERE employee_id = $1 AND roster_date = $2',
         [input.employee_id, input.roster_date]);
@@ -346,6 +347,7 @@ export async function registerAllocationRoutes(app: FastifyInstance, opts: { poo
     return {
       data: await mutate(pool, req, 'roster.bulk', 'roster_entry', async db => {
         const shift = await inOrg(db, 'work_shifts', input.shift_id, u.orgId);
+        if (input.project_id) await inOrg(db, 'projects', input.project_id, u.orgId);
         const restDays = (Array.isArray(shift.rest_days) ? shift.rest_days : []) as Weekday[];
         const summary = { created: 0, skipped_rest_day: 0, already_rostered: 0 };
 
