@@ -461,6 +461,25 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
       policies, registeredStateCodes: states,
     });
 
+    // The claim-level project_id and cost_head_id are checked against
+    // u.orgId above (POST /expense-claims); a line is free to override
+    // either one, and that override went straight into the insert below
+    // with no check of its own -- a line could bill another organisation's
+    // project, charge another organisation's cost head, or point its
+    // receipt at another organisation's uploaded document.
+    const checkIds = async (table: string, ids: Array<string | null | undefined>) => {
+      const unique = [...new Set(ids.filter((v): v is string => Boolean(v)))];
+      if (!unique.length) return;
+      const found = await db.query(
+        `SELECT id FROM ${table} WHERE id = ANY($1::uuid[]) AND org_id = $2`, [unique, u.orgId]);
+      if (found.rowCount !== unique.length) {
+        fail('VALIDATION_ERROR', `A line refers to a ${table.replace('_', ' ')} outside this organization`);
+      }
+    };
+    await checkIds('projects', lines.map(l => l.project_id));
+    await checkIds('cost_heads', lines.map(l => l.cost_head_id));
+    await checkIds('documents', lines.map(l => l.receipt_document_id));
+
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i], verdict = evaluation.lines[i];
       const projectId = line.project_id ?? claim.project_id ?? null;
