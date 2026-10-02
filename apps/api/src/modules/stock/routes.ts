@@ -104,7 +104,7 @@ export async function registerStockRoutes(app: FastifyInstance, opts: { pool: Po
 
   app.patch('/api/v1/stock-locations/:id', { preHandler: guard('location.manage') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const body = req.body as { name?: string; parent_id?: string | null; active?: boolean };
+    const body = (req.body ?? {}) as { name?: string; parent_id?: string | null; active?: boolean };
     return {
       data: await mutate(pool, req, 'location.update', 'stock_location', async db => {
         const location = await inOrg(db, 'stock_locations', id, u.orgId, true);
@@ -343,6 +343,12 @@ export async function registerStockRoutes(app: FastifyInstance, opts: { pool: Po
       if (input.quantity > position.available) {
         fail('INSUFFICIENT_STOCK',
           `Only ${position.available} is available to reserve — ${position.onHand} on hand, ${position.reserved} already reserved`);
+      }
+      // A reservation holds stock until this date, then releases it
+      // unattended -- one created already past that date would hold nothing
+      // for nobody, and the release job would clear it the moment it ran.
+      if (input.expires_on && input.expires_on < today()) {
+        fail('VALIDATION_ERROR', 'The expiry date is already in the past');
       }
       return (await db.query(
         `INSERT INTO stock_reservations(org_id, created_by, item_id, location_id, quantity,
