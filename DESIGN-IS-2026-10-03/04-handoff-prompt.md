@@ -1,7 +1,7 @@
-/make-plan Redesign the Silverline ERP survey module's internal structure and design-system discipline (`apps/web/app/survey/page.tsx` 3,877 lines, `apps/web/app/survey/entry/page.tsx`, `apps/web/app/survey/setup/page.tsx`). Current design failed audit at 16/30 with gaps in principles #3 (aesthetic), #4 (understandable), #8 (thorough), #9 (environmentally friendly), and #10 (as little design as possible).
+/make-plan Redesign the Silverline ERP survey module's internal structure and design-system discipline (`apps/web/app/survey/page.tsx` 3,877 lines, `apps/web/app/survey/entry/page.tsx`, `apps/web/app/survey/setup/page.tsx`). Current design failed audit at 17/30 with gaps in principles #3 (aesthetic), #4 (understandable), #8 (thorough), and #10 (as little design as possible). (#9 environmentally friendly was revised to 2/3 after confirming the survey module does not actually import the map/clustering stack the initial estimate assumed — see 02-scorecard.md and move 5 below, now resolved.)
 
 Verdict paragraph (quoted from 03-verdict.md):
-> Total score is 16/30 — below the ≥20 REFINE threshold — driven by five principles scoring 1/3 (aesthetic, understandable, thorough, environmentally friendly, as-little-as-possible), none of which is a one-line fix: they share a common root cause, which is that the survey module was built as one 3,877-line file with no shared design-system discipline enforced within it, rather than a deliberate layout/token pass. This is a REDESIGN of the survey module's internal structure and design-system discipline, not of the product's identity: the honesty (3/3) and long-lasting (3/3) scores, and the clean color-token system, are real strengths worth keeping.
+> Total score is 17/30 — below the ≥20 REFINE threshold — driven by principles scoring 1/3 (aesthetic, understandable, thorough, as-little-as-possible), none of which is a one-line fix: they share a common root cause, which is that the survey module was built as one 3,877-line file with no shared design-system discipline enforced within it, rather than a deliberate layout/token pass. This is a REDESIGN of the survey module's internal structure and design-system discipline, not of the product's identity: the honesty (3/3) and long-lasting (3/3) scores, and the clean color-token system, are real strengths worth keeping.
 
 Why redesign and not refine: five principles independently scored 1/3, and they compound from one shared structural cause (no shared input/filter component, no deliberate focus/ARIA pass, no enforced spacing subset) rather than being five unrelated small fixes — fixing them as isolated patches would just re-create the duplication this audit flagged.
 
@@ -23,7 +23,7 @@ Top 5 moves from the audit (verbatim):
 2. #8 — Give every native input in the survey module a local, deliberate focus style and ARIA label, routed through the same shared input components from move 1 so the fix is structural.
 3. #4 — Replace raw domain codes in user-facing defaults/filters (`'GCP-1'` at `:3144`, `'OUTSTANDING'` at `:181`) with a label map from code to plain phrase.
 4. #3 — Fix the confirmed AA-contrast failure on `text-text-subtle`/`bg-surface-sunken` at `text-2xs` (`:2772`), and consolidate the 40-value spacing scale currently in use down to one documented choice per context instead of 3-way half-step duplicates (`gap-1`/`1.5`/`2`, `py-1`/`1.5`/`2`/`2.5`).
-5. #9 — Confirm whether `maplibre-gl` + `@mapbox/mapbox-gl-draw` + `supercluster` are lazy-loaded to only the survey views that render a map, rather than shipping with the rest of the 3,877-line bundle; split if not.
+5. ~~#9 — Confirm whether the map stack is lazy-loaded~~ RESOLVED, no action: the survey module does not import `maplibre-gl`/`mapbox-gl-draw`/`supercluster` at all; that stack belongs to `/attendance` only and is already correctly split there via `next/dynamic(..., { ssr: false })`.
 
 Redesign principles in priority order:
 1. #10 (as little design as possible) — one shared, parameterized filter/select component used everywhere a filter dropdown currently appears, with zero per-instance style duplication.
@@ -34,7 +34,6 @@ Deliverables for the plan:
 - New component inventory for the survey module: a shared filter/select component, a shared text-input component, and where each of the current ~14 duplicated-pattern instances in `survey/page.tsx`/`entry`/`setup` migrates to it
 - A documented spacing subset (reduced from the current 40 ad hoc values) and a documented contrast-safe replacement for the `text-text-subtle`/`bg-surface-sunken` pairing, applied consistently
 - A code→plain-language label map for domain abbreviations/enums currently shown raw to users (starting with `GCP-1` and `OUTSTANDING`)
-- A bundle-splitting plan for the maplibre/mapbox-gl-draw/supercluster stack if it is not already lazy-loaded per-view
 - States checklist carried forward unchanged (Empty/Loading/Error already present; Success and Focus need deliberate per-surface treatment, not just a global fallback)
 - Migration path: this is an internal refactor of existing pages, not a user-facing flow change, so no user migration/cutover plan is needed beyond normal QA — confirm no route/URL changes
 
