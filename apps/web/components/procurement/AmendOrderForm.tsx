@@ -5,6 +5,7 @@ import { useMutation } from '@tanstack/react-query';
 import { apiRequest } from '@/lib/apiClient';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { Input, Textarea } from '@/components/ui/Input';
 import { RecordSheet, Section } from '@/components/finance/Primitives';
 
 type Row = Record<string, any>;
@@ -79,12 +80,12 @@ export function AmendOrder({
       <div className="space-y-4">
         <label className="block text-xs text-text-muted">
           Reason *
-          <textarea aria-label="Amendment reason" className="mt-1 w-full rounded border border-border bg-surface p-2 text-sm text-text"
+          <Textarea aria-label="Amendment reason" className="mt-1 w-full"
             value={reason} onChange={(e) => setReason(e.target.value)} />
         </label>
         <label className="block text-xs text-text-muted">
           New delivery date (optional)
-          <input type="date" className="mt-1 w-full rounded border border-border bg-surface p-2 text-sm text-text"
+          <Input type="date" className="mt-1 w-full"
             value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} />
         </label>
 
@@ -93,11 +94,11 @@ export function AmendOrder({
             {lines.map((l) => (
               <div key={String(l.id)} className="grid gap-2 rounded-lg border border-border bg-surface-sunken p-3 sm:grid-cols-3">
                 <span className="text-sm text-text">{l.description}</span>
-                <input type="number" min="0" step="any" aria-label={`Quantity for ${l.description}`}
+                <Input type="number" min="0" step="any" aria-label={`Quantity for ${l.description}`}
                   placeholder={`Qty (currently ${Number(l.quantity)})`}
                   value={lineEdits[String(l.id)]?.quantity ?? ''}
                   onChange={(e) => setLineEdit(String(l.id), { quantity: e.target.value })} />
-                <input type="number" min="0" step="any" aria-label={`Rate for ${l.description}`}
+                <Input type="number" min="0" step="any" aria-label={`Rate for ${l.description}`}
                   placeholder={`Rate (currently ${Number(l.unit_rate)})`}
                   value={lineEdits[String(l.id)]?.unit_rate ?? ''}
                   onChange={(e) => setLineEdit(String(l.id), { unit_rate: e.target.value })} />

@@ -4,6 +4,7 @@ import {useQueryClient} from '@tanstack/react-query';
 import {apiRequest} from '@/lib/apiClient';
 import {Button} from '@/components/ui/Button';
 import {ErrorCard} from '@/components/ui/ErrorCard';
+import {Input,Textarea} from '@/components/ui/Input';
 import {type Row} from './Workbench';
 
 export function AuditResults({audit}:{audit:Row}){return <div className="overflow-x-auto"><h3 className="my-3 font-semibold">{audit.name}</h3><table className="w-full text-left text-sm"><thead><tr>{['Asset','Result','Expected condition','Observed condition'].map(x=><th key={x} className="p-2">{x}</th>)}</tr></thead><tbody>{audit.results.map((r:Row)=><tr key={r.asset_id} className="border-t"><td className="p-2">{r.asset_code}</td><td className="p-2">{r.result.replaceAll('_',' ')}</td><td className="p-2">{r.expected_condition}</td><td className="p-2">{r.observed_condition??'Not found'}</td></tr>)}</tbody></table></div>;}
@@ -15,8 +16,8 @@ export function AssetAudit(){
   const ids=new Map<string,string>();for(const code of codes){const {data}=await apiRequest<{id:string}>('/api/v1/assets/resolve?code='+encodeURIComponent(code));ids.set(code,data.id);}
   const {data}=await apiRequest<Row>('/api/v1/asset-audits',{method:'POST',body:{name,expected_ids:expectedCodes.map(c=>ids.get(c)),scans:scans.map(s=>({asset_id:ids.get(s.code),condition:s.condition}))}});setSaved(data);await client.invalidateQueries({queryKey:['v2']});
  }catch(e){setError(e);}finally{setBusy(false);}}}>
- <label className="block text-sm font-medium">Audit name<input required className="mt-1 block w-full rounded border p-2" value={name} onChange={e=>setName(e.target.value)}/></label>
- <div className="grid gap-4 md:grid-cols-2"><label className="block text-sm font-medium">Expected asset codes, one per line<textarea required rows={6} className="mt-1 block w-full rounded border p-2" value={expected} onChange={e=>setExpected(e.target.value)} placeholder={'SCANNER-01\nSCANNER-02'}/></label><label className="block text-sm font-medium">Observed assets: code, condition<textarea rows={6} className="mt-1 block w-full rounded border p-2" value={observed} onChange={e=>setObserved(e.target.value)} placeholder={'SCANNER-01, GOOD'}/><span className="text-xs text-text-muted">Omitted expected assets are recorded as missing.</span></label></div>
+ <label className="block text-sm font-medium">Audit name<Input required className="mt-1 block w-full" value={name} onChange={e=>setName(e.target.value)}/></label>
+ <div className="grid gap-4 md:grid-cols-2"><label className="block text-sm font-medium">Expected asset codes, one per line<Textarea required rows={6} className="mt-1 block w-full" value={expected} onChange={e=>setExpected(e.target.value)} placeholder={'SCANNER-01\nSCANNER-02'}/></label><label className="block text-sm font-medium">Observed assets: code, condition<Textarea rows={6} className="mt-1 block w-full" value={observed} onChange={e=>setObserved(e.target.value)} placeholder={'SCANNER-01, GOOD'}/><span className="text-xs text-text-muted">Omitted expected assets are recorded as missing.</span></label></div>
  {error?<ErrorCard error={error}/>:null}<Button type="submit" loading={busy}>Record physical audit</Button>{saved?<AuditResults audit={saved}/>:null}
  </form>;
 }

@@ -10,12 +10,10 @@ import { applyFieldErrors } from '@/lib/form-errors';
 import { Button } from './ui/Button';
 import { ErrorCard } from './ui/ErrorCard';
 import { FormField } from './ui/FormField';
-import { Input } from './ui/Input';
+import { Input, Textarea } from './ui/Input';
+import { NativeSelect } from './ui/Select';
 import { EmployeePicker } from './EmployeePicker';
 import { Badge } from './ui/Badge';
-
-const inputClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 /**
  * File an attendance exception (type + reason + optional record link).
@@ -127,16 +125,16 @@ export function ExceptionDialog({
               <Input id="ex-record" placeholder="Link to a record…" {...register('attendance_record_id')} />
             </FormField>
             <FormField label="Exception type *" htmlFor="ex-type" error={errors.exception_type?.message}>
-              <select id="ex-type" className={inputClass} {...register('exception_type')}>
+              <NativeSelect id="ex-type" className="w-full" {...register('exception_type')}>
                 {EXCEPTION_TYPES.map((t) => (
                   <option key={t} value={t}>
                     {t}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </FormField>
             <FormField label="Reason *" htmlFor="ex-reason" error={errors.reason?.message}>
-              <textarea id="ex-reason" rows={3} className={inputClass} {...register('reason')} />
+              <Textarea id="ex-reason" rows={3} className="w-full" {...register('reason')} />
             </FormField>
             <FormField label="Document ID (optional)" htmlFor="ex-doc" error={errors.document_id?.message}>
               <Input id="ex-doc" placeholder="Supporting document id…" {...register('document_id')} />

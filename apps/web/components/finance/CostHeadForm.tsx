@@ -7,6 +7,8 @@ import { useMutation } from '@tanstack/react-query';
 import { createCostHead, updateCostHead, type CostHead } from '@/lib/cost-heads';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { Input, Textarea } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { FieldError, RecordSheet } from '@/components/finance/Primitives';
 import { applyFieldErrors } from '@/lib/form-errors';
 import { costHeadFormSchema, COST_HEAD_KINDS, type CostHeadFormInput } from '@/lib/validation';
@@ -60,19 +62,19 @@ export function CostHeadForm({
               submitted form data, and the API's PATCH schema is `.partial()`
               anyway — this field never travels on an edit either way, but
               readOnly keeps its value in the form state for the eye to see. */}
-          <input className="mt-1 w-full" maxLength={30} readOnly={Boolean(initial)} {...register('code')} />
+          <Input className="mt-1 w-full" maxLength={30} readOnly={Boolean(initial)} {...register('code')} />
           <FieldError message={errors.code?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Name
-          <input className="mt-1 w-full" maxLength={120} {...register('name')} />
+          <Input className="mt-1 w-full" maxLength={120} {...register('name')} />
           <FieldError message={errors.name?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Kind
-          <select className="mt-1 w-full" {...register('kind')}>
+          <NativeSelect className="mt-1 w-full" {...register('kind')}>
             {COST_HEAD_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
-          </select>
+          </NativeSelect>
           <FieldError message={errors.kind?.message} />
         </label>
         <label className="mt-1 flex items-center gap-2 text-xs text-text-muted">
@@ -81,7 +83,7 @@ export function CostHeadForm({
         </label>
         <label className="text-xs text-text-muted sm:col-span-2">
           Description (optional)
-          <textarea rows={2} className="mt-1 w-full" maxLength={500} {...register('description')} />
+          <Textarea rows={2} className="mt-1 w-full" maxLength={500} {...register('description')} />
         </label>
 
         {submitError ? <ErrorCard title="Could not save the cost head" error={submitError} className="sm:col-span-2" /> : null}

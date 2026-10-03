@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/Card';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Textarea } from '@/components/ui/Input';
 import { Section } from '@/components/finance/Primitives';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { day } from '@/lib/finance';
@@ -173,13 +174,13 @@ export function DueForPurgePanel() {
           <label className="block text-xs font-medium text-text-muted" htmlFor="purge-reason">
             Reason for purging {selected.size || 0} selected document(s)
           </label>
-          <textarea
+          <Textarea
             id="purge-reason"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             rows={2}
             placeholder="Why these are being purged now"
-            className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+            className="w-full"
           />
           <Button
             type="button"

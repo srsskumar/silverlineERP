@@ -1,14 +1,13 @@
 'use client';
 
 import * as React from 'react';
+import { Input, Textarea } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import {
   MasterSelect, ContractValueFields, PRIORITIES,
   useWorkspaces, useProjectTypes, useProjectCategories, useClients, useUsers,
   type ContractState,
 } from './ProjectFields';
-
-const inputClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 export interface ProjectFormState extends ContractState {
   workspace_id: string;
@@ -153,8 +152,7 @@ export function ProjectForm({
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
           <label className="mb-1 block text-xs font-medium text-text-muted">Code *</label>
-          <input
-            className={inputClass}
+          <Input
             placeholder="e.g. HYD-ROAD-01"
             value={state.code}
             maxLength={50}
@@ -169,8 +167,7 @@ export function ProjectForm({
         </div>
         <div>
           <label className="mb-1 block text-xs font-medium text-text-muted">Name *</label>
-          <input
-            className={inputClass}
+          <Input
             placeholder="Project name"
             value={state.name}
             maxLength={255}
@@ -206,9 +203,8 @@ export function ProjectForm({
 
       <div>
         <label className="mb-1 block text-xs font-medium text-text-muted">Description</label>
-        <textarea
+        <Textarea
           rows={3}
-          className={inputClass}
           placeholder="What is this project about?…"
           value={state.description}
           onChange={(e) => set({ description: e.target.value })}
@@ -226,16 +222,16 @@ export function ProjectForm({
         />
         <div>
           <label className="mb-1 block text-xs font-medium text-text-muted">Planned start</label>
-          <input
-            type="date" className={inputClass}
+          <Input
+            type="date"
             value={state.planned_start_date}
             onChange={(e) => set({ planned_start_date: e.target.value })}
           />
         </div>
         <div>
           <label className="mb-1 block text-xs font-medium text-text-muted">Planned end</label>
-          <input
-            type="date" className={inputClass}
+          <Input
+            type="date"
             min={state.planned_start_date || undefined}
             value={state.planned_end_date}
             onChange={(e) => set({ planned_end_date: e.target.value })}
@@ -245,15 +241,14 @@ export function ProjectForm({
 
       <div className="max-w-xs">
         <label className="mb-1 block text-xs font-medium text-text-muted">Priority</label>
-        <select
-          className={inputClass}
+        <NativeSelect
           value={state.priority}
           onChange={(e) => set({ priority: e.target.value })}
         >
           {PRIORITIES.map((p) => (
             <option key={p} value={p}>{p.charAt(0) + p.slice(1).toLowerCase()}</option>
           ))}
-        </select>
+        </NativeSelect>
       </div>
 
       <div className="rounded-lg border border-border bg-surface-sunken p-3 sm:p-4">
@@ -262,15 +257,14 @@ export function ProjectForm({
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
             <label className="mb-1 block text-xs font-medium text-text-muted">Track</label>
-            <select
-              className={inputClass}
+            <NativeSelect
               value={state.project_kind}
               onChange={(e) => set({ project_kind: e.target.value })}
             >
               <option value="">Not set…</option>
               <option value="GOVERNMENT">Government</option>
               <option value="PRIVATE">Private</option>
-            </select>
+            </NativeSelect>
           </div>
 
           <MasterSelect
@@ -304,8 +298,7 @@ export function ProjectForm({
         {state.project_kind === 'GOVERNMENT' ? (
           <div className="mt-4 max-w-sm">
             <label className="mb-1 block text-xs font-medium text-text-muted">Work order number</label>
-            <input
-              className={inputClass}
+            <Input
               placeholder="As issued by the department"
               value={state.work_order_number}
               maxLength={100}

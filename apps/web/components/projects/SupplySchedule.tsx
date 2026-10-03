@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ErrorCard } from '@/components/ui/ErrorCard';
@@ -171,12 +172,12 @@ export function SupplySchedule({
                   <td className="px-2 py-2">
                     {canManage ? (
                       <>
-                        <select
+                        <NativeSelect
                           aria-label={`Catalogue item for line ${i + 1}`}
                           value={line.catalogue_item_id ?? ''}
                           onChange={(e) => pick(i, (catalogue.data ?? [])
                             .find((c) => c.id === e.target.value))}
-                          className="mb-1 h-7 w-full rounded-md border border-border bg-canvas px-1 text-2xs text-text"
+                          className="mb-1 h-7 w-full text-2xs"
                         >
                           <option value="">From the catalogue…</option>
                           {(catalogue.data ?? []).map((c) => (
@@ -184,7 +185,7 @@ export function SupplySchedule({
                               {c.name} ({c.code})
                             </option>
                           ))}
-                        </select>
+                        </NativeSelect>
                         <Input
                           value={line.description}
                           onChange={(e) => set(i, { description: e.target.value })}
@@ -234,13 +235,13 @@ export function SupplySchedule({
                   <td className="px-2 py-2">
                     {canManage ? (
                       <>
-                        <select
+                        <NativeSelect
                           aria-label={`GST rate for line ${i + 1}`}
                           value={String(line.gst_rate)}
                           onChange={(e) => set(i, { gst_rate: Number(e.target.value) })}
-                          className="h-7 w-16 rounded-md border border-border bg-canvas px-1 text-2xs text-text">
+                          className="h-7 w-16 text-2xs">
                           {GST_SLABS.map((r) => <option key={r} value={r}>{r}%</option>)}
-                        </select>
+                        </NativeSelect>
                         <label className="mt-1 flex items-center gap-1 text-2xs text-text-muted">
                           <input type="checkbox" checked={line.price_includes_gst}
                             onChange={(e) => set(i, { price_includes_gst: e.target.checked })} />

@@ -11,7 +11,8 @@ import { assignablePeople, listPeople, peopleIndex, personLabel } from '@/lib/pe
 import { Button } from './ui/Button';
 import { ErrorCard } from './ui/ErrorCard';
 import { FormField } from './ui/FormField';
-import { Input } from './ui/Input';
+import { Input, Textarea } from './ui/Input';
+import { NativeSelect } from './ui/Select';
 
 /**
  * Assign a task to somebody, by name.
@@ -93,9 +94,9 @@ export function AssignDialog({
         </p>
         <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="mt-4 flex flex-col gap-4" noValidate>
           <FormField label="Assign to *" htmlFor="assign-user" error={errors.assignee_id?.message}>
-            <select
+            <NativeSelect
               id="assign-user"
-              className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
+              className="w-full"
               disabled={people.isLoading}
               {...register('assignee_id')}
             >
@@ -107,13 +108,13 @@ export function AssignDialog({
                     {p.name}{p.emp_no ? ` · ${p.emp_no}` : ''}
                   </option>
                 ))}
-            </select>
+            </NativeSelect>
           </FormField>
           <FormField label="Reason *" htmlFor="assign-reason" error={errors.reason?.message}>
-            <textarea
+            <Textarea
               id="assign-reason"
               rows={2}
-              className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
+              className="w-full"
               placeholder="Why is this person the right owner? (required)"
               {...register('reason')}
             />

@@ -15,7 +15,8 @@ import { applyFieldErrors } from '@/lib/form-errors';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { FormField } from '@/components/ui/FormField';
-import { Input } from '@/components/ui/Input';
+import { Input, Textarea } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 
 /**
  * Dialogs for `/org/holidays` (S1's holiday calendar).
@@ -74,24 +75,24 @@ export function CreateHolidayDialog({ open, year, onClose }: { open: boolean; ye
             <Input id="hol-name" invalid={!!errors.name} {...register('name')} />
           </FormField>
           <FormField label="Type *" htmlFor="hol-type" error={errors.type?.message}>
-            <select id="hol-type" className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm" {...register('type')}>
+            <NativeSelect id="hol-type" className="w-full" {...register('type')}>
               {HOLIDAY_TYPES.map((t) => (
                 <option key={t} value={t}>
                   {HOLIDAY_TYPE_LABELS[t]}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
           </FormField>
           <div className="grid grid-cols-2 gap-3">
             <FormField label="Scope type" htmlFor="hol-scope-type" error={errors.scope_type?.message}>
-              <select id="hol-scope-type" className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm" {...register('scope_type')}>
+              <NativeSelect id="hol-scope-type" className="w-full" {...register('scope_type')}>
                 <option value="">Org-wide</option>
                 {ORG_UNIT_TYPES.map((t) => (
                   <option key={t} value={t}>
                     {t}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </FormField>
             <FormField label="Scope ID" htmlFor="hol-scope-id" error={errors.scope_id?.message}>
               <Input id="hol-scope-id" placeholder="optional" {...register('scope_id')} />
@@ -168,19 +169,19 @@ export function EditHolidayDialog({ open, holiday, onClose }: { open: boolean; h
             <Input id="hol-edit-name" invalid={!!errors.name} {...register('name')} />
           </FormField>
           <FormField label="Type *" htmlFor="hol-edit-type" error={errors.type?.message}>
-            <select id="hol-edit-type" className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm" {...register('type')}>
+            <NativeSelect id="hol-edit-type" className="w-full" {...register('type')}>
               {HOLIDAY_TYPES.map((t) => (
                 <option key={t} value={t}>
                   {HOLIDAY_TYPE_LABELS[t]}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
           </FormField>
           <FormField label="Reason for this change *" htmlFor="hol-edit-reason" error={errors.reason?.message}>
-            <textarea
+            <Textarea
               id="hol-edit-reason"
               rows={3}
-              className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring"
+              className="w-full"
               {...register('reason')}
             />
           </FormField>
@@ -244,10 +245,10 @@ export function HolidayStatusDialog({
         </p>
         <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="mt-4 flex flex-col gap-4" noValidate>
           <FormField label="Reason" htmlFor="hol-status-reason" error={errors.reason?.message}>
-            <textarea
+            <Textarea
               id="hol-status-reason"
               rows={3}
-              className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring"
+              className="w-full"
               {...register('reason')}
             />
           </FormField>

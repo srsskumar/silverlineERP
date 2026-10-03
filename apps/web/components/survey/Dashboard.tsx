@@ -26,6 +26,8 @@ import { Stat } from '@/components/finance/Primitives';
 import { day, dayTime } from '@/lib/finance';
 import { milestoneCounts } from '@/lib/survey';
 import { ExportMenu } from '@/components/ui/ExportMenu';
+import { Input } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import {
   SurveyAlertSettings, SurveyContacts, SurveyQueries, type QueryScope,
 } from '@/components/survey/DashboardActions';
@@ -316,7 +318,6 @@ export function SurveyDashboard({
   const [reason, setReason] = React.useState<{ code: string; source: string } | null>(null);
   /* What a question is about, set by whichever row the reader pressed Ask on. */
   const [scope, setScope] = React.useState<QueryScope>({});
-  const sel = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
 
   const query = useQuery({
     queryKey: ['survey', 'dashboard', projectId, from, to, level, district, mandal,
@@ -408,36 +409,34 @@ export function SurveyDashboard({
         <div className="flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1 text-2xs uppercase tracking-wide text-text-subtle">
             Period from
-            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
-              className="rounded border border-border bg-surface px-2 py-1 text-sm text-text" />
+            <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
           </label>
           <label className="flex flex-col gap-1 text-2xs uppercase tracking-wide text-text-subtle">
             to
-            <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
-              className="rounded border border-border bg-surface px-2 py-1 text-sm text-text" />
+            <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
           </label>
           <label className="flex flex-col gap-1 text-2xs uppercase tracking-wide text-text-subtle">
             District
-            <select className={sel} value={district}
+            <NativeSelect value={district}
               onChange={(e) => { setDistrict(e.target.value); setMandal(''); }}>
               <option value="">All districts</option>
               {d.options.districts.map((u: Unit) => <option key={u.id} value={u.id}>{u.name}</option>)}
-            </select>
+            </NativeSelect>
           </label>
           <label className="flex flex-col gap-1 text-2xs uppercase tracking-wide text-text-subtle">
             Mandal
-            <select className={sel} value={mandal} onChange={(e) => setMandal(e.target.value)}>
+            <NativeSelect value={mandal} onChange={(e) => setMandal(e.target.value)}>
               <option value="">All mandals</option>
               {d.options.mandals.map((u: Unit) => <option key={u.id} value={u.id}>{u.name}</option>)}
-            </select>
+            </NativeSelect>
           </label>
           <label className="flex flex-col gap-1 text-2xs uppercase tracking-wide text-text-subtle">
             Group by
-            <select className={sel} value={level} onChange={(e) => setLevel(e.target.value)}>
+            <NativeSelect value={level} onChange={(e) => setLevel(e.target.value)}>
               <option value="district">District</option>
               <option value="division">Division</option>
               <option value="mandal">Mandal</option>
-            </select>
+            </NativeSelect>
           </label>
           {position ? (
             <Button variant="ghost" onClick={() => setPosition('')}>

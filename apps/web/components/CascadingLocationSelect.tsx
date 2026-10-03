@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { listOrgUnits } from '@/lib/org';
 import { queryKeys } from '@/lib/query-keys';
+import { NativeSelect } from '@/components/ui/Select';
 
 export interface LocationSelection {
   district_id?: string;
@@ -10,9 +11,6 @@ export interface LocationSelection {
   village_id?: string;
   site_id?: string;
 }
-
-const selectClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring disabled:bg-surface-sunken';
 
 /**
  * District → mandal → village chained selects. Queries are cached (10min
@@ -63,9 +61,9 @@ export function CascadingLocationSelect({
         <label htmlFor="loc-district" className="text-sm font-medium text-text-muted">
           District
         </label>
-        <select
+        <NativeSelect
           id="loc-district"
-          className={selectClass}
+          className="w-full"
           disabled={disabled}
           value={districtId ?? ''}
           onChange={(e) =>
@@ -78,16 +76,16 @@ export function CascadingLocationSelect({
               {u.name}
             </option>
           ))}
-        </select>
+        </NativeSelect>
         {districtsQuery.isLoading && <p className="text-xs text-text-subtle">Loading districts…</p>}
       </div>
       <div className="flex flex-col gap-1">
         <label htmlFor="loc-mandal" className="text-sm font-medium text-text-muted">
           Mandal
         </label>
-        <select
+        <NativeSelect
           id="loc-mandal"
-          className={selectClass}
+          className="w-full"
           disabled={disabled || !districtId}
           value={mandalId ?? ''}
           onChange={(e) =>
@@ -100,16 +98,16 @@ export function CascadingLocationSelect({
               {u.name}
             </option>
           ))}
-        </select>
+        </NativeSelect>
         {mandalsQuery.isFetching && districtId && <p className="text-xs text-text-subtle">Loading mandals…</p>}
       </div>
       <div className="flex flex-col gap-1">
         <label htmlFor="loc-village" className="text-sm font-medium text-text-muted">
           Village
         </label>
-        <select
+        <NativeSelect
           id="loc-village"
-          className={selectClass}
+          className="w-full"
           disabled={disabled || !mandalId}
           value={villageId ?? ''}
           onChange={(e) => onChange({ district_id: districtId, mandal_id: mandalId, village_id: e.target.value || undefined, site_id: undefined })}
@@ -120,16 +118,16 @@ export function CascadingLocationSelect({
               {u.name}
             </option>
           ))}
-        </select>
+        </NativeSelect>
         {villagesQuery.isFetching && mandalId && <p className="text-xs text-text-subtle">Loading villages…</p>}
       </div>
       <div className="flex flex-col gap-1">
         <label htmlFor="loc-site" className="text-sm font-medium text-text-muted">
           Assigned site
         </label>
-        <select
+        <NativeSelect
           id="loc-site"
-          className={selectClass}
+          className="w-full"
           disabled={disabled || !villageId}
           value={siteId ?? ''}
           onChange={(e) => onChange({
@@ -145,7 +143,7 @@ export function CascadingLocationSelect({
               {u.name}
             </option>
           ))}
-        </select>
+        </NativeSelect>
         {sitesQuery.isFetching && villageId && <p className="text-xs text-text-subtle">Loading sites…</p>}
       </div>
     </div>

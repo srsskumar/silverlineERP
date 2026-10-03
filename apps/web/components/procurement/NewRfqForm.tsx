@@ -7,6 +7,8 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input, Textarea } from '@/components/ui/Input';
 import { FieldError, RecordSheet, Section } from '@/components/finance/Primitives';
 import { businessToday } from '@/lib/finance';
 import { useToast } from '@/components/ui/Toast';
@@ -77,35 +79,35 @@ export function NewRfq({ onClose, onCreated }: { onClose: () => void; onCreated:
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="text-xs text-text-muted">
             RFQ number
-            <input className="mt-1 w-full" maxLength={50} {...register('rfq_no')} />
+            <Input className="mt-1 w-full" maxLength={50} {...register('rfq_no')} />
             <FieldError message={errors.rfq_no?.message} />
           </label>
           <label className="text-xs text-text-muted">
             Due date
-            <input type="date" className="mt-1 w-full" {...register('due_date')} />
+            <Input type="date" className="mt-1 w-full" {...register('due_date')} />
             <FieldError message={errors.due_date?.message} />
           </label>
           <label className="text-xs text-text-muted">
             From a requisition (optional)
-            <select className="mt-1 w-full" {...register('requisition_id')}>
+            <NativeSelect className="mt-1 w-full" {...register('requisition_id')}>
               <option value="">Not from a requisition</option>
               {(requisitions.data ?? []).map((r) => (
                 <option key={String(r.id)} value={String(r.id)}>{r.requisition_no}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
           <label className="text-xs text-text-muted">
             Project (optional)
-            <select className="mt-1 w-full" {...register('project_id')}>
+            <NativeSelect className="mt-1 w-full" {...register('project_id')}>
               <option value="">Not tied to a project</option>
               {(projects.data ?? []).map((p) => (
                 <option key={String(p.id)} value={String(p.id)}>{p.code} — {p.name}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
           <label className="text-xs text-text-muted sm:col-span-2">
             Scope (optional)
-            <textarea rows={2} className="mt-1 w-full" maxLength={4000} {...register('scope')} />
+            <Textarea rows={2} className="mt-1 w-full" maxLength={4000} {...register('scope')} />
           </label>
         </div>
 
@@ -133,17 +135,17 @@ export function NewRfq({ onClose, onCreated }: { onClose: () => void; onCreated:
             {fields.map((f, i) => (
               <div key={f.id} className="rounded-lg border border-border bg-surface-sunken p-3">
                 <div className="grid gap-2 sm:grid-cols-4">
-                  <select {...register(`lines.${i}.item_id`)}>
+                  <NativeSelect aria-label="Inventory item" {...register(`lines.${i}.item_id`)}>
                     <option value="">Not in inventory</option>
                     {(items.data ?? []).map((it) => (
                       <option key={String(it.id)} value={String(it.id)}>{it.code} — {it.name}</option>
                     ))}
-                  </select>
-                  <input className="sm:col-span-2" placeholder="Description" maxLength={255} {...register(`lines.${i}.description`)} />
-                  <input placeholder="Unit" maxLength={20} {...register(`lines.${i}.unit`)} />
+                  </NativeSelect>
+                  <Input className="sm:col-span-2" placeholder="Description" aria-label="Line description" maxLength={255} {...register(`lines.${i}.description`)} />
+                  <Input placeholder="Unit" aria-label="Unit" maxLength={20} {...register(`lines.${i}.unit`)} />
                 </div>
                 <div className="mt-2 grid gap-2 sm:grid-cols-4">
-                  <input type="number" min="0" step="any" placeholder="Quantity" {...register(`lines.${i}.quantity`)} />
+                  <Input type="number" min="0" step="any" placeholder="Quantity" aria-label="Quantity" {...register(`lines.${i}.quantity`)} />
                 </div>
                 {fields.length > 1 ? (
                   <div className="mt-2 flex justify-end">

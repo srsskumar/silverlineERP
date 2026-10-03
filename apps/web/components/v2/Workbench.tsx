@@ -8,6 +8,8 @@ import { useAuth } from '@/components/AuthProvider';
 import { Button } from '@/components/ui/Button';
 import { Combobox } from '@/components/ui/Combobox';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { Input, Textarea } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { EmployeePicker } from '@/components/EmployeePicker';
 import { UserPicker } from '@/components/UserPicker';
 export type Row=Record<string,any>;
@@ -48,11 +50,11 @@ function SelectField({field,value,onChange}:{field:Field;value:unknown;onChange:
  // A multi-select still needs every option visible at once, so it keeps the
  // native control; a single choice from a long list is what the typeahead is
  // for.
- if(field.type==='multi_select') return <select className="w-full rounded-md border border-border p-2" multiple
+ if(field.type==='multi_select') return <NativeSelect className="h-auto w-full" multiple
    value={Array.isArray(value)?value:[]}
    onChange={e=>onChange(Array.from(e.target.selectedOptions,o=>o.value))}>
    {options.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}
-  </select>;
+  </NativeSelect>;
 
  const create=field.createPath?async(name:string)=>{
   const {data}=await apiRequest<Row>('/api/v1/'+field.createPath,{method:'POST',body:{[field.createField??'name']:name}});
@@ -83,7 +85,7 @@ function SelectField({field,value,onChange}:{field:Field;value:unknown;onChange:
  */
 export function MutationForm({path,fields,method='POST',version,initial={},submit='Save',transform,onSaved,signOutMessage}:{path:string;fields:Field[];method?:string;version?:number;initial?:Row;submit?:string;transform?:(row:Row)=>Row;onSaved?:(row:Row)=>void;signOutMessage?:string}){
  const [values,setValues]=useState<Row>(()=>Object.fromEntries(fields.map(f=>[f.key,initial[f.key]??f.default??(f.type==='checkbox'?false:'')]))),[busy,setBusy]=useState(false),[error,setError]=useState<unknown>(),[saved,setSaved]=useState(false),client=useQueryClient();
- return <form className="space-y-4" onSubmit={async e=>{e.preventDefault();setBusy(true);setError(undefined);setSaved(false);try{const body=Object.fromEntries(Object.entries(values).filter(([,v])=>v!==''));const {data}=await apiRequest<Row>('/api/v1/'+path,{method,body:transform?transform(body):body,headers:{...(version!==undefined?{'If-Match':String(version)}:{})}});setSaved(true);if(signOutMessage){signOutWithNotice(signOutMessage);return;}await client.invalidateQueries();onSaved?.(data);}catch(e){setError(e);}finally{setBusy(false);}}}><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{fields.map(f=><label key={f.key} className="block text-sm font-medium text-text-muted"><span className="mb-1 block">{f.label}{f.required?' *':''}</span>{f.type==='employee'?<EmployeePicker value={String(values[f.key]??'')} onChange={v=>setValues({...values,[f.key]:v})} hint={f.hint}/>:f.type==='user'?<UserPicker value={String(values[f.key]??'')} onChange={v=>setValues({...values,[f.key]:v})} hint={f.hint}/>:f.source||f.type==='select'||f.type==='multi_select'?<SelectField field={f} value={values[f.key]} onChange={v=>setValues({...values,[f.key]:v})}/>:f.type==='checkbox'?<input type="checkbox" checked={!!values[f.key]} onChange={e=>setValues({...values,[f.key]:e.target.checked})}/>:f.type==='textarea'?<textarea className="w-full rounded-md border border-border p-2" required={f.required} value={String(values[f.key])} onChange={e=>setValues({...values,[f.key]:e.target.value})}/>:<input className="w-full rounded-md border border-border p-2" type={f.type??'text'} required={f.required} step={f.type==='number'?'any':undefined} value={String(values[f.key])} onChange={e=>setValues({...values,[f.key]:e.target.value})}/>}</label>)}</div>{error?<ErrorCard error={error}/>:null}<div className="flex items-center gap-3"><Button type="submit" loading={busy}>{submit}</Button>{saved?<p role="status" className="text-sm text-success">Saved successfully.</p>:null}</div></form>;
+ return <form className="space-y-4" onSubmit={async e=>{e.preventDefault();setBusy(true);setError(undefined);setSaved(false);try{const body=Object.fromEntries(Object.entries(values).filter(([,v])=>v!==''));const {data}=await apiRequest<Row>('/api/v1/'+path,{method,body:transform?transform(body):body,headers:{...(version!==undefined?{'If-Match':String(version)}:{})}});setSaved(true);if(signOutMessage){signOutWithNotice(signOutMessage);return;}await client.invalidateQueries();onSaved?.(data);}catch(e){setError(e);}finally{setBusy(false);}}}><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{fields.map(f=><label key={f.key} className="block text-sm font-medium text-text-muted"><span className="mb-1 block">{f.label}{f.required?' *':''}</span>{f.type==='employee'?<EmployeePicker value={String(values[f.key]??'')} onChange={v=>setValues({...values,[f.key]:v})} hint={f.hint}/>:f.type==='user'?<UserPicker value={String(values[f.key]??'')} onChange={v=>setValues({...values,[f.key]:v})} hint={f.hint}/>:f.source||f.type==='select'||f.type==='multi_select'?<SelectField field={f} value={values[f.key]} onChange={v=>setValues({...values,[f.key]:v})}/>:f.type==='checkbox'?<input type="checkbox" checked={!!values[f.key]} onChange={e=>setValues({...values,[f.key]:e.target.checked})}/>:f.type==='textarea'?<Textarea className="w-full" required={f.required} value={String(values[f.key])} onChange={e=>setValues({...values,[f.key]:e.target.value})}/>:<Input className="w-full" type={f.type??'text'} required={f.required} step={f.type==='number'?'any':undefined} value={String(values[f.key])} onChange={e=>setValues({...values,[f.key]:e.target.value})}/>}</label>)}</div>{error?<ErrorCard error={error}/>:null}<div className="flex items-center gap-3"><Button type="submit" loading={busy}>{submit}</Button>{saved?<p role="status" className="text-sm text-success">Saved successfully.</p>:null}</div></form>;
 }
 export function Collection({path,columns,onSelect}:{path:string;columns:{key:string;label:string}[];onSelect?:(row:Row)=>void}){
  const [offset,setOffset]=useState(0),query=useRows(`${path}${path.includes('?')?'&':'?'}limit=30&offset=${offset}`);

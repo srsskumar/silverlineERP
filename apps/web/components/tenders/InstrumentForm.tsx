@@ -7,6 +7,8 @@ import { useMutation } from '@tanstack/react-query';
 import { createInstrument, type Instrument } from '@/lib/instruments';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { Input } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { FieldError, Section } from '@/components/finance/Primitives';
 import { applyFieldErrors } from '@/lib/form-errors';
 import { instrumentFormSchema, INSTRUMENT_TYPES, type InstrumentFormInput } from '@/lib/validation';
@@ -57,39 +59,39 @@ export function InstrumentForm({
         <input type="hidden" {...register('tender_id')} />
         <label className="text-xs text-text-muted">
           Type
-          <select className="mt-1 w-full" {...register('instrument_type')}>
+          <NativeSelect className="mt-1 w-full" {...register('instrument_type')}>
             {INSTRUMENT_TYPES.map((t) => <option key={t} value={t}>{t.replaceAll('_', ' ')}</option>)}
-          </select>
+          </NativeSelect>
           <FieldError message={errors.instrument_type?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Issuing bank
-          <input className="mt-1 w-full" {...register('issuing_bank')} />
+          <Input className="mt-1 w-full" {...register('issuing_bank')} />
           <FieldError message={errors.issuing_bank?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Instrument number
-          <input className="mt-1 w-full" maxLength={100} {...register('instrument_number')} />
+          <Input className="mt-1 w-full" maxLength={100} {...register('instrument_number')} />
           <FieldError message={errors.instrument_number?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Amount
-          <input type="number" min="0" step="0.01" className="mt-1 w-full" {...register('amount')} />
+          <Input type="number" min="0" step="0.01" className="mt-1 w-full" {...register('amount')} />
           <FieldError message={errors.amount?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Issue date
-          <input type="date" className="mt-1 w-full" {...register('issue_date')} />
+          <Input type="date" className="mt-1 w-full" {...register('issue_date')} />
           <FieldError message={errors.issue_date?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Expiry date
-          <input type="date" className="mt-1 w-full" {...register('expiry_date')} />
+          <Input type="date" className="mt-1 w-full" {...register('expiry_date')} />
           <FieldError message={errors.expiry_date?.message} />
         </label>
         <label className="text-xs text-text-muted sm:col-span-3">
           Notes (optional)
-          <input className="mt-1 w-full" {...register('notes')} />
+          <Input className="mt-1 w-full" {...register('notes')} />
         </label>
 
         {submitError ? <ErrorCard title="Could not save the instrument" error={submitError} className="sm:col-span-3" /> : null}

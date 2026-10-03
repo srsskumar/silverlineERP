@@ -8,6 +8,8 @@ import { apiRequestRaw } from '@/lib/apiClient';
 import { createApprovalPolicy } from '@/lib/approval-policies';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input } from '@/components/ui/Input';
 import { FieldError, RecordSheet, Section } from '@/components/finance/Primitives';
 import { useToast } from '@/components/ui/Toast';
 import { applyFieldErrors } from '@/lib/form-errors';
@@ -128,25 +130,25 @@ export function ApprovalPolicyForm({
                 <p className="mt-1 text-sm text-text">{DOCUMENT_TYPE_LABELS[initial.document_type] ?? initial.document_type}</p>
               </>
             ) : (
-              <select className="mt-1 w-full" {...register('document_type')}>
+              <NativeSelect className="mt-1 w-full" {...register('document_type')}>
                 {APPROVAL_DOCUMENT_TYPES.map((t) => (
                   <option key={t} value={t}>{DOCUMENT_TYPE_LABELS[t] ?? t}</option>
                 ))}
-              </select>
+              </NativeSelect>
             )}
             <FieldError message={errors.document_type?.message} />
           </label>
           <label className="text-xs text-text-muted">
             Name
-            <input className="mt-1 w-full" maxLength={150} {...register('name')} />
+            <Input className="mt-1 w-full" maxLength={150} {...register('name')} />
             <FieldError message={errors.name?.message} />
           </label>
           <label className="text-xs text-text-muted">
             Mode
-            <select className="mt-1 w-full" {...register('mode')}>
+            <NativeSelect className="mt-1 w-full" {...register('mode')}>
               <option value="CUMULATIVE">Cumulative — every level up to the amount</option>
               <option value="SINGLE">Single — only the one level the amount falls in</option>
-            </select>
+            </NativeSelect>
           </label>
           <label className="text-xs text-text-muted">
             Project (optional — leave blank for the org-wide default)
@@ -156,18 +158,18 @@ export function ApprovalPolicyForm({
                 <p className="mt-1 text-sm text-text">{lockedProjectLabel}</p>
               </>
             ) : (
-              <select className="mt-1 w-full" {...register('project_id')}>
+              <NativeSelect className="mt-1 w-full" {...register('project_id')}>
                 <option value="">Org-wide</option>
                 {(projects.data ?? []).map((p) => (
                   <option key={String(p.id)} value={String(p.id)}>{p.code} — {p.name}</option>
                 ))}
-              </select>
+              </NativeSelect>
             )}
             <FieldError message={errors.project_id?.message} />
           </label>
           <label className="text-xs text-text-muted">
             Tolerance %
-            <input type="number" min="0" max="25" step="0.01" className="mt-1 w-full" {...register('tolerance_pct')} />
+            <Input type="number" min="0" max="25" step="0.01" className="mt-1 w-full" {...register('tolerance_pct')} />
             <FieldError message={errors.tolerance_pct?.message} />
           </label>
           <label className="mt-1 flex items-center gap-2 text-xs text-text-muted">
@@ -191,17 +193,17 @@ export function ApprovalPolicyForm({
             {fields.map((f, i) => (
               <div key={f.id} className="rounded-lg border border-border bg-surface-sunken p-3">
                 <div className="grid gap-2 sm:grid-cols-6">
-                  <input type="number" min="1" max="20" placeholder="Sequence" {...register(`levels.${i}.sequence`)} />
-                  <input type="number" min="0" step="any" placeholder="Min amount" {...register(`levels.${i}.min_amount`)} />
-                  <input type="number" min="0" step="any" placeholder="Max amount (blank = and above)" {...register(`levels.${i}.max_amount`)} />
-                  <select aria-label={`Approver role for level ${i + 1}`} {...register(`levels.${i}.approver_role`)}>
+                  <Input type="number" min="1" max="20" aria-label={`Sequence for level ${i + 1}`} placeholder="Sequence" {...register(`levels.${i}.sequence`)} />
+                  <Input type="number" min="0" step="any" aria-label={`Minimum amount for level ${i + 1}`} placeholder="Min amount" {...register(`levels.${i}.min_amount`)} />
+                  <Input type="number" min="0" step="any" aria-label={`Maximum amount for level ${i + 1}`} placeholder="Max amount (blank = and above)" {...register(`levels.${i}.max_amount`)} />
+                  <NativeSelect aria-label={`Approver role for level ${i + 1}`} {...register(`levels.${i}.approver_role`)}>
                     <option value="">No role — use a specific approver instead</option>
                     {ROLE_CODES.map((code) => (
                       <option key={code} value={code}>{roleLabel(code)}</option>
                     ))}
-                  </select>
-                  <input placeholder="Approver user ID (optional)" {...register(`levels.${i}.approver_user_id`)} />
-                  <input type="number" min="1" max="8760" placeholder="SLA hours (optional)" {...register(`levels.${i}.sla_hours`)} />
+                  </NativeSelect>
+                  <Input aria-label={`Approver user ID for level ${i + 1}`} placeholder="Approver user ID (optional)" {...register(`levels.${i}.approver_user_id`)} />
+                  <Input type="number" min="1" max="8760" aria-label={`SLA hours for level ${i + 1}`} placeholder="SLA hours (optional)" {...register(`levels.${i}.sla_hours`)} />
                 </div>
                 {fields.length > 1 ? (
                   <div className="mt-2 flex justify-end">

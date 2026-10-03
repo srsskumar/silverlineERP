@@ -7,6 +7,8 @@ import { useMutation } from '@tanstack/react-query';
 import { apiRequest } from '@/lib/apiClient';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { Input, Textarea } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { FieldError, RecordSheet } from '@/components/finance/Primitives';
 import { businessToday } from '@/lib/finance';
 import { useToast } from '@/components/ui/Toast';
@@ -70,35 +72,35 @@ export function NewAdvance({
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="text-xs text-text-muted">
             Advance type
-            <select className="mt-1 w-full" {...register('advance_type')}>
+            <NativeSelect className="mt-1 w-full" {...register('advance_type')}>
               {ADVANCE_TYPES.map((t) => (
                 <option key={t} value={t}>{t.charAt(0) + t.slice(1).toLowerCase()}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
           <label className="text-xs text-text-muted">
             Paid on
-            <input type="date" className="mt-1 w-full" {...register('paid_on')} />
+            <Input type="date" className="mt-1 w-full" {...register('paid_on')} />
             <FieldError message={errors.paid_on?.message} />
           </label>
           <label className="text-xs text-text-muted">
             Amount
-            <input type="number" min="0" step="0.01" className="mt-1 w-full" {...register('amount')} />
+            <Input type="number" min="0" step="0.01" className="mt-1 w-full" {...register('amount')} />
             <FieldError message={errors.amount?.message} />
           </label>
           <label className="text-xs text-text-muted">
             Recovery % (of each bill's gross)
-            <input type="number" min="0.01" max="100" step="0.01" className="mt-1 w-full" {...register('recovery_pct')} />
+            <Input type="number" min="0.01" max="100" step="0.01" className="mt-1 w-full" {...register('recovery_pct')} />
             <FieldError message={errors.recovery_pct?.message} />
           </label>
           <label className="text-xs text-text-muted sm:col-span-2">
             Bank guarantee ID (optional)
-            <input className="mt-1 w-full" placeholder="UUID, if this advance is secured by one" {...register('bank_guarantee_id')} />
+            <Input className="mt-1 w-full" placeholder="UUID, if this advance is secured by one" {...register('bank_guarantee_id')} />
             <FieldError message={errors.bank_guarantee_id?.message} />
           </label>
           <label className="text-xs text-text-muted sm:col-span-2">
             Remarks (optional)
-            <textarea rows={2} className="mt-1 w-full" maxLength={1000} {...register('remarks')} />
+            <Textarea rows={2} className="mt-1 w-full" maxLength={1000} {...register('remarks')} />
           </label>
         </div>
 

@@ -12,6 +12,8 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
+import { Input } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { day, money } from '@/lib/finance';
 import { BankImportForm } from './BankImportForm';
 import { PaymentPicker } from './PaymentPicker';
@@ -39,7 +41,7 @@ function ReconcileRow({ row, onDone }: { row: BankTransaction; onDone: () => voi
         <div className="w-56">
           <PaymentPicker value={paymentId} onChange={setPaymentId} placeholder="Search payments…" />
         </div>
-        <input className="w-28 text-2xs" placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+        <Input aria-label="Note" className="w-28 text-2xs" placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
         <Button variant="secondary" size="sm" onClick={() => setOpen(false)}>Cancel</Button>
         <Button size="sm" loading={reconcile.isPending} disabled={!paymentId.trim()} onClick={() => reconcile.mutate()}>
           Confirm
@@ -77,13 +79,13 @@ export function BankReconciliationManager() {
       <div className="flex flex-wrap items-end gap-3 rounded-lg border border-border bg-surface p-4">
         <label className="text-xs text-text-muted">
           Status
-          <select className="mt-1 w-48" value={status} onChange={(e) => setStatus(e.target.value)}>
+          <NativeSelect className="mt-1 w-48" value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All</option>
             <option value="UNMATCHED">Unmatched</option>
             <option value="RECONCILED">Reconciled</option>
             <option value="PARTIALLY_MATCHED">Partially matched</option>
             <option value="EXCEPTION">Exception</option>
-          </select>
+          </NativeSelect>
         </label>
       </div>
 

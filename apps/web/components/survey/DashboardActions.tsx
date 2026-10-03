@@ -21,6 +21,8 @@ import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input, Textarea } from '@/components/ui/Input';
 import { Notice } from '@/components/finance/Primitives';
 import { useToast } from '@/components/ui/Toast';
 import { messageOf } from '@/lib/form-errors';
@@ -31,8 +33,6 @@ import {
 } from '@silverline/shared';
 
 type Row = Record<string, any>;
-
-const field = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
 
 /* ------------------------------------------------------------- contacts */
 
@@ -101,19 +101,19 @@ export function SurveyContacts({
       {adding ? (
         <div className="mb-3 space-y-2 rounded-md border border-border bg-surface-sunken p-3">
           <div className="flex flex-wrap gap-2">
-            <select className={field} value={side}
+            <NativeSelect aria-label="Contact side" value={side}
               onChange={(e) => setSide(e.target.value as 'GOVT' | 'SILVERLINE')}>
               <option value="GOVT">{CONTACT_SIDE_LABELS.GOVT}</option>
               <option value="SILVERLINE">{CONTACT_SIDE_LABELS.SILVERLINE}</option>
-            </select>
-            <input className={field} value={name} placeholder="Name"
+            </NativeSelect>
+            <Input aria-label="Name" value={name} placeholder="Name"
               onChange={(e) => setName(e.target.value)} />
-            <input className={field} value={designation}
+            <Input aria-label="Designation" value={designation}
               placeholder="Designation — Tahsildar, Deputy Surveyor…"
               onChange={(e) => setDesignation(e.target.value)} />
-            <input className={field} value={phone} placeholder="Telephone"
+            <Input aria-label="Telephone" value={phone} placeholder="Telephone"
               onChange={(e) => setPhone(e.target.value)} />
-            <input className={field} value={contactEmail} placeholder="Email (optional)"
+            <Input aria-label="Email" value={contactEmail} placeholder="Email (optional)"
               onChange={(e) => setContactEmail(e.target.value)} />
           </div>
           <Button onClick={() => add.mutate()}
@@ -301,16 +301,16 @@ export function SurveyQueries({
             ) : null}
           </p>
           <div className="flex flex-wrap gap-2">
-            <select className={field} value={kind} onChange={(e) => setKind(e.target.value)}>
+            <NativeSelect aria-label="Query kind" value={kind} onChange={(e) => setKind(e.target.value)}>
               {QUERY_KINDS.map((k) => (
                 <option key={k} value={k}>{QUERY_KIND_LABELS[k]}</option>
               ))}
-            </select>
-            <input className={`${field} min-w-64 flex-1`} value={subject}
+            </NativeSelect>
+            <Input className="min-w-64 flex-1" aria-label="Subject" value={subject}
               placeholder="Subject — something somebody can scan"
               onChange={(e) => setSubject(e.target.value)} />
           </div>
-          <textarea className={`${field} min-h-24 w-full`} value={body}
+          <Textarea className="min-h-24 w-full" aria-label="Message" value={body}
             placeholder="Say enough that somebody can answer without asking what you meant."
             onChange={(e) => setBody(e.target.value)} />
           <Button onClick={() => raise.mutate()}
@@ -358,7 +358,7 @@ export function SurveyQueries({
               ) : canAnswer ? (
                 answering === String(q.id) ? (
                   <div className="mt-1.5 space-y-1">
-                    <textarea className={`${field} min-h-16 w-full`} value={answer}
+                    <Textarea className="min-h-16 w-full" aria-label="Answer" value={answer}
                       placeholder="Answer"
                       onChange={(e) => setAnswer(e.target.value)} />
                     <Button onClick={() => reply.mutate(String(q.id))}
@@ -472,13 +472,13 @@ export function SurveyAlertSettings({ projectId }: { projectId: string }) {
 
       <div className="space-y-2 rounded-md border border-border bg-surface-sunken p-3">
         <div className="flex flex-wrap gap-2">
-          <input className={field} value={email} placeholder="name@department.gov.in"
+          <Input aria-label="Email" value={email} placeholder="name@department.gov.in"
             onChange={(e) => setEmail(e.target.value)} />
-          <input className={field} value={label} placeholder="Whose inbox (optional)"
+          <Input aria-label="Label" value={label} placeholder="Whose inbox (optional)"
             onChange={(e) => setLabel(e.target.value)} />
           <label className="flex items-center gap-1.5 text-2xs text-text-muted">
             Until
-            <input type="date" className={field} value={until}
+            <Input type="date" value={until}
               onChange={(e) => setUntil(e.target.value)} />
           </label>
         </div>

@@ -8,6 +8,8 @@ import { apiRequest } from '@/lib/apiClient';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input, Textarea } from '@/components/ui/Input';
 import { FieldError, RecordSheet, Section } from '@/components/finance/Primitives';
 import { businessToday } from '@/lib/finance';
 import { useToast } from '@/components/ui/Toast';
@@ -87,28 +89,28 @@ export function NewRaBill({
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="text-xs text-text-muted">
             Bill type
-            <select className="mt-1 w-full" {...register('bill_type')}>
+            <NativeSelect className="mt-1 w-full" {...register('bill_type')}>
               <option value="RA">RA (interim)</option>
               <option value="FINAL">Final</option>
-            </select>
+            </NativeSelect>
           </label>
           <label className="text-xs text-text-muted">
             Measurement book ref (optional)
-            <input className="mt-1 w-full" maxLength={100} {...register('measurement_book_ref')} />
+            <Input className="mt-1 w-full" maxLength={100} {...register('measurement_book_ref')} />
           </label>
           <label className="text-xs text-text-muted">
             Period from
-            <input type="date" className="mt-1 w-full" {...register('period_from')} />
+            <Input type="date" className="mt-1 w-full" {...register('period_from')} />
             <FieldError message={errors.period_from?.message} />
           </label>
           <label className="text-xs text-text-muted">
             Period to
-            <input type="date" className="mt-1 w-full" {...register('period_to')} />
+            <Input type="date" className="mt-1 w-full" {...register('period_to')} />
             <FieldError message={errors.period_to?.message} />
           </label>
           <label className="text-xs text-text-muted sm:col-span-2">
             Remarks (optional)
-            <textarea rows={2} className="mt-1 w-full" maxLength={4000} {...register('remarks')} />
+            <Textarea rows={2} className="mt-1 w-full" maxLength={4000} {...register('remarks')} />
           </label>
         </div>
 
@@ -132,14 +134,14 @@ export function NewRaBill({
               {lineArray.fields.map((f, i) => (
                 <div key={f.id} className="rounded-lg border border-border bg-surface-sunken p-3">
                   <div className="grid gap-2 sm:grid-cols-4">
-                    <select className="sm:col-span-2" {...register(`lines.${i}.boq_item_id`)}>
+                    <NativeSelect className="sm:col-span-2" aria-label="BOQ item" {...register(`lines.${i}.boq_item_id`)}>
                       <option value="">Pick a BOQ item</option>
                       {(boq.data ?? []).map((b) => (
                         <option key={String(b.id)} value={String(b.id)}>{b.item_code} — {b.description}</option>
                       ))}
-                    </select>
-                    <input type="number" min="0" step="any" placeholder="Cumulative quantity to date" {...register(`lines.${i}.cumulative_quantity`)} />
-                    <input placeholder="Remarks (optional)" maxLength={500} {...register(`lines.${i}.remarks`)} />
+                    </NativeSelect>
+                    <Input type="number" min="0" step="any" placeholder="Cumulative quantity to date" aria-label="Cumulative quantity to date" {...register(`lines.${i}.cumulative_quantity`)} />
+                    <Input placeholder="Remarks (optional)" aria-label="Line remarks" maxLength={500} {...register(`lines.${i}.remarks`)} />
                   </div>
                   {lineArray.fields.length > 1 ? (
                     <div className="mt-2 flex justify-end">
@@ -179,14 +181,14 @@ export function NewRaBill({
               {deductionArray.fields.map((f, i) => (
                 <div key={f.id} className="rounded-lg border border-border bg-surface-sunken p-3">
                   <div className="grid gap-2 sm:grid-cols-4">
-                    <select {...register(`fixed_deductions.${i}.head`)}>
+                    <NativeSelect aria-label="Deduction head" {...register(`fixed_deductions.${i}.head`)}>
                       {RA_BILL_DEDUCTION_HEADS.map((h) => (
                         <option key={h} value={h}>{DEDUCTION_LABELS[h] ?? h}</option>
                       ))}
-                    </select>
-                    <input placeholder="Label" maxLength={150} {...register(`fixed_deductions.${i}.label`)} />
-                    <input type="number" min="0" step="0.01" placeholder="Amount" {...register(`fixed_deductions.${i}.amount`)} />
-                    <input placeholder="Reason" maxLength={1000} {...register(`fixed_deductions.${i}.reason`)} />
+                    </NativeSelect>
+                    <Input placeholder="Label" aria-label="Deduction label" maxLength={150} {...register(`fixed_deductions.${i}.label`)} />
+                    <Input type="number" min="0" step="0.01" placeholder="Amount" aria-label="Deduction amount" {...register(`fixed_deductions.${i}.amount`)} />
+                    <Input placeholder="Reason" aria-label="Deduction reason" maxLength={1000} {...register(`fixed_deductions.${i}.reason`)} />
                   </div>
                   <div className="mt-2 flex justify-end">
                     <Button type="button" variant="ghost" size="sm" onClick={() => deductionArray.remove(i)}>Remove</Button>

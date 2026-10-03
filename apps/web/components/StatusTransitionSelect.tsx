@@ -9,6 +9,8 @@ import { hasPermission } from '@/lib/permissions';
 import { useAuth } from './AuthProvider';
 import { Button } from './ui/Button';
 import { ErrorCard } from './ui/ErrorCard';
+import { Textarea } from './ui/Input';
+import { NativeSelect } from './ui/Select';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/Dialog';
 
 /**
@@ -91,9 +93,9 @@ export function StatusTransitionSelect({
         <p className="text-sm text-text-muted">No transitions are available from {current}.</p>
       ) : (
         <div className="flex flex-col gap-2 sm:flex-row">
-          <select
+          <NativeSelect
             id={`task-status-${taskId}`}
-            className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 sm:max-w-xs"
+            className="w-full sm:max-w-xs"
             value={next}
             onChange={(e) => {
               setNext(e.target.value);
@@ -107,7 +109,7 @@ export function StatusTransitionSelect({
                 {s}
               </option>
             ))}
-          </select>
+          </NativeSelect>
           <Button disabled={!next} loading={mutation.isPending} onClick={() => next && mutation.mutate({ status: next })}>
             Move
           </Button>
@@ -138,9 +140,9 @@ export function StatusTransitionSelect({
             <label htmlFor={`override-reason-${taskId}`} className="text-sm font-medium text-text-muted">
               Reason
             </label>
-            <textarea
+            <Textarea
               id={`override-reason-${taskId}`}
-              className="min-h-20 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring"
+              className="min-h-20 w-full"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
             />

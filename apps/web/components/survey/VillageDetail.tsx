@@ -10,6 +10,8 @@ import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Badge } from '@/components/ui/Badge';
 import { Combobox } from '@/components/ui/Combobox';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input } from '@/components/ui/Input';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Notice } from '@/components/finance/Primitives';
 import { businessToday, day } from '@/lib/finance';
@@ -26,7 +28,6 @@ import { ReversePaymentDialog, mayReversePayments } from '@/components/survey/Re
 
 type Row = Record<string, any>;
 
-const field = 'w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
 
 const PAGE = 100;
 const MAX_PAGES = 20;
@@ -266,30 +267,30 @@ function StageForm({
     <div className="mt-2 grid gap-2 border-t border-border pt-2 sm:grid-cols-4">
       <label className="space-y-1">
         <span className="text-2xs uppercase tracking-wide text-text-subtle">State</span>
-        <select className={field} value={form.state}
+        <NativeSelect value={form.state}
           onChange={(e) => setForm({ ...form, state: e.target.value })}>
           {Object.entries(STAGE_STATE_LABELS).map(([k, v]) => (
             <option key={k} value={k}>{v}</option>
           ))}
-        </select>
+        </NativeSelect>
       </label>
       <label className="space-y-1">
         <span className="text-2xs uppercase tracking-wide text-text-subtle">Started</span>
-        <input type="date" className={field} value={form.started_on}
+        <Input type="date" value={form.started_on}
           onChange={(e) => setForm({ ...form, started_on: e.target.value })} />
       </label>
       <label className="space-y-1">
         <span className="text-2xs uppercase tracking-wide text-text-subtle">
           Completed {form.state === 'COMPLETED' ? <span className="text-danger">*</span> : null}
         </span>
-        <input type="date" className={field} value={form.completed_on}
+        <Input type="date" value={form.completed_on}
           onChange={(e) => setForm({ ...form, completed_on: e.target.value })} />
       </label>
       <label className="space-y-1 sm:col-span-4">
         <span className="text-2xs uppercase tracking-wide text-text-subtle">Remarks</span>
         {/* Why a village is stuck. "Two parcels disputed" is the reason it
             sits here for three weeks, and it belongs on the record. */}
-        <input className={field} value={form.remarks} placeholder="Two parcels disputed"
+        <Input value={form.remarks} placeholder="Two parcels disputed"
           onChange={(e) => setForm({ ...form, remarks: e.target.value })} />
       </label>
       {asksStaffing ? (
@@ -305,7 +306,7 @@ function StageForm({
             <span className="text-2xs uppercase tracking-wide text-text-subtle">
               Government staff allotted <span className="text-danger">*</span>
             </span>
-            <input type="number" min={0} className={field}
+            <Input type="number" min={0}
               value={form.gt_govt_staff_allocated} placeholder="2"
               onChange={(e) => setForm({ ...form, gt_govt_staff_allocated: e.target.value })} />
           </label>
@@ -313,7 +314,7 @@ function StageForm({
             <span className="text-2xs uppercase tracking-wide text-text-subtle">
               Our crew allotted <span className="text-danger">*</span>
             </span>
-            <input type="number" min={0} className={field}
+            <Input type="number" min={0}
               value={form.gt_crew_allocated} placeholder="4"
               onChange={(e) => setForm({ ...form, gt_crew_allocated: e.target.value })} />
           </label>
@@ -485,11 +486,11 @@ function Crew({
               <p className="mt-2 text-2xs text-text-muted">{outcome}</p>
             ) : null}
           </div>
-          <select className={field} value={form.stage_code}
+          <NativeSelect value={form.stage_code} aria-label="Stage"
             onChange={(e) => setForm({ ...form, stage_code: e.target.value })}>
             <option value="">Which stage…</option>
             {pipeline.map((s) => <option key={s.code} value={s.code}>{s.label}</option>)}
-          </select>
+          </NativeSelect>
           <div className="sm:col-span-3">
             <Button type="button" variant="primary" loading={assign.isPending}
               disabled={basket.length === 0 || !form.stage_code}
@@ -833,7 +834,7 @@ function Rovers({ villageId, canManage }: { villageId: string; canManage: boolea
               </p>
             ) : null}
           </div>
-          <input type="date" className={field} value={form.allocated_on}
+          <Input type="date" value={form.allocated_on} aria-label="Allocated on"
             onChange={(e) => setForm({ ...form, allocated_on: e.target.value })} />
           <div className="sm:col-span-3">
             <Button type="button" variant="primary" loading={allocate.isPending}
@@ -1066,29 +1067,29 @@ function Billing({
         <div className="mt-2 grid gap-2 sm:grid-cols-2">
           <label className="text-2xs text-text-subtle">
             Milestone
-            <select className={field} value={form.milestone}
+            <NativeSelect value={form.milestone}
               onChange={(e) => setForm({ ...form, milestone: e.target.value })}>
               {open.map((m) => (
                 <option key={m} value={m}>
                   {MILESTONE_LABELS[m]} — {MILESTONE_PERCENT[m]}%
                 </option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
           <label className="text-2xs text-text-subtle">
             Submitted on
-            <input type="date" className={field} value={form.submitted_on}
+            <Input type="date" value={form.submitted_on}
               max={businessToday()}
               onChange={(e) => setForm({ ...form, submitted_on: e.target.value })} />
           </label>
           <label className="text-2xs text-text-subtle">
             Department reference
-            <input className={field} value={form.reference_no} placeholder="RC/2026/114"
+            <Input value={form.reference_no} placeholder="RC/2026/114"
               onChange={(e) => setForm({ ...form, reference_no: e.target.value })} />
           </label>
           <label className="text-2xs text-text-subtle">
             Extent claimed (Ac)
-            <input className={field} inputMode="decimal" value={form.extent_ac}
+            <Input inputMode="decimal" value={form.extent_ac}
               placeholder={village.total_extent_ac ? String(village.total_extent_ac) : ''}
               onChange={(e) => setForm({ ...form, extent_ac: e.target.value })} />
             <span className="mt-0.5 block text-2xs text-text-subtle">
@@ -1097,7 +1098,7 @@ function Billing({
           </label>
           <label className="text-2xs text-text-subtle sm:col-span-2">
             Remarks
-            <input className={field} value={form.remarks}
+            <Input value={form.remarks}
               onChange={(e) => setForm({ ...form, remarks: e.target.value })} />
           </label>
           <div className="sm:col-span-2">
@@ -1293,33 +1294,33 @@ function ClaimEdit({ claim, onDone }: { claim: Row; onDone: () => void }) {
     <div className="grid gap-2 border-t border-border p-3 sm:grid-cols-3">
       <label className="text-2xs text-text-subtle">
         Share (%)
-        <input className={field} inputMode="decimal" value={form.percent}
+        <Input inputMode="decimal" value={form.percent}
           onChange={(e) => setForm({ ...form, percent: e.target.value })} />
       </label>
       <label className="text-2xs text-text-subtle">
         Submitted on
-        <input type="date" className={field} value={form.submitted_on} max={businessToday()}
+        <Input type="date" value={form.submitted_on} max={businessToday()}
           onChange={(e) => setForm({ ...form, submitted_on: e.target.value })} />
       </label>
       <label className="text-2xs text-text-subtle">
         Decided on
-        <input type="date" className={field} value={form.decided_on} max={businessToday()}
+        <Input type="date" value={form.decided_on} max={businessToday()}
           onChange={(e) => setForm({ ...form, decided_on: e.target.value })} />
         <span className="mt-0.5 block">Leave blank if it is still with the department.</span>
       </label>
       <label className="text-2xs text-text-subtle">
         Department reference
-        <input className={field} value={form.reference_no} placeholder="RC/2026/114"
+        <Input value={form.reference_no} placeholder="RC/2026/114"
           onChange={(e) => setForm({ ...form, reference_no: e.target.value })} />
       </label>
       <label className="text-2xs text-text-subtle">
         Extent claimed (Ac)
-        <input className={field} inputMode="decimal" value={form.extent_ac}
+        <Input inputMode="decimal" value={form.extent_ac}
           onChange={(e) => setForm({ ...form, extent_ac: e.target.value })} />
       </label>
       <label className="text-2xs text-text-subtle">
         Remarks
-        <input className={field} value={form.remarks}
+        <Input value={form.remarks}
           onChange={(e) => setForm({ ...form, remarks: e.target.value })} />
       </label>
       <div className="sm:col-span-3">
@@ -1475,7 +1476,8 @@ export function CertifiedTotals({ village, canCertify }: { village: Row; canCert
                     </TD>
                     <TD className="text-right tabular-nums">
                       {open ? (
-                        <input className={`${field} text-right`} inputMode="decimal"
+                        <Input className="text-right" inputMode="decimal"
+                          aria-label={`Certified quantity for ${String(r.label)}`}
                           placeholder={String(r.certified ?? r.recorded)}
                           value={d.quantity}
                           onChange={(e) => setDraft({
@@ -1497,7 +1499,8 @@ export function CertifiedTotals({ village, canCertify }: { village: Row; canCert
                     </TD>
                     <TD tone="muted">
                       {open ? (
-                        <input className={field} placeholder="Recount at handover"
+                        <Input placeholder="Recount at handover"
+                          aria-label={`Why the certified figure for ${String(r.label)} differs`}
                           value={d.reason}
                           onChange={(e) => setDraft({
                             ...draft, [code]: { ...d, reason: e.target.value },
@@ -1888,18 +1891,18 @@ function ControlPoints({ village, canManage }: { village: Row; canManage: boolea
         <div className="mt-2 grid gap-2 sm:grid-cols-2">
           <label className="text-2xs text-text-subtle">
             Point name
-            <input className={field} value={form.point_code} placeholder="GCP-1"
+            <Input value={form.point_code} placeholder="GCP-1"
               onChange={(e) => setForm({ ...form, point_code: e.target.value })} />
           </label>
           <label className="text-2xs text-text-subtle">
             Established on
-            <input type="date" className={field} value={form.established_on}
+            <Input type="date" value={form.established_on}
               max={businessToday()}
               onChange={(e) => setForm({ ...form, established_on: e.target.value })} />
           </label>
           <label className="text-2xs text-text-subtle sm:col-span-2">
             Where it is
-            <input className={field} value={form.landmark}
+            <Input value={form.landmark}
               placeholder="Panchayat office, Government hospital, Temple gate…"
               onChange={(e) => setForm({ ...form, landmark: e.target.value })} />
             <span className="mt-0.5 block">
@@ -1908,19 +1911,19 @@ function ControlPoints({ village, canManage }: { village: Row; canManage: boolea
           </label>
           <label className="text-2xs text-text-subtle">
             Latitude (degrees)
-            <input className={field} inputMode="decimal" value={form.latitude}
+            <Input inputMode="decimal" value={form.latitude}
               placeholder="17.6868231"
               onChange={(e) => setForm({ ...form, latitude: e.target.value })} />
           </label>
           <label className="text-2xs text-text-subtle">
             Longitude (degrees)
-            <input className={field} inputMode="decimal" value={form.longitude}
+            <Input inputMode="decimal" value={form.longitude}
               placeholder="83.2184815"
               onChange={(e) => setForm({ ...form, longitude: e.target.value })} />
           </label>
           <label className="text-2xs text-text-subtle">
             Elevation (m)
-            <input className={field} inputMode="decimal" value={form.elevation_m}
+            <Input inputMode="decimal" value={form.elevation_m}
               placeholder="45.212"
               onChange={(e) => setForm({ ...form, elevation_m: e.target.value })} />
             <span className="mt-0.5 block">Optional — a horizontal point is still a point.</span>
@@ -1935,19 +1938,19 @@ function ControlPoints({ village, canManage }: { village: Row; canManage: boolea
             */}
           <label className="text-2xs text-text-subtle">
             Easting (m)
-            <input className={field} inputMode="decimal" value={form.easting_m}
+            <Input inputMode="decimal" value={form.easting_m}
               placeholder="736412.318"
               onChange={(e) => setForm({ ...form, easting_m: e.target.value })} />
           </label>
           <label className="text-2xs text-text-subtle">
             Northing (m)
-            <input className={field} inputMode="decimal" value={form.northing_m}
+            <Input inputMode="decimal" value={form.northing_m}
               placeholder="1956043.772"
               onChange={(e) => setForm({ ...form, northing_m: e.target.value })} />
           </label>
           <label className="text-2xs text-text-subtle">
             Grid zone
-            <input className={field} value={form.grid_zone} placeholder="44N"
+            <Input value={form.grid_zone} placeholder="44N"
               onChange={(e) => setForm({ ...form, grid_zone: e.target.value })} />
             <span className="mt-0.5 block">
               Needed with a northing and easting — without it they are two numbers.
@@ -1955,7 +1958,7 @@ function ControlPoints({ village, canManage }: { village: Row; canManage: boolea
           </label>
           <label className="text-2xs text-text-subtle sm:col-span-2">
             Remarks
-            <input className={field} value={form.remarks}
+            <Input value={form.remarks}
               placeholder="Tied to BM 42; 45 min base observation, PDOP 1.4"
               onChange={(e) => setForm({ ...form, remarks: e.target.value })} />
             <span className="mt-0.5 block">

@@ -20,9 +20,7 @@ import { FormField } from '@/components/ui/FormField';
 import { Input } from '@/components/ui/Input';
 import { EmployeePicker } from '@/components/EmployeePicker';
 import { Skeleton } from '@/components/ui/Skeleton';
-
-const inputClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
+import { NativeSelect } from '@/components/ui/Select';
 
 /**
  * Admin balance adjust dialog (leave.admin). Upserts the opening balance for
@@ -116,14 +114,14 @@ function AdjustDialog({
               />
             </FormField>
             <FormField label="Leave type *" htmlFor="bal-type" error={errors.leave_type_id?.message}>
-              <select id="bal-type" className={inputClass} {...register('leave_type_id')}>
+              <NativeSelect id="bal-type" className="w-full" {...register('leave_type_id')}>
                 <option value="">Pick a leave type…</option>
                 {(typesQuery.data ?? []).map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.code} — {t.name}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </FormField>
             <div className="grid grid-cols-2 gap-4">
               <FormField label="Year *" htmlFor="bal-year" error={errors.period_year?.message}>

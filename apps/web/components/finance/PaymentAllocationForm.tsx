@@ -7,6 +7,8 @@ import { useMutation } from '@tanstack/react-query';
 import { allocatePayment } from '@/lib/payments';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { Input } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { FieldError, Section } from '@/components/finance/Primitives';
 import { applyFieldErrors } from '@/lib/form-errors';
 import { paymentAllocationFormSchema, type PaymentAllocationFormInput } from '@/lib/validation';
@@ -58,47 +60,47 @@ export function PaymentAllocationForm({
       <form onSubmit={handleSubmit((v) => allocate.mutate(v))} noValidate className="grid gap-3 sm:grid-cols-3">
         <label className="text-xs text-text-muted">
           Document type
-          <select className="mt-1 w-full" {...register('document_type')}>
+          <NativeSelect className="mt-1 w-full" {...register('document_type')}>
             <option value="RA_BILL">RA bill</option>
             <option value="VENDOR_INVOICE">Vendor invoice</option>
             <option value="EXPENSE_CLAIM">Expense claim</option>
             <option value="ADVANCE">Advance</option>
-          </select>
+          </NativeSelect>
           <FieldError message={errors.document_type?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Document ID
-          <input className="mt-1 w-full" placeholder="UUID" {...register('document_id')} />
+          <Input className="mt-1 w-full" placeholder="UUID" {...register('document_id')} />
           <FieldError message={errors.document_id?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Amount
-          <input type="number" min="0" step="0.01" className="mt-1 w-full" {...register('amount')} />
+          <Input type="number" min="0" step="0.01" className="mt-1 w-full" {...register('amount')} />
           <FieldError message={errors.amount?.message} />
         </label>
         <label className="text-xs text-text-muted">
           TDS (optional)
-          <input type="number" min="0" step="0.01" className="mt-1 w-full" {...register('tds_amount')} />
+          <Input type="number" min="0" step="0.01" className="mt-1 w-full" {...register('tds_amount')} />
           <FieldError message={errors.tds_amount?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Retention (optional)
-          <input type="number" min="0" step="0.01" className="mt-1 w-full" {...register('retention_amount')} />
+          <Input type="number" min="0" step="0.01" className="mt-1 w-full" {...register('retention_amount')} />
           <FieldError message={errors.retention_amount?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Advance adjusted (optional)
-          <input type="number" min="0" step="0.01" className="mt-1 w-full" {...register('advance_adjusted')} />
+          <Input type="number" min="0" step="0.01" className="mt-1 w-full" {...register('advance_adjusted')} />
           <FieldError message={errors.advance_adjusted?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Other deduction (optional)
-          <input type="number" min="0" step="0.01" className="mt-1 w-full" {...register('other_deduction')} />
+          <Input type="number" min="0" step="0.01" className="mt-1 w-full" {...register('other_deduction')} />
           <FieldError message={errors.other_deduction?.message} />
         </label>
         <label className="text-xs text-text-muted sm:col-span-2">
           Deduction reason (required if a deduction was withheld)
-          <input className="mt-1 w-full" maxLength={500} {...register('deduction_reason')} />
+          <Input className="mt-1 w-full" maxLength={500} {...register('deduction_reason')} />
           <FieldError message={errors.deduction_reason?.message} />
         </label>
         {submitError ? <ErrorCard title="Could not allocate the payment" error={submitError} className="sm:col-span-3" /> : null}

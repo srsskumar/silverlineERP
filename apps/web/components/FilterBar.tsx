@@ -25,9 +25,7 @@ import { applyFieldErrors } from '@/lib/form-errors';
 import { Button } from './ui/Button';
 import { ErrorCard } from './ui/ErrorCard';
 import { Input } from './ui/Input';
-
-const inputClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
+import { NativeSelect } from './ui/Select';
 
 const saveSchema = z.object({
   name: z.string().trim().min(1, 'Name is required').max(255),
@@ -144,14 +142,14 @@ export function FilterBar({
           <label htmlFor={`${idPrefix}-status`} className="text-sm font-medium text-text-muted">
             Status
           </label>
-          <select id={`${idPrefix}-status`} className={inputClass} value={status} onChange={(e) => setStatus(e.target.value)}>
+          <NativeSelect id={`${idPrefix}-status`} className="w-full" value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All</option>
             {(workflow.data?.statuses ?? TASK_STATUSES).map((s) => (
               <option key={s} value={s}>
                 {s}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </div>
         <div className="flex-1">
           <label htmlFor={`${idPrefix}-q`} className="text-sm font-medium text-text-muted">
@@ -167,14 +165,14 @@ export function FilterBar({
           <label htmlFor={`${idPrefix}-sla`} className="text-sm font-medium text-text-muted">
             SLA
           </label>
-          <select id={`${idPrefix}-sla`} className={inputClass} value={sla} onChange={(e) => setSla(e.target.value)}>
+          <NativeSelect id={`${idPrefix}-sla`} className="w-full" value={sla} onChange={(e) => setSla(e.target.value)}>
             <option value="">All</option>
             {SLA_FILTER_VALUES.map((s) => (
               <option key={s} value={s}>
                 {s}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </div>
       </div>
 
@@ -225,9 +223,9 @@ export function FilterBar({
             <label htmlFor={`${idPrefix}-saved`} className="text-sm font-medium text-text-muted">
               Saved filters
             </label>
-            <select
+            <NativeSelect
               id={`${idPrefix}-saved`}
-              className={inputClass}
+              className="w-full"
               value={selectedFilter}
               onChange={(e) => {
                 setSelectedFilter(e.target.value);
@@ -241,7 +239,7 @@ export function FilterBar({
                   {f.name}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
           </div>
           <div className="flex gap-2">
             <Button variant="secondary" disabled={!selectedFilter} onClick={applySelected}>

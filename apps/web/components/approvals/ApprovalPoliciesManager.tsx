@@ -13,6 +13,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
+import { NativeSelect } from '@/components/ui/Select';
 import { DOCUMENT_TYPE_LABELS } from '@/lib/finance';
 import { ApprovalPolicyForm } from './ApprovalPolicyForm';
 
@@ -84,12 +85,12 @@ export function ApprovalPoliciesManager() {
       <div className="flex flex-wrap items-end gap-3 rounded-lg border border-border bg-surface p-4">
         <label className="text-xs text-text-muted">
           Document type
-          <select className="mt-1 w-56" value={documentType} onChange={(e) => setDocumentType(e.target.value)}>
+          <NativeSelect className="mt-1 w-56" value={documentType} onChange={(e) => setDocumentType(e.target.value)}>
             <option value="">All document types</option>
             {Object.entries(DOCUMENT_TYPE_LABELS).map(([code, label]) => (
               <option key={code} value={code}>{label}</option>
             ))}
-          </select>
+          </NativeSelect>
         </label>
         <div className="ml-auto">
           {canManage ? <Button onClick={() => setFormOpen('new')}>New policy</Button> : null}

@@ -7,6 +7,8 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input, Textarea } from '@/components/ui/Input';
 import { FieldError, RecordSheet, Section } from '@/components/finance/Primitives';
 import { businessToday } from '@/lib/finance';
 import { useToast } from '@/components/ui/Toast';
@@ -117,22 +119,22 @@ export function NewPurchaseOrder({
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="text-xs text-text-muted">
             Order number
-            <input className="mt-1 w-full" maxLength={50} {...register('po_number')} />
+            <Input className="mt-1 w-full" maxLength={50} {...register('po_number')} />
             <FieldError message={errors.po_number?.message} />
           </label>
           <label className="text-xs text-text-muted">
             Vendor
-            <select className="mt-1 w-full" {...register('vendor_id')}>
+            <NativeSelect className="mt-1 w-full" {...register('vendor_id')}>
               <option value="">Choose a vendor</option>
               {(vendors.data ?? []).map((v) => (
                 <option key={String(v.id)} value={String(v.id)}>{v.name}</option>
               ))}
-            </select>
+            </NativeSelect>
             <FieldError message={errors.vendor_id?.message} />
           </label>
           <label className="text-xs text-text-muted">
             From an approved requisition (optional)
-            <select
+            <NativeSelect
               className="mt-1 w-full"
               value={requisitionId}
               onChange={(e) => { setRequisitionId(e.target.value); setValue('requisition_id', e.target.value || undefined); }}
@@ -141,44 +143,44 @@ export function NewPurchaseOrder({
               {(approvedRequisitions.data ?? []).map((r) => (
                 <option key={String(r.id)} value={String(r.id)}>{r.requisition_no}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
           <label className="text-xs text-text-muted">
             Project (optional)
-            <select className="mt-1 w-full" {...register('project_id')}>
+            <NativeSelect className="mt-1 w-full" {...register('project_id')}>
               <option value="">Not tied to a project</option>
               {(projects.data ?? []).map((p) => (
                 <option key={String(p.id)} value={String(p.id)}>{p.code} — {p.name}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
           <label className="text-xs text-text-muted">
             Order date
-            <input type="date" className="mt-1 w-full" {...register('po_date')} />
+            <Input type="date" className="mt-1 w-full" {...register('po_date')} />
             <FieldError message={errors.po_date?.message} />
           </label>
           <label className="text-xs text-text-muted">
             Delivery date (optional)
-            <input type="date" className="mt-1 w-full" {...register('delivery_date')} />
+            <Input type="date" className="mt-1 w-full" {...register('delivery_date')} />
             <FieldError message={errors.delivery_date?.message} />
           </label>
           <label className="text-xs text-text-muted">
             Payment terms (optional)
-            <input className="mt-1 w-full" maxLength={200} placeholder="Net 30" {...register('payment_terms')} />
+            <Input className="mt-1 w-full" maxLength={200} placeholder="Net 30" {...register('payment_terms')} />
           </label>
           <label className="text-xs text-text-muted">
             Place of supply (optional, two-digit state code)
-            <input className="mt-1 w-full" maxLength={2} placeholder="36" {...register('place_of_supply')} />
+            <Input className="mt-1 w-full" maxLength={2} placeholder="36" {...register('place_of_supply')} />
             <FieldError message={errors.place_of_supply?.message} />
           </label>
           <label className="text-xs text-text-muted sm:col-span-2">
             Delivery address (optional)
-            <textarea rows={2} className="mt-1 w-full" maxLength={1000} {...register('delivery_address')} />
+            <Textarea rows={2} className="mt-1 w-full" maxLength={1000} {...register('delivery_address')} />
           </label>
           {requisitionId ? (
             <label className="text-xs text-text-muted sm:col-span-2">
               Override reason (only needed if this order goes beyond the requisition)
-              <input className="mt-1 w-full" maxLength={1000} {...register('scope_override_reason')} />
+              <Input className="mt-1 w-full" maxLength={1000} {...register('scope_override_reason')} />
               <FieldError message={errors.scope_override_reason?.message} />
             </label>
           ) : null}
@@ -196,21 +198,21 @@ export function NewPurchaseOrder({
             {fields.map((f, i) => (
               <div key={f.id} className="rounded-lg border border-border bg-surface-sunken p-3">
                 <div className="grid gap-2 sm:grid-cols-6">
-                  <select {...register(`lines.${i}.item_id`)}>
+                  <NativeSelect aria-label="Catalogue item" {...register(`lines.${i}.item_id`)}>
                     <option value="">Not in inventory</option>
                     {(items.data ?? []).map((it) => (
                       <option key={String(it.id)} value={String(it.id)}>{it.code} — {it.name}</option>
                     ))}
-                  </select>
-                  <input className="sm:col-span-2" placeholder="Description" maxLength={255} {...register(`lines.${i}.description`)} />
-                  <input placeholder="HSN/SAC (optional)" maxLength={8} {...register(`lines.${i}.hsn_sac`)} />
-                  <input placeholder="Unit" maxLength={20} {...register(`lines.${i}.unit`)} />
-                  <input type="number" min="0" step="any" placeholder="Quantity" {...register(`lines.${i}.quantity`)} />
+                  </NativeSelect>
+                  <Input className="sm:col-span-2" aria-label="Description" placeholder="Description" maxLength={255} {...register(`lines.${i}.description`)} />
+                  <Input aria-label="HSN/SAC" placeholder="HSN/SAC (optional)" maxLength={8} {...register(`lines.${i}.hsn_sac`)} />
+                  <Input aria-label="Unit" placeholder="Unit" maxLength={20} {...register(`lines.${i}.unit`)} />
+                  <Input type="number" min="0" step="any" aria-label="Quantity" placeholder="Quantity" {...register(`lines.${i}.quantity`)} />
                 </div>
                 <div className="mt-2 grid gap-2 sm:grid-cols-4">
-                  <input type="number" min="0" step="0.01" placeholder="Unit rate" {...register(`lines.${i}.unit_rate`)} />
-                  <input type="number" min="0" max="28" step="0.01" placeholder="GST %" {...register(`lines.${i}.gst_rate_pct`)} />
-                  <input className="sm:col-span-2" placeholder="Remarks (optional)" maxLength={500} {...register(`lines.${i}.remarks`)} />
+                  <Input type="number" min="0" step="0.01" aria-label="Unit rate" placeholder="Unit rate" {...register(`lines.${i}.unit_rate`)} />
+                  <Input type="number" min="0" max="28" step="0.01" aria-label="GST %" placeholder="GST %" {...register(`lines.${i}.gst_rate_pct`)} />
+                  <Input className="sm:col-span-2" aria-label="Remarks" placeholder="Remarks (optional)" maxLength={500} {...register(`lines.${i}.remarks`)} />
                 </div>
                 {fields.length > 1 ? (
                   <div className="mt-2 flex justify-end">

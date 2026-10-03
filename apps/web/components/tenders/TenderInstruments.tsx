@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { Input } from '@/components/ui/Input';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
@@ -40,7 +41,7 @@ function StatusAction({ row, onDone }: { row: Instrument; onDone: () => void }) 
     return (
       <div className="flex flex-col items-end gap-1.5">
         <div className="flex items-center gap-1.5">
-          <input className="w-40 text-2xs" placeholder="Reason (optional)" value={reason} onChange={(e) => setReason(e.target.value)} />
+          <Input aria-label="Reason" className="w-40 text-2xs" placeholder="Reason (optional)" value={reason} onChange={(e) => setReason(e.target.value)} />
           <Button variant="secondary" size="sm" onClick={() => setOpen(null)}>Cancel</Button>
           <Button size="sm" loading={change.isPending} onClick={() => change.mutate(open)}>
             Confirm {open === 'RELEASED' ? 'release' : 'forfeit'}

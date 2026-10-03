@@ -8,6 +8,8 @@ import { apiRequestRaw } from '@/lib/apiClient';
 import { createPayment, type Payment } from '@/lib/payments';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input, Textarea } from '@/components/ui/Input';
 import { FieldError, RecordSheet } from '@/components/finance/Primitives';
 import { applyFieldErrors } from '@/lib/form-errors';
 import { paymentFormSchema, PAYMENT_DIRECTIONS, PAYMENT_MODES, type PaymentFormInput } from '@/lib/validation';
@@ -55,69 +57,69 @@ export function PaymentForm({ onClose, onCreated }: { onClose: () => void; onCre
       <form onSubmit={handleSubmit((v) => create.mutate(v))} noValidate className="grid gap-3 sm:grid-cols-2">
         <label className="text-xs text-text-muted">
           Direction
-          <select className="mt-1 w-full" {...register('direction')}>
+          <NativeSelect className="mt-1 w-full" {...register('direction')}>
             {PAYMENT_DIRECTIONS.map((d) => (
               <option key={d} value={d}>{d === 'RECEIVABLE' ? 'Receivable — money in' : 'Payable — money out'}</option>
             ))}
-          </select>
+          </NativeSelect>
           <FieldError message={errors.direction?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Payment number
-          <input className="mt-1 w-full" maxLength={50} {...register('payment_no')} />
+          <Input className="mt-1 w-full" maxLength={50} {...register('payment_no')} />
           <FieldError message={errors.payment_no?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Paid on
-          <input type="date" className="mt-1 w-full" {...register('paid_on')} />
+          <Input type="date" className="mt-1 w-full" {...register('paid_on')} />
           <FieldError message={errors.paid_on?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Amount
-          <input type="number" min="0" step="0.01" className="mt-1 w-full" {...register('amount')} />
+          <Input type="number" min="0" step="0.01" className="mt-1 w-full" {...register('amount')} />
           <FieldError message={errors.amount?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Mode
-          <select className="mt-1 w-full" {...register('mode')}>
+          <NativeSelect className="mt-1 w-full" {...register('mode')}>
             {PAYMENT_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
+          </NativeSelect>
           <FieldError message={errors.mode?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Reference (optional)
-          <input className="mt-1 w-full" maxLength={100} {...register('reference')} />
+          <Input className="mt-1 w-full" maxLength={100} {...register('reference')} />
         </label>
         <label className="text-xs text-text-muted">
           Party type (optional)
-          <select className="mt-1 w-full" {...register('party_type')}>
+          <NativeSelect className="mt-1 w-full" {...register('party_type')}>
             <option value="">Not specified</option>
             <option value="CLIENT">Client</option>
             <option value="VENDOR">Vendor</option>
             <option value="EMPLOYEE">Employee</option>
-          </select>
+          </NativeSelect>
         </label>
         <label className="text-xs text-text-muted">
           Party ID (optional)
-          <input className="mt-1 w-full" placeholder="UUID" {...register('party_id')} />
+          <Input className="mt-1 w-full" placeholder="UUID" {...register('party_id')} />
           <FieldError message={errors.party_id?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Project (optional)
-          <select className="mt-1 w-full" {...register('project_id')}>
+          <NativeSelect className="mt-1 w-full" {...register('project_id')}>
             <option value="">Not tied to a project</option>
             {(projects.data ?? []).map((p) => (
               <option key={String(p.id)} value={String(p.id)}>{p.code} — {p.name}</option>
             ))}
-          </select>
+          </NativeSelect>
         </label>
         <label className="text-xs text-text-muted">
           Bank account (optional)
-          <input className="mt-1 w-full" maxLength={50} {...register('bank_account')} />
+          <Input className="mt-1 w-full" maxLength={50} {...register('bank_account')} />
         </label>
         <label className="text-xs text-text-muted sm:col-span-2">
           Notes (optional)
-          <textarea rows={2} className="mt-1 w-full" maxLength={1000} {...register('notes')} />
+          <Textarea rows={2} className="mt-1 w-full" maxLength={1000} {...register('notes')} />
         </label>
 
         {submitError ? <ErrorCard title="Could not create the payment" error={submitError} className="sm:col-span-2" /> : null}

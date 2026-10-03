@@ -10,6 +10,8 @@ import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Badge } from '@/components/ui/Badge';
+import { Input } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { Field, Notice, RecordSheet, Section } from '@/components/finance/Primitives';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
@@ -224,22 +226,22 @@ export function VendorInvoiceLines({ invoiceId, onClose }: { invoiceId: string; 
                   <div key={f.id} className="rounded-lg border border-border bg-surface-sunken p-3">
                     <div className="grid gap-2 sm:grid-cols-6">
                       {purchaseOrderId ? (
-                        <select className="sm:col-span-2" disabled={!editable} {...register(`lines.${i}.po_line_id`)}>
+                        <NativeSelect aria-label="Purchase order line" className="sm:col-span-2" disabled={!editable} {...register(`lines.${i}.po_line_id`)}>
                           <option value="">No order line</option>
                           {poLines.map((l) => (
                             <option key={String(l.id)} value={String(l.id)}>{l.description}</option>
                           ))}
-                        </select>
+                        </NativeSelect>
                       ) : null}
-                      <input
-                        placeholder="Description" disabled={!editable}
+                      <Input
+                        aria-label="Description" placeholder="Description" disabled={!editable}
                         className={purchaseOrderId ? 'sm:col-span-2' : 'sm:col-span-3'}
                         {...register(`lines.${i}.description`)}
                       />
-                      <input placeholder="HSN/SAC" maxLength={8} disabled={!editable} {...register(`lines.${i}.hsn_sac`)} />
-                      <input type="number" min="0" step="any" placeholder="Qty" disabled={!editable} {...register(`lines.${i}.quantity`)} />
-                      <input type="number" min="0" step="any" placeholder="Rate" disabled={!editable} {...register(`lines.${i}.unit_rate`)} />
-                      <input type="number" min="0" step="any" placeholder="GST %" disabled={!editable} {...register(`lines.${i}.gst_rate_pct`)} />
+                      <Input aria-label="HSN/SAC" placeholder="HSN/SAC" maxLength={8} disabled={!editable} {...register(`lines.${i}.hsn_sac`)} />
+                      <Input aria-label="Quantity" type="number" min="0" step="any" placeholder="Qty" disabled={!editable} {...register(`lines.${i}.quantity`)} />
+                      <Input aria-label="Unit rate" type="number" min="0" step="any" placeholder="Rate" disabled={!editable} {...register(`lines.${i}.unit_rate`)} />
+                      <Input aria-label="GST percentage" type="number" min="0" step="any" placeholder="GST %" disabled={!editable} {...register(`lines.${i}.gst_rate_pct`)} />
                     </div>
                     {editable && fields.length > 1 ? (
                       <div className="mt-2 flex justify-end">
@@ -299,11 +301,12 @@ export function VendorInvoiceLines({ invoiceId, onClose }: { invoiceId: string; 
                 ) : null}
                 {!lastMatch.matched && !lastMatch.override_by && canOverride ? (
                   <div className="flex items-center gap-2">
-                    <input
+                    <Input
+                      aria-label="Reason for overriding the mismatch"
                       value={overrideReason}
                       onChange={(e) => setOverrideReason(e.target.value)}
                       placeholder="Reason for overriding the mismatch"
-                      className="w-64 rounded-md border border-border bg-surface px-2 py-1 text-xs text-text"
+                      className="w-64"
                     />
                     <Button
                       type="button" variant="secondary" size="sm"

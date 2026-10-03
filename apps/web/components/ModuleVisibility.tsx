@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
+import { NativeSelect } from '@/components/ui/Select';
 import { Notice } from '@/components/finance/Primitives';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ErrorCard } from '@/components/ui/ErrorCard';
@@ -81,9 +82,9 @@ export function ModuleVisibility() {
       {roles.length ? (
         <div className="mt-3">
           <label className="text-xs text-text-muted" htmlFor="module-visibility-role">Role</label>
-          <select
+          <NativeSelect
             id="module-visibility-role"
-            className="ml-2 rounded border border-border bg-surface px-2 py-1 text-sm text-text"
+            className="ml-2"
             value={activeRole}
             onChange={(e) => setRoleCode(e.target.value)}
           >
@@ -92,7 +93,7 @@ export function ModuleVisibility() {
                 {String(r.name ?? r.code)}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </div>
       ) : null}
 

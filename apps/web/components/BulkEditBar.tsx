@@ -4,6 +4,8 @@ import * as React from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
 import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { Notice } from '@/components/finance/Primitives';
 import { useToast } from '@/components/ui/Toast';
 import { messageOf } from '@/lib/form-errors';
@@ -81,8 +83,6 @@ export function BulkEditBar({
     { key: 'department', label: 'Department', kind: 'text' },
     { key: 'designation_id', label: 'Designation', kind: 'designation' },
   ];
-  const input = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
-
   return (
     <div className="space-y-2 rounded-lg border border-border bg-surface-sunken p-3">
       <div className="flex flex-wrap items-end gap-2">
@@ -92,26 +92,26 @@ export function BulkEditBar({
 
         <label className="flex flex-col gap-1 text-2xs text-text-muted">
           Change
-          <select className={input} value={field} onChange={(e) => setField(e.target.value)}>
+          <NativeSelect value={field} onChange={(e) => setField(e.target.value)}>
             <option value="">Choose a field…</option>
             {FIELDS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
-          </select>
+          </NativeSelect>
         </label>
 
         {field === 'designation_id' ? (
           <label className="flex flex-col gap-1 text-2xs text-text-muted">
             To
-            <select className={input} value={value} onChange={(e) => setValue(e.target.value)}>
+            <NativeSelect value={value} onChange={(e) => setValue(e.target.value)}>
               <option value="">Choose a designation…</option>
               {(designations.data ?? []).map((d) => (
                 <option key={String(d.id)} value={String(d.id)}>{String(d.label)}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
         ) : field ? (
           <label className="flex flex-col gap-1 text-2xs text-text-muted">
             To
-            <input className={input} value={value} onChange={(e) => setValue(e.target.value)} />
+            <Input value={value} onChange={(e) => setValue(e.target.value)} />
           </label>
         ) : null}
 

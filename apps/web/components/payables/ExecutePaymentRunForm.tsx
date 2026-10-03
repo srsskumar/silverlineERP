@@ -7,6 +7,8 @@ import { useMutation } from '@tanstack/react-query';
 import { apiRequest } from '@/lib/apiClient';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { Input, Textarea } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { FieldError, RecordSheet } from '@/components/finance/Primitives';
 import { businessToday } from '@/lib/finance';
 import { useToast } from '@/components/ui/Toast';
@@ -77,24 +79,24 @@ export function ExecutePaymentRunForm({
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="text-xs text-text-muted">
             Paid on
-            <input type="date" className="mt-1 w-full" {...register('paid_on')} />
+            <Input type="date" className="mt-1 w-full" {...register('paid_on')} />
             <FieldError message={errors.paid_on?.message} />
           </label>
           <label className="text-xs text-text-muted">
             Bank reference
-            <input className="mt-1 w-full" placeholder="UTR / cheque number" {...register('bank_reference')} />
+            <Input className="mt-1 w-full" placeholder="UTR / cheque number" {...register('bank_reference')} />
             <FieldError message={errors.bank_reference?.message} />
           </label>
           <label className="text-xs text-text-muted">
             Payment mode
-            <select className="mt-1 w-full" {...register('payment_mode')}>
+            <NativeSelect className="mt-1 w-full" {...register('payment_mode')}>
               {PAYMENT_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
+            </NativeSelect>
             <FieldError message={errors.payment_mode?.message} />
           </label>
           <label className="text-xs text-text-muted sm:col-span-2">
             Note (optional)
-            <textarea rows={2} className="mt-1 w-full" maxLength={1000} {...register('note')} />
+            <Textarea rows={2} className="mt-1 w-full" maxLength={1000} {...register('note')} />
           </label>
         </div>
 

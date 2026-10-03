@@ -8,6 +8,8 @@ import { listCostHeads } from '@/lib/cost-heads';
 import { setProjectBudget } from '@/lib/cost-heads';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { Input } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { FieldError, RecordSheet, Section } from '@/components/finance/Primitives';
 import { applyFieldErrors } from '@/lib/form-errors';
 import { budgetFormSchema, type BudgetFormInput } from '@/lib/validation';
@@ -67,7 +69,7 @@ export function BudgetEditForm({
         {isRevision ? (
           <label className="block text-xs text-text-muted">
             Reason for the revision
-            <input className="mt-1 w-full" maxLength={500} {...register('revision_reason')} />
+            <Input className="mt-1 w-full" maxLength={500} {...register('revision_reason')} />
             <FieldError message={errors.revision_reason?.message} />
           </label>
         ) : null}
@@ -84,14 +86,14 @@ export function BudgetEditForm({
             {fields.map((f, i) => (
               <div key={f.id} className="rounded-lg border border-border bg-surface-sunken p-3">
                 <div className="grid gap-2 sm:grid-cols-4">
-                  <select {...register(`lines.${i}.cost_head_id`)}>
+                  <NativeSelect aria-label="Cost head" {...register(`lines.${i}.cost_head_id`)}>
                     <option value="">Pick a cost head</option>
                     {(costHeads.data ?? []).map((h) => (
                       <option key={h.id} value={h.id}>{h.code} — {h.name}</option>
                     ))}
-                  </select>
-                  <input type="number" min="0" step="0.01" placeholder="Budgeted amount" {...register(`lines.${i}.budgeted_amount`)} />
-                  <input className="sm:col-span-2" placeholder="Notes (optional)" maxLength={500} {...register(`lines.${i}.notes`)} />
+                  </NativeSelect>
+                  <Input aria-label="Budgeted amount" type="number" min="0" step="0.01" placeholder="Budgeted amount" {...register(`lines.${i}.budgeted_amount`)} />
+                  <Input aria-label="Notes" className="sm:col-span-2" placeholder="Notes (optional)" maxLength={500} {...register(`lines.${i}.notes`)} />
                 </div>
                 {fields.length > 1 ? (
                   <div className="mt-2 flex justify-end">

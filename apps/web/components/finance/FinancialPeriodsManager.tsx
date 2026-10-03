@@ -13,6 +13,7 @@ import { hasPermission, PERMISSIONS } from '@/lib/permissions';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { Input } from '@/components/ui/Input';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
@@ -91,17 +92,17 @@ export function FinancialPeriodsManager() {
           >
             <label className="text-xs text-text-muted">
               Code
-              <input className="mt-1 w-full" maxLength={30} placeholder="2026-10" {...register('code')} />
+              <Input className="mt-1 w-full" maxLength={30} placeholder="2026-10" {...register('code')} />
               <FieldError message={errors.code?.message} />
             </label>
             <label className="text-xs text-text-muted">
               Starts on
-              <input type="date" className="mt-1 w-full" {...register('starts_on')} />
+              <Input type="date" className="mt-1 w-full" {...register('starts_on')} />
               <FieldError message={errors.starts_on?.message} />
             </label>
             <label className="text-xs text-text-muted">
               Ends on
-              <input type="date" className="mt-1 w-full" {...register('ends_on')} />
+              <Input type="date" className="mt-1 w-full" {...register('ends_on')} />
               <FieldError message={errors.ends_on?.message} />
             </label>
             <Button type="submit" loading={isSubmitting || create.isPending}>Create period</Button>
@@ -162,7 +163,8 @@ export function FinancialPeriodsManager() {
                         </Button>
                       ) : reopening?.id === p.id ? (
                         <div className="flex items-center justify-end gap-2">
-                          <input
+                          <Input
+                            aria-label="Reason for reopening"
                             className="w-48"
                             placeholder="Reason for reopening"
                             value={reason}

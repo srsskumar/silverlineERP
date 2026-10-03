@@ -11,9 +11,8 @@ import { Button } from './ui/Button';
 import { ErrorCard } from './ui/ErrorCard';
 import { FormField } from './ui/FormField';
 import { ConflictDialog, useConflict } from './ConflictDialog';
-
-const inputClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
+import { Textarea } from './ui/Input';
+import { NativeSelect } from './ui/Select';
 
 /**
  * Single-transition exception decision (APPROVE/REJECT + optional note),
@@ -85,13 +84,13 @@ export function DecisionDialog({
         </p>
         <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="mt-4 flex flex-col gap-4" noValidate>
           <FormField label="Decision *" htmlFor="dec-decision" error={errors.decision?.message}>
-            <select id="dec-decision" className={inputClass} {...register('decision')}>
+            <NativeSelect id="dec-decision" className="w-full" {...register('decision')}>
               <option value="APPROVE">APPROVE</option>
               <option value="REJECT">REJECT</option>
-            </select>
+            </NativeSelect>
           </FormField>
           <FormField label="Note (optional)" htmlFor="dec-note" error={errors.note?.message}>
-            <textarea id="dec-note" rows={3} className={inputClass} placeholder="Decision rationale…" {...register('note')} />
+            <Textarea id="dec-note" rows={3} className="w-full" placeholder="Decision rationale…" {...register('note')} />
           </FormField>
           {submitError ? <ErrorCard title="Could not record decision" error={submitError} /> : null}
           <div className="flex justify-end gap-2">

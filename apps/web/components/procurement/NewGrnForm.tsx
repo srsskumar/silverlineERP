@@ -7,6 +7,8 @@ import { useMutation } from '@tanstack/react-query';
 import { apiRequest } from '@/lib/apiClient';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input } from '@/components/ui/Input';
 import { FieldError, RecordSheet, Section } from '@/components/finance/Primitives';
 import { businessToday } from '@/lib/finance';
 import { useToast } from '@/components/ui/Toast';
@@ -74,25 +76,25 @@ export function NewGrn({
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="text-xs text-text-muted">
             Receipt number
-            <input className="mt-1 w-full" maxLength={50} {...register('grn_no')} />
+            <Input className="mt-1 w-full" maxLength={50} {...register('grn_no')} />
             <FieldError message={errors.grn_no?.message} />
           </label>
           <label className="text-xs text-text-muted">
             Received date
-            <input type="date" className="mt-1 w-full" {...register('received_date')} />
+            <Input type="date" className="mt-1 w-full" {...register('received_date')} />
             <FieldError message={errors.received_date?.message} />
           </label>
           <label className="text-xs text-text-muted">
             Challan no (optional)
-            <input className="mt-1 w-full" maxLength={50} {...register('challan_no')} />
+            <Input className="mt-1 w-full" maxLength={50} {...register('challan_no')} />
           </label>
           <label className="text-xs text-text-muted">
             Vehicle no (optional)
-            <input className="mt-1 w-full" maxLength={20} {...register('vehicle_no')} />
+            <Input className="mt-1 w-full" maxLength={20} {...register('vehicle_no')} />
           </label>
           <label className="text-xs text-text-muted sm:col-span-2">
             Over-receipt reason (only needed if a line arrives beyond what was ordered)
-            <input className="mt-1 w-full" maxLength={1000} {...register('over_receipt_reason')} />
+            <Input className="mt-1 w-full" maxLength={1000} {...register('over_receipt_reason')} />
           </label>
         </div>
 
@@ -111,20 +113,20 @@ export function NewGrn({
             {fields.map((f, i) => (
               <div key={f.id} className="rounded-lg border border-border bg-surface-sunken p-3">
                 <div className="grid gap-2 sm:grid-cols-4">
-                  <select className="sm:col-span-2" {...register(`lines.${i}.po_line_id`)}>
+                  <NativeSelect className="sm:col-span-2" aria-label="Order line" {...register(`lines.${i}.po_line_id`)}>
                     <option value="">Pick an order line</option>
                     {poLines.map((l) => (
                       <option key={String(l.id)} value={String(l.id)}>
                         {l.description} — {Number(l.pendingQuantity ?? l.quantity)} pending
                       </option>
                     ))}
-                  </select>
-                  <input type="number" min="0" step="any" placeholder="Received quantity" {...register(`lines.${i}.received_quantity`)} />
-                  <input type="number" min="0" step="any" placeholder="Accepted quantity" {...register(`lines.${i}.accepted_quantity`)} />
+                  </NativeSelect>
+                  <Input type="number" min="0" step="any" placeholder="Received quantity" aria-label="Received quantity" {...register(`lines.${i}.received_quantity`)} />
+                  <Input type="number" min="0" step="any" placeholder="Accepted quantity" aria-label="Accepted quantity" {...register(`lines.${i}.accepted_quantity`)} />
                 </div>
                 <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                  <input placeholder="Rejection reason (needed if any was rejected)" maxLength={500} {...register(`lines.${i}.rejection_reason`)} />
-                  <input placeholder="Remarks (optional)" maxLength={500} {...register(`lines.${i}.remarks`)} />
+                  <Input placeholder="Rejection reason (needed if any was rejected)" aria-label="Rejection reason" maxLength={500} {...register(`lines.${i}.rejection_reason`)} />
+                  <Input placeholder="Remarks (optional)" aria-label="Line remarks" maxLength={500} {...register(`lines.${i}.remarks`)} />
                 </div>
                 {fields.length > 1 ? (
                   <div className="mt-2 flex justify-end">

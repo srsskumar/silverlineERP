@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Panel, Collection, MutationForm, Can, type Row } from '@/components/v2/Workbench';
 import { Button } from '@/components/ui/Button';
+import { NativeSelect } from '@/components/ui/Select';
 
 /**
  * Stock reservations (§44) — a tab beside Stock/Ledger/Vendors/Invoices in
@@ -27,8 +28,8 @@ export function StockReservationsTab() {
           <div className="mb-3 flex items-center gap-2">
             <label className="text-sm font-medium text-text-muted">
               State
-              <select
-                className="ml-2 rounded-md border border-border p-1.5 text-sm"
+              <NativeSelect
+                className="ml-2"
                 value={state}
                 onChange={(e) => setState(e.target.value)}
               >
@@ -37,7 +38,7 @@ export function StockReservationsTab() {
                 <option value="RELEASED">Released</option>
                 <option value="EXPIRED">Expired</option>
                 <option value="CONSUMED">Consumed</option>
-              </select>
+              </NativeSelect>
             </label>
           </div>
           <Collection

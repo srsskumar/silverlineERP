@@ -23,11 +23,9 @@ import { applyFieldErrors, requestIdOf } from '@/lib/form-errors';
 import { Button } from './ui/Button';
 import { ErrorCard } from './ui/ErrorCard';
 import { FormField } from './ui/FormField';
-import { Input } from './ui/Input';
+import { Input, Textarea } from './ui/Input';
+import { NativeSelect } from './ui/Select';
 import { Badge } from './ui/Badge';
-
-const inputClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 /**
  * File a leave request. Shows a live inclusive-day count, a balance preview
@@ -104,14 +102,14 @@ export function LeaveRequestForm({
   return (
     <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="flex flex-col gap-4" noValidate>
       <FormField label="Leave type *" htmlFor="leave-type" error={errors.leave_type_id?.message}>
-        <select id="leave-type" className={inputClass} {...register('leave_type_id')}>
+        <NativeSelect id="leave-type" className="w-full" {...register('leave_type_id')}>
           <option value="">Pick a leave type…</option>
           {types.map((t) => (
             <option key={t.id} value={t.id}>
               {t.code} — {t.name} ({t.is_paid ? 'paid' : 'unpaid'})
             </option>
           ))}
-        </select>
+        </NativeSelect>
       </FormField>
 
       {selectedType && (
@@ -165,10 +163,10 @@ export function LeaveRequestForm({
       </div>
 
       <FormField label="Reason" htmlFor="leave-reason" error={errors.reason?.message}>
-        <textarea
+        <Textarea
           id="leave-reason"
           rows={3}
-          className={inputClass}
+          className="w-full"
           placeholder="Required for backdated leave (server re-validates)…"
           {...register('reason')}
         />

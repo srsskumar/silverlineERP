@@ -6,6 +6,7 @@ import { Loader2, Search } from 'lucide-react';
 import { Badge } from './ui/Badge';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
+import { NativeSelect } from './ui/Select';
 import { Skeleton } from './ui/Skeleton';
 import { ErrorCard } from './ui/ErrorCard';
 import { useToast } from './ui/Toast';
@@ -224,17 +225,18 @@ export function EmployeeAssignments({
                 <Row key={c.id} choice={c} checked={!!on}
                   onToggle={() => canEdit && toggleProgramme(c)}>
                   {on ? (
-                    <select
+                    <NativeSelect
+                      aria-label="Role on this programme"
                       value={on.project_role}
                       disabled={!canEdit}
                       onClick={(e) => e.preventDefault()}
                       onChange={(e) => setProgrammeRole(c.id, e.target.value)}
-                      className="h-7 rounded-md border border-border bg-canvas px-1 text-2xs text-text"
+                      className="h-7 text-2xs"
                     >
                       {PROGRAMME_ROLES.map(([value, label]) => (
                         <option key={value} value={value}>{label}</option>
                       ))}
-                    </select>
+                    </NativeSelect>
                   ) : null}
                 </Row>
               );

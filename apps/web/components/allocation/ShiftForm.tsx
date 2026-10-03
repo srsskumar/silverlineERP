@@ -7,6 +7,7 @@ import { useMutation } from '@tanstack/react-query';
 import { createShift, updateShift, type Shift } from '@/lib/shifts';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { Input } from '@/components/ui/Input';
 import { FieldError, RecordSheet } from '@/components/finance/Primitives';
 import { applyFieldErrors } from '@/lib/form-errors';
 import { shiftFormSchema, WEEKDAYS, type ShiftFormInput } from '@/lib/validation';
@@ -70,47 +71,47 @@ export function ShiftForm({
       <form onSubmit={handleSubmit((v) => save.mutate(v))} noValidate className="grid gap-3 sm:grid-cols-2">
         <label className="text-xs text-text-muted">
           Code
-          <input className="mt-1 w-full" maxLength={30} readOnly={Boolean(initial)} {...register('code')} />
+          <Input className="mt-1 w-full" maxLength={30} readOnly={Boolean(initial)} {...register('code')} />
           <FieldError message={errors.code?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Name
-          <input className="mt-1 w-full" maxLength={100} {...register('name')} />
+          <Input className="mt-1 w-full" maxLength={100} {...register('name')} />
           <FieldError message={errors.name?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Starts at
-          <input type="time" className="mt-1 w-full" {...register('starts_at')} />
+          <Input type="time" className="mt-1 w-full" {...register('starts_at')} />
           <FieldError message={errors.starts_at?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Ends at
-          <input type="time" className="mt-1 w-full" {...register('ends_at')} />
+          <Input type="time" className="mt-1 w-full" {...register('ends_at')} />
           <FieldError message={errors.ends_at?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Break (minutes)
-          <input type="number" min="0" max="480" className="mt-1 w-full" {...register('break_minutes')} />
+          <Input type="number" min="0" max="480" className="mt-1 w-full" {...register('break_minutes')} />
           <FieldError message={errors.break_minutes?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Daily threshold hours
-          <input type="number" min="0" max="24" step="0.5" className="mt-1 w-full" {...register('daily_threshold_hours')} />
+          <Input type="number" min="0" max="24" step="0.5" className="mt-1 w-full" {...register('daily_threshold_hours')} />
           <FieldError message={errors.daily_threshold_hours?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Overtime multiplier
-          <input type="number" min="1" max="4" step="0.1" className="mt-1 w-full" {...register('overtime_multiplier')} />
+          <Input type="number" min="1" max="4" step="0.1" className="mt-1 w-full" {...register('overtime_multiplier')} />
           <FieldError message={errors.overtime_multiplier?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Effective from
-          <input type="date" className="mt-1 w-full" {...register('effective_from')} />
+          <Input type="date" className="mt-1 w-full" {...register('effective_from')} />
           <FieldError message={errors.effective_from?.message} />
         </label>
         <label className="text-xs text-text-muted">
           Effective to (optional)
-          <input type="date" className="mt-1 w-full" {...register('effective_to')} />
+          <Input type="date" className="mt-1 w-full" {...register('effective_to')} />
           <FieldError message={errors.effective_to?.message} />
         </label>
         <label className="mt-1 flex items-center gap-2 text-xs text-text-muted">

@@ -17,14 +17,12 @@ import { Button } from './ui/Button';
 import { ErrorCard } from './ui/ErrorCard';
 import { FormField } from './ui/FormField';
 import { Input } from './ui/Input';
+import { NativeSelect } from './ui/Select';
 import { CascadingLocationSelect } from './CascadingLocationSelect';
 import { DesignationSelect } from './DesignationSelect';
 import { ConflictDialog } from './ConflictDialog';
 
 export type EmployeeFormValues = EmployeeCreateInput;
-
-const inputClass =
-  'w-full rounded-md border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 border-border';
 
 function toDefaults(src?: Partial<Record<string, unknown>>): Partial<EmployeeFormValues> {
   if (!src) return {};
@@ -158,14 +156,14 @@ export function EmployeeForm({
           <Input id="father_name" {...register('father_name')} />
         </FormField>
         <FormField label="Gender" htmlFor="gender" error={err('gender')}>
-          <select id="gender" className={inputClass} {...register('gender')}>
+          <NativeSelect id="gender" className="w-full" {...register('gender')}>
             <option value="">Select gender</option>
             {GENDERS.map((g) => (
               <option key={g} value={g}>
                 {g}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </FormField>
         <FormField label="Date of birth" htmlFor="date_of_birth" error={err('date_of_birth')}>
           <Input id="date_of_birth" type="date" {...register('date_of_birth')} />

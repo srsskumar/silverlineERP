@@ -23,6 +23,7 @@ import { Button } from './ui/Button';
 import { ErrorCard } from './ui/ErrorCard';
 import { FormField } from './ui/FormField';
 import { Input } from './ui/Input';
+import { NativeSelect } from './ui/Select';
 
 /**
  * S6 report form: type-only UI (format fixed csv, no filters — deferred, see
@@ -70,9 +71,9 @@ export function ReportForm() {
         className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-4"
       >
         <FormField label="Report type" error={errors.type?.message} htmlFor="report-type">
-          <select
+          <NativeSelect
             id="report-type"
-            className="w-full rounded-md border border-border px-3 py-2 text-sm"
+            className="w-full"
             {...register('type')}
           >
             <option value="">Pick a report type</option>
@@ -85,13 +86,13 @@ export function ReportForm() {
                 </option>
               );
             })}
-          </select>
+          </NativeSelect>
         </FormField>
         <FormField label="Format" htmlFor="report-format">
-          <select id="report-format" className="rounded border p-2" value={format} onChange={e=>setFormat(e.target.value as typeof format)}><option value="csv">CSV</option><option value="xlsx">Excel (.xlsx)</option><option value="pdf">PDF</option></select>
+          <NativeSelect id="report-format" value={format} onChange={e=>setFormat(e.target.value as typeof format)}><option value="csv">CSV</option><option value="xlsx">Excel (.xlsx)</option><option value="pdf">PDF</option></NativeSelect>
         </FormField>
-        {selected==='attendance'||selected==='leave'?<div className="grid grid-cols-2 gap-3"><label className="text-sm">From<input type="date" className="block w-full rounded border p-2" value={from} onChange={e=>setFrom(e.target.value)}/></label><label className="text-sm">To<input type="date" className="block w-full rounded border p-2" value={to} onChange={e=>setTo(e.target.value)}/></label></div>:null}
-        {selected==='tasks'?<label className="text-sm">Project ID (optional)<input className="block w-full rounded border p-2" value={projectId} onChange={e=>setProjectId(e.target.value)}/></label>:null}
+        {selected==='attendance'||selected==='leave'?<div className="grid grid-cols-2 gap-3"><label className="text-sm">From<Input type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label><label className="text-sm">To<Input type="date" value={to} onChange={e=>setTo(e.target.value)}/></label></div>:null}
+        {selected==='tasks'?<label className="text-sm">Project ID (optional)<Input value={projectId} onChange={e=>setProjectId(e.target.value)}/></label>:null}
         <p className="text-xs text-text-muted">
           Reports larger than{' '}
           {REPORT_ROW_LIMIT} rows run in the background. Your inbox will notify you when they are ready.

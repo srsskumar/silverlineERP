@@ -12,6 +12,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
+import { NativeSelect } from '@/components/ui/Select';
 import { CostHeadForm } from './CostHeadForm';
 
 /** Cost head master list (§15.6): the fixed set a site P&L is read against. */
@@ -36,7 +37,7 @@ export function CostHeadsManager() {
       <div className="flex flex-wrap items-end gap-3 rounded-lg border border-border bg-surface p-4">
         <label className="text-xs text-text-muted">
           Kind
-          <select className="mt-1 w-48" value={kind} onChange={(e) => setKind(e.target.value)}>
+          <NativeSelect className="mt-1 w-48" value={kind} onChange={(e) => setKind(e.target.value)}>
             <option value="">All</option>
             <option value="LABOUR">Labour</option>
             <option value="MATERIAL">Material</option>
@@ -44,7 +45,7 @@ export function CostHeadsManager() {
             <option value="EQUIPMENT">Equipment</option>
             <option value="OVERHEAD">Overhead</option>
             <option value="OTHER">Other</option>
-          </select>
+          </NativeSelect>
         </label>
         <div className="ml-auto">
           {canManage ? <Button onClick={() => setFormOpen('new')}>New cost head</Button> : null}

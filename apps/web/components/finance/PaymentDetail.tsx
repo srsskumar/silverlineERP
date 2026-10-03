@@ -15,6 +15,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody } from '@/components/ui/Page';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
+import { Input } from '@/components/ui/Input';
 import { Field, Notice, Section } from '@/components/finance/Primitives';
 import { day, money } from '@/lib/finance';
 import { PaymentAllocationForm } from './PaymentAllocationForm';
@@ -79,7 +80,8 @@ export function PaymentDetail({ id }: { id: string }) {
                 {canManage && !payment.data.reversed_at ? (
                   reversing ? (
                     <div className="flex items-center gap-2">
-                      <input
+                      <Input
+                        aria-label="Reason for reversal"
                         className="w-56"
                         placeholder="Reason for reversal"
                         value={reason}

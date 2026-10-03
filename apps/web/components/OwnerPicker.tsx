@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { useRows } from '@/components/v2/Workbench';
 import { Combobox } from '@/components/ui/Combobox';
+import { Input } from '@/components/ui/Input';
 import { EmployeePicker } from '@/components/EmployeePicker';
 
 /**
@@ -39,9 +40,9 @@ export function OwnerPicker({ ownerType, value, onChange, id }: {
   const source = OWNER_SOURCES[ownerType];
   if (!source) {
     return (
-      <input
+      <Input
         id={id}
-        className="w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+        className="w-full"
         value={value}
         placeholder={`${ownerType} id`}
         onChange={(e) => onChange(e.target.value)}

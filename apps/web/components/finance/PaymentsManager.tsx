@@ -13,6 +13,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
+import { NativeSelect } from '@/components/ui/Select';
 import { day, money } from '@/lib/finance';
 import { PaymentForm } from './PaymentForm';
 
@@ -37,11 +38,11 @@ export function PaymentsManager() {
       <div className="flex flex-wrap items-end gap-3 rounded-lg border border-border bg-surface p-4">
         <label className="text-xs text-text-muted">
           Direction
-          <select className="mt-1 w-48" value={direction} onChange={(e) => setDirection(e.target.value)}>
+          <NativeSelect className="mt-1 w-48" value={direction} onChange={(e) => setDirection(e.target.value)}>
             <option value="">All</option>
             <option value="RECEIVABLE">Receivable</option>
             <option value="PAYABLE">Payable</option>
-          </select>
+          </NativeSelect>
         </label>
         <label className="flex items-center gap-2 text-xs text-text-muted">
           <input type="checkbox" checked={unallocatedOnly} onChange={(e) => setUnallocatedOnly(e.target.checked)} />

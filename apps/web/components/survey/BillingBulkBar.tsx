@@ -4,6 +4,8 @@ import * as React from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiRequest } from '@/lib/apiClient';
 import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { Notice } from '@/components/finance/Primitives';
 import { useToast } from '@/components/ui/Toast';
 import { messageOf } from '@/lib/form-errors';
@@ -15,8 +17,6 @@ import {
 
 type Row = Record<string, any>;
 type Action = 'SUBMIT' | 'DECIDE' | 'REVERSE';
-
-const field = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
 
 /** A stage's name, for the sentence that says what is in the way. */
 const labelOfStage = (code: string): string =>
@@ -168,49 +168,49 @@ export function BillingBulkBar({
 
         <label className="flex flex-col gap-1 text-2xs text-text-muted">
           Record
-          <select className={field} value={action}
+          <NativeSelect value={action}
             onChange={(e) => setAction(e.target.value as Action)}>
             <option value="SUBMIT">A submission for billing</option>
             <option value="DECIDE">The department’s decision</option>
             {canReverse ? (
               <option value="REVERSE">A reversal of a payment recorded by mistake</option>
             ) : null}
-          </select>
+          </NativeSelect>
         </label>
 
         <label className="flex flex-col gap-1 text-2xs text-text-muted">
           Milestone
-          <select className={field} value={milestone}
+          <NativeSelect value={milestone}
             onChange={(e) => setMilestone(e.target.value)}>
             {[1, 2, 3].map((m) => (
               <option key={m} value={m}>
                 {MILESTONE_LABELS[m]} — {MILESTONE_PERCENT[m]}%
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </label>
 
         {action === 'DECIDE' ? (
           <label className="flex flex-col gap-1 text-2xs text-text-muted">
             Decided
-            <select className={field} value={status} onChange={(e) => setStatus(e.target.value)}>
+            <NativeSelect value={status} onChange={(e) => setStatus(e.target.value)}>
               <option value="APPROVED">Approved</option>
               <option value="REJECTED">Returned</option>
               <option value="PAID">Paid</option>
-            </select>
+            </NativeSelect>
           </label>
         ) : null}
 
         {action !== 'REVERSE' ? (
           <label className="flex flex-col gap-1 text-2xs text-text-muted">
             {action === 'SUBMIT' ? 'Submitted on' : 'Decided on'}
-            <input type="date" className={field} value={on} max={businessToday()}
+            <Input type="date" value={on} max={businessToday()}
               onChange={(e) => setOn(e.target.value)} />
           </label>
         ) : (
           <label className="flex flex-col gap-1 text-2xs text-text-muted">
             Reason for reversing
-            <input className={field} value={reason} maxLength={1000}
+            <Input value={reason} maxLength={1000}
               placeholder="Marked paid in the wrong batch"
               onChange={(e) => setReason(e.target.value)} />
           </label>
@@ -220,7 +220,7 @@ export function BillingBulkBar({
           <>
             <label className="flex flex-col gap-1 text-2xs text-text-muted">
               Department reference
-              <input className={field} value={reference} placeholder="RC/2026/114"
+              <Input value={reference} placeholder="RC/2026/114"
                 onChange={(e) => setReference(e.target.value)} />
             </label>
             <label className="flex items-center gap-1.5 pb-2 text-2xs text-text-muted"
@@ -235,7 +235,7 @@ export function BillingBulkBar({
         {action !== 'REVERSE' ? (
           <label className="flex flex-col gap-1 text-2xs text-text-muted">
             Remarks
-            <input className={field} value={remarks} onChange={(e) => setRemarks(e.target.value)} />
+            <Input value={remarks} onChange={(e) => setRemarks(e.target.value)} />
           </label>
         ) : null}
 

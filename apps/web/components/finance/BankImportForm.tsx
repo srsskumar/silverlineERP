@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
+import { Input, Textarea } from '@/components/ui/Input';
 import { Notice, Section } from '@/components/finance/Primitives';
 
 /** Matches POST /api/v1/bank-transactions/import's own `transactions` cap
@@ -114,11 +115,11 @@ export function BankImportForm({ onImported }: { onImported?: (summary: BankImpo
       <div className="space-y-3">
         <label className="block text-xs text-text-muted">
           Bank account (optional — applies to rows without their own)
-          <input className="mt-1 w-64" maxLength={50} value={bankAccount} onChange={(e) => setBankAccount(e.target.value)} />
+          <Input className="mt-1 w-64" maxLength={50} value={bankAccount} onChange={(e) => setBankAccount(e.target.value)} />
         </label>
         <label className="block text-xs text-text-muted">
           CSV — header row: statement_ref, value_date, amount, narration, bank_account
-          <textarea
+          <Textarea
             rows={6}
             className="mt-1 w-full font-mono text-xs"
             placeholder={'statement_ref,value_date,amount,narration\nTXN001,2026-09-20,50000,NEFT credit'}

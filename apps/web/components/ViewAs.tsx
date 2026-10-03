@@ -7,6 +7,7 @@ import { useAuth } from './AuthProvider';
 import { Button } from './ui/Button';
 import { Badge } from './ui/Badge';
 import { Input, Textarea } from './ui/Input';
+import { NativeSelect } from './ui/Select';
 import { FormField } from './ui/FormField';
 import { useToast } from './ui/Toast';
 import {
@@ -237,17 +238,17 @@ export function ViewAsDialog({
           </FormField>
 
           <FormField label="For how long" htmlFor="viewas-minutes" hint="The session ends by itself, whether or not you remember to.">
-            <select
+            <NativeSelect
               id="viewas-minutes"
               value={minutes}
               onChange={(e) => setMinutes(Number(e.target.value))}
-              className="h-9 w-full rounded-md border border-border bg-surface px-2 text-xs text-text"
+              className="h-9 w-full text-xs"
             >
               <option value={15}>15 minutes</option>
               <option value={30}>30 minutes</option>
               <option value={60}>1 hour</option>
               <option value={120}>2 hours</option>
-            </select>
+            </NativeSelect>
           </FormField>
 
           {error ? (

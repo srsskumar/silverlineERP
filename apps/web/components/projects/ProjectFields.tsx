@@ -6,6 +6,8 @@ import { contractValueBreakdown, amountInWords } from '@silverline/shared';
 import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
 import { Button } from '@/components/ui/Button';
 import { Combobox } from '@/components/ui/Combobox';
+import { Input } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { money } from '@/lib/finance';
 
 type Row = Record<string, any>;
@@ -33,9 +35,6 @@ async function fetchAll(path: string): Promise<Row[]> {
   }
   return out;
 }
-
-const inputClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 /** The four priorities the server accepts. Free text only ever produced typos. */
 export const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'URGENT'] as const;
@@ -216,8 +215,8 @@ export function ContractValueFields({
       <div className="grid gap-3 sm:grid-cols-3">
         <div>
           <label className="mb-1 block text-xs font-medium text-text-muted">Contract value (₹)</label>
-          <input
-            type="number" min="0" step="0.01" className={inputClass} disabled={disabled}
+          <Input
+            type="number" min="0" step="0.01" disabled={disabled}
             placeholder="As written on the order"
             value={state.contract_value}
             onChange={(e) => set({ contract_value: e.target.value })}
@@ -225,20 +224,20 @@ export function ContractValueFields({
         </div>
         <div>
           <label className="mb-1 block text-xs font-medium text-text-muted">Is GST included?</label>
-          <select
-            className={inputClass} disabled={disabled}
+          <NativeSelect
+            className="w-full" disabled={disabled}
             value={state.contract_gst_included}
             onChange={(e) => set({ contract_gst_included: e.target.value as ContractState['contract_gst_included'] })}
           >
             <option value="">Not stated</option>
             <option value="true">Yes — the figure includes GST</option>
             <option value="false">No — GST is on top</option>
-          </select>
+          </NativeSelect>
         </div>
         <div>
           <label className="mb-1 block text-xs font-medium text-text-muted">GST rate</label>
-          <select
-            className={inputClass}
+          <NativeSelect
+            className="w-full"
             disabled={disabled || state.contract_gst_included === ''}
             value={state.contract_gst_rate}
             onChange={(e) => set({ contract_gst_rate: e.target.value })}
@@ -247,7 +246,7 @@ export function ContractValueFields({
             {[0, 0.25, 1, 1.5, 3, 5, 6, 7.5, 12, 18, 28].map((r) => (
               <option key={r} value={String(r)}>{r}%</option>
             ))}
-          </select>
+          </NativeSelect>
         </div>
       </div>
 

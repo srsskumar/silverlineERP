@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest, apiRequestRaw } from '@/lib/apiClient';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
+import { Input } from '@/components/ui/Input';
 import { Notice } from '@/components/finance/Primitives';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
@@ -77,8 +78,6 @@ export function PasswordResetQueue() {
   });
 
   const rows = queue.data ?? [];
-  const field = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
-
   return (
     <section className="rounded-lg border border-border bg-surface p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -130,7 +129,7 @@ export function PasswordResetQueue() {
               <div className="mt-2 flex flex-wrap items-end gap-2">
                 <label className="flex flex-col gap-1 text-2xs text-text-muted">
                   New password (12 characters or more)
-                  <input className={field} type="text" value={password} minLength={12}
+                  <Input type="text" value={password} minLength={12}
                     onChange={(e) => setPassword(e.target.value)} />
                 </label>
                 <label className="flex items-center gap-1.5 text-2xs text-text-muted">
