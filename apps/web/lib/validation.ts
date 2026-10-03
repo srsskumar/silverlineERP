@@ -298,7 +298,11 @@ export const holidaySchema = z
     name: z.string().trim().min(1, 'Name is required').max(255),
     type: z.enum(HOLIDAY_TYPES, { errorMap: () => ({ message: 'Pick a holiday type' }) }),
     scope_type: optionalEnum(ORG_UNIT_TYPES),
-    scope_id: z.string().trim().min(1).max(100).optional(),
+    // An empty string is what the field's own blank default sends --
+    // .optional() alone only forgives `undefined`, so Org-wide (the
+    // default scope, scope_id left blank) failed validation on every
+    // holiday, not just an edge case.
+    scope_id: optionalText(100),
   })
   .superRefine((v, ctx) => {
     if (v.scope_id && !v.scope_type) {
