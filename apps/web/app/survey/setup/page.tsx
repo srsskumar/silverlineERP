@@ -13,6 +13,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input, Textarea } from '@/components/ui/Input';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Notice, Section, Stat } from '@/components/finance/Primitives';
@@ -103,17 +105,17 @@ export default function SurveySetupPage() {
                   */}
                 <label className="flex min-w-0 items-center gap-2 text-xs text-text-muted">
                   Programme
-                  <select
+                  <NativeSelect
                     value={projectId}
                     onChange={(e) => setProjectId(e.target.value)}
-                    className="max-w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+                    className="max-w-full"
                   >
                     {projects.data.map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.name} ({p.village_count} villages)
                       </option>
                     ))}
-                  </select>
+                  </NativeSelect>
                 </label>
                 <Link href="/survey" className="ml-auto">
                   <Button type="button" variant="ghost">Back to progress</Button>
@@ -168,8 +170,6 @@ function NewProgramme({ onCreated }: { onCreated: (id: string) => void }) {
     },
   });
 
-  const field = 'w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
-
   if (!open) {
     return <Button type="button" variant="primary" onClick={() => setOpen(true)}>New programme</Button>;
   }
@@ -187,17 +187,17 @@ function NewProgramme({ onCreated }: { onCreated: (id: string) => void }) {
       <div className="grid gap-3 sm:grid-cols-3">
         <label className="space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">Code</span>
-          <input className={field} value={form.code} placeholder="ASR-RESURVEY-26"
+          <Input value={form.code} placeholder="ASR-RESURVEY-26"
             onChange={(e) => setForm({ ...form, code: e.target.value })} />
         </label>
         <label className="space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">Name</span>
-          <input className={field} value={form.name} placeholder="Alluri Sitharama Raju resurvey"
+          <Input value={form.name} placeholder="Alluri Sitharama Raju resurvey"
             onChange={(e) => setForm({ ...form, name: e.target.value })} />
         </label>
         <label className="space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">Started on</span>
-          <input type="date" className={field} value={form.started_on}
+          <Input type="date" value={form.started_on}
             onChange={(e) => setForm({ ...form, started_on: e.target.value })} />
         </label>
       </div>
@@ -301,7 +301,6 @@ function AddVillage({ projectId }: { projectId: string }) {
     },
   });
 
-  const field = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
   const ready = form.village_name.trim() && form.village_code.trim() && form.mandal_id;
 
   return (
@@ -315,28 +314,28 @@ function AddVillage({ projectId }: { projectId: string }) {
         <div className="grid gap-3 sm:grid-cols-4">
           <label className="space-y-1">
             <span className="text-2xs uppercase tracking-wide text-text-subtle">District</span>
-            <select className={field} value={form.district_id}
+            <NativeSelect className="w-full" value={form.district_id}
               onChange={(e) => setForm({ ...form, district_id: e.target.value, mandal_id: '' })}>
               <option value="">Choose…</option>
               {(districts.data ?? []).map((d) => (
                 <option key={String(d.id)} value={String(d.id)}>{String(d.name)}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
           <label className="space-y-1">
             <span className="text-2xs uppercase tracking-wide text-text-subtle">Village name</span>
-            <input className={field} value={form.village_name}
+            <Input value={form.village_name}
               onChange={(e) => setForm({ ...form, village_name: e.target.value })} />
           </label>
           <label className="space-y-1">
             <span className="text-2xs uppercase tracking-wide text-text-subtle">Village code</span>
-            <input className={field} value={form.village_code}
+            <Input value={form.village_code}
               placeholder="As the department lists it"
               onChange={(e) => setForm({ ...form, village_code: e.target.value })} />
           </label>
           <label className="space-y-1">
             <span className="text-2xs uppercase tracking-wide text-text-subtle">Mandal</span>
-            <select className={field} value={form.mandal_id}
+            <NativeSelect className="w-full" value={form.mandal_id}
               onChange={(e) => setForm({ ...form, mandal_id: e.target.value })}>
               <option value="">
                 {form.district_id ? 'Choose…' : 'Choose a district first'}
@@ -344,13 +343,13 @@ function AddVillage({ projectId }: { projectId: string }) {
               {inDistrict.map((m) => (
                 <option key={String(m.id)} value={String(m.id)}>{String(m.name)}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
           <label className="space-y-1">
             <span className="text-2xs uppercase tracking-wide text-text-subtle">
               Extent (Ac)
             </span>
-            <input className={field} type="number" min={0} step="0.01"
+            <Input type="number" min={0} step="0.01"
               value={form.total_extent_ac}
               onChange={(e) => setForm({ ...form, total_extent_ac: e.target.value })} />
           </label>
@@ -365,14 +364,14 @@ function AddVillage({ projectId }: { projectId: string }) {
                 <span className="text-2xs uppercase tracking-wide text-text-subtle">
                   New mandal name
                 </span>
-                <input className={field} value={form.new_mandal_name}
+                <Input value={form.new_mandal_name}
                   onChange={(e) => setForm({ ...form, new_mandal_name: e.target.value })} />
               </label>
               <label className="space-y-1">
                 <span className="text-2xs uppercase tracking-wide text-text-subtle">
                   Mandal code
                 </span>
-                <input className={field} value={form.new_mandal_code}
+                <Input value={form.new_mandal_code}
                   onChange={(e) => setForm({ ...form, new_mandal_code: e.target.value })} />
               </label>
               <div className="flex items-end">
@@ -504,12 +503,13 @@ function VillageImport({ projectId }: { projectId: string }) {
           </Button>
         </div>
 
-        <textarea
+        <Textarea
           value={text}
           onChange={(e) => { setText(e.target.value); setPreview(null); }}
           rows={6}
           placeholder="DistrictCode,District Name,DivisionCode,Division Name,MandalCode,Mandal Name,Village Code,Village Name,vill_code_old&#10;15,Alluri Sitharama Raju,1,Paderu,11,KOYYURU,1511077,ADAKULA,314077"
-          className="w-full rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-2xs text-text"
+          className="font-mono text-2xs"
+          aria-label="Village data to import"
         />
 
         {duplicates.length > 0 ? (
@@ -717,12 +717,6 @@ function BoardLink({ programme }: { programme: Row }) {
     },
   });
 
-  // `max-w-full`: a native select otherwise sizes itself to its longest
-  // option text (a programme's full "CODE — Name" pairing here), which on a
-  // phone screen was wider than the screen itself — a horizontal scrollbar
-  // on the whole page for one dropdown.
-  const field = 'max-w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
-
   return (
     <Section title="Put the work on the task board">
       <Card className="space-y-3 p-4">
@@ -738,8 +732,8 @@ function BoardLink({ programme }: { programme: Row }) {
 
         <label className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
           Project the tasks belong to
-          <select
-            className={field}
+          <NativeSelect
+            className="max-w-full"
             value={programme.project_id ?? ''}
             onChange={(e) => e.target.value && link.mutate(e.target.value)}
           >
@@ -747,7 +741,7 @@ function BoardLink({ programme }: { programme: Row }) {
             {(projects.data ?? []).map((p) => (
               <option key={p.id} value={p.id}>{p.code} — {p.name}</option>
             ))}
-          </select>
+          </NativeSelect>
           {link.isPending ? <span>linking…</span> : null}
         </label>
 
@@ -844,7 +838,6 @@ function NewMeasure() {
     },
   });
 
-  const field = 'w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
   const measures: Row[] = catalogue.data?.measures ?? [];
 
   return (
@@ -868,7 +861,7 @@ function NewMeasure() {
             <div className="grid gap-3 sm:grid-cols-3">
               <label className="space-y-1">
                 <span className="text-2xs uppercase tracking-wide text-text-subtle">Column name</span>
-                <input className={field} value={form.label} placeholder="Drone images"
+                <Input value={form.label} placeholder="Drone images"
                   onChange={(e) => setForm({
                     ...form, label: e.target.value,
                     code: form.code || e.target.value.toUpperCase().replace(/[^A-Z0-9]+/g, '_'),
@@ -876,30 +869,30 @@ function NewMeasure() {
               </label>
               <label className="space-y-1">
                 <span className="text-2xs uppercase tracking-wide text-text-subtle">Group it sits under</span>
-                <input className={field} value={form.group_label} placeholder="Imagery"
+                <Input value={form.group_label} placeholder="Imagery"
                   onChange={(e) => setForm({ ...form, group_label: e.target.value })} />
               </label>
               <label className="space-y-1">
                 <span className="text-2xs uppercase tracking-wide text-text-subtle">Measured in</span>
-                <select className={field} value={form.unit}
+                <NativeSelect className="w-full" value={form.unit}
                   onChange={(e) => setForm({ ...form, unit: e.target.value })}>
                   <option value="COUNT">a count</option>
                   <option value="POINTS">points</option>
                   <option value="PARCELS">parcels</option>
                   <option value="ACRES">acres</option>
-                </select>
+                </NativeSelect>
               </label>
             </div>
             <label className="space-y-1">
               <span className="text-2xs uppercase tracking-wide text-text-subtle">
                 Percentage complete measured against
               </span>
-              <select className={field} value={form.basis}
+              <NativeSelect className="w-full" value={form.basis}
                 onChange={(e) => setForm({ ...form, basis: e.target.value })}>
                 <option value="TARGET">a target set per village</option>
                 <option value="EXTENT">the village extent in acres</option>
                 <option value="NONE">nothing — it is a count, not progress</option>
-              </select>
+              </NativeSelect>
               <span className="block text-2xs text-text-subtle">
                 Where there is nothing to divide by, the report says so rather than showing 0%.
               </span>

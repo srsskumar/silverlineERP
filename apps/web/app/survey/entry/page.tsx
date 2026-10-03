@@ -14,6 +14,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
 import { Combobox } from '@/components/ui/Combobox';
 import { Badge } from '@/components/ui/Badge';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input } from '@/components/ui/Input';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
@@ -308,8 +310,6 @@ export default function SurveyEntryPage() {
     );
   }
 
-  const field = 'w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
-
   return (
     <AppShell>
       <PageHeader
@@ -318,16 +318,15 @@ export default function SurveyEntryPage() {
       />
       <PageBody>
         <Toolbar>
-          <select value={projectId} onChange={(e) => { setProjectId(e.target.value); setVillageId(''); }}
-            className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+          <NativeSelect value={projectId} onChange={(e) => { setProjectId(e.target.value); setVillageId(''); }}
+            aria-label="Programme">
             {(projects.data ?? []).map((p) => (
               <option key={p.id} value={p.id}>{p.name}</option>
             ))}
-          </select>
+          </NativeSelect>
           <label className="flex items-center gap-1.5 text-xs text-text-muted">
             Date
-            <input type="date" value={date} max={today} onChange={(e) => setDate(e.target.value)}
-              className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text" />
+            <Input type="date" value={date} max={today} onChange={(e) => setDate(e.target.value)} />
           </label>
           {date < today ? (
             // Entering a missed day is normal and correct here; saying so
@@ -403,7 +402,7 @@ export default function SurveyEntryPage() {
                   <span className="text-2xs uppercase tracking-wide text-text-subtle">
                     Government staff present
                   </span>
-                  <input type="number" min={0} className={field} value={attendance.govt}
+                  <Input type="number" min={0} value={attendance.govt}
                     placeholder={village.gt_govt_staff_allocated != null
                       ? String(village.gt_govt_staff_allocated) : ''}
                     onChange={(e) => setAttendance({ ...attendance, govt: e.target.value })} />
@@ -412,7 +411,7 @@ export default function SurveyEntryPage() {
                   <span className="text-2xs uppercase tracking-wide text-text-subtle">
                     Our crew present
                   </span>
-                  <input type="number" min={0} className={field} value={attendance.crew}
+                  <Input type="number" min={0} value={attendance.crew}
                     placeholder={village.gt_crew_allocated != null
                       ? String(village.gt_crew_allocated) : ''}
                     onChange={(e) => setAttendance({ ...attendance, crew: e.target.value })} />
@@ -443,12 +442,12 @@ export default function SurveyEntryPage() {
               <div className="grid gap-3 sm:grid-cols-3">
                 <label className="space-y-1">
                   <span className="text-2xs uppercase tracking-wide text-text-subtle">Teams on site</span>
-                  <input type="number" min={0} className={field} value={deployed.teams}
+                  <Input type="number" min={0} value={deployed.teams}
                     onChange={(e) => setDeployed({ ...deployed, teams: Number(e.target.value) })} />
                 </label>
                 <label className="space-y-1">
                   <span className="text-2xs uppercase tracking-wide text-text-subtle">DGPS base</span>
-                  <input type="number" min={0} className={field} value={deployed.base}
+                  <Input type="number" min={0} value={deployed.base}
                     onChange={(e) => setDeployed({ ...deployed, base: Number(e.target.value) })} />
                 </label>
                 {/*
@@ -484,8 +483,8 @@ export default function SurveyEntryPage() {
                         : `allocated: ${outToday.length}`}
                     </span>
                   </span>
-                  <input
-                    type="number" min={0} className={field} value={deployed.rovers}
+                  <Input
+                    type="number" min={0} value={deployed.rovers}
                     onChange={(e) => {
                       roverCountTouched.current = true;
                       setDeployed({
@@ -561,18 +560,20 @@ export default function SurveyEntryPage() {
 
                           {row.status === 'UTILIZED' ? null : (
                             <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                              <select
-                                className={field}
+                              <NativeSelect
+                                className="w-full"
                                 value={row.idle_reason}
+                                aria-label="Why was it idle?"
                                 onChange={(e) => set({ idle_reason: e.target.value })}>
                                 <option value="">Why was it idle?</option>
                                 {DELAY_REASON_OPTIONS.map((o) => (
                                   <option key={o.code} value={o.code}>{o.label}</option>
                                 ))}
-                              </select>
+                              </NativeSelect>
                               {row.idle_reason === 'OTHER' ? (
-                                <input className={field} value={row.remarks}
+                                <Input value={row.remarks}
                                   placeholder="What happened?"
+                                  aria-label="What happened"
                                   onChange={(e) => set({ remarks: e.target.value })} />
                               ) : null}
                             </div>
@@ -645,8 +646,8 @@ export default function SurveyEntryPage() {
                               {position && position.pct !== null ? ` · ${pct(position.pct)}` : ''}
                             </span>
                           </span>
-                          <input
-                            type="number" min={0} step="any" className={field}
+                          <Input
+                            type="number" min={0} step="any"
                             placeholder="0"
                             value={values[m.code] ?? ''}
                             onChange={(e) => setValues({ ...values, [m.code]: e.target.value })}
@@ -682,16 +683,18 @@ export default function SurveyEntryPage() {
                       Say why before recording another day on this village. Asked once.
                     </p>
                     <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      <select className={field} value={gtReason}
+                      <NativeSelect className="w-full" value={gtReason}
+                        aria-label="Why ground truthing was delayed"
                         onChange={(e) => setGtReason(e.target.value)}>
                         <option value="">Choose a reason…</option>
                         {DELAY_REASON_OPTIONS.map((o) => (
                           <option key={o.code} value={o.code}>{o.label}</option>
                         ))}
-                      </select>
+                      </NativeSelect>
                       {gtReason === 'OTHER' ? (
-                        <input className={field} value={gtRemarks}
+                        <Input value={gtRemarks}
                           placeholder="What happened?"
+                          aria-label="What happened"
                           onChange={(e) => setGtRemarks(e.target.value)} />
                       ) : null}
                     </div>
@@ -706,20 +709,20 @@ export default function SurveyEntryPage() {
                   <span className="text-2xs uppercase tracking-wide text-text-subtle">
                     If today was thin, why?
                   </span>
-                  <select className={field} value={lowReason}
+                  <NativeSelect className="w-full" value={lowReason}
                     onChange={(e) => setLowReason(e.target.value)}>
                     <option value="">Not a low day</option>
                     {DELAY_REASON_OPTIONS.map((o) => (
                       <option key={o.code} value={o.code}>{o.label}</option>
                     ))}
-                  </select>
+                  </NativeSelect>
                 </label>
                 {lowReason === 'OTHER' ? (
                   <label className="space-y-1">
                     <span className="text-2xs uppercase tracking-wide text-text-subtle">
                       What happened?
                     </span>
-                    <input className={field} value={lowRemarks}
+                    <Input value={lowRemarks}
                       onChange={(e) => setLowRemarks(e.target.value)} />
                   </label>
                 ) : null}
@@ -727,7 +730,7 @@ export default function SurveyEntryPage() {
 
               <label className="space-y-1">
                 <span className="text-2xs uppercase tracking-wide text-text-subtle">Notes</span>
-                <input className={field} value={notes} placeholder="Rain stopped work after noon"
+                <Input value={notes} placeholder="Rain stopped work after noon"
                   onChange={(e) => setNotes(e.target.value)} />
               </label>
 
@@ -919,8 +922,6 @@ function AmendEntry({
     },
   });
 
-  const field = 'w-24 rounded-md border border-border bg-surface px-2 py-1 text-sm text-text';
-
   if (!mayAmend) {
     return (
       <Notice tone="info" title="This day needs a programme manager">
@@ -940,18 +941,18 @@ function AmendEntry({
       <div className="flex flex-wrap items-end gap-3">
         <label className="flex flex-col gap-1 text-2xs text-text-muted">
           Teams
-          <input className={field} type="number" min={0} value={teams}
+          <Input className="w-24" type="number" min={0} value={teams}
             onChange={(e) => setTeams(e.target.value)} />
         </label>
         <label className="flex flex-col gap-1 text-2xs text-text-muted">
           Rovers out
-          <input className={field} type="number" min={0} value={rovers}
+          <Input className="w-24" type="number" min={0} value={rovers}
             onChange={(e) => setRovers(e.target.value)} />
         </label>
         {Object.keys(existing).map((code) => (
           <label key={code} className="flex flex-col gap-1 text-2xs text-text-muted">
             {code.replaceAll('_', ' ').toLowerCase()}
-            <input className={field} type="number" min={0} step="any"
+            <Input className="w-24" type="number" min={0} step="any"
               value={values[code] ?? ''}
               onChange={(e) => setValues({ ...values, [code]: e.target.value })} />
           </label>
@@ -960,13 +961,11 @@ function AmendEntry({
       <div className="flex flex-wrap items-end gap-3">
         <label className="flex flex-1 flex-col gap-1 text-2xs text-text-muted">
           Notes
-          <input className="w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-text"
-            value={notes} onChange={(e) => setNotes(e.target.value)} />
+          <Input value={notes} onChange={(e) => setNotes(e.target.value)} />
         </label>
         <label className="flex flex-1 flex-col gap-1 text-2xs text-text-muted">
           Why it changed
-          <input
-            className="w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-text"
+          <Input
             placeholder="Miskeyed, re-measured, wrong village…"
             value={reason} onChange={(e) => setReason(e.target.value)} />
         </label>

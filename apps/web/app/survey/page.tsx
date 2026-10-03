@@ -17,6 +17,8 @@ import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Paged } from '@/components/ui/Paged';
 import { Badge } from '@/components/ui/Badge';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input } from '@/components/ui/Input';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Notice, Section, Stat } from '@/components/finance/Primitives';
@@ -237,15 +239,14 @@ export default function SurveyPage() {
             <div className="mb-4">
               <label className="flex items-center gap-2 text-xs text-text-muted">
                 Programme
-                <select
+                <NativeSelect
                   value={projectId}
                   onChange={(e) => setProjectId(e.target.value)}
-                  className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
                 >
                   {(projects.data ?? []).map((p) => (
                     <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>
                   ))}
-                </select>
+                </NativeSelect>
               </label>
             </div>
           ) : null}
@@ -269,15 +270,15 @@ export default function SurveyPage() {
       />
       <PageBody>
         <Toolbar>
-          <select
+          <NativeSelect
             value={projectId}
             onChange={(e) => setProjectId(e.target.value)}
-            className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+            aria-label="Programme"
           >
             {(projects.data ?? []).map((p) => (
               <option key={p.id} value={p.id}>{p.name} ({p.village_count} villages)</option>
             ))}
-          </select>
+          </NativeSelect>
 
           {/*
             * Eight tabs do not fit across a phone, and a row that does not fit
@@ -312,15 +313,13 @@ export default function SurveyPage() {
 
           <label className="flex items-center gap-1.5 text-xs text-text-muted">
             From
-            <input type="date" value={range.from}
-              onChange={(e) => setRange({ ...range, from: e.target.value })}
-              className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text" />
+            <Input type="date" value={range.from}
+              onChange={(e) => setRange({ ...range, from: e.target.value })} />
           </label>
           <label className="flex items-center gap-1.5 text-xs text-text-muted">
             to
-            <input type="date" value={range.to}
-              onChange={(e) => setRange({ ...range, to: e.target.value })}
-              className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text" />
+            <Input type="date" value={range.to}
+              onChange={(e) => setRange({ ...range, to: e.target.value })} />
           </label>
           <Button type="button" variant="ghost" onClick={() => setRange(fy)}>
             This financial year
@@ -487,8 +486,6 @@ function Progress({
   const narrowed = Boolean(scope.district || scope.mandal || scope.village_id || scope.stage);
   const pipeline: Row[] = data.pipeline ?? [];
 
-  const sel = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
-
   /*
    * The roll-up as it stands on screen, in a file.
    *
@@ -565,7 +562,7 @@ function Progress({
         <div className="flex flex-wrap items-end gap-3">
           <label className="text-2xs text-text-subtle">
             <span className="mb-1 block">District</span>
-            <select className={sel} value={scope.district}
+            <NativeSelect value={scope.district}
               onChange={(e) => setScope({
                 ...scope, district: e.target.value, mandal: '', village_id: '',
               })}>
@@ -573,53 +570,53 @@ function Progress({
               {(options.districts ?? []).map((d: string) => (
                 <option key={d} value={d}>{d}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
 
           <label className="text-2xs text-text-subtle">
             <span className="mb-1 block">Mandal</span>
-            <select className={sel} value={scope.mandal}
+            <NativeSelect value={scope.mandal}
               onChange={(e) => setScope({ ...scope, mandal: e.target.value, village_id: '' })}>
               <option value="">Every mandal</option>
               {(options.mandals ?? []).map((mm: string) => (
                 <option key={mm} value={mm}>{mm}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
 
           <label className="text-2xs text-text-subtle">
             <span className="mb-1 block">Village</span>
-            <select className={sel} value={scope.village_id}
+            <NativeSelect value={scope.village_id}
               onChange={(e) => setScope({ ...scope, village_id: e.target.value })}>
               <option value="">Every village</option>
               {(options.villages ?? []).map((v: Row) => (
                 <option key={String(v.id)} value={String(v.id)}>{String(v.name)}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
 
           <label className="text-2xs text-text-subtle">
             <span className="mb-1 block">Stage</span>
-            <select className={sel} value={scope.stage}
+            <NativeSelect value={scope.stage}
               onChange={(e) => setScope({ ...scope, stage: e.target.value })}>
               <option value="">Any stage</option>
               {pipeline.map((st) => (
                 <option key={String(st.code)} value={String(st.code)}>{String(st.label)}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
 
           {scope.stage ? (
             <label className="text-2xs text-text-subtle">
               <span className="mb-1 block">Which is</span>
-              <select className={sel} value={scope.stage_state}
+              <NativeSelect value={scope.stage_state}
                 onChange={(e) => setScope({ ...scope, stage_state: e.target.value })}>
                 <option value="OUTSTANDING">not finished</option>
                 <option value="NOT_STARTED">still to start</option>
                 <option value="IN_PROGRESS">in progress</option>
                 <option value="ON_HOLD">on hold</option>
                 <option value="COMPLETED">finished</option>
-              </select>
+              </NativeSelect>
             </label>
           ) : null}
 
@@ -1092,13 +1089,11 @@ function PeriodReport({
             <div className="text-2xs text-text-subtle">
               <span className="mb-1 block">Between</span>
               <div className="flex items-center gap-1">
-                <input type="date" value={span.from} max={span.to}
-                  onChange={(e) => setSpan({ ...span, from: e.target.value })}
-                  className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text" />
+                <Input type="date" value={span.from} max={span.to}
+                  onChange={(e) => setSpan({ ...span, from: e.target.value })} />
                 <span className="text-text-muted">and</span>
-                <input type="date" value={span.to} max={businessToday()} min={span.from}
-                  onChange={(e) => setSpan({ ...span, to: e.target.value })}
-                  className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text" />
+                <Input type="date" value={span.to} max={businessToday()} min={span.from}
+                  onChange={(e) => setSpan({ ...span, to: e.target.value })} />
               </div>
               {/* A chosen range has no calendar predecessor, so the
                   comparison is the same number of days before it. Said out
@@ -1119,10 +1114,9 @@ function PeriodReport({
                   onClick={() => setAsOf(stepPeriod(asOf, grain as 'DAY' | 'WEEK' | 'MONTH', -1))}>
                   ← Previous
                 </Button>
-                <input type="date" value={asOf} max={businessToday()}
+                <Input type="date" value={asOf} max={businessToday()}
                   onChange={(e) => setAsOf(e.target.value)}
-                  title="Any day inside the period you want reported"
-                  className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text" />
+                  title="Any day inside the period you want reported" />
                 <Button type="button" variant="ghost" disabled={atLatest}
                   title={atLatest ? 'This is the current period' : `The ${noun} after this one`}
                   onClick={() => setAsOf(stepPeriod(asOf, grain as 'DAY' | 'WEEK' | 'MONTH', 1))}>
@@ -1138,12 +1132,11 @@ function PeriodReport({
 
           <label className="text-2xs text-text-subtle">
             <span className="mb-1 block">Break down by</span>
-            <select value={level} onChange={(e) => setLevel(e.target.value as ReportLevel)}
-              className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+            <NativeSelect value={level} onChange={(e) => setLevel(e.target.value as ReportLevel)}>
               {REPORT_LEVELS.map((l) => (
                 <option key={l} value={l}>{LEVEL_LABELS[l]}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
         </div>
       </Card>
@@ -1451,13 +1444,13 @@ function MoveVillages({ projectId, villages }: { projectId: string; villages: Ro
       <span className="text-xs text-text-muted">
         Move {villages.length} village{villages.length === 1 ? '' : 's'} to
       </span>
-      <select value={target} onChange={(e) => setTarget(e.target.value)}
-        className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+      <NativeSelect value={target} onChange={(e) => setTarget(e.target.value)}
+        aria-label="Target programme">
         <option value="">Choose a programme…</option>
         {(programmes.data ?? [])
           .filter((p) => String(p.id) !== projectId)
           .map((p) => <option key={String(p.id)} value={String(p.id)}>{String(p.name)}</option>)}
-      </select>
+      </NativeSelect>
       <Button type="button" variant="primary" loading={move.isPending}
         disabled={!target} onClick={() => move.mutate()}>
         Move
@@ -1576,12 +1569,11 @@ function Deployment({
         <div className="flex flex-wrap items-end gap-3 border-t border-border pt-3">
           <label className="text-2xs text-text-subtle">
             <span className="mb-1 block">Group by</span>
-            <select value={level} onChange={(e) => setLevel(e.target.value as ReportLevel)}
-              className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+            <NativeSelect value={level} onChange={(e) => setLevel(e.target.value as ReportLevel)}>
               {REPORT_LEVELS.map((l) => (
                 <option key={l} value={l}>{LEVEL_LABELS[l]}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
         </div>
       </Card>
@@ -2560,56 +2552,56 @@ function Villages({
   return (
     <div className="space-y-3">
       <Toolbar>
-        <input
+        <Input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Find a village, code, mandal or district…"
-          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+          aria-label="Find a village, code, mandal or district"
         />
-        <select value={district}
+        <NativeSelect value={district}
           onChange={(e) => { setDistrict(e.target.value); setMandal(''); }}
-          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+          aria-label="District">
           <option value="">All districts</option>
           {districts.map((d) => <option key={d} value={d}>{d}</option>)}
-        </select>
-        <select value={mandal} onChange={(e) => setMandal(e.target.value)}
-          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+        </NativeSelect>
+        <NativeSelect value={mandal} onChange={(e) => setMandal(e.target.value)}
+          aria-label="Mandal">
           <option value="">All mandals</option>
           {mandals.map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
-        <select value={stage} onChange={(e) => setStage(e.target.value)}
-          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+        </NativeSelect>
+        <NativeSelect value={stage} onChange={(e) => setStage(e.target.value)}
+          aria-label="Stage">
           <option value="">Any stage</option>
           {pipeline.map((p) => (
             <option key={String(p.code)} value={String(p.code)}>{String(p.label)}</option>
           ))}
-        </select>
+        </NativeSelect>
         {/* The thirteen positions the dashboard reports, so a reader can land
             on the same list the chart counted. */}
-        <select value={position} onChange={(e) => setPosition(e.target.value)}
+        <NativeSelect value={position} onChange={(e) => setPosition(e.target.value)}
           title="Where the village has got to, as the dashboard reports it"
-          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+          aria-label="Stage status">
           <option value="">Any stage status</option>
           {VILLAGE_LADDER.map((r: { key: string; label: string }) => (
             <option key={r.key} value={r.key}>{r.label}</option>
           ))}
-        </select>
-        <select value={billing} onChange={(e) => setBilling(e.target.value)}
+        </NativeSelect>
+        <NativeSelect value={billing} onChange={(e) => setBilling(e.target.value)}
           title="Pull villages by what has been submitted for billing"
-          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+          aria-label="Billing status">
           {BILLING_FILTERS.map((b) => (
             <option key={b.value} value={b.value}>{b.label}</option>
           ))}
-        </select>
+        </NativeSelect>
         {stage ? (
-          <select value={stageState} onChange={(e) => setStageState(e.target.value)}
-            className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+          <NativeSelect value={stageState} onChange={(e) => setStageState(e.target.value)}
+            aria-label="Status">
             <option value="OUTSTANDING">not finished</option>
             <option value="NOT_STARTED">still to start</option>
             <option value="IN_PROGRESS">in progress</option>
             <option value="ON_HOLD">on hold</option>
             <option value="COMPLETED">finished</option>
-          </select>
+          </NativeSelect>
         ) : null}
         {/*
           * Moving what the filter is showing.
@@ -2769,7 +2761,7 @@ function Villages({
                         */}
                       {v.village_code ? (
                         <span
-                          className="ml-1.5 whitespace-nowrap rounded bg-surface-sunken px-1 py-0.5 font-mono text-2xs text-text-subtle"
+                          className="ml-1.5 whitespace-nowrap rounded bg-surface-sunken px-1 py-0.5 font-mono text-2xs text-text-muted"
                           title="The revenue department's village code. Reconciliation is done on codes, not names — two villages with the same name in one district is ordinary."
                         >
                           {v.village_code}
@@ -3193,7 +3185,6 @@ function GcpRecorder({
   const warnings = form.latitude !== '' && form.longitude !== ''
     && Number.isFinite(lat) && Number.isFinite(lng) ? checkGcp(lat, lng) : [];
   const chosen = villages.find((v) => String(v.id) === form.survey_village_id);
-  const field = 'w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
 
   return (
     <Card className="space-y-3 p-4">
@@ -3215,7 +3206,7 @@ function GcpRecorder({
       <div className="grid gap-3 sm:grid-cols-3">
         <label className="text-2xs text-text-subtle sm:col-span-2">
           Village
-          <select className={field} value={form.survey_village_id}
+          <NativeSelect className="w-full" value={form.survey_village_id}
             onChange={(e) => setForm({ ...form, survey_village_id: e.target.value })}>
             <option value="">Choose a village…</option>
             {villages.map((v) => (
@@ -3227,29 +3218,29 @@ function GcpRecorder({
                 {alreadyHave.has(String(v.id)) ? ' (already has one)' : ''}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </label>
         <label className="text-2xs text-text-subtle">
           Point name
-          <input className={field} value={form.point_code} placeholder="GCP-1"
+          <Input value={form.point_code} placeholder="GCP-1"
             onChange={(e) => setForm({ ...form, point_code: e.target.value })} />
         </label>
 
         <label className="text-2xs text-text-subtle">
           Latitude (degrees)
-          <input className={field} inputMode="decimal" value={form.latitude}
+          <Input inputMode="decimal" value={form.latitude}
             placeholder="17.6868231"
             onChange={(e) => setForm({ ...form, latitude: e.target.value })} />
         </label>
         <label className="text-2xs text-text-subtle">
           Longitude (degrees)
-          <input className={field} inputMode="decimal" value={form.longitude}
+          <Input inputMode="decimal" value={form.longitude}
             placeholder="83.2184815"
             onChange={(e) => setForm({ ...form, longitude: e.target.value })} />
         </label>
         <label className="text-2xs text-text-subtle">
           Elevation (m)
-          <input className={field} inputMode="decimal" value={form.elevation_m}
+          <Input inputMode="decimal" value={form.elevation_m}
             placeholder="45.212"
             onChange={(e) => setForm({ ...form, elevation_m: e.target.value })} />
         </label>
@@ -3258,31 +3249,31 @@ function GcpRecorder({
             both, and the drawings are in the grid. */}
         <label className="text-2xs text-text-subtle">
           Easting (m)
-          <input className={field} inputMode="decimal" value={form.easting_m}
+          <Input inputMode="decimal" value={form.easting_m}
             placeholder="736412.318"
             onChange={(e) => setForm({ ...form, easting_m: e.target.value })} />
         </label>
         <label className="text-2xs text-text-subtle">
           Northing (m)
-          <input className={field} inputMode="decimal" value={form.northing_m}
+          <Input inputMode="decimal" value={form.northing_m}
             placeholder="1956043.772"
             onChange={(e) => setForm({ ...form, northing_m: e.target.value })} />
         </label>
         <label className="text-2xs text-text-subtle">
           Grid zone
-          <input className={field} value={form.grid_zone} placeholder="44N"
+          <Input value={form.grid_zone} placeholder="44N"
             onChange={(e) => setForm({ ...form, grid_zone: e.target.value })} />
         </label>
 
         <label className="text-2xs text-text-subtle">
           Established on
-          <input type="date" className={field} value={form.established_on}
+          <Input type="date" value={form.established_on}
             max={businessToday()}
             onChange={(e) => setForm({ ...form, established_on: e.target.value })} />
         </label>
         <label className="text-2xs text-text-subtle sm:col-span-2">
           How it was fixed
-          <input className={field} value={form.remarks}
+          <Input value={form.remarks}
             placeholder="Tied to BM 42; 45 min base observation, PDOP 1.4"
             onChange={(e) => setForm({ ...form, remarks: e.target.value })} />
         </label>
@@ -3462,14 +3453,14 @@ function ControlList({
             {adding ? 'Close' : 'Record a control point'}
           </Button>
         ) : null}
-        <input value={find} onChange={(e) => setFind(e.target.value)}
+        <Input value={find} onChange={(e) => setFind(e.target.value)}
           placeholder="Find a point, village or mandal…"
-          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text" />
-        <select value={mandal} onChange={(e) => setMandal(e.target.value)}
-          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text">
+          aria-label="Find a point, village or mandal" />
+        <NativeSelect value={mandal} onChange={(e) => setMandal(e.target.value)}
+          aria-label="Mandal">
           <option value="">All mandals</option>
           {mandals.map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
+        </NativeSelect>
         {flagged > 0 ? (
           <label className="flex items-center gap-1.5 text-2xs text-text-muted">
             <input type="checkbox" checked={onlyOdd}
@@ -3692,31 +3683,30 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
     ]),
   };
 
-  const sel = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
-
   return (
     <div className="space-y-3">
       <Toolbar>
-        <input value={find} onChange={(e) => setFind(e.target.value)}
+        <Input value={find} onChange={(e) => setFind(e.target.value)}
           placeholder="Find a village, mandal or person…"
-          className={sel} />
-        <select value={mandal} onChange={(e) => setMandal(e.target.value)} className={sel}>
+          aria-label="Find a village, mandal or person" />
+        <NativeSelect value={mandal} onChange={(e) => setMandal(e.target.value)}
+          aria-label="Mandal">
           <option value="">All mandals</option>
           {mandals.map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
-        <select value={gt} onChange={(e) => setGt(e.target.value)} className={sel}
-          title="Where ground truthing has reached">
+        </NativeSelect>
+        <NativeSelect value={gt} onChange={(e) => setGt(e.target.value)}
+          title="Where ground truthing has reached" aria-label="Ground truthing status">
           <option value="">Any ground truthing state</option>
           {['NOT_STARTED', 'IN_PROGRESS', 'ON_HOLD', 'COMPLETED'].map((st) => (
             <option key={st} value={st}>{STAGE_STATE_LABELS[st] ?? st}</option>
           ))}
-        </select>
+        </NativeSelect>
         <label className="flex items-center gap-1.5 text-2xs text-text-muted"
           title="Villages where ground truthing is finished and the surveyed extent differs from the revenue record">
           <input type="checkbox" checked={varyOn}
             onChange={(e) => setVaryOn(e.target.checked)} />
           Extent differs by
-          <input className="w-14 rounded-md border border-border bg-surface px-1.5 py-1 text-sm text-text"
+          <Input className="w-14" aria-label="Minimum extent difference, percent"
             inputMode="decimal" value={varyPct}
             onChange={(e) => setVaryPct(e.target.value)} />
           % or more

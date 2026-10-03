@@ -5,6 +5,24 @@ import * as SelectPrimitive from '@radix-ui/react-select';
 import { Check, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
+/**
+ * Shared styling for a plain native `<select>` — same sizing/focus-ring
+ * treatment as Input's inputClasses, for call sites that need native
+ * <option> children (grouped options, option lists built from data) rather
+ * than the SelectPrimitive-based compound API above.
+ */
+export const nativeSelectClasses =
+  'h-8 rounded border border-border bg-surface px-2.5 text-sm text-text shadow-sm transition-colors ' +
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ' +
+  'focus-visible:ring-offset-1 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50';
+
+export const NativeSelect = React.forwardRef<
+  HTMLSelectElement,
+  React.SelectHTMLAttributes<HTMLSelectElement>
+>(function NativeSelect({ className, ...rest }, ref) {
+  return <select ref={ref} className={cn(nativeSelectClasses, className)} {...rest} />;
+});
+
 export const Select = SelectPrimitive.Root;
 export const SelectValue = SelectPrimitive.Value;
 export const SelectGroup = SelectPrimitive.Group;
