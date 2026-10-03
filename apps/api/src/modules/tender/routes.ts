@@ -27,6 +27,30 @@ export async function registerTenderRoutes(app: FastifyInstance, opts: { pool: P
   const guard = (p: string) => requirePermission(auth, p);
 
   /**
+   * Every cross-table reference a tender body can carry, checked against
+   * the caller's own org. POST already ran these; PATCH took the identical
+   * fields (tenderBaseSchema.partial()) straight into an UPDATE with none
+   * of them checked, so an org could repoint an existing tender at another
+   * org's client, opportunity, category, type or DSC holder.
+   */
+  async function assertTenderRefsInOrg(
+    db: Pool | PoolClient, orgId: string, input: Record<string, unknown>,
+  ): Promise<void> {
+    if (input.client_id) await inOrg(db, 'clients', String(input.client_id), orgId);
+    if (input.opportunity_id) await inOrg(db, 'opportunities', String(input.opportunity_id), orgId);
+    if (input.project_category_id) {
+      await inOrg(db, 'project_categories', String(input.project_category_id), orgId);
+    }
+    if (input.project_type_id) {
+      const t = await db.query(
+        'SELECT 1 FROM project_types WHERE id = $1::uuid AND org_id = $2',
+        [input.project_type_id, orgId]);
+      if (!t.rowCount) fail('NOT_FOUND', 'Project type not found', 404);
+    }
+    if (input.dsc_used_by) await inOrg(db, 'employees', String(input.dsc_used_by), orgId);
+  }
+
+  /**
    * §8.6 / §8.11: required checklist items still outstanding.
    *
    * Returned rather than thrown so the caller can decide — SUBMITTED and
@@ -91,17 +115,7 @@ export async function registerTenderRoutes(app: FastifyInstance, opts: { pool: P
   app.post('/api/v1/tenders', { preHandler: guard('tender.manage') }, async (req, reply) => {
     const u = actor(req), input = parse(tenderSchema, req.body) as Record<string, unknown>;
     const row = await mutate(pool, req, 'tender.create', 'tender', async db => {
-      if (input.client_id) await inOrg(db, 'clients', String(input.client_id), u.orgId);
-      if (input.opportunity_id) await inOrg(db, 'opportunities', String(input.opportunity_id), u.orgId);
-      if (input.project_category_id) {
-        await inOrg(db, 'project_categories', String(input.project_category_id), u.orgId);
-      }
-      if (input.project_type_id) {
-        const t = await db.query(
-          'SELECT 1 FROM project_types WHERE id = $1::uuid AND org_id = $2',
-          [input.project_type_id, u.orgId]);
-        if (!t.rowCount) fail('NOT_FOUND', 'Project type not found', 404);
-      }
+      await assertTenderRefsInOrg(db, u.orgId, input);
       const prepared = { ...input, jv_partners: JSON.stringify(input.jv_partners ?? []) };
       const keys = Object.keys(prepared), values = [u.orgId, u.id, ...Object.values(prepared)];
       const created = (await db.query(
@@ -135,6 +149,7 @@ export async function registerTenderRoutes(app: FastifyInstance, opts: { pool: P
         if (['AWARDED', 'REJECTED', 'CANCELLED'].includes(String(current.status))) {
           fail('TENDER_CLOSED', `A ${String(current.status).toLowerCase()} tender can no longer be edited`);
         }
+        await assertTenderRefsInOrg(db, u.orgId, input);
         const prepared = 'jv_partners' in input ? { ...input, jv_partners: JSON.stringify(input.jv_partners) } : input;
         const keys = Object.keys(prepared);
         const sets = keys.map((k, i) => `${k} = $${i + 3}`).join(',');
@@ -260,6 +275,7 @@ export async function registerTenderRoutes(app: FastifyInstance, opts: { pool: P
     const input = parse(eligibilityItemSchema, req.body) as Record<string, unknown>;
     const row = await mutate(pool, req, 'tender.eligibility.add', 'tender', async db => {
       await inOrg(db, 'tenders', id, u.orgId);
+      if (input.document_id) await inOrg(db, 'documents', String(input.document_id), u.orgId);
       const keys = Object.keys(input), values = [u.orgId, u.id, id, ...Object.values(input)];
       return (await db.query(
         `INSERT INTO tender_eligibility_items(org_id, created_by, tender_id, ${keys.join(',')})
@@ -275,13 +291,17 @@ export async function registerTenderRoutes(app: FastifyInstance, opts: { pool: P
     return {
       data: await mutate(pool, req, 'tender.eligibility.update', 'tender', async db => {
         await inOrg(db, 'tenders', id, u.orgId);
+        if (input.document_id) await inOrg(db, 'documents', String(input.document_id), u.orgId);
+        const current = (await db.query(
+          'SELECT * FROM tender_eligibility_items WHERE id = $1 AND tender_id = $2 FOR UPDATE',
+          [itemId, id])).rows[0];
+        if (!current) fail('NOT_FOUND', 'That checklist item is not on this tender', 404);
+        version(req, current as { version: number });
         const keys = Object.keys(input);
         const sets = keys.map((k, i) => `${k} = $${i + 4}`).join(',');
-        const updated = (await db.query(
+        return (await db.query(
           `UPDATE tender_eligibility_items SET ${sets}, version = version + 1, updated_at = now(), updated_by = $3
            WHERE id = $1 AND tender_id = $2 RETURNING *`, [itemId, id, u.id, ...Object.values(input)])).rows[0];
-        if (!updated) fail('NOT_FOUND', 'That checklist item is not on this tender', 404);
-        return updated;
       }),
     };
   });
@@ -325,6 +345,7 @@ export async function registerTenderRoutes(app: FastifyInstance, opts: { pool: P
     const row = await mutate(pool, req, 'instrument.create', 'instrument', async db => {
       if (input.tender_id) await inOrg(db, 'tenders', String(input.tender_id), u.orgId);
       if (input.project_id) await inOrg(db, 'projects', String(input.project_id), u.orgId);
+      if (input.document_id) await inOrg(db, 'documents', String(input.document_id), u.orgId);
       const keys = Object.keys(input), values = [u.orgId, u.id, ...Object.values(input)];
       return (await db.query(
         `INSERT INTO bank_guarantee_instruments(org_id, created_by, ${keys.join(',')})
@@ -371,6 +392,8 @@ export async function registerTenderRoutes(app: FastifyInstance, opts: { pool: P
     const u = actor(req), input = parse(proposalSchema, req.body) as Record<string, unknown>;
     const row = await mutate(pool, req, 'proposal.create', 'proposal', async db => {
       await inOrg(db, 'clients', String(input.client_id), u.orgId);
+      if (input.opportunity_id) await inOrg(db, 'opportunities', String(input.opportunity_id), u.orgId);
+      if (input.contact_id) await inOrg(db, 'contacts', String(input.contact_id), u.orgId);
       const prepared = { ...input, competing_quotes: JSON.stringify(input.competing_quotes ?? []) };
       const keys = Object.keys(prepared), values = [u.orgId, u.id, ...Object.values(prepared)];
       return (await db.query(
@@ -411,6 +434,12 @@ export async function registerTenderRoutes(app: FastifyInstance, opts: { pool: P
       fail('PROPOSAL_NOT_ACCEPTED', 'Only an accepted proposal converts to a project');
     }
     await inOrg(db, 'workspaces', input.workspace_id, u.orgId);
+    // Unlike the values below that fall back to the already org-checked
+    // source record, these three are taken as-is from the request whenever
+    // the caller supplies them -- an override with no check of its own.
+    if (input.project_manager_id) await inOrg(db, 'users', input.project_manager_id, u.orgId);
+    if (input.project_type_id) await inOrg(db, 'project_types', input.project_type_id, u.orgId);
+    if (input.project_category_id) await inOrg(db, 'project_categories', input.project_category_id, u.orgId);
 
     // Explicit pre-check for a clear error. The project table's own unique
     // index would also stop a duplicate, but it reports as DUPLICATE_RECORD,
