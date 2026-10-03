@@ -31,7 +31,7 @@ export function StatusBadge({
    */
   tone?: Tone;
 }) {
-  if (!status) return <span className="text-2xs text-text-subtle">—</span>;
+  if (!status) return <span className="text-2xs text-text-muted">—</span>;
   return <Badge tone={tone ?? financialTone(status)} size={size}>{statusLabel(status)}</Badge>;
 }
 
@@ -51,7 +51,7 @@ export function Field({
 }) {
   return (
     <div className="min-w-0">
-      <dt className="text-2xs uppercase tracking-wide text-text-subtle">{label}</dt>
+      <dt className="text-2xs uppercase tracking-wide text-text-muted">{label}</dt>
       <dd
         className={cn(
           'mt-0.5 truncate tabular-nums',
@@ -102,7 +102,7 @@ export function RecordSheet({
       <SheetContent className={wide ? 'w-[min(52rem,100vw-2.5rem)]' : undefined}>
         <SheetHeader>
           <SheetTitle className="text-base font-semibold text-text">{title}</SheetTitle>
-          {subtitle ? <p className="mt-0.5 text-2xs text-text-subtle">{subtitle}</p> : null}
+          {subtitle ? <p className="mt-0.5 text-2xs text-text-muted">{subtitle}</p> : null}
         </SheetHeader>
         <SheetBody>{children}</SheetBody>
       </SheetContent>
@@ -149,7 +149,7 @@ export function Stat({
       >
         {value}
       </p>
-      {hint ? <p className="mt-0.5 text-2xs text-text-subtle">{hint}</p> : null}
+      {hint ? <p className="mt-0.5 text-2xs text-text-muted">{hint}</p> : null}
     </div>
   );
 }
