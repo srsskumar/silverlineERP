@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
 /**
@@ -77,6 +78,50 @@ export function TH({
       )}
       {...rest}
     />
+  );
+}
+
+/**
+ * A column header that sorts the table when clicked.
+ *
+ * No table in the app had this -- every list depended on filters, a fixed
+ * default order, and the CSV/Excel export for anything else. That is enough
+ * for a filtered, exported report; it is not enough for scanning a table
+ * already on screen to find the largest or the oldest. One component so
+ * every table gets the same click-to-sort, the same arrow, and the same
+ * three-state cycle (asc, desc, back to the table's own order) rather than
+ * each screen inventing its own.
+ */
+export function SortableTH<K extends string>({
+  children, sortKey, sort, onSort, align = 'left', className,
+}: {
+  children: React.ReactNode;
+  sortKey: K;
+  sort: { key: K | null; dir: 'asc' | 'desc' };
+  onSort: (key: K) => void;
+  align?: 'left' | 'right' | 'center';
+  className?: string;
+}) {
+  const active = sort.key === sortKey;
+  const Icon = active ? (sort.dir === 'asc' ? ChevronUp : ChevronDown) : ChevronsUpDown;
+  return (
+    <TH align={align} className={cn('p-0', className)}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+        className={cn(
+          'flex h-8 w-full items-center gap-1 px-3 text-2xs font-semibold uppercase tracking-wide',
+          'text-text-subtle hover:text-text focus-visible:outline-none focus-visible:ring-2',
+          'focus-visible:ring-ring focus-visible:ring-inset',
+          align === 'right' && 'flex-row-reverse text-right',
+          align === 'center' && 'justify-center',
+        )}
+      >
+        {children}
+        <Icon className={cn('size-3 shrink-0', !active && 'opacity-40')} />
+      </button>
+    </TH>
   );
 }
 

@@ -14,7 +14,8 @@ import { mayReversePayments } from '@/components/survey/ReversePaymentDialog';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
-import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
+import { Table, TableWrap, THead, TBody, TR, TH, TD, SortableTH } from '@/components/ui/Table';
+import { useSort } from '@/lib/useSort';
 import { Paged } from '@/components/ui/Paged';
 import { Badge } from '@/components/ui/Badge';
 import { NativeSelect } from '@/components/ui/Select';
@@ -2463,6 +2464,18 @@ function Villages({
    * selection is intersected with the visible rows on every render, so what
    * the bar says is selected is always what is on screen.
    */
+  const { sorted: sortedRows, sort, onSort } = useSort(
+    rows,
+    (v, key: 'village' | 'district' | 'mandal' | 'extent' | 'surveyed') => {
+      switch (key) {
+        case 'village': return String(v.village_name ?? '');
+        case 'district': return String(v.district_name ?? '');
+        case 'mandal': return String(v.mandal_name ?? '');
+        case 'extent': return Number(v.total_extent_ac ?? 0);
+        case 'surveyed': return surveyedExtent(v, measures as any);
+      }
+    },
+  );
   const visibleIds = rows.map((v) => String(v.id));
   const selectedHere = visibleIds.filter((id) => picked.has(id));
   const allPicked = visibleIds.length > 0 && selectedHere.length === visibleIds.length;
@@ -2654,8 +2667,8 @@ function Villages({
 
       {/* Capped height: the horizontal scrollbar for a twelve-column table
           has to be reachable without scrolling past a thousand villages. */}
-      <Paged rows={rows} noun="villages"
-        focusIndex={open ? rows.findIndex((v) => String(v.id) === open) : -1}>
+      <Paged rows={sortedRows} noun="villages"
+        focusIndex={open ? sortedRows.findIndex((v) => String(v.id) === open) : -1}>
         {(shown, offset) => (
       <TableWrap tall>
         <Table>
@@ -2689,9 +2702,9 @@ function Villages({
                   rather than the underlying record, which is what somebody
                   reading the screen is counting. */}
               <TH className="text-right">#</TH>
-              <TH>Village and code</TH>
-              <TH>District</TH>
-              <TH>Mandal</TH>
+              <SortableTH sortKey="village" sort={sort} onSort={onSort}>Village and code</SortableTH>
+              <SortableTH sortKey="district" sort={sort} onSort={onSort}>District</SortableTH>
+              <SortableTH sortKey="mandal" sort={sort} onSort={onSort}>Mandal</SortableTH>
               {/*
                 * Two numbers, not one.
                 *
@@ -2700,12 +2713,12 @@ function Villages({
                 * They differ, sometimes a lot, and that difference is the work
                 * remaining — showing only one of them hides it.
                 */}
-              <TH className="text-right">Extent</TH>
+              <SortableTH sortKey="extent" sort={sort} onSort={onSort} align="right">Extent</SortableTH>
               {/* The revenue record is in acres and every government letter
                   is in square kilometres. Carrying both stops the conversion
                   being done by hand, differently each time. */}
               <TH className="text-right">Extent (km²)</TH>
-              <TH className="text-right">Surveyed</TH>
+              <SortableTH sortKey="surveyed" sort={sort} onSort={onSort} align="right">Surveyed</SortableTH>
               <TH>Where it has got to</TH>
               {/* What has been claimed, beside where the work has got to:
                   they move apart, and the gap between them is money sitting
