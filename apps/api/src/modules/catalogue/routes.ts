@@ -13,6 +13,7 @@ import {
 } from "@silverline/shared";
 import { buildAuthenticate, requirePermission } from "../../common/auth.js";
 import { actor, mutate, version } from "../../common/domain.js";
+import { VERSION_HEADER } from "../../common/ifMatch.js";
 
 /**
  * §077 -- the catalogue, and what was agreed for a project.
@@ -129,7 +130,13 @@ export async function registerCatalogueRoutes(
         const before = existing.rows[0] as Record<string, unknown>;
         // Optimistic concurrency when the caller holds a version; callers that
         // predate it still get the row lock, which is what keeps fields safe.
-        if (req.headers["if-match"] !== undefined) version(req, before as { version: number });
+        // The web client sends X-Record-Version, not If-Match (Vercel's edge
+        // mangles If-Match -- see common/ifMatch.ts) -- checking only
+        // "if-match" here meant this never actually ran for a real request,
+        // and concurrent edits clobbered each other with no 409.
+        if (req.headers[VERSION_HEADER] !== undefined || req.headers["if-match"] !== undefined) {
+          version(req, before as { version: number });
+        }
         const next = { ...before, ...(input ?? {}), ...(archiving ? { status: body.status } : {}) };
         return (await db.query(
           `UPDATE catalogue_items
