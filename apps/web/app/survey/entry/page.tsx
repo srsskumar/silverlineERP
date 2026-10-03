@@ -324,7 +324,7 @@ export default function SurveyEntryPage() {
               <option key={p.id} value={p.id}>{p.name}</option>
             ))}
           </NativeSelect>
-          <label className="flex items-center gap-1.5 text-xs text-text-muted">
+          <label className="flex items-center gap-2 text-xs text-text-muted">
             Date
             <Input type="date" value={date} max={today} onChange={(e) => setDate(e.target.value)} />
           </label>

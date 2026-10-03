@@ -311,12 +311,12 @@ export default function SurveyPage() {
             )) : null}
           </div>
 
-          <label className="flex items-center gap-1.5 text-xs text-text-muted">
+          <label className="flex items-center gap-2 text-xs text-text-muted">
             From
             <Input type="date" value={range.from}
               onChange={(e) => setRange({ ...range, from: e.target.value })} />
           </label>
-          <label className="flex items-center gap-1.5 text-xs text-text-muted">
+          <label className="flex items-center gap-2 text-xs text-text-muted">
             to
             <Input type="date" value={range.to}
               onChange={(e) => setRange({ ...range, to: e.target.value })} />
@@ -2761,7 +2761,7 @@ function Villages({
                         */}
                       {v.village_code ? (
                         <span
-                          className="ml-1.5 whitespace-nowrap rounded bg-surface-sunken px-1 py-0.5 font-mono text-2xs text-text-muted"
+                          className="ml-1 whitespace-nowrap rounded bg-surface-sunken px-1 py-0.5 font-mono text-2xs text-text-muted"
                           title="The revenue department's village code. Reconciliation is done on codes, not names — two villages with the same name in one district is ordinary."
                         >
                           {v.village_code}
@@ -3462,7 +3462,7 @@ function ControlList({
           {mandals.map((m) => <option key={m} value={m}>{m}</option>)}
         </NativeSelect>
         {flagged > 0 ? (
-          <label className="flex items-center gap-1.5 text-2xs text-text-muted">
+          <label className="flex items-center gap-2 text-2xs text-text-muted">
             <input type="checkbox" checked={onlyOdd}
               onChange={(e) => setOnlyOdd(e.target.checked)} />
             Only the {flagged} that look wrong
@@ -3701,7 +3701,7 @@ function Summary({ projectId, projectName }: { projectId: string; projectName: s
             <option key={st} value={st}>{STAGE_STATE_LABELS[st] ?? st}</option>
           ))}
         </NativeSelect>
-        <label className="flex items-center gap-1.5 text-2xs text-text-muted"
+        <label className="flex items-center gap-2 text-2xs text-text-muted"
           title="Villages where ground truthing is finished and the surveyed extent differs from the revenue record">
           <input type="checkbox" checked={varyOn}
             onChange={(e) => setVaryOn(e.target.checked)} />
