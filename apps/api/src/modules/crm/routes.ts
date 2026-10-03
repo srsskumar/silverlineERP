@@ -224,6 +224,7 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
       data: await mutate(pool, req, 'contact.update', 'contact', async db => {
         const current = await inOrg(db, 'contacts', id, u.orgId, true);
         version(req, current as { version: number });
+        if (input.client_id) await inOrg(db, 'clients', String(input.client_id), u.orgId);
         const keys = Object.keys(input);
         const sets = keys.map((k, i) => `${k} = $${i + 3}`).join(',');
         return (await db.query(
@@ -284,21 +285,30 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
     };
   });
 
+  /** Every foreign-key field a lead can carry, scoped to the caller's own org. */
+  async function assertLeadRefsInOrg(
+    db: Pool | PoolClient, orgId: string, input: Record<string, unknown>,
+  ): Promise<void> {
+    if (input.client_id) await inOrg(db, 'clients', String(input.client_id), orgId);
+    if (input.contact_id) await inOrg(db, 'contacts', String(input.contact_id), orgId);
+    if (input.owner_id) await inOrg(db, 'users', String(input.owner_id), orgId);
+    // Scoped to the tenant like every other reference: the column's own
+    // foreign key only proves the row exists somewhere.
+    if (input.project_category_id) {
+      await inOrg(db, 'project_categories', String(input.project_category_id), orgId);
+    }
+    if (input.project_type_id) {
+      const t = await db.query(
+        'SELECT 1 FROM project_types WHERE id = $1::uuid AND org_id = $2',
+        [input.project_type_id, orgId]);
+      if (!t.rowCount) fail('NOT_FOUND', 'Project type not found', 404);
+    }
+  }
+
   app.post('/api/v1/leads', { preHandler: guard('lead.manage') }, async (req, reply) => {
     const u = actor(req), input = parse(leadSchema, req.body) as Record<string, unknown>;
     const row = await mutate(pool, req, 'lead.create', 'lead', async db => {
-      if (input.client_id) await inOrg(db, 'clients', String(input.client_id), u.orgId);
-      // Scoped to the tenant like every other reference: the column's own
-      // foreign key only proves the row exists somewhere.
-      if (input.project_category_id) {
-        await inOrg(db, 'project_categories', String(input.project_category_id), u.orgId);
-      }
-      if (input.project_type_id) {
-        const t = await db.query(
-          'SELECT 1 FROM project_types WHERE id = $1::uuid AND org_id = $2',
-          [input.project_type_id, u.orgId]);
-        if (!t.rowCount) fail('NOT_FOUND', 'Project type not found', 404);
-      }
+      await assertLeadRefsInOrg(db, u.orgId, input);
       const keys = Object.keys(input), values = [u.orgId, u.id, ...Object.values(input)];
       const created = (await db.query(
         `INSERT INTO leads(org_id, created_by, ${keys.join(',')})
@@ -319,6 +329,7 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
         const current = await inOrg(db, 'leads', id, u.orgId, true);
         version(req, current as { version: number });
         if (current.status === 'CLOSED') fail('LEAD_CLOSED', 'This lead is closed and can no longer be edited');
+        await assertLeadRefsInOrg(db, u.orgId, input);
         const keys = Object.keys(input);
         const sets = keys.map((k, i) => `${k} = $${i + 3}`).join(',');
         return (await db.query(
