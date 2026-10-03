@@ -25,7 +25,16 @@
 
     --text: 222 24% 12%;
     --text-muted: 217 12% 42%;
-    --text-subtle: 217 11% 58%;
+    /*
+     * Was 58% lightness — computed contrast on this app's light surfaces
+     * (white/near-white; everything here is light) is ~3.2:1, below WCAG
+     * AA's 4.5:1 for normal text. Confirmed live on multiple pages this
+     * session. 45% clears AA with margin (~5:1) while staying visibly
+     * lighter than --text-muted (42%), so the two tiers stay distinct.
+     * Dark mode's own --text-subtle below was already fine (~4.7:1,
+     * computed) and is untouched.
+     */
+    --text-subtle: 217 11% 45%;
     --text-inverse: 0 0% 100%;
 
     /* Brand — actions and focus only. */
