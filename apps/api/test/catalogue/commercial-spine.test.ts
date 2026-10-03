@@ -332,7 +332,8 @@ describe("§8.6/§8.11 eligibility gate", () => {
     const tender = await tenderAtInProgress(client.id);
     const item = (await post(w.admin, `/api/v1/tenders/${tender.id}/eligibility`,
       { requirement_name: "ISO certificate", is_required: true })).data;
-    await patch(w.admin, `/api/v1/tenders/${tender.id}/eligibility/${item.id}`, { item_status: "READY" });
+    await patch({ ...w.admin, ...(await ifMatchFor("tender_eligibility_items", item.id)) },
+      `/api/v1/tenders/${tender.id}/eligibility/${item.id}`, { item_status: "READY" });
 
     const res = await post({ ...w.admin, ...(await ifMatchFor("tenders", tender.id)) },
       `/api/v1/tenders/${tender.id}/status`, { status: "SUBMITTED" });

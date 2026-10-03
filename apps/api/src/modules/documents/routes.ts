@@ -82,6 +82,11 @@ export async function registerDocumentRoutes(
     LEFT JOIN documents s ON s.supersedes_id = d.id AND NOT s.pending_deletion
     LEFT JOIN users u ON u.id = d.created_by`;
 
+  /** The full joined row by id, for re-presenting after a mutation. */
+  async function fullRow(db: Pool | PoolClient, id: string): Promise<Record<string, any>> {
+    return (await db.query(`${SELECT} WHERE d.id = $1`, [id])).rows[0];
+  }
+
   /** Attach the derived state, and withhold what the reader may not see. */
   function present(
     row: Record<string, any>, asOf: string, canSeeConfidential: boolean,
@@ -319,10 +324,28 @@ export async function registerDocumentRoutes(
   app.patch('/api/v1/documents/:id', { preHandler: guard('document.manage') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
     const input = parse(documentPatchSchema, req.body);
+    const canSeeConfidential = u.permissions.includes('document.confidential');
     return {
       data: await mutate(pool, req, 'document.update', 'document', async db => {
         const row = await liveDocument(db, u.orgId, id, true);
         version(req, row as { version: number });
+
+        // The same field-level restriction GET already enforces on reading
+        // reference_number/notes applies to writing them: document.manage
+        // let any holder blind-overwrite (and, via the response below, read
+        // back) a confidential document's reference_number/notes with no
+        // document.confidential check at all.
+        const typeRow = (await db.query(
+          'SELECT confidential FROM document_types WHERE id = $1', [row.type_id])).rows[0];
+        if (typeRow?.confidential && !canSeeConfidential) {
+          for (const key of ['reference_number', 'notes'] as const) {
+            if (input[key] !== undefined) {
+              fail('FORBIDDEN',
+                'This document is confidential. document.confidential is needed to change its reference number or notes.',
+                403);
+            }
+          }
+        }
 
         // A superseded row is the record of what was in force before. Editing
         // it rewrites exactly the history a renewal exists to keep.
@@ -356,12 +379,14 @@ export async function registerDocumentRoutes(
             sets.push(`${key} = $${values.length}`);
           }
         }
-        if (!sets.length) return row;
-        values.push(u.id);
-        return (await db.query(
-          `UPDATE documents SET ${sets.join(', ')}, version = version + 1,
-             updated_at = now(), updated_by = $${values.length}
-           WHERE id = $1 RETURNING *`, values)).rows[0];
+        if (sets.length) {
+          values.push(u.id);
+          await db.query(
+            `UPDATE documents SET ${sets.join(', ')}, version = version + 1,
+               updated_at = now(), updated_by = $${values.length}
+             WHERE id = $1`, values);
+        }
+        return present(await fullRow(db, id), today(), canSeeConfidential);
       }),
     };
   });
@@ -377,6 +402,7 @@ export async function registerDocumentRoutes(
     async (req, reply) => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(documentRenewSchema, req.body);
+      const canSeeConfidential = u.permissions.includes('document.confidential');
       const row = await mutate(pool, req, 'document.renew', 'document', async db => {
         // Locked, but no version header is demanded: a renewal never modifies
         // the old row, it only inserts a successor. The lock serialises two
@@ -395,18 +421,24 @@ export async function registerDocumentRoutes(
         // is revised without ever expiring; a labour licence renewed without a
         // new expiry would read as compliant forever.
         const type = (await db.query(
-          'SELECT label, expiry_required FROM document_types WHERE id = $1', [old.type_id])).rows[0];
+          'SELECT label, expiry_required, confidential FROM document_types WHERE id = $1',
+          [old.type_id])).rows[0];
         if (type?.expiry_required && !input.expires_on) {
           fail('EXPIRY_REQUIRED',
             `A ${type.label} must record an expiry date — without one it reads as compliant forever`,
             422);
+        }
+        if (type?.confidential && !canSeeConfidential && input.reference_number !== undefined) {
+          fail('FORBIDDEN',
+            'This document is confidential. document.confidential is needed to set its reference number.',
+            403);
         }
         const validFrom = input.valid_from ?? iso(old.valid_from);
         if (validFrom && input.expires_on && input.expires_on < validFrom) {
           fail('VALIDATION_ERROR', 'A document cannot expire before it takes effect', 422);
         }
 
-        return (await db.query(
+        const created = (await db.query(
           `INSERT INTO documents(org_id, type_id, owner_type, owner_id, title, reference_number,
              issuing_authority, issued_on, valid_from, expires_on, revision, notes,
              source_type, source_id, supersedes_id, created_by, updated_by)
@@ -419,6 +451,10 @@ export async function registerDocumentRoutes(
           [id, input.reference_number ?? null, input.issued_on ?? null,
             input.valid_from ?? null, input.expires_on ?? null, input.revision ?? null,
             input.notes ?? null, u.id])).rows[0];
+        // The new row carries the old (possibly confidential) reference_number
+        // and notes forward even when this caller supplied neither -- present()
+        // withholds them from the response exactly as every read path does.
+        return present(await fullRow(db, created.id), today(), canSeeConfidential);
       });
       reply.code(201);
       return { data: row };
@@ -448,15 +484,17 @@ export async function registerDocumentRoutes(
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(legalHoldSchema, req.body);
       const action = input.legal_hold ? 'document.legalhold' : 'document.legalhold.release';
+      const canSeeConfidential = u.permissions.includes('document.confidential');
       return {
         data: await mutate(pool, req, action, 'document', async db => {
           const row = await liveDocument(db, u.orgId, id, true);
           version(req, row as { version: number });
-          return (await db.query(
+          await db.query(
             `UPDATE documents SET legal_hold = $2, legal_hold_reason = $3,
                version = version + 1, updated_at = now(), updated_by = $4
-             WHERE id = $1 RETURNING *`,
-            [id, input.legal_hold, input.legal_hold ? input.reason : null, u.id])).rows[0];
+             WHERE id = $1`,
+            [id, input.legal_hold, input.legal_hold ? input.reason : null, u.id]);
+          return present(await fullRow(db, id), today(), canSeeConfidential);
         }),
       };
     });
