@@ -64,9 +64,13 @@ export function deadlineLabel(days: number | null | undefined): string {
   if (days === -1) return 'Expired yesterday';
   if (days === 0) return 'Expires today';
   if (days === 1) return 'Expires tomorrow';
-  if (days < 45) return `${days} days left`;
-  if (days < 365) return `${Math.round(days / 30)} months left`;
-  return `${Math.round(days / 365)} years left`;
+  if (days < 45) return `${days} day${days === 1 ? '' : 's'} left`;
+  if (days < 365) {
+    const months = Math.round(days / 30);
+    return `${months} month${months === 1 ? '' : 's'} left`;
+  }
+  const years = Math.round(days / 365);
+  return `${years} year${years === 1 ? '' : 's'} left`;
 }
 
 /**

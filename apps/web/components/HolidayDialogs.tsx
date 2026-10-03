@@ -3,8 +3,9 @@
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createHoliday, updateHoliday, holidayEditPatchBody, type Holiday } from '@/lib/holidays';
+import { listOrgUnits, orgUnitDisplayName } from '@/lib/org';
 import { queryKeys } from '@/lib/query-keys';
 import {
   holidaySchema, holidayEditSchema, holidayStatusChangeSchema,
@@ -36,6 +37,7 @@ export function CreateHolidayDialog({ open, year, onClose }: { open: boolean; ye
     handleSubmit,
     reset,
     setError,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<HolidayInput>({
     resolver: zodResolver(holidaySchema),
@@ -49,9 +51,27 @@ export function CreateHolidayDialog({ open, year, onClose }: { open: boolean; ye
     }
   }, [open, year, reset]);
 
+  // Named, not typed in -- the same gap already fixed for Payments' party
+  // field this session. A blank scope_type reads as "Org-wide" with no id
+  // needed; once a type is chosen, the list is units of that type only.
+  const scopeType = watch('scope_type');
+  const scopeUnits = useQuery({
+    queryKey: ['org-units', 'for-holiday-scope', scopeType],
+    queryFn: async () => (await listOrgUnits({ type: scopeType, limit: 100 })).data,
+    enabled: !!scopeType,
+  });
+
   const mutation = useMutation({
+    // The API's own scope_id/scope_type are each z.string().optional() with
+    // no .nullable() -- an explicit null fails the same way a blank string
+    // used to on this form's own schema. Omitting the key entirely, not
+    // sending null for it, is what "not scoped" means to that schema.
     mutationFn: (v: HolidayInput) =>
-      createHoliday({ date: v.date, name: v.name, type: v.type, scope_type: v.scope_type, scope_id: v.scope_id || null }),
+      createHoliday({
+        date: v.date, name: v.name, type: v.type,
+        ...(v.scope_type ? { scope_type: v.scope_type } : {}),
+        ...(v.scope_id ? { scope_id: v.scope_id } : {}),
+      }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.holidays.all });
       onClose();
@@ -94,8 +114,13 @@ export function CreateHolidayDialog({ open, year, onClose }: { open: boolean; ye
                 ))}
               </NativeSelect>
             </FormField>
-            <FormField label="Scope ID" htmlFor="hol-scope-id" error={errors.scope_id?.message}>
-              <Input id="hol-scope-id" placeholder="optional" {...register('scope_id')} />
+            <FormField label="Scope" htmlFor="hol-scope-id" error={errors.scope_id?.message}>
+              <NativeSelect id="hol-scope-id" className="w-full" disabled={!scopeType} {...register('scope_id')}>
+                <option value="">{scopeType ? `Choose a ${scopeType}` : 'Pick a scope type first'}</option>
+                {(scopeUnits.data ?? []).map((u, _i, all) => (
+                  <option key={u.id} value={u.id}>{orgUnitDisplayName(u, all)}</option>
+                ))}
+              </NativeSelect>
             </FormField>
           </div>
           {submitError ? <ErrorCard title="Could not create holiday" error={submitError} /> : null}

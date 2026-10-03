@@ -246,7 +246,8 @@ export default function AuditPage() {
                 Older
               </Button>
               <span className="text-2xs text-text-subtle">
-                {rows.length} entries{pages.length > 0 ? `, page ${pages.length + 1}` : ''}
+                {rows.length} {rows.length === 1 ? 'entry' : 'entries'}
+                {pages.length > 0 ? `, page ${pages.length + 1}` : ''}
               </span>
             </div>
           ) : null}
