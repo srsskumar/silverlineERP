@@ -716,6 +716,7 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    const row=await inOrg(db,'assets',id,u.orgId,true);await assetAccess(req,id);version(req,row as {version:number});
    const edges:Record<string,string[]>={AVAILABLE:['DAMAGED','LOST'],ASSIGNED:['IN_USE','RETURNED','DAMAGED','LOST'],IN_USE:['RETURNED','DAMAGED','LOST'],RETURNED:['AVAILABLE','DAMAGED'],DAMAGED:['AVAILABLE','WRITTEN_OFF'],LOST:['RETURNED','WRITTEN_OFF'],WRITTEN_OFF:[]};
    if(!edges[row.status]?.includes(i.status))fail('INVALID_TRANSITION',`Cannot move ${row.status} to ${i.status}`,409);
+   if(i.returned_to_employee_id)await inOrg(db,'employees',i.returned_to_employee_id,u.orgId);
    /*
     * Closing the assignment records the *return*, and leaves the issue
     * condition alone.
