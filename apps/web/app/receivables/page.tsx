@@ -12,6 +12,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input } from '@/components/ui/Input';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Notice, Section, Stat } from '@/components/finance/Primitives';
@@ -80,25 +82,23 @@ export default function ReceivablesPage() {
         <Toolbar>
           <label className="flex items-center gap-2 text-xs text-text-muted">
             As at
-            <input
+            <Input
               type="date"
               value={asOf}
               onChange={(e) => setAsOf(e.target.value)}
-              className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
             />
           </label>
           <label className="flex items-center gap-2 text-xs text-text-muted">
             DSO window
-            <select
+            <NativeSelect
               value={periodDays}
               onChange={(e) => setPeriodDays(Number(e.target.value))}
-              className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
             >
               <option value={30}>30 days</option>
               <option value={90}>90 days</option>
               <option value={180}>180 days</option>
               <option value={365}>365 days</option>
-            </select>
+            </NativeSelect>
           </label>
         </Toolbar>
 
@@ -323,12 +323,11 @@ function Statement({ clientId, to }: { clientId: string; to: string }) {
   const fromPicker = (
     <label className="flex items-center gap-2 text-xs text-text-muted">
       From
-      <input
+      <Input
         type="date"
         value={from}
         max={to}
         onChange={(e) => setFrom(e.target.value)}
-        className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
       />
     </label>
   );

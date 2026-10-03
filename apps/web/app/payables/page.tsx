@@ -12,6 +12,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
+import { Input } from '@/components/ui/Input';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Notice, Section, Stat } from '@/components/finance/Primitives';
@@ -106,11 +107,10 @@ export default function PayablesPage() {
           {tab === 'ageing' ? (
             <label className="flex items-center gap-2 text-xs text-text-muted">
               As at
-              <input
+              <Input
                 type="date"
                 value={asOf}
                 onChange={(e) => setAsOf(e.target.value)}
-                className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
               />
             </label>
           ) : null}
@@ -370,12 +370,13 @@ function HoldButton({
     <div className="flex items-center justify-end gap-1">
       {/* A hold with no stated reason is indistinguishable from an oversight
           when somebody looks at it three weeks later. */}
-      <input
+      <Input
         autoFocus
+        aria-label="Why is it being held?"
         value={reason}
         onChange={(e) => setReason(e.target.value)}
         placeholder="Why is it being held?"
-        className="w-44 rounded-md border border-border bg-surface px-2 py-1 text-xs text-text"
+        className="w-44"
       />
       <Button
         type="button"
@@ -616,15 +617,12 @@ function RunForm({ onDone }: { onDone: () => void }) {
     onSuccess: (res: any) => { setExcluded(res?.data?.excluded ?? []); onDone(); },
   });
 
-  const field = 'w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
-
   return (
     <Card className="mt-3 space-y-3 p-4">
       <div className="grid gap-3 sm:grid-cols-3">
         <label className="space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">Run number</span>
-          <input
-            className={field}
+          <Input
             value={form.run_no}
             onChange={(e) => setForm({ ...form, run_no: e.target.value })}
             placeholder="PR-2026-09-01"
@@ -632,22 +630,22 @@ function RunForm({ onDone }: { onDone: () => void }) {
         </label>
         <label className="space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">Run date</span>
-          <input type="date" className={field} value={form.run_date}
+          <Input type="date" value={form.run_date}
             onChange={(e) => setForm({ ...form, run_date: e.target.value })} />
         </label>
         <label className="space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">Pay everything due through</span>
-          <input type="date" className={field} value={form.due_through}
+          <Input type="date" value={form.due_through}
             onChange={(e) => setForm({ ...form, due_through: e.target.value })} />
         </label>
         <label className="space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">Bank account</span>
-          <input className={field} value={form.bank_account}
+          <Input value={form.bank_account}
             onChange={(e) => setForm({ ...form, bank_account: e.target.value })} />
         </label>
         <label className="space-y-1 sm:col-span-2">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">Notes</span>
-          <input className={field} value={form.notes}
+          <Input value={form.notes}
             onChange={(e) => setForm({ ...form, notes: e.target.value })} />
         </label>
       </div>

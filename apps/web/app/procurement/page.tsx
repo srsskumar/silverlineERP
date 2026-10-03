@@ -12,6 +12,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input } from '@/components/ui/Input';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Field, Notice, RecordSheet, Section, StatusBadge, Stat } from '@/components/finance/Primitives';
@@ -126,7 +128,7 @@ export default function ProcurementPage() {
           </div>
 
           {tab === 'requisitions' || tab === 'orders' ? (
-            <select
+            <NativeSelect
               aria-label="Status"
               className="max-w-48"
               value={status}
@@ -139,7 +141,7 @@ export default function ProcurementPage() {
               ).map((s) => (
                 <option key={s} value={s}>{s.replaceAll('_', ' ').toLowerCase()}</option>
               ))}
-            </select>
+            </NativeSelect>
           ) : null}
         </Toolbar>
 
@@ -831,15 +833,15 @@ function RfqDetail({ id, onClose, onChanged }: { id: string; onClose: () => void
           {canManage && rfq.status !== 'AWARDED' && evaluations.length > 0 ? (
             <Section title="Award">
               <div className="grid gap-2 sm:grid-cols-2">
-                <select value={awardTo} onChange={(e) => setAwardTo(e.target.value)}>
+                <NativeSelect aria-label="Choose the vendor" value={awardTo} onChange={(e) => setAwardTo(e.target.value)}>
                   <option value="">Choose the vendor</option>
                   {evaluations.filter((e) => e.technicallyQualified).map((e) => (
                     <option key={String(e.vendorId)} value={String(e.vendorId)}>
                       {e.vendorName} — {money(e.landedCost)}{e.rank === 1 ? ' (L1)' : ''}
                     </option>
                   ))}
-                </select>
-                <input
+                </NativeSelect>
+                <Input
                   placeholder="Justification"
                   maxLength={2000}
                   value={reason}

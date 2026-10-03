@@ -12,6 +12,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input } from '@/components/ui/Input';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Field, Notice, RecordSheet, Section, StatusBadge, Stat } from '@/components/finance/Primitives';
@@ -102,7 +104,7 @@ export default function BillingPage() {
       <PageBody>
         <RequireDestination href="/billing">
         <Toolbar>
-          <select
+          <NativeSelect
             aria-label="Project"
             className="max-w-80"
             value={projectId}
@@ -111,7 +113,7 @@ export default function BillingPage() {
             {(projects.data ?? []).map((p) => (
               <option key={String(p.id)} value={String(p.id)}>{p.code} — {p.name}</option>
             ))}
-          </select>
+          </NativeSelect>
 
           <div className="flex rounded-md border border-border bg-surface p-0.5">
             {visible.map((t) => (
@@ -523,12 +525,13 @@ function Retention({ projectId }: { projectId: string }) {
         <Card className="p-4">
           <Section title="Release">
             <div className="grid gap-2 sm:grid-cols-3">
-              <input
+              <Input
                 type="number" min="0" max={releasable} step="0.01" placeholder="Amount"
+                aria-label="Amount"
                 value={amount} onChange={(e) => setAmount(e.target.value)}
               />
-              <input
-                className="sm:col-span-2" placeholder="Reason"
+              <Input
+                className="sm:col-span-2" placeholder="Reason" aria-label="Reason"
                 value={reason} onChange={(e) => setReason(e.target.value)}
               />
             </div>
@@ -815,12 +818,11 @@ function MeasuredProposal({ projectId }: { projectId: string }) {
       <Toolbar>
         <label className="flex items-center gap-1.5 text-xs text-text-muted">
           Measured up to
-          <input
+          <Input
             type="date"
             value={asOf}
             max={today}
             onChange={(e) => setAsOf(e.target.value)}
-            className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
           />
         </label>
         <span className="text-2xs text-text-subtle">
@@ -1024,7 +1026,6 @@ function BoqLinks({
     },
   });
 
-  const field = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
   const linked = new Set((links.data ?? []).map((l) => String(l.boq_item_id)));
 
   return (
@@ -1055,7 +1056,7 @@ function BoqLinks({
       <div className="flex flex-wrap items-end gap-2">
         <label className="flex flex-col gap-1 text-2xs text-text-muted">
           BOQ line
-          <select className={field} value={form.boq_item_id}
+          <NativeSelect value={form.boq_item_id}
             onChange={(e) => setForm({ ...form, boq_item_id: e.target.value })}>
             <option value="">Choose a line…</option>
             {(boq.data ?? [])
@@ -1065,11 +1066,11 @@ function BoqLinks({
                   {String(b.item_code)} — {String(b.description)} ({String(b.unit)})
                 </option>
               ))}
-          </select>
+          </NativeSelect>
         </label>
         <label className="flex flex-col gap-1 text-2xs text-text-muted">
           Measured by
-          <select className={field} value={form.measure_id}
+          <NativeSelect value={form.measure_id}
             onChange={(e) => setForm({ ...form, measure_id: e.target.value })}>
             <option value="">Choose a measure…</option>
             {(options.data?.measures ?? []).map((m) => (
@@ -1077,21 +1078,21 @@ function BoqLinks({
                 {String(m.label)} ({String(m.unit)})
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </label>
         <label className="flex flex-col gap-1 text-2xs text-text-muted">
           Only once finished
-          <select className={field} value={form.stage_id}
+          <NativeSelect value={form.stage_id}
             onChange={(e) => setForm({ ...form, stage_id: e.target.value })}>
             <option value="">Count it as soon as it is measured</option>
             {(options.data?.stages ?? []).map((s) => (
               <option key={String(s.id)} value={String(s.id)}>{String(s.label)}</option>
             ))}
-          </select>
+          </NativeSelect>
         </label>
         <label className="flex flex-col gap-1 text-2xs text-text-muted">
           Conversion
-          <input className={`${field} w-24`} value={form.factor} inputMode="decimal"
+          <Input className="w-24" value={form.factor} inputMode="decimal"
             onChange={(e) => setForm({ ...form, factor: e.target.value })} />
         </label>
         <Button type="button"

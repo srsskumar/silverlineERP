@@ -13,6 +13,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody, Toolbar, ToolbarSpacer } from '@/components/ui/Page';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input, Textarea } from '@/components/ui/Input';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Field, Notice, RecordSheet, Section, StatusBadge, Stat } from '@/components/finance/Primitives';
@@ -138,7 +140,7 @@ export default function ExpensesPage() {
         </div>
 
         <Toolbar>
-          <select
+          <NativeSelect
             aria-label="Status"
             className="max-w-44"
             value={status}
@@ -148,7 +150,7 @@ export default function ExpensesPage() {
             {['DRAFT', 'SUBMITTED', 'APPROVED', 'REJECTED', 'WITHDRAWN', 'REIMBURSED'].map((s) => (
               <option key={s} value={s}>{s.charAt(0) + s.slice(1).toLowerCase()}</option>
             ))}
-          </select>
+          </NativeSelect>
           <label className="flex items-center gap-1.5 text-xs text-text-muted">
             <input
               type="checkbox"
@@ -533,25 +535,28 @@ function ClaimDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
 
               {canReimburse && c.status === 'APPROVED' ? (
                 <div className="mt-3 grid gap-2 sm:grid-cols-5">
-                  <input
+                  <Input
                     className="sm:col-span-1"
                     type="number"
                     min="0"
                     step="0.01"
                     placeholder="Amount"
+                    aria-label="Amount"
                     value={payment.amount}
                     onChange={(e) => setPayment((p) => ({ ...p, amount: e.target.value }))}
                   />
-                  <input
+                  <Input
                     type="date"
+                    aria-label="Paid on"
                     value={payment.paid_on}
                     onChange={(e) => setPayment((p) => ({ ...p, paid_on: e.target.value }))}
                   />
-                  <select value={payment.mode} onChange={(e) => setPayment((p) => ({ ...p, mode: e.target.value }))}>
+                  <NativeSelect aria-label="Payment mode" value={payment.mode} onChange={(e) => setPayment((p) => ({ ...p, mode: e.target.value }))}>
                     {PAYMENT_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                  <input
+                  </NativeSelect>
+                  <Input
                     placeholder="UTR / cheque no"
+                    aria-label="UTR / cheque no"
                     value={payment.reference}
                     onChange={(e) => setPayment((p) => ({ ...p, reference: e.target.value }))}
                   />
@@ -574,19 +579,21 @@ function ClaimDetail({ id, onClose, onChanged }: { id: string; onClose: () => vo
 
           {['DRAFT', 'SUBMITTED', 'REJECTED'].includes(String(c.status)) ? (
             <Section title="Actions">
-              <textarea
-                className="w-full rounded-md border border-border bg-surface p-2 text-sm"
+              <Textarea
+                className="w-full"
                 rows={2}
                 maxLength={1000}
                 placeholder="Reason — required to reject or withdraw"
+                aria-label="Reason"
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
               />
               {excess > 0 && canOverride && c.status === 'SUBMITTED' ? (
-                <input
+                <Input
                   className="mt-2 w-full"
                   maxLength={1000}
                   placeholder="Why the excess is allowed (recorded against your name)"
+                  aria-label="Why the excess is allowed"
                   value={overrideReason}
                   onChange={(e) => setOverrideReason(e.target.value)}
                 />
@@ -745,15 +752,15 @@ function NewClaim({ onClose, onCreated }: { onClose: () => void; onCreated: (id:
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-xs text-text-muted">
           Claim number
-          <input className="mt-1 w-full" value={claimNo} maxLength={50} onChange={(e) => setClaimNo(e.target.value)} />
+          <Input className="mt-1 w-full" value={claimNo} maxLength={50} onChange={(e) => setClaimNo(e.target.value)} />
         </label>
         <label className="text-xs text-text-muted">
           Claim date
-          <input type="date" className="mt-1 w-full" value={claimDate} onChange={(e) => setClaimDate(e.target.value)} />
+          <Input type="date" className="mt-1 w-full" value={claimDate} onChange={(e) => setClaimDate(e.target.value)} />
         </label>
         <label className="text-xs text-text-muted sm:col-span-2">
           Purpose
-          <input
+          <Input
             className="mt-1 w-full"
             maxLength={1000}
             placeholder="Site visit to the Mandal office"
@@ -763,12 +770,12 @@ function NewClaim({ onClose, onCreated }: { onClose: () => void; onCreated: (id:
         </label>
         <label className="text-xs text-text-muted sm:col-span-2">
           Project (needed for any billable line)
-          <select className="mt-1 w-full" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+          <NativeSelect className="mt-1 w-full" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
             <option value="">Not charged to a project</option>
             {(projects.data ?? []).map((p) => (
               <option key={String(p.id)} value={String(p.id)}>{p.code} — {p.name}</option>
             ))}
-          </select>
+          </NativeSelect>
         </label>
       </div>
 
@@ -787,44 +794,50 @@ function NewClaim({ onClose, onCreated }: { onClose: () => void; onCreated: (id:
             return (
               <div key={i} className="rounded-lg border border-border bg-surface-sunken p-3">
                 <div className="grid gap-2 sm:grid-cols-4">
-                  <select value={l.category} onChange={(e) => set(i, { category: e.target.value })}>
+                  <NativeSelect aria-label="Category" value={l.category} onChange={(e) => set(i, { category: e.target.value })}>
                     {Object.entries(EXPENSE_CATEGORY_LABELS).map(([code, label]) => (
                       <option key={code} value={code}>{label}</option>
                     ))}
-                  </select>
-                  <input type="date" value={l.expense_date} onChange={(e) => set(i, { expense_date: e.target.value })} />
-                  <input
+                  </NativeSelect>
+                  <Input type="date" aria-label="Expense date" value={l.expense_date} onChange={(e) => set(i, { expense_date: e.target.value })} />
+                  <Input
                     className="sm:col-span-2"
                     placeholder="Description"
+                    aria-label="Description"
                     maxLength={500}
                     value={l.description}
                     onChange={(e) => set(i, { description: e.target.value })}
                   />
-                  <input
+                  <Input
                     type="number" min="0" step="0.01" placeholder="Amount"
+                    aria-label="Amount"
                     value={l.amount}
                     onChange={(e) => set(i, { amount: e.target.value })}
                   />
                   {isPerDiem ? (
-                    <input
+                    <Input
                       type="number" min="0" step="1" placeholder="Days"
+                      aria-label="Days"
                       value={l.units}
                       onChange={(e) => set(i, { units: e.target.value })}
                     />
                   ) : (
                     <>
-                      <input
+                      <Input
                         placeholder="Vendor"
+                        aria-label="Vendor"
                         value={l.vendor_name}
                         onChange={(e) => set(i, { vendor_name: e.target.value })}
                       />
-                      <input
+                      <Input
                         placeholder="Invoice no"
+                        aria-label="Invoice no"
                         value={l.invoice_no}
                         onChange={(e) => set(i, { invoice_no: e.target.value })}
                       />
-                      <input
+                      <Input
                         placeholder="Vendor GSTIN"
+                        aria-label="Vendor GSTIN"
                         maxLength={15}
                         value={l.vendor_gstin}
                         onChange={(e) => set(i, { vendor_gstin: e.target.value })}
@@ -835,9 +848,10 @@ function NewClaim({ onClose, onCreated }: { onClose: () => void; onCreated: (id:
 
                 <div className="mt-2 flex flex-wrap items-center gap-3">
                   {!isPerDiem ? (
-                    <input
+                    <Input
                       className="max-w-32"
                       type="number" min="0" step="0.01" placeholder="GST amount"
+                      aria-label="GST amount"
                       value={l.gst_amount}
                       onChange={(e) => set(i, { gst_amount: e.target.value })}
                     />

@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Input } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { FormField } from '@/components/ui/FormField';
 import { Spinner } from '@/components/ui/Spinner';
 import { BulkEditBar } from '@/components/BulkEditBar';
@@ -95,7 +96,7 @@ function EmployeesTable() {
           <Input id="emp-search" placeholder="emp_no, name…" value={q} onChange={(e) => setQ(e.target.value)} />
         </FormField>
         <FormField label="Status" htmlFor="emp-status" className="sm:w-40">
-          <select
+          <NativeSelect
             id="emp-status"
             className="w-full"
             value={status}
@@ -110,10 +111,10 @@ function EmployeesTable() {
                 {s}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </FormField>
         <FormField label="District" htmlFor="emp-district" className="sm:w-48">
-          <select
+          <NativeSelect
             id="emp-district"
             className="w-full"
             value={districtId}
@@ -125,7 +126,7 @@ function EmployeesTable() {
                 {d.name}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </FormField>
         <Link href="/employees/new">
           <Button>New employee</Button>
