@@ -1087,14 +1087,18 @@ async function seedOperations(db: PoolClient, ctx: Ctx): Promise<void> {
     const open = i % 3 === 0;
     await db.query(
       `INSERT INTO asset_assignments (org_id,asset_id,employee_id,project_id,due_date,issued_at,
-         returned_at,condition,reason,created_by)
-       VALUES ($1,$2::uuid,$3::uuid,$4::uuid,$5::date,$6,$7,$8,$9,$10::uuid)`,
+         returned_at,condition,return_condition,reason,created_by)
+       VALUES ($1,$2::uuid,$3::uuid,$4::uuid,$5::date,$6,$7,$8,$9,$10,$11::uuid)`,
       [
         orgId, assets[i]!, pick(employees, i),
         ctxProjects.length ? pick(ctxProjects, i) : null,
         daysAhead(30 + i), hoursAgo(200 + i),
         open ? null : hoursAgo(20 + i),
         pick(["GOOD", "FAIR", "WORN"] as const, i),
+        // The constraint added in 057_asset_register.sql requires a
+        // return_condition whenever returned_at is set -- a closed
+        // assignment with nothing said about the state it came back in.
+        open ? null : pick(["GOOD", "FAIR", "WORN"] as const, i),
         "Issued for the season's work at " + pick(SITES, i),
         pick(users, i),
       ],
