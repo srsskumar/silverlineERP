@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { listOrgUnits } from '@/lib/org';
+import { listOrgUnits, orgUnitDisplayName } from '@/lib/org';
 import { queryKeys } from '@/lib/query-keys';
 import { NativeSelect } from '@/components/ui/Select';
 
@@ -71,9 +71,9 @@ export function CascadingLocationSelect({
           }
         >
           <option value="">Select district</option>
-          {(districtsQuery.data?.data ?? []).map((u) => (
+          {(districtsQuery.data?.data ?? []).map((u, _i, all) => (
             <option key={u.id} value={u.id}>
-              {u.name}
+              {orgUnitDisplayName(u, all)}
             </option>
           ))}
         </NativeSelect>
@@ -93,9 +93,9 @@ export function CascadingLocationSelect({
           }
         >
           <option value="">{districtId ? 'Select mandal' : 'Pick a district first'}</option>
-          {(mandalsQuery.data?.data ?? []).map((u) => (
+          {(mandalsQuery.data?.data ?? []).map((u, _i, all) => (
             <option key={u.id} value={u.id}>
-              {u.name}
+              {orgUnitDisplayName(u, all)}
             </option>
           ))}
         </NativeSelect>
@@ -113,9 +113,9 @@ export function CascadingLocationSelect({
           onChange={(e) => onChange({ district_id: districtId, mandal_id: mandalId, village_id: e.target.value || undefined, site_id: undefined })}
         >
           <option value="">{mandalId ? 'Select village' : 'Pick a mandal first'}</option>
-          {(villagesQuery.data?.data ?? []).map((u) => (
+          {(villagesQuery.data?.data ?? []).map((u, _i, all) => (
             <option key={u.id} value={u.id}>
-              {u.name}
+              {orgUnitDisplayName(u, all)}
             </option>
           ))}
         </NativeSelect>
@@ -138,9 +138,9 @@ export function CascadingLocationSelect({
           })}
         >
           <option value="">{villageId ? 'Select site' : 'Pick a village first'}</option>
-          {(sitesQuery.data?.data ?? []).map((u) => (
+          {(sitesQuery.data?.data ?? []).map((u, _i, all) => (
             <option key={u.id} value={u.id}>
-              {u.name}
+              {orgUnitDisplayName(u, all)}
             </option>
           ))}
         </NativeSelect>

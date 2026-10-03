@@ -38,6 +38,24 @@ export async function listOrgUnits(params: ListOrgUnitsParams = {}): Promise<Cur
   return { ...normalizeCursorPage<OrgUnit>(raw.body), request_id: raw.requestId };
 }
 
+/**
+ * A label safe to put in a picker, for a list that may hold two units with
+ * the same name.
+ *
+ * Nothing stops two districts (or two mandals) being named the same --
+ * imported geography is matched by code, not name, so a code that doesn't
+ * match an existing row creates a second row with a name that does. A
+ * picker built straight from the list then offers "Chittoor" twice with no
+ * way to tell them apart. This appends the code, only to the names that
+ * actually collide, so the ordinary case (every name unique) is untouched.
+ */
+export function orgUnitDisplayName<T extends { name: string; code: string }>(
+  unit: T, all: T[],
+): string {
+  const collides = all.some((u) => u !== unit && u.name === unit.name);
+  return collides ? `${unit.name} (${unit.code})` : unit.name;
+}
+
 export async function fetchAllOrgUnits(
   params: Omit<ListOrgUnitsParams, 'cursor'> = {},
   maxPages = 10,

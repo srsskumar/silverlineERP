@@ -18,7 +18,7 @@ import { BulkEditBar } from '@/components/BulkEditBar';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { PERMISSIONS } from '@/lib/permissions';
 import { EMPLOYEE_FILTER_STATUSES, listEmployees } from '@/lib/employees';
-import { listOrgUnits } from '@/lib/org';
+import { listOrgUnits, orgUnitDisplayName } from '@/lib/org';
 import { queryKeys } from '@/lib/query-keys';
 import { displayMasked, displayEmployeeName } from '@/lib/masking';
 
@@ -121,9 +121,9 @@ function EmployeesTable() {
             onChange={(e) => setDistrictId(e.target.value)}
           >
             <option value="">All districts</option>
-            {(districtsQuery.data?.data ?? []).map((d) => (
+            {(districtsQuery.data?.data ?? []).map((d, _i, all) => (
               <option key={d.id} value={d.id}>
-                {d.name}
+                {orgUnitDisplayName(d, all)}
               </option>
             ))}
           </NativeSelect>
