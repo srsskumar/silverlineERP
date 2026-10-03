@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { z } from 'zod';
-import { automationSchema,webhookSchema } from '@silverline/shared';
+import { automationSchema,webhookSchema,assertAutomationActionValues } from '@silverline/shared';
 import { buildAuthenticate,requirePermission } from '../../common/auth.js';
 import { actor,parse,page,inOrg,mutate,version,fail,projectAccess } from '../../common/domain.js';
 import { encryptPii,decryptPii } from '../../common/crypto.js';
@@ -16,6 +16,7 @@ export async function registerAutomationRoutes(app:FastifyInstance,opts:{pool:Po
  });
  app.post('/api/v1/automation-rules',{preHandler:guard('automation.manage')},async(req,reply)=>{
   const i=parse(automationSchema,req.body),u=actor(req);
+  assertAutomationActionValues(i.actions);
   if(i.project_id)await projectAccess(pool,req,i.project_id);else if(!u.permissions.includes('admin.configure')||!resolveScopes(u.scopes).global)fail('FORBIDDEN','Only administrators may create organization rules',403);
   const permissions:Record<string,string>={status:'task.transition',assign:'task.assign',label:'task.update',comment:'task.comment',notify:'automation.manage',webhook:'webhook.manage'};
   for(const a of i.actions)if(!u.permissions.includes(permissions[a.type]))fail('FORBIDDEN',`Missing ${permissions[a.type]} for this action`,403);
@@ -32,6 +33,7 @@ export async function registerAutomationRoutes(app:FastifyInstance,opts:{pool:Po
  app.patch('/api/v1/automation-rules/:id',{preHandler:guard('automation.manage')},async req=>{
   const id=(req.params as {id:string}).id,u=actor(req),old=await inOrg(pool,'automation_rules',id,u.orgId);
   const i=parse(automationSchema.partial().strict(),req.body),config=parse(automationSchema,{...old,...i});
+  assertAutomationActionValues(config.actions);
   if(old.project_id)await projectAccess(pool,req,old.project_id);else if(!u.permissions.includes('admin.configure')||!resolveScopes(u.scopes).global)fail('FORBIDDEN','Administrator permission required',403);
   if(config.project_id)await projectAccess(pool,req,config.project_id);else if(!u.permissions.includes('admin.configure')||!resolveScopes(u.scopes).global)fail('FORBIDDEN','Administrator permission required',403);
   const permissions:Record<string,string>={status:'task.transition',assign:'task.assign',label:'task.update',comment:'task.comment',notify:'automation.manage',webhook:'webhook.manage'};

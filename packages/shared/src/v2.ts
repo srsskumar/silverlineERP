@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { dateStringSchema } from './s1.js';
 import { isValidUdyam, isValidGstRate } from './india.js';
 import type { RoleCode } from './rbac.js';
+import { ApiError } from './errors.js';
 
 export const V2_PERMISSIONS = ['inventory.read','inventory.manage','asset.read','asset.manage','cycle.read','cycle.manage','custom_field.manage','automation.read','automation.manage','webhook.manage','analytics.read','admin.configure'] as const;
 const planning = ['cycle.read','cycle.manage','custom_field.manage','automation.read','automation.manage','analytics.read'];
@@ -186,4 +187,21 @@ export const assetAuditSchema = z.object({name:text,expected_ids:z.array(uuid).m
 export const cycleSchema = z.object({project_id:uuid,name:text,start_date:dateStringSchema,end_date:dateStringSchema,goal:z.string().max(2000).optional(),rollover:z.enum(['NEXT','BACKLOG']).default('NEXT')}).refine(x=>x.end_date>=x.start_date,{message:'End must follow start',path:['end_date']});
 export const customFieldSchema = z.object({project_id:uuid.optional(),project_type_id:uuid.optional(),field_key:z.string().regex(/^[a-z][a-z0-9_]{0,49}$/),name:text,field_type:z.enum(['text','number','date','select','multi_select','user','boolean']),options:z.array(text).max(100).default([]),required:z.boolean().default(false)}).refine(v=>Boolean(v.project_id)!==Boolean(v.project_type_id),'Choose one project or project type');
 export const automationSchema = z.object({name:text,project_id:uuid.nullable().optional(),trigger:z.enum(['task.create','task.status','task.assign','sla.at_risk','sla.breached','task.due','cycle.close']),conditions:z.array(z.object({field:z.enum(['status','priority','assignee_id','project_id','label_id','assignee_role']),value:text})).max(10).default([]),actions:z.array(z.object({type:z.enum(['status','assign','label','comment','notify','webhook']),value:text})).min(1).max(10),active:z.boolean().default(true)});
+/**
+ * notify/webhook treat an action's value as a recipient/subscription id at
+ * dispatch time (inOrg lookup) -- a malformed value there is a Postgres
+ * uuid-cast error surfacing as a 500, not the clean validation error every
+ * other body-shape mistake gets. A plain function, not chained onto
+ * automationSchema itself: zod's ZodEffects (what .superRefine() returns)
+ * does not support .partial() the way the PATCH route needs to.
+ */
+export function assertAutomationActionValues(actions: { type: string; value: string }[]): void {
+  for (const a of actions) {
+    if ((a.type === 'notify' || a.type === 'webhook') && !uuid.safeParse(a.value).success) {
+      throw new ApiError({ status: 422, code: 'VALIDATION_ERROR', message: 'Validation failed',
+        fieldErrors: [{ field: 'actions',
+          message: `A ${a.type} action's value must be the ${a.type === 'notify' ? "recipient's" : "subscription's"} id` }] });
+    }
+  }
+}
 export const webhookSchema = z.object({name:text,url:z.string().url().max(2048).refine(v=>new URL(v).protocol==='https:','HTTPS is required'),events:z.array(text).min(1).max(30),active:z.boolean().default(true)});
