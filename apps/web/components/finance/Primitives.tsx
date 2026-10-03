@@ -134,7 +134,7 @@ export function Stat({
 }) {
   return (
     <div className="rounded-lg border border-border bg-surface px-3 py-2.5">
-      <p className="flex items-center gap-1 text-2xs uppercase tracking-wide text-text-subtle">
+      <p className="flex items-center gap-1 text-2xs uppercase tracking-wide text-text-muted">
         {label}
         {explain ? <InfoHint label={`What ${label.toLowerCase()} means`}>{explain}</InfoHint> : null}
       </p>
