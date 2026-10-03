@@ -570,6 +570,7 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
     if (input.project_id) await projectAccess(pool, req, input.project_id);
     const row = await mutate(pool, req, 'rfq.create', 'rfq', async db => {
       await assertItemsInOrg(db, u.orgId, input.lines.map(l => l.item_id));
+      if (input.requisition_id) await inOrg(db, 'purchase_requisitions', input.requisition_id, u.orgId);
       for (const vendorId of input.vendor_ids) {
         const vendor = await inOrg(db, 'vendors', vendorId, u.orgId);
         // Inviting a blacklisted vendor wastes everyone's time and invites the
@@ -637,7 +638,12 @@ export async function registerProcurementRoutes(app: FastifyInstance, opts: { po
         }
         throw error;
       }
+      const ownLines = await db.query('SELECT id FROM rfq_lines WHERE rfq_id = $1', [id]);
+      const ownLineIds = new Set(ownLines.rows.map(r => String(r.id)));
       for (const line of input.lines) {
+        if (!ownLineIds.has(line.rfq_line_id)) {
+          fail('VALIDATION_ERROR', 'A quote line must reference a line on this RFQ');
+        }
         await db.query(
           `INSERT INTO vendor_quote_lines(org_id, quote_id, rfq_line_id, unit_rate,
              discount_pct, gst_rate_pct, remarks)
