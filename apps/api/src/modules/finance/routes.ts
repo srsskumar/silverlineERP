@@ -258,6 +258,11 @@ export async function registerFinanceRoutes(app: FastifyInstance, opts: { pool: 
     if (input.project_id) await projectAccess(pool, req, input.project_id);
     const row = await mutate(pool, req, 'payment.create', 'payment', async db => {
       await guardPeriod(db, req, input.paid_on);
+      if (input.party_id) {
+        const table = input.party_type === 'VENDOR' ? 'vendors'
+          : input.party_type === 'EMPLOYEE' ? 'employees' : 'clients';
+        await inOrg(db, table, input.party_id, u.orgId);
+      }
       const clash = await db.query(
         'SELECT 1 FROM payments WHERE org_id = $1 AND payment_no = $2', [u.orgId, input.payment_no]);
       if (clash.rowCount) fail('DUPLICATE_PAYMENT_NO', `Payment ${input.payment_no} already exists`, 409);
