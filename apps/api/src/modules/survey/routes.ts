@@ -800,7 +800,9 @@ export async function registerSurveyRoutes(
       started_on?: string | null; target_completion_on?: string | null },
   ): Promise<string> {
     let workspaceId = input.workspace_id ?? null;
-    if (!workspaceId) {
+    if (workspaceId) {
+      await inOrg(db, 'workspaces', workspaceId, u.orgId);
+    } else {
       const spaces = (await db.query(
         'SELECT id FROM workspaces WHERE org_id = $1 ORDER BY created_at LIMIT 2',
         [u.orgId])).rows;
@@ -852,7 +854,9 @@ export async function registerSurveyRoutes(
        * without a special case for programmes that have no project.
        */
       let projectId = input.project_id ?? null;
-      if (!projectId && input.create_project) {
+      if (projectId) {
+        await inOrg(db, 'projects', projectId, u.orgId);
+      } else if (input.create_project) {
         projectId = await pairProject(db, u, input);
       }
 
