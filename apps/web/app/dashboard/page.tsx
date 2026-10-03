@@ -8,6 +8,7 @@ import { RequirePermission } from '@/components/RequirePermission';
 import { KanbanBoard } from '@/components/KanbanBoard';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { NativeSelect } from '@/components/ui/Select';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { WorkforceStrip } from '@/components/WorkforceStrip';
 import { PERMISSIONS, hasPermission } from '@/lib/permissions';
@@ -19,9 +20,6 @@ import { TASK_STATUSES } from '@/lib/validation';
 import { queryKeys } from '@/lib/query-keys';
 
 export const dynamic = 'force-static';
-
-const selectClass =
-  'rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 /**
  * Board-first landing page (Jira-style): pick a project, pick one of its
@@ -143,9 +141,9 @@ export default function DashboardPage() {
           ) : (
             <label className="flex items-center gap-2 text-sm text-text-muted">
               Project
-              <select
+              <NativeSelect
                 aria-label="Project"
-                className={`${selectClass} max-w-64`}
+                className="max-w-64"
                 value={projectId ?? ''}
                 onChange={(e) => {
                   setProjectId(e.target.value || null);
@@ -159,7 +157,7 @@ export default function DashboardPage() {
                     {p.code} — {p.name}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </label>
           )}
           {boardsQuery.isLoading ? (
@@ -167,9 +165,9 @@ export default function DashboardPage() {
           ) : boards.length > 0 ? (
             <label className="flex items-center gap-2 text-sm text-text-muted">
               Board
-              <select
+              <NativeSelect
                 aria-label="Board"
-                className={`${selectClass} max-w-52`}
+                className="max-w-52"
                 value={boardId ?? ''}
                 onChange={(e) => setBoardId(e.target.value || null)}
               >
@@ -178,7 +176,7 @@ export default function DashboardPage() {
                     {b.name}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </label>
           ) : null}
           {projectId ? (

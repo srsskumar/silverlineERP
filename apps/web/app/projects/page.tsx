@@ -17,12 +17,11 @@ import { moneyIndian } from '@/lib/finance';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { Input } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { Skeleton } from '@/components/ui/Skeleton';
 
 export const dynamic = 'force-static';
-
-const inputClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 export default function ProjectsPage() {
   return (
@@ -90,19 +89,19 @@ function ProjectsTable() {
       <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4 sm:flex-row sm:items-end">
         <div>
           <label htmlFor="projects-status" className="text-sm font-medium text-text-muted">Status</label>
-          <select id="projects-status" className={inputClass} value={status} onChange={(e) => setStatus(e.target.value)}>
+          <NativeSelect id="projects-status" className="w-full" value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All</option>
             {PROJECT_STATUSES.map((s) => (
               <option key={s} value={s}>{s}</option>
             ))}
-          </select>
+          </NativeSelect>
         </div>
         {canReadWorkspaces && (
           <div>
             <label htmlFor="projects-workspace" className="text-sm font-medium text-text-muted">Workspace</label>
-            <select
+            <NativeSelect
               id="projects-workspace"
-              className={inputClass}
+              className="w-full"
               value={workspaceId}
               onChange={(e) => setWorkspaceId(e.target.value)}
             >
@@ -110,14 +109,13 @@ function ProjectsTable() {
               {(workspacesQuery.data ?? []).map((w) => (
                 <option key={w.id} value={w.id}>{w.name}</option>
               ))}
-            </select>
+            </NativeSelect>
           </div>
         )}
         <div className="flex-1">
           <label htmlFor="projects-q" className="text-sm font-medium text-text-muted">Search</label>
-          <input
+          <Input
             id="projects-q"
-            className={inputClass}
             placeholder="Code or name…"
             value={q}
             onChange={(e) => setQ(e.target.value)}

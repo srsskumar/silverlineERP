@@ -9,6 +9,8 @@ import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Input } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { statusLabel } from '@/lib/board-visuals';
@@ -50,7 +52,7 @@ export default function TendersPage() {
           <p className="hidden text-xs text-text-subtle sm:block">Bids in flight, by closing date.</p>
         </div>
         <div className="flex items-center gap-2">
-          <select
+          <NativeSelect
             aria-label="Status"
             className="max-w-44"
             value={status}
@@ -59,7 +61,7 @@ export default function TendersPage() {
             <option value="">All statuses</option>
             {['DRAFT','PUBLISHED','IN_PROGRESS','SUBMITTED','UNDER_EVALUATION','CLARIFICATION_REQUIRED','SELECTED','REJECTED','AWARDED','CANCELLED']
               .map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
-          </select>
+          </NativeSelect>
           <Link href="/tenders/new" className="rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-fg hover:bg-primary-hover">
             + New tender
           </Link>
@@ -266,8 +268,9 @@ function TenderDetail({ id, onClose, onChanged }: { id: string; onClose: () => v
                         : ' Complete them first — overriding needs a permission you do not hold.'}
                     </p>
                     {canOverride ? (
-                      <input
-                        className="mt-2 w-full rounded-md border border-border p-2 text-sm"
+                      <Input
+                        className="mt-2 w-full"
+                        aria-label="Override reason"
                         placeholder="Override reason"
                         value={overrideReason}
                         maxLength={2000}

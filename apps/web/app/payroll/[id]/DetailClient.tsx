@@ -460,11 +460,10 @@ export function LabourCostPanel({ runId }: { runId: string }) {
                 <div className="flex flex-wrap items-end gap-2">
                   <label className="flex flex-1 flex-col gap-1 text-2xs text-text-muted">
                     Why it is being reversed
-                    <input
+                    <Input
                       value={reason}
                       onChange={(e) => setReason(e.target.value)}
                       placeholder="Attendance corrected, run reopened…"
-                      className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
                     />
                   </label>
                   <Button type="button" variant="secondary"

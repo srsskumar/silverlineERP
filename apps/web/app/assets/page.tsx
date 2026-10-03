@@ -13,6 +13,8 @@ import { useReveal } from '@/lib/use-reveal';
 import { Combobox } from '@/components/ui/Combobox';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { Input } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { ASSET_CONDITIONS, ASSET_LOCATION_LABELS, assetConditionLabel } from '@silverline/shared';
 import { day } from '@/lib/finance';
 
@@ -433,7 +435,6 @@ function IssueKit() {
     },
   });
 
-  const field = 'w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
   const ready = basket.length > 0 && form.employee_id && form.reason.trim();
 
   return (
@@ -503,7 +504,7 @@ function IssueKit() {
         </label>
         <label className="block text-sm font-medium text-text-muted">
           <span className="mb-1 block">For project</span>
-          <select className={field} value={form.project_id}
+          <NativeSelect className="w-full" value={form.project_id}
             onChange={(e) => setForm({ ...form, project_id: e.target.value })}>
             <option value="">None</option>
             {(projects.data ?? []).map((p) => (
@@ -511,25 +512,25 @@ function IssueKit() {
                 {String(p.code ?? '')} {String(p.name)}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </label>
         <label className="block text-sm font-medium text-text-muted">
           <span className="mb-1 block">Return due</span>
-          <input type="date" className={field} value={form.due_date}
+          <Input type="date" value={form.due_date}
             onChange={(e) => setForm({ ...form, due_date: e.target.value })} />
         </label>
         <label className="block text-sm font-medium text-text-muted">
           <span className="mb-1 block">Condition going out *</span>
-          <select className={field} value={form.condition}
+          <NativeSelect className="w-full" value={form.condition}
             onChange={(e) => setForm({ ...form, condition: e.target.value })}>
             {CONDITIONS.map((c) => (
               <option key={c.value} value={c.value}>{c.label}</option>
             ))}
-          </select>
+          </NativeSelect>
         </label>
         <label className="block text-sm font-medium text-text-muted sm:col-span-2">
           <span className="mb-1 block">What it is for *</span>
-          <input className={field} value={form.reason}
+          <Input value={form.reason}
             placeholder="Ground truthing, Koyyuru mandal"
             onChange={(e) => setForm({ ...form, reason: e.target.value })} />
         </label>

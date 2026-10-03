@@ -20,6 +20,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { FormField } from '@/components/ui/FormField';
 import { Input } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { Skeleton } from '@/components/ui/Skeleton';
 
 export const dynamic = 'force-static';
@@ -135,9 +136,9 @@ function CreateUnitDialog({
               htmlFor="unit-parent"
               error={errors.parent_id?.message}
             >
-              <select
+              <NativeSelect
                 id="unit-parent"
-                className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm"
+                className="w-full"
                 {...register('parent_id')}
               >
                 <option value="">Select a parent</option>
@@ -154,7 +155,7 @@ function CreateUnitDialog({
                     {p.name} ({p.code}) — {fallbackParent}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </FormField>
           )}
           {submitError ? <ErrorCard title="Could not create location" error={submitError} /> : null}

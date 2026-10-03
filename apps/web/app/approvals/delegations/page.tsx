@@ -10,6 +10,7 @@ import { Card } from '@/components/ui/Card';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Input } from '@/components/ui/Input';
 import { PageHeader, PageBody } from '@/components/ui/Page';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
@@ -119,7 +120,7 @@ export default function DelegationsPage() {
                 </label>
                 <label className="text-xs text-text-muted">
                   From
-                  <input
+                  <Input
                     type="date"
                     className="mt-1 w-full"
                     value={validFrom}
@@ -128,7 +129,7 @@ export default function DelegationsPage() {
                 </label>
                 <label className="text-xs text-text-muted">
                   Until
-                  <input
+                  <Input
                     type="date"
                     className="mt-1 w-full"
                     min={validFrom}
@@ -138,7 +139,7 @@ export default function DelegationsPage() {
                 </label>
                 <label className="text-xs text-text-muted">
                   Reason
-                  <input
+                  <Input
                     className="mt-1 w-full"
                     maxLength={500}
                     placeholder="Annual leave"

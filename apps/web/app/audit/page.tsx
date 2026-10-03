@@ -11,6 +11,8 @@ import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input } from '@/components/ui/Input';
 import { Notice } from '@/components/finance/Primitives';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
@@ -102,47 +104,44 @@ export default function AuditPage() {
       <PageBody>
         <div className="space-y-4">
           <Toolbar>
-            <input
+            <Input
               value={action}
               onChange={(e) => reset(() => setAction(e.target.value))}
               placeholder="Action, e.g. asset.transfer"
-              className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+              aria-label="Action"
             />
-            <input
+            <Input
               value={entity}
               onChange={(e) => reset(() => setEntity(e.target.value))}
               placeholder="Entity, e.g. asset"
-              className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+              aria-label="Entity"
             />
-            <select
+            <NativeSelect
               aria-label="Who"
               value={actorId}
               onChange={(e) => reset(() => setActorId(e.target.value))}
-              className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
             >
               <option value="">Anybody</option>
               {(people.data ?? []).map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
-            </select>
-            <input
+            </NativeSelect>
+            <Input
               value={entityId}
               onChange={(e) => reset(() => setEntityId(e.target.value))}
               placeholder="Record id"
               aria-label="Record id"
-              className="w-40 rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-xs text-text"
+              className="w-40 font-mono text-xs"
             />
             <label className="flex items-center gap-1 text-xs text-text-muted">
               From
-              <input type="date" value={from} max={to || undefined}
-                onChange={(e) => reset(() => setFrom(e.target.value))}
-                className="rounded-md border border-border bg-surface px-2 py-1 text-sm text-text" />
+              <Input type="date" value={from} max={to || undefined}
+                onChange={(e) => reset(() => setFrom(e.target.value))} />
             </label>
             <label className="flex items-center gap-1 text-xs text-text-muted">
               to
-              <input type="date" value={to} min={from || undefined}
-                onChange={(e) => reset(() => setTo(e.target.value))}
-                className="rounded-md border border-border bg-surface px-2 py-1 text-sm text-text" />
+              <Input type="date" value={to} min={from || undefined}
+                onChange={(e) => reset(() => setTo(e.target.value))} />
             </label>
             {filtered ? (
               <Button type="button" variant="ghost"

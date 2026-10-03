@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Input } from '@/components/ui/Input';
 import { statusLabel } from '@/lib/board-visuals';
 import { day, dayTime } from '@/lib/finance';
 
@@ -242,8 +243,8 @@ function LeadDetail({ id, onClose, onChanged }: { id: string; onClose: () => voi
               <section className="mt-5">
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-text-muted">Move to</h3>
                 {allowed.some(needsReason) ? (
-                  <input
-                    className="mt-2 w-full rounded-md border border-border p-2 text-sm"
+                  <Input
+                    className="mt-2 w-full"
                     placeholder="Reason (required to mark lost or disqualified)"
                     value={lostReason}
                     maxLength={2000}

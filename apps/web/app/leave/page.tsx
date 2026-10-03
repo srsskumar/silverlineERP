@@ -18,13 +18,12 @@ import { EmployeePicker } from '@/components/EmployeePicker';
 import { PersonName } from '@/components/PersonName';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Spinner } from '@/components/ui/Spinner';
+import { NativeSelect } from '@/components/ui/Select';
 import { day } from '@/lib/finance';
 
 export const dynamic = 'force-static';
 
 const PAGE_LIMIT = 20;
-const inputClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 function RequestsTable({ view }: { view: LeaveListView }) {
   const [status, setStatus] = React.useState('');
@@ -51,12 +50,12 @@ function RequestsTable({ view }: { view: LeaveListView }) {
       <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4 sm:flex-row sm:items-end">
         <div>
           <label htmlFor={`leave-status-${view}`} className="text-sm font-medium text-text-muted">Status</label>
-          <select id={`leave-status-${view}`} className={inputClass} value={status} onChange={(e) => setStatus(e.target.value)}>
+          <NativeSelect id={`leave-status-${view}`} value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All</option>
             {LEAVE_STATUSES.map((s) => (
               <option key={s} value={s}>{s}</option>
             ))}
-          </select>
+          </NativeSelect>
         </div>
         {view === 'all' && (
           <div className="flex-1">

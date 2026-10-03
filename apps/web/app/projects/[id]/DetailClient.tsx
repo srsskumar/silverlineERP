@@ -32,9 +32,7 @@ import { Badge } from '@/components/ui/Badge';
 import { money } from '@/lib/finance';
 import { contractValueBreakdown, amountInWords } from '@silverline/shared';
 import { isConflictError, requestIdOf } from '@/lib/form-errors';
-
-const inputClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
+import { NativeSelect } from '@/components/ui/Select';
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -353,9 +351,9 @@ function ProjectStatusPanel({
       <h2 className="text-sm font-semibold text-text">Change status</h2>
       <p className="mt-1 text-xs text-text-muted">Allowed transitions are enforced by the server (project-type workflow).</p>
       <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
-        <select
+        <NativeSelect
           aria-label="Project status"
-          className={`${inputClass} sm:max-w-xs`}
+          className="sm:max-w-xs"
           value={next}
           disabled={allowed.length === 0}
           onChange={(e) => {
@@ -366,7 +364,7 @@ function ProjectStatusPanel({
           {allowed.map((s) => (
             <option key={s} value={s}>{statusLabel(s)}</option>
           ))}
-        </select>
+        </NativeSelect>
         <Button
           disabled={allowed.length === 0 || next === current}
           loading={mutation.isPending}

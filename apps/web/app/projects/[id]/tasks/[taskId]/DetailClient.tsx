@@ -31,12 +31,10 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { FormField } from '@/components/ui/FormField';
-import { Input } from '@/components/ui/Input';
+import { Input, Textarea } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { applyFieldErrors, isConflictError, requestIdOf } from '@/lib/form-errors';
-
-const inputClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -380,17 +378,17 @@ function EditTaskFields({
           <Input id={`task-title-${taskId}`} invalid={!!errors.title} {...register('title')} />
         </FormField>
         <FormField label="Description" htmlFor={`task-desc-${taskId}`} error={errors.description?.message}>
-          <textarea id={`task-desc-${taskId}`} rows={3} className={inputClass} {...register('description')} />
+          <Textarea id={`task-desc-${taskId}`} rows={3} {...register('description')} />
         </FormField>
         <FormField label="Priority" htmlFor={`task-priority-${taskId}`} error={errors.priority?.message}>
           {/* A dropdown, not free text: the server accepts four values and
               typing produced "high", "Hi" and "URGENT!" against them. */}
-          <select id={`task-priority-${taskId}`} className={inputClass} {...register('priority')}>
+          <NativeSelect id={`task-priority-${taskId}`} {...register('priority')}>
             <option value="">Unset</option>
             {PRIORITIES.map((p) => (
               <option key={p} value={p}>{p.charAt(0) + p.slice(1).toLowerCase()}</option>
             ))}
-          </select>
+          </NativeSelect>
         </FormField>
         {submitError ? <ErrorCard title="Could not save task" error={submitError} /> : null}
         <div>

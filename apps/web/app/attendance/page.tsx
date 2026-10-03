@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Input } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Spinner } from '@/components/ui/Spinner';
 import { PERMISSIONS } from '@/lib/permissions';
@@ -36,9 +37,6 @@ const PunchClusterMap = nextDynamic<PunchClusterMapProps>(
     loading: () => <Skeleton className="h-[420px] w-full" />,
   },
 );
-const inputClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
-
 function RecordsTable() {
   const [employeeId, setEmployeeId] = React.useState('');
   const [from, setFrom] = React.useState('');
@@ -98,12 +96,12 @@ function RecordsTable() {
         </div>
         <div>
           <label htmlFor="rec-status" className="text-sm font-medium text-text-muted">Status</label>
-          <select id="rec-status" className={inputClass} value={status} onChange={(e) => setStatus(e.target.value)}>
+          <NativeSelect id="rec-status" value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All</option>
             {['PRESENT', 'PARTIAL', 'ABSENT'].map((s) => (
               <option key={s} value={s}>{s}</option>
             ))}
-          </select>
+          </NativeSelect>
         </div>
         <div className="flex items-end">
           <Button

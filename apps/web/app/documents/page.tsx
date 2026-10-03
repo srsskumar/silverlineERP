@@ -13,6 +13,8 @@ import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
 import { Combobox } from '@/components/ui/Combobox';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input } from '@/components/ui/Input';
 import { OwnerPicker } from '@/components/OwnerPicker';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
@@ -109,17 +111,16 @@ export default function DocumentsPage() {
           {tab === 'renewals' ? (
             <label className="flex items-center gap-2 text-xs text-text-muted">
               Looking ahead
-              <select
+              <NativeSelect
                 value={within}
                 onChange={(e) => setWithin(Number(e.target.value))}
-                className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
               >
                 <option value={30}>30 days</option>
                 <option value={60}>60 days</option>
                 <option value={90}>90 days</option>
                 <option value={180}>180 days</option>
                 <option value={365}>a year</option>
-              </select>
+              </NativeSelect>
             </label>
           ) : null}
           {canManage ? (
@@ -298,8 +299,6 @@ function RenewDialog({
     onSuccess: onDone,
   });
 
-  const field = 'w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
-
   return (
     <Card className="space-y-3 p-4">
       <div>
@@ -313,17 +312,17 @@ function RenewDialog({
       <div className="grid gap-3 sm:grid-cols-3">
         <label className="space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">New expiry date</span>
-          <input type="date" className={field} value={form.expires_on}
+          <Input type="date" value={form.expires_on}
             onChange={(e) => setForm({ ...form, expires_on: e.target.value })} />
         </label>
         <label className="space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">Issued on</span>
-          <input type="date" className={field} value={form.issued_on}
+          <Input type="date" value={form.issued_on}
             onChange={(e) => setForm({ ...form, issued_on: e.target.value })} />
         </label>
         <label className="space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">New reference</span>
-          <input className={field} value={form.reference_number}
+          <Input value={form.reference_number}
             placeholder={document.reference_number ?? 'Unchanged'}
             onChange={(e) => setForm({ ...form, reference_number: e.target.value })} />
         </label>
@@ -363,7 +362,6 @@ function Register({
   if (query.isError) return <ErrorCard error={query.error} onRetry={() => query.refetch()} />;
 
   const items: Row[] = query.data?.data ?? [];
-  const select = 'rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
   const showHoldColumn = canHold || canRelease;
   const showActionsColumn = showHoldColumn || canDelete;
 
@@ -384,21 +382,21 @@ function Register({
       </Card>
 
       <Toolbar>
-        <select className={select} value={filters.category}
+        <NativeSelect aria-label="Category" value={filters.category}
           onChange={(e) => setFilters({ ...filters, category: e.target.value })}>
           <option value="">Every category</option>
           {Object.entries(CATEGORY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-        </select>
-        <select className={select} value={filters.owner_type}
+        </NativeSelect>
+        <NativeSelect aria-label="Owner" value={filters.owner_type}
           onChange={(e) => setFilters({ ...filters, owner_type: e.target.value })}>
           <option value="">Attached to anything</option>
           {Object.entries(OWNER_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-        </select>
-        <select className={select} value={filters.state}
+        </NativeSelect>
+        <NativeSelect aria-label="State" value={filters.state}
           onChange={(e) => setFilters({ ...filters, state: e.target.value })}>
           <option value="">Any state</option>
           {Object.entries(STATE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-        </select>
+        </NativeSelect>
       </Toolbar>
 
       {items.length === 0 ? (
@@ -522,7 +520,6 @@ function LegalHoldDialog({
     onSuccess: onDone,
   });
 
-  const field = 'w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
   const ready = mode === 'release' || reason.trim().length >= 3;
 
   return (
@@ -541,7 +538,7 @@ function LegalHoldDialog({
       {mode === 'hold' ? (
         <label className="block space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">Reason</span>
-          <input aria-label="Reason" className={field} value={reason}
+          <Input aria-label="Reason" value={reason}
             placeholder="Under litigation, audit query…"
             onChange={(e) => setReason(e.target.value)} />
         </label>
@@ -595,7 +592,6 @@ function AddDocument({ onDone }: { onDone: () => void }) {
     onSuccess: onDone,
   });
 
-  const field = 'w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text';
   // The owners a type will accept, so the picker cannot offer a combination
   // the server is going to refuse.
   const owners: string[] = chosen?.owners?.length ? chosen.owners : Object.keys(OWNER_LABELS);
@@ -625,16 +621,16 @@ function AddDocument({ onDone }: { onDone: () => void }) {
         </label>
         <label className="space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">Title</span>
-          <input className={field} value={form.title}
+          <Input value={form.title}
             placeholder="Labour licence — Ameerpet stretch"
             onChange={(e) => setForm({ ...form, title: e.target.value })} />
         </label>
         <label className="space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">Attached to</span>
-          <select className={field} value={form.owner_type}
+          <NativeSelect className="w-full" value={form.owner_type}
             onChange={(e) => setForm({ ...form, owner_type: e.target.value, owner_id: '' })}>
             {owners.map((o) => <option key={o} value={o}>{OWNER_LABELS[o] ?? o}</option>)}
-          </select>
+          </NativeSelect>
         </label>
         {form.owner_type !== 'organization' ? (
           <label className="space-y-1">
@@ -650,25 +646,25 @@ function AddDocument({ onDone }: { onDone: () => void }) {
         ) : null}
         <label className="space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">Reference number</span>
-          <input className={field} value={form.reference_number}
+          <Input value={form.reference_number}
             onChange={(e) => setForm({ ...form, reference_number: e.target.value })} />
         </label>
         <label className="space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">Issuing authority</span>
-          <input className={field} value={form.issuing_authority}
+          <Input value={form.issuing_authority}
             placeholder="Labour Commissioner, Telangana"
             onChange={(e) => setForm({ ...form, issuing_authority: e.target.value })} />
         </label>
         <label className="space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">Issued on</span>
-          <input type="date" className={field} value={form.issued_on}
+          <Input type="date" value={form.issued_on}
             onChange={(e) => setForm({ ...form, issued_on: e.target.value })} />
         </label>
         <label className="space-y-1">
           <span className="text-2xs uppercase tracking-wide text-text-subtle">
             Expires on {chosen?.expiry_required ? <span className="text-danger">(required)</span> : null}
           </span>
-          <input type="date" className={field} value={form.expires_on}
+          <Input type="date" value={form.expires_on}
             onChange={(e) => setForm({ ...form, expires_on: e.target.value })} />
         </label>
       </div>

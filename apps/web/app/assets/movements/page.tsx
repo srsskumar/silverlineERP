@@ -12,6 +12,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Combobox } from '@/components/ui/Combobox';
+import { Input } from '@/components/ui/Input';
 import { Notice } from '@/components/finance/Primitives';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
@@ -126,13 +127,11 @@ export default function MovementsPage() {
             </div> : null}
             <label className="flex items-center gap-1.5 text-xs text-text-muted">
               From
-              <input type="date" value={from} onChange={(e) => change(() => setFrom(e.target.value))}
-                className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text" />
+              <Input type="date" value={from} onChange={(e) => change(() => setFrom(e.target.value))} />
             </label>
             <label className="flex items-center gap-1.5 text-xs text-text-muted">
               to
-              <input type="date" value={to} onChange={(e) => change(() => setTo(e.target.value))}
-                className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text" />
+              <Input type="date" value={to} onChange={(e) => change(() => setTo(e.target.value))} />
             </label>
             {(assetId || employeeId || from || to) ? (
               <Button type="button" variant="ghost" onClick={() => change(() => {

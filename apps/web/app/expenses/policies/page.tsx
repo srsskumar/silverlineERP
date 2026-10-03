@@ -13,6 +13,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody } from '@/components/ui/Page';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
+import { NativeSelect } from '@/components/ui/Select';
+import { Input } from '@/components/ui/Input';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { Notice, Section } from '@/components/finance/Primitives';
@@ -95,7 +97,7 @@ export default function ExpensePoliciesPage() {
               <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-4">
                 <label className="text-xs text-text-muted">
                   Category
-                  <select
+                  <NativeSelect
                     className="mt-1 w-full"
                     value={form.category}
                     onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
@@ -103,11 +105,11 @@ export default function ExpensePoliciesPage() {
                     {Object.entries(EXPENSE_CATEGORY_LABELS).map(([code, label]) => (
                       <option key={code} value={code}>{label}</option>
                     ))}
-                  </select>
+                  </NativeSelect>
                 </label>
                 <label className="text-xs text-text-muted">
                   Effective from
-                  <input
+                  <Input
                     type="date"
                     className="mt-1 w-full"
                     value={form.effective_from}
@@ -118,7 +120,7 @@ export default function ExpensePoliciesPage() {
                 {isEntitlement ? (
                   <label className="text-xs text-text-muted">
                     Rate per day
-                    <input
+                    <Input
                       type="number" min="0" step="0.01" className="mt-1 w-full"
                       value={form.unit_rate}
                       onChange={(e) => setForm((f) => ({ ...f, unit_rate: e.target.value }))}
@@ -128,7 +130,7 @@ export default function ExpensePoliciesPage() {
                   <>
                     <label className="text-xs text-text-muted">
                       Per line limit
-                      <input
+                      <Input
                         type="number" min="0" step="0.01" className="mt-1 w-full" placeholder="No cap"
                         value={form.per_line_limit}
                         onChange={(e) => setForm((f) => ({ ...f, per_line_limit: e.target.value }))}
@@ -136,7 +138,7 @@ export default function ExpensePoliciesPage() {
                     </label>
                     <label className="text-xs text-text-muted">
                       Per claim limit
-                      <input
+                      <Input
                         type="number" min="0" step="0.01" className="mt-1 w-full" placeholder="No cap"
                         value={form.per_claim_limit}
                         onChange={(e) => setForm((f) => ({ ...f, per_claim_limit: e.target.value }))}
@@ -144,7 +146,7 @@ export default function ExpensePoliciesPage() {
                     </label>
                     <label className="text-xs text-text-muted">
                       Receipt required above
-                      <input
+                      <Input
                         type="number" min="0" step="0.01" className="mt-1 w-full" placeholder="Always"
                         value={form.requires_receipt_above}
                         onChange={(e) => setForm((f) => ({ ...f, requires_receipt_above: e.target.value }))}
@@ -155,7 +157,7 @@ export default function ExpensePoliciesPage() {
 
                 <label className="text-xs text-text-muted">
                   Grade (optional)
-                  <input
+                  <Input
                     className="mt-1 w-full" maxLength={50} placeholder="Applies to everyone"
                     value={form.applies_to_grade}
                     onChange={(e) => setForm((f) => ({ ...f, applies_to_grade: e.target.value }))}

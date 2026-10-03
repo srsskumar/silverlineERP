@@ -12,6 +12,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
 import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
 import { Badge } from '@/components/ui/Badge';
+import { Input } from '@/components/ui/Input';
 import { Stat } from '@/components/finance/Primitives';
 import { categoryLabel, day, money } from '@/lib/finance';
 
@@ -79,11 +80,11 @@ export default function ExpenseReportsPage() {
           </div>
           {view !== 'aging' ? (
             <>
-              <input
+              <Input
                 type="date" aria-label="From" className="max-w-40"
                 value={from} onChange={(e) => setFrom(e.target.value)}
               />
-              <input
+              <Input
                 type="date" aria-label="To" className="max-w-40"
                 value={to} onChange={(e) => setTo(e.target.value)}
               />

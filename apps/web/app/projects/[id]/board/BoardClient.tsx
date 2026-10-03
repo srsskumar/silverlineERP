@@ -34,11 +34,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { FormField } from '@/components/ui/FormField';
 import { Input } from '@/components/ui/Input';
+import { NativeSelect } from '@/components/ui/Select';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { applyFieldErrors, isConflictError, requestIdOf } from '@/lib/form-errors';
-
-const inputClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 export function BoardView({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
@@ -134,9 +132,9 @@ export function BoardView({ projectId }: { projectId: string }) {
               <label htmlFor="board-select" className="text-sm font-medium text-text-muted">
                 Board
               </label>
-              <select
+              <NativeSelect
                 id="board-select"
-                className={`${inputClass} sm:max-w-sm`}
+                className="w-full sm:max-w-sm"
                 value={selectedId ?? ''}
                 onChange={(e) => setSelectedId(e.target.value)}
               >
@@ -145,7 +143,7 @@ export function BoardView({ projectId }: { projectId: string }) {
                     {b.name} ({String(b.view_type)})
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </div>
           )}
 
@@ -281,10 +279,10 @@ function NewBoardDialog({
             <Input id="new-board-name" placeholder="e.g. Sprint board" invalid={!!errors.name} {...register('name')} />
           </FormField>
           <FormField label="View type" htmlFor="new-board-view" error={errors.view_type?.message}>
-            <select id="new-board-view" className={inputClass} {...register('view_type')}>
+            <NativeSelect id="new-board-view" {...register('view_type')}>
               <option value="KANBAN">KANBAN</option>
               <option value="LIST">LIST</option>
-            </select>
+            </NativeSelect>
           </FormField>
           {submitError ? <ErrorCard title="Could not create board" error={submitError} /> : null}
           <div className="flex justify-end gap-2">
@@ -462,12 +460,12 @@ function ManageColumnsDialog({
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
               <div className="flex-1">
                 <label htmlFor="col-add" className="text-sm font-medium text-text-muted">Add status column</label>
-                <select id="col-add" className={inputClass} value={addStatus} onChange={(e) => setAddStatus(e.target.value)}>
+                <NativeSelect id="col-add" className="w-full" value={addStatus} onChange={(e) => setAddStatus(e.target.value)}>
                   <option value="">Pick a workflow status…</option>
                   {available.map((s) => (
                     <option key={s} value={s}>{s}</option>
                   ))}
-                </select>
+                </NativeSelect>
               </div>
               <Button
                 variant="secondary"

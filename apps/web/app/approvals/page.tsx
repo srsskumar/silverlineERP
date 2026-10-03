@@ -8,6 +8,7 @@ import { AppShell } from '@/components/AppShell';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { NativeSelect } from '@/components/ui/Select';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
@@ -129,7 +130,7 @@ export default function ApprovalsPage() {
           </div>
 
           {tab !== 'inbox' ? (
-            <select
+            <NativeSelect
               aria-label="Document type"
               className="max-w-48"
               value={documentType}
@@ -139,7 +140,7 @@ export default function ApprovalsPage() {
               {Object.entries(DOCUMENT_TYPE_LABELS).map(([code, label]) => (
                 <option key={code} value={code}>{label}</option>
               ))}
-            </select>
+            </NativeSelect>
           ) : null}
         </Toolbar>
 
