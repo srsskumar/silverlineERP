@@ -512,7 +512,8 @@ describe("re-routing when the amount moves", () => {
     await post({ ...w.role.TEAM_LEAD, ...(await instanceVersion(res.data.id)) },
       `/api/v1/approvals/${res.data.id}/decision`, { decision: "APPROVE" });
 
-    const revalidated = await post(w.role.EMPLOYEE, `/api/v1/approvals/${res.data.id}/revalidate`, { amount: 600_000 });
+    const revalidated = await post({ ...w.role.EMPLOYEE, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/revalidate`, { amount: 600_000 });
     expect(revalidated.status, JSON.stringify(revalidated.body)).toBe(200);
     expect(revalidated.data.reapproval_required).toBe(true);
 
@@ -530,7 +531,8 @@ describe("re-routing when the amount moves", () => {
 
   it("leaves a reduction inside the same band standing", async () => {
     const res = await submit(400_000);
-    const revalidated = await post(w.role.EMPLOYEE, `/api/v1/approvals/${res.data.id}/revalidate`, { amount: 350_000 });
+    const revalidated = await post({ ...w.role.EMPLOYEE, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/revalidate`, { amount: 350_000 });
     expect(revalidated.data.reapproval_required).toBe(false);
     const row = await w.pool.query("SELECT status, amount FROM approval_instances WHERE id=$1", [res.data.id]);
     expect(row.rows[0].status).toBe("PENDING");
@@ -547,15 +549,18 @@ describe("re-routing when the amount moves", () => {
       ],
     });
     const res = await submit(100_000, "VENDOR_INVOICE");
-    const small = await post(w.role.EMPLOYEE, `/api/v1/approvals/${res.data.id}/revalidate`, { amount: 102_000 });
+    const small = await post({ ...w.role.EMPLOYEE, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/revalidate`, { amount: 102_000 });
     expect(small.data.reapproval_required).toBe(false);
-    const large = await post(w.role.EMPLOYEE, `/api/v1/approvals/${res.data.id}/revalidate`, { amount: 130_000 });
+    const large = await post({ ...w.role.EMPLOYEE, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/revalidate`, { amount: 130_000 });
     expect(large.data.reapproval_required).toBe(true);
   });
 
   it("marks the abandoned steps skipped rather than leaving them pending", async () => {
     const res = await submit(400_000);
-    await post(w.role.EMPLOYEE, `/api/v1/approvals/${res.data.id}/revalidate`, { amount: 3_000_000 });
+    await post({ ...w.role.EMPLOYEE, ...(await instanceVersion(res.data.id)) },
+      `/api/v1/approvals/${res.data.id}/revalidate`, { amount: 3_000_000 });
     const steps = await w.pool.query(
       "SELECT status FROM approval_steps WHERE instance_id=$1", [res.data.id]);
     expect(steps.rows.every(r => r.status !== "PENDING")).toBe(true);

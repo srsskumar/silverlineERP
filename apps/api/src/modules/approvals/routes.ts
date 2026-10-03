@@ -208,6 +208,41 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     return null;
   }
 
+  /** The table each submittable document type lives in, for an org-ownership check. */
+  const DOCUMENT_TABLE: Record<string, string> = {
+    PURCHASE_REQUISITION: 'purchase_requisitions',
+    PURCHASE_ORDER: 'purchase_orders',
+    VENDOR_INVOICE: 'invoices',
+    EXPENSE_CLAIM: 'expense_claims',
+    PAYMENT: 'payments',
+    RA_BILL: 'ra_bills',
+    TENDER_SUBMISSION: 'tenders',
+    LEAVE_REQUEST: 'leave_requests',
+    ADVANCE: 'project_advances',
+    RETENTION_RELEASE: 'retention_ledger',
+  };
+
+  /**
+   * document_id is opaque to this route when it names no row at all
+   * (integration tests, and callers submitting ahead of the document fully
+   * landing, both rely on that) -- but when it DOES name a row, that row has
+   * to be this org's, or a submission can permanently block another org's
+   * real document via uk_ai_live_document (a cross-tenant denial of
+   * service), not just misfile a reference.
+   */
+  async function assertDocumentNotForeign(
+    db: Pool | PoolClient, documentType: string, documentId: string, orgId: string,
+  ): Promise<void> {
+    const table = DOCUMENT_TABLE[documentType];
+    if (!table) return;
+    const row = (await db.query(`SELECT org_id FROM ${table} WHERE id = $1::uuid`, [documentId])).rows[0];
+    if (row && row.org_id !== orgId) {
+      fail('NOT_FOUND',
+        'That record no longer exists, or it belongs to something you do not have access to. Go back to the list and open it from there.',
+        404);
+    }
+  }
+
   async function policyFor(db: Pool | PoolClient, orgId: string, documentType: string, projectId?: string | null) {
     const rows = (await db.query(
       `SELECT * FROM approval_policies
@@ -352,6 +387,8 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     const u = actor(req);
     const body = parse(approvalSubmissionSchema, req.body);
     const row = await mutate(pool, req, 'approval.submit', 'approval_instance', async db => {
+      await assertDocumentNotForeign(db, body.document_type, body.document_id, u.orgId);
+      if (body.project_id) await inOrg(db, 'projects', body.project_id, u.orgId);
       const policy = await policyFor(db, u.orgId, body.document_type, body.project_id);
       if (!policy) {
         // Named so the web admin screen's error card can point straight at
@@ -672,6 +709,7 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
     return {
       data: await mutate(pool, req, 'approval.revalidate', 'approval_instance', async db => {
         const instance = await inOrg(db, 'approval_instances', id, u.orgId, true);
+        version(req, instance as { version: number }, 'approval request');
         const policy = (await db.query('SELECT * FROM approval_policies WHERE id = $1', [instance.policy_id])).rows[0];
         const levels = await levelsFor(db, String(instance.policy_id));
         const verdict = requiresReapproval({
@@ -683,7 +721,7 @@ export async function registerApprovalRoutes(app: FastifyInstance, opts: { pool:
         });
         if (!verdict.required) {
           await db.query(
-            'UPDATE approval_instances SET amount = $2, updated_at = now(), updated_by = $3 WHERE id = $1',
+            'UPDATE approval_instances SET amount = $2, version = version + 1, updated_at = now(), updated_by = $3 WHERE id = $1',
             [id, body.amount, u.id]);
           return { ...instance, amount: body.amount, reapproval_required: false, reason: verdict.reason };
         }
