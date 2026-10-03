@@ -879,12 +879,25 @@ export async function registerAttendanceRoutes(
       });
     }
 
+    if (d.survey_village_id) {
+      const ownVillage = await db.query(
+        'SELECT 1 FROM survey_villages WHERE id = $1::uuid AND org_id = $2',
+        [d.survey_village_id, user.orgId]);
+      if (!ownVillage.rowCount) {
+        return sendError(reply, req.requestId, {
+          status: 404,
+          code: 'NOT_FOUND',
+          message: 'Survey village not found',
+        });
+      }
+    }
+
     if (d.event_type === 'CHECK_OUT' && d.survey_village_id && !d.progress_deferred_reason) {
       const workDay = businessDay(new Date(d.client_timestamp));
       const filed = await db.query(
         `SELECT 1 FROM survey_entries
-         WHERE survey_village_id = $1::uuid AND entry_date = $2::date`,
-        [d.survey_village_id, workDay]);
+         WHERE survey_village_id = $1::uuid AND entry_date = $2::date AND org_id = $3`,
+        [d.survey_village_id, workDay, user.orgId]);
       if (!filed.rowCount) {
         // Made while offline, or long enough ago that the app can no longer
         // put the question to them. Either way it is history, not a prompt.
@@ -1538,6 +1551,19 @@ export async function registerAttendanceRoutes(
         message:
           `That attendance record belongs to somebody else. You can raise an exception on your own attendance; anybody else's needs the "attendance.decide" permission.`,
       });
+    }
+    if (d.document_id) {
+      const docRes = await db.query(
+        "SELECT 1 FROM documents WHERE id = $1::uuid AND org_id = $2",
+        [d.document_id, user.orgId],
+      );
+      if ((docRes.rowCount ?? 0) === 0) {
+        return sendError(reply, req.requestId, {
+          status: 404,
+          code: "NOT_FOUND",
+          message: "Document not found",
+        });
+      }
     }
     const ins = await db.query(
       `INSERT INTO attendance_exceptions
