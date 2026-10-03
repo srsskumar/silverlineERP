@@ -13,6 +13,7 @@ import { Input, Textarea } from '@/components/ui/Input';
 import { FieldError, RecordSheet } from '@/components/finance/Primitives';
 import { applyFieldErrors } from '@/lib/form-errors';
 import { paymentFormSchema, PAYMENT_DIRECTIONS, PAYMENT_MODES, type PaymentFormInput } from '@/lib/validation';
+import { fullName } from '@/lib/people';
 
 type Row = Record<string, any>;
 
@@ -33,7 +34,7 @@ export function PaymentForm({ onClose, onCreated }: { onClose: () => void; onCre
   });
 
   const {
-    register, handleSubmit, setError, formState: { errors },
+    register, handleSubmit, setError, watch, formState: { errors },
   } = useForm<PaymentFormInput>({
     resolver: zodResolver(paymentFormSchema),
     defaultValues: {
@@ -42,6 +43,39 @@ export function PaymentForm({ onClose, onCreated }: { onClose: () => void; onCre
       bank_account: '', notes: '',
     } as unknown as PaymentFormInput,
   });
+
+  /*
+   * Named, not typed in.
+   *
+   * The field used to ask for a raw UUID with nothing to look one up
+   * against -- the only way to fill it correctly was already knowing the
+   * id, which defeats the point of a form. Each party type reads from its
+   * own list, the same way Project does a few fields down.
+   */
+  const partyType = watch('party_type');
+  const clients = useQuery({
+    queryKey: ['clients', 'for-payment'],
+    queryFn: async () => ((await apiRequestRaw('/api/v1/clients?limit=100')).body as { data: Row[] }).data,
+    staleTime: 300_000,
+    enabled: partyType === 'CLIENT',
+  });
+  const vendors = useQuery({
+    queryKey: ['vendors', 'for-payment'],
+    queryFn: async () => ((await apiRequestRaw('/api/v1/vendors?limit=100')).body as { data: Row[] }).data,
+    staleTime: 300_000,
+    enabled: partyType === 'VENDOR',
+  });
+  const employees = useQuery({
+    queryKey: ['employees', 'for-payment'],
+    queryFn: async () => ((await apiRequestRaw('/api/v1/employees?limit=100')).body as { data: Row[] }).data,
+    staleTime: 300_000,
+    enabled: partyType === 'EMPLOYEE',
+  });
+  const partyOptions: Row[] =
+    partyType === 'CLIENT' ? (clients.data ?? [])
+    : partyType === 'VENDOR' ? (vendors.data ?? [])
+    : partyType === 'EMPLOYEE' ? (employees.data ?? [])
+    : [];
 
   const create = useMutation({
     mutationFn: (v: PaymentFormInput) => createPayment(v),
@@ -100,8 +134,18 @@ export function PaymentForm({ onClose, onCreated }: { onClose: () => void; onCre
           </NativeSelect>
         </label>
         <label className="text-xs text-text-muted">
-          Party ID (optional)
-          <Input className="mt-1 w-full" placeholder="UUID" {...register('party_id')} />
+          {partyType === 'CLIENT' ? 'Client (optional)'
+            : partyType === 'VENDOR' ? 'Vendor (optional)'
+            : partyType === 'EMPLOYEE' ? 'Employee (optional)'
+            : 'Party (optional)'}
+          <NativeSelect className="mt-1 w-full" disabled={!partyType} {...register('party_id')}>
+            <option value="">{partyType ? 'Not specified' : 'Choose a party type first'}</option>
+            {partyOptions.map((p) => (
+              <option key={String(p.id)} value={String(p.id)}>
+                {partyType === 'EMPLOYEE' ? fullName(p) : String(p.name ?? p.id)}
+              </option>
+            ))}
+          </NativeSelect>
           <FieldError message={errors.party_id?.message} />
         </label>
         <label className="text-xs text-text-muted">
