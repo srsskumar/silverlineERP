@@ -801,9 +801,14 @@ function RecentEntries({ villageId }: { villageId: string }) {
               <TH className="text-right">Rovers out</TH>
               <TH className="text-right">Used</TH>
               <TH className="text-right">Idle</TH>
-              {codes.map((c) => (
-                <TH key={c} className="text-right">{c.replaceAll('_', ' ').toLowerCase()}</TH>
-              ))}
+              {codes.map((c) => {
+                const label = c.replaceAll('_', ' ').toLowerCase();
+                return (
+                  <TH key={c} className="text-right">
+                    {label.charAt(0).toUpperCase() + label.slice(1)}
+                  </TH>
+                );
+              })}
               <TH>Recorded by</TH>
               <TH>Notes</TH>
               <TH />
@@ -949,14 +954,17 @@ function AmendEntry({
           <Input className="w-24" type="number" min={0} value={rovers}
             onChange={(e) => setRovers(e.target.value)} />
         </label>
-        {Object.keys(existing).map((code) => (
-          <label key={code} className="flex flex-col gap-1 text-2xs text-text-muted">
-            {code.replaceAll('_', ' ').toLowerCase()}
-            <Input className="w-24" type="number" min={0} step="any"
-              value={values[code] ?? ''}
-              onChange={(e) => setValues({ ...values, [code]: e.target.value })} />
-          </label>
-        ))}
+        {Object.keys(existing).map((code) => {
+          const label = code.replaceAll('_', ' ').toLowerCase();
+          return (
+            <label key={code} className="flex flex-col gap-1 text-2xs text-text-muted">
+              {label.charAt(0).toUpperCase() + label.slice(1)}
+              <Input className="w-24" type="number" min={0} step="any"
+                value={values[code] ?? ''}
+                onChange={(e) => setValues({ ...values, [code]: e.target.value })} />
+            </label>
+          );
+        })}
       </div>
       <div className="flex flex-wrap items-end gap-3">
         <label className="flex flex-1 flex-col gap-1 text-2xs text-text-muted">

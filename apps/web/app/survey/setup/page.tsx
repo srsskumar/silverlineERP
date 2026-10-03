@@ -20,6 +20,7 @@ import { hasPermission } from '@/lib/permissions';
 import { Notice, Section, Stat } from '@/components/finance/Primitives';
 import { duplicateVillageCodes, readVillageCsv, missingColumns } from '@/lib/survey-import';
 import { acres, count } from '@/lib/survey';
+import { listWorkspaces } from '@/lib/projects';
 import { IMPORT_TEMPLATES, downloadTemplate, downloadTemplateWorkbook } from '@/lib/import-templates';
 
 type Row = Record<string, any>;
@@ -155,18 +156,30 @@ export default function SurveySetupPage() {
 function NewProgramme({ onCreated }: { onCreated: (id: string) => void }) {
   const [open, setOpen] = React.useState(false);
   const today = businessToday();
-  const [form, setForm] = React.useState({ code: '', name: '', started_on: today });
+  const [form, setForm] = React.useState({ code: '', name: '', started_on: today, workspace_id: '' });
+
+  // An organisation with one workspace needs no choice -- the server picks
+  // it. One with several refuses the creation outright until told which one
+  // (WORKSPACE_REQUIRED), so the form has to ask before that happens rather
+  // than let the person hit a dead end with nowhere to say.
+  const workspaces = useQuery({
+    queryKey: ['workspaces'], queryFn: listWorkspaces, staleTime: 300_000,
+  });
+  const needsWorkspace = (workspaces.data?.length ?? 0) > 1;
 
   const create = useMutation({
     mutationFn: async () =>
       apiRequest<{ id: string }>('/api/v1/survey/projects', {
         method: 'POST',
-        body: { code: form.code, name: form.name, started_on: form.started_on || undefined },
+        body: {
+          code: form.code, name: form.name, started_on: form.started_on || undefined,
+          ...(form.workspace_id ? { workspace_id: form.workspace_id } : {}),
+        },
       }),
     onSuccess: (res: any) => {
       onCreated(String(res?.data?.id));
       setOpen(false);
-      setForm({ code: '', name: '', started_on: today });
+      setForm({ code: '', name: '', started_on: today, workspace_id: '' });
     },
   });
 
@@ -200,11 +213,24 @@ function NewProgramme({ onCreated }: { onCreated: (id: string) => void }) {
           <Input type="date" value={form.started_on}
             onChange={(e) => setForm({ ...form, started_on: e.target.value })} />
         </label>
+        {needsWorkspace ? (
+          <label className="space-y-1">
+            <span className="text-2xs uppercase tracking-wide text-text-subtle">Workspace</span>
+            <NativeSelect className="w-full" value={form.workspace_id}
+              onChange={(e) => setForm({ ...form, workspace_id: e.target.value })}>
+              <option value="">Choose…</option>
+              {(workspaces.data ?? []).map((w) => (
+                <option key={String(w.id)} value={String(w.id)}>{String(w.name)}</option>
+              ))}
+            </NativeSelect>
+          </label>
+        ) : null}
       </div>
       {create.isError ? <ErrorCard error={create.error} /> : null}
       <div className="flex gap-2">
         <Button type="button" variant="primary" loading={create.isPending}
-          disabled={!form.code.trim() || !form.name.trim()} onClick={() => create.mutate()}>
+          disabled={!form.code.trim() || !form.name.trim() || (needsWorkspace && !form.workspace_id)}
+          onClick={() => create.mutate()}>
           Create
         </Button>
         <Button type="button" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
