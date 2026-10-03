@@ -247,6 +247,8 @@ export async function registerStockRoutes(app: FastifyInstance, opts: { pool: Po
       const item = await inOrg(db, 'inventory_items', input.item_id, u.orgId, true);
       if (input.from_location_id) await inOrg(db, 'stock_locations', input.from_location_id, u.orgId);
       if (input.to_location_id) await inOrg(db, 'stock_locations', input.to_location_id, u.orgId);
+      if (input.project_id) await inOrg(db, 'projects', input.project_id, u.orgId);
+      if (input.task_id) await inOrg(db, 'tasks', input.task_id, u.orgId);
       // A retired item takes no new stock (D-005), the same rule the older
       // /inventory/transactions route applies. What is already on the shelf
       // can still be issued, returned, counted or written off, so that the
@@ -338,6 +340,8 @@ export async function registerStockRoutes(app: FastifyInstance, opts: { pool: Po
       // quantity otherwise, and both promise it (D-001).
       const item = await inOrg(db, 'inventory_items', input.item_id, u.orgId, true);
       await inOrg(db, 'stock_locations', input.location_id, u.orgId);
+      if (input.project_id) await inOrg(db, 'projects', input.project_id, u.orgId);
+      if (input.task_id) await inOrg(db, 'tasks', input.task_id, u.orgId);
       const position = await positionAt(db, item, input.location_id);
       // Reserving stock that is not free would promise the same bags twice.
       if (input.quantity > position.available) {
