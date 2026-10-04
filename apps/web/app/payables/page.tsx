@@ -10,7 +10,8 @@ import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
-import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
+import { Table, TableWrap, THead, TBody, TR, TH, TD, SortableTH } from '@/components/ui/Table';
+import { useSort } from '@/lib/useSort';
 import { Badge } from '@/components/ui/Badge';
 import { Input } from '@/components/ui/Input';
 import { useAuth } from '@/components/AuthProvider';
@@ -66,6 +67,21 @@ export default function PayablesPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['ap-ageing'] }),
   });
 
+  const data = ageing.data;
+  const summary = data as AgeingSummary | undefined;
+  const vendors: Row[] = data?.vendors ?? [];
+  type VendorSortKey = 'supplier' | 'overdue' | 'interest' | 'total' | (typeof AGEING_BUCKETS)[number];
+  const { sorted: sortedVendors, sort: vendorSort, onSort: onVendorSort } = useSort<Row, VendorSortKey>(
+    vendors,
+    (v, key) => {
+      if (key === 'supplier') return v.vendor_name;
+      if (key === 'overdue') return v.overdue;
+      if (key === 'interest') return v.accrued_interest;
+      if (key === 'total') return v.total;
+      return (v as AgeingSummary).buckets?.[key] ?? 0;
+    },
+  );
+
   if (!canRead) {
     return (
       <AppShell>
@@ -79,10 +95,6 @@ export default function PayablesPage() {
       </AppShell>
     );
   }
-
-  const data = ageing.data;
-  const summary = data as AgeingSummary | undefined;
-  const vendors: Row[] = data?.vendors ?? [];
 
   return (
     <AppShell>
@@ -173,18 +185,18 @@ export default function PayablesPage() {
                       <Table>
                         <THead>
                           <TR>
-                            <TH>Supplier</TH>
+                            <SortableTH<VendorSortKey> sortKey="supplier" sort={vendorSort} onSort={onVendorSort}>Supplier</SortableTH>
                             {AGEING_BUCKETS.map((b) => (
-                              <TH key={b} className="text-right">{BUCKET_LABELS[b]}</TH>
+                              <SortableTH<VendorSortKey> key={b} sortKey={b} sort={vendorSort} onSort={onVendorSort} align="right">{BUCKET_LABELS[b]}</SortableTH>
                             ))}
-                            <TH className="text-right">Overdue</TH>
-                            <TH className="text-right">Interest</TH>
-                            <TH className="text-right">Total</TH>
+                            <SortableTH<VendorSortKey> sortKey="overdue" sort={vendorSort} onSort={onVendorSort} align="right">Overdue</SortableTH>
+                            <SortableTH<VendorSortKey> sortKey="interest" sort={vendorSort} onSort={onVendorSort} align="right">Interest</SortableTH>
+                            <SortableTH<VendorSortKey> sortKey="total" sort={vendorSort} onSort={onVendorSort} align="right">Total</SortableTH>
                             <TH />
                           </TR>
                         </THead>
                         <TBody>
-                          {vendors.map((v) => {
+                          {sortedVendors.map((v) => {
                             const id = String(v.vendor_id ?? 'UNASSIGNED');
                             const open = openVendor === id;
                             return (

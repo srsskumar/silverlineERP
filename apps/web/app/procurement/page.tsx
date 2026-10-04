@@ -10,7 +10,8 @@ import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
-import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
+import { Table, TableWrap, THead, TBody, TR, TH, TD, SortableTH } from '@/components/ui/Table';
+import { useSort } from '@/lib/useSort';
 import { Badge } from '@/components/ui/Badge';
 import { NativeSelect } from '@/components/ui/Select';
 import { Input } from '@/components/ui/Input';
@@ -79,6 +80,39 @@ export default function ProcurementPage() {
 
   const rows = list.data ?? [];
   const refresh = () => void client.invalidateQueries({ queryKey: ['procurement'] });
+  // Positional, not field-named: the 4 tabs share one row array but each has its
+  // own field names in the same column slots (col1 = the document number, etc).
+  type ProcSortKey = 'col1' | 'col2' | 'col3' | 'col4' | 'col5';
+  const { sorted: sortedRows, sort: rowSort, onSort: onRowSort } = useSort<Row, ProcSortKey>(
+    rows,
+    (r, key) => {
+      if (tab === 'requisitions') {
+        return key === 'col1' ? r.requisition_no
+          : key === 'col2' ? r.project_code
+          : key === 'col3' ? r.requested_by_username
+          : key === 'col4' ? r.estimated_value
+          : key === 'col5' ? r.status : undefined;
+      }
+      if (tab === 'orders') {
+        return key === 'col1' ? r.po_number
+          : key === 'col2' ? r.vendor_name
+          : key === 'col3' ? (r.promised_delivery_date ?? r.delivery_date)
+          : key === 'col4' ? r.total_value
+          : key === 'col5' ? r.status : undefined;
+      }
+      if (tab === 'rfqs') {
+        return key === 'col1' ? r.rfq_no
+          : key === 'col2' ? r.due_date
+          : key === 'col3' ? r.invited_count
+          : key === 'col4' ? r.quote_count
+          : key === 'col5' ? r.status : undefined;
+      }
+      return key === 'col1' ? r.return_no
+        : key === 'col2' ? r.reason
+        : key === 'col3' ? r.resolution
+        : key === 'col4' ? r.return_date : undefined;
+    },
+  );
 
   const ALL_TABS: { key: Tab; label: string; permission: string }[] = [
     { key: 'requisitions', label: 'Requisitions', permission: 'requisition.read' },
@@ -166,29 +200,40 @@ export default function ProcurementPage() {
                   <TR>
                     {tab === 'requisitions' ? (
                       <>
-                        <TH>Requisition</TH><TH>Project</TH><TH>Raised by</TH>
-                        <TH align="right">Estimated</TH><TH>Status</TH><TH />
+                        <SortableTH<ProcSortKey> sortKey="col1" sort={rowSort} onSort={onRowSort}>Requisition</SortableTH>
+                        <SortableTH<ProcSortKey> sortKey="col2" sort={rowSort} onSort={onRowSort}>Project</SortableTH>
+                        <SortableTH<ProcSortKey> sortKey="col3" sort={rowSort} onSort={onRowSort}>Raised by</SortableTH>
+                        <SortableTH<ProcSortKey> sortKey="col4" sort={rowSort} onSort={onRowSort} align="right">Estimated</SortableTH>
+                        <SortableTH<ProcSortKey> sortKey="col5" sort={rowSort} onSort={onRowSort}>Status</SortableTH><TH />
                       </>
                     ) : tab === 'orders' ? (
                       <>
-                        <TH>Order</TH><TH>Vendor</TH><TH>Delivery</TH>
-                        <TH align="right">Value</TH><TH>Status</TH><TH />
+                        <SortableTH<ProcSortKey> sortKey="col1" sort={rowSort} onSort={onRowSort}>Order</SortableTH>
+                        <SortableTH<ProcSortKey> sortKey="col2" sort={rowSort} onSort={onRowSort}>Vendor</SortableTH>
+                        <SortableTH<ProcSortKey> sortKey="col3" sort={rowSort} onSort={onRowSort}>Delivery</SortableTH>
+                        <SortableTH<ProcSortKey> sortKey="col4" sort={rowSort} onSort={onRowSort} align="right">Value</SortableTH>
+                        <SortableTH<ProcSortKey> sortKey="col5" sort={rowSort} onSort={onRowSort}>Status</SortableTH><TH />
                       </>
                     ) : tab === 'rfqs' ? (
                       <>
-                        <TH>RFQ</TH><TH>Due</TH><TH align="right">Vendors</TH>
-                        <TH align="right">Quotes in</TH><TH>Status</TH><TH />
+                        <SortableTH<ProcSortKey> sortKey="col1" sort={rowSort} onSort={onRowSort}>RFQ</SortableTH>
+                        <SortableTH<ProcSortKey> sortKey="col2" sort={rowSort} onSort={onRowSort}>Due</SortableTH>
+                        <SortableTH<ProcSortKey> sortKey="col3" sort={rowSort} onSort={onRowSort} align="right">Vendors</SortableTH>
+                        <SortableTH<ProcSortKey> sortKey="col4" sort={rowSort} onSort={onRowSort} align="right">Quotes in</SortableTH>
+                        <SortableTH<ProcSortKey> sortKey="col5" sort={rowSort} onSort={onRowSort}>Status</SortableTH><TH />
                       </>
                     ) : (
                       <>
-                        <TH>Return</TH><TH>Reason</TH><TH>Resolution</TH>
-                        <TH>Date</TH><TH /><TH />
+                        <SortableTH<ProcSortKey> sortKey="col1" sort={rowSort} onSort={onRowSort}>Return</SortableTH>
+                        <SortableTH<ProcSortKey> sortKey="col2" sort={rowSort} onSort={onRowSort}>Reason</SortableTH>
+                        <SortableTH<ProcSortKey> sortKey="col3" sort={rowSort} onSort={onRowSort}>Resolution</SortableTH>
+                        <SortableTH<ProcSortKey> sortKey="col4" sort={rowSort} onSort={onRowSort}>Date</SortableTH><TH /><TH />
                       </>
                     )}
                   </TR>
                 </THead>
                 <TBody>
-                  {rows.map((r) => (
+                  {sortedRows.map((r) => (
                     <TR key={String(r.id)}>
                       {tab === 'requisitions' ? (
                         <>

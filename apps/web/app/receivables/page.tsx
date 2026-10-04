@@ -10,7 +10,8 @@ import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody, Toolbar } from '@/components/ui/Page';
-import { Table, TableWrap, THead, TBody, TR, TH, TD } from '@/components/ui/Table';
+import { Table, TableWrap, THead, TBody, TR, TH, TD, SortableTH } from '@/components/ui/Table';
+import { useSort } from '@/lib/useSort';
 import { Badge } from '@/components/ui/Badge';
 import { NativeSelect } from '@/components/ui/Select';
 import { Input } from '@/components/ui/Input';
@@ -53,6 +54,22 @@ export default function ReceivablesPage() {
       )).body as { data: Row }).data,
   });
 
+  const data = ageing.data;
+  const summary = data as AgeingSummary | undefined;
+  const clients: Row[] = data?.clients ?? [];
+  const breached = clients.filter((c) => c.credit?.breached);
+  type ClientSortKey = 'client' | 'overdue' | 'total' | 'credit' | (typeof AGEING_BUCKETS)[number];
+  const { sorted: sortedClients, sort: clientSort, onSort: onClientSort } = useSort<Row, ClientSortKey>(
+    clients,
+    (c, key) => {
+      if (key === 'client') return c.client_name;
+      if (key === 'overdue') return c.overdue;
+      if (key === 'total') return c.total;
+      if (key === 'credit') return c.credit?.utilisationPct;
+      return (c as AgeingSummary).buckets?.[key] ?? 0;
+    },
+  );
+
   if (!canRead) {
     return (
       <AppShell>
@@ -66,11 +83,6 @@ export default function ReceivablesPage() {
       </AppShell>
     );
   }
-
-  const data = ageing.data;
-  const summary = data as AgeingSummary | undefined;
-  const clients: Row[] = data?.clients ?? [];
-  const breached = clients.filter((c) => c.credit?.breached);
 
   return (
     <AppShell>
@@ -171,18 +183,18 @@ export default function ReceivablesPage() {
                   <Table>
                     <THead>
                       <TR>
-                        <TH>Client</TH>
+                        <SortableTH<ClientSortKey> sortKey="client" sort={clientSort} onSort={onClientSort}>Client</SortableTH>
                         {AGEING_BUCKETS.map((b) => (
-                          <TH key={b} className="text-right">{BUCKET_LABELS[b]}</TH>
+                          <SortableTH<ClientSortKey> key={b} sortKey={b} sort={clientSort} onSort={onClientSort} align="right">{BUCKET_LABELS[b]}</SortableTH>
                         ))}
-                        <TH className="text-right">Overdue</TH>
-                        <TH className="text-right">Total</TH>
-                        <TH className="text-right">Credit</TH>
+                        <SortableTH<ClientSortKey> sortKey="overdue" sort={clientSort} onSort={onClientSort} align="right">Overdue</SortableTH>
+                        <SortableTH<ClientSortKey> sortKey="total" sort={clientSort} onSort={onClientSort} align="right">Total</SortableTH>
+                        <SortableTH<ClientSortKey> sortKey="credit" sort={clientSort} onSort={onClientSort} align="right">Credit</SortableTH>
                         <TH />
                       </TR>
                     </THead>
                     <TBody>
-                      {clients.map((c) => {
+                      {sortedClients.map((c) => {
                         const id = String(c.client_id ?? 'UNASSIGNED');
                         const open = openClient === id;
                         return (

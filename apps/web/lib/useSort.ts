@@ -35,7 +35,14 @@ export function useSort<T, K extends string>(
       if (av == null && bv == null) return 0;
       if (av == null) return 1;
       if (bv == null) return -1;
-      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+      // Money/decimal columns commonly arrive as numeric strings (Postgres
+      // NUMERIC serialized through the JSON API, the same reason money()
+      // itself does Number(value) rather than trusting the type) -- sorting
+      // those lexicographically put "200000" before "4000". Numeric-looking
+      // strings get the same numeric comparison a real number would.
+      const an = typeof av === 'number' ? av : av !== '' && Number.isFinite(Number(av)) ? Number(av) : null;
+      const bn = typeof bv === 'number' ? bv : bv !== '' && Number.isFinite(Number(bv)) ? Number(bv) : null;
+      if (an !== null && bn !== null) return (an - bn) * dir;
       return String(av).toLowerCase().localeCompare(String(bv).toLowerCase()) * dir;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
