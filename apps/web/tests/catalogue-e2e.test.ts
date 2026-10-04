@@ -91,13 +91,14 @@ describe('E2E-02 employee signs in without admin permissions', () => {
 
     // An employee works on projects and is issued assets, so /projects and
     // /assets are theirs. What they must not reach is other people's records
-    // and the money.
+    // and the money. /org/holidays is deliberately not in this list: owner
+    // decision 2026-10-01 #1 granted holiday.read to EMPLOYEE (s1.ts), so
+    // the calendar is visible to them too -- see the "own destinations" test.
     for (const adminHref of [
       '/employees',
       '/attendance/exceptions',
       '/payroll',
       '/org/locations',
-      '/org/holidays',
       '/admin',
       '/inventory',
       '/analytics',
@@ -126,6 +127,8 @@ describe('E2E-02 employee signs in without admin permissions', () => {
     // Their own punch clock lives at /attendance; the register on the same
     // page needs attendance.read and is not rendered for them.
     expect(visible).toContain('/attendance');
+    // owner decision 2026-10-01 #1: holiday.read granted to EMPLOYEE.
+    expect(visible).toContain('/org/holidays');
   });
 
   it('hides every quick-create action an employee cannot perform', () => {

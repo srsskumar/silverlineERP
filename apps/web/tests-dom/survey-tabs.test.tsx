@@ -333,7 +333,12 @@ describe('the land survey screen', () => {
       expect(screen.queryByRole('button', { name: tab })).toBeNull();
     }
     for (const tab of BEHIND_MORE) await reveal(tab);
-  });
+    // Mounts the full survey page, then clicks through all six deep tabs --
+    // the heaviest test in this file (~3.4s alone). The suite-wide default
+    // of 5s is tight enough that running under full-suite CPU contention
+    // (the whole ~990-test run in parallel) occasionally tips it over,
+    // which is suite contention, not a slow app; give it real headroom.
+  }, 20_000);
 
   it('writes the village count on every bar', async () => {
     // The ask was plain: show the numbers of villages at each stage. Reading

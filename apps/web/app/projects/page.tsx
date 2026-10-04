@@ -158,7 +158,7 @@ function ProjectsTable() {
               <TBody>
                 {sortedRows.map((p) => (
                   <TR key={p.id}>
-                    <TD mono className="text-xs">{p.code}</TD>
+                    <TD mono>{p.code}</TD>
                     <TD>{p.name}</TD>
                     <TD>
                       <ProjectKindBadge kind={p.project_kind as string | null} tenderId={p.tender_id as string | null} />
