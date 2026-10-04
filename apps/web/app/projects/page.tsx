@@ -20,6 +20,8 @@ import { ErrorCard } from '@/components/ui/ErrorCard';
 import { Input } from '@/components/ui/Input';
 import { NativeSelect } from '@/components/ui/Select';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { Table, TableWrap, THead, TBody, TR, TH, TD, SortableTH } from '@/components/ui/Table';
+import { useSort } from '@/lib/useSort';
 
 export const dynamic = 'force-static';
 
@@ -83,6 +85,15 @@ function ProjectsTable() {
   });
 
   const rows = listQuery.data ?? [];
+  type ProjectSortKey = 'code' | 'name' | 'track' | 'status' | 'value' | 'priority';
+  const { sorted: sortedRows, sort, onSort } = useSort<(typeof rows)[number], ProjectSortKey>(rows, (p, key) => {
+    if (key === 'code') return p.code;
+    if (key === 'name') return p.name;
+    if (key === 'track') return p.project_kind as string | null;
+    if (key === 'status') return p.status as string;
+    if (key === 'value') return p.contract_value as unknown as number | string | null;
+    return p.priority as string | null;
+  });
 
   return (
     <div className="flex flex-col gap-4">
@@ -130,43 +141,45 @@ function ProjectsTable() {
       ) : rows.length === 0 ? (
         <EmptyState title="No projects" description="Nothing matches these filters yet — create the first project to get started." />
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-border">
-          <table className="min-w-full divide-y divide-border bg-surface text-sm">
-            <thead className="bg-surface-sunken">
-              <tr>
-                <th className="px-3 py-2 text-left font-medium text-text-muted">Code</th>
-                <th className="px-3 py-2 text-left font-medium text-text-muted">Name</th>
-                <th className="px-3 py-2 text-left font-medium text-text-muted">Track</th>
-                <th className="px-3 py-2 text-left font-medium text-text-muted">Status</th>
-                <th className="px-3 py-2 text-right font-medium text-text-muted">Contract value</th>
-                <th className="px-3 py-2 text-left font-medium text-text-muted">Priority</th>
-                <th className="px-3 py-2 text-left font-medium text-text-muted">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {rows.map((p) => (
-                <tr key={p.id}>
-                  <td className="px-3 py-2 font-mono text-xs text-text">{p.code}</td>
-                  <td className="px-3 py-2 text-text">{p.name}</td>
-                  <td className="px-3 py-2">
-                    <ProjectKindBadge kind={p.project_kind as string | null} tenderId={p.tender_id as string | null} />
-                  </td>
-                  <td className="px-3 py-2">
-                    <ProjectStatusBadge status={String(p.status)} />
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-text-muted">
-                    {moneyIndian(p.contract_value)}
-                  </td>
-                  <td className="px-3 py-2 text-text-muted">{p.priority ? String(p.priority) : '—'}</td>
-                  <td className="px-3 py-2">
-                    <Link href={`/projects/${p.id}`} className="text-primary hover:underline">
-                      View
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="rounded-lg border border-border">
+          <TableWrap>
+            <Table>
+              <THead>
+                <TR>
+                  <SortableTH<ProjectSortKey> sortKey="code" sort={sort} onSort={onSort}>Code</SortableTH>
+                  <SortableTH<ProjectSortKey> sortKey="name" sort={sort} onSort={onSort}>Name</SortableTH>
+                  <SortableTH<ProjectSortKey> sortKey="track" sort={sort} onSort={onSort}>Track</SortableTH>
+                  <SortableTH<ProjectSortKey> sortKey="status" sort={sort} onSort={onSort}>Status</SortableTH>
+                  <SortableTH<ProjectSortKey> sortKey="value" sort={sort} onSort={onSort} align="right">Contract value</SortableTH>
+                  <SortableTH<ProjectSortKey> sortKey="priority" sort={sort} onSort={onSort}>Priority</SortableTH>
+                  <TH>Action</TH>
+                </TR>
+              </THead>
+              <TBody>
+                {sortedRows.map((p) => (
+                  <TR key={p.id}>
+                    <TD mono className="text-xs">{p.code}</TD>
+                    <TD>{p.name}</TD>
+                    <TD>
+                      <ProjectKindBadge kind={p.project_kind as string | null} tenderId={p.tender_id as string | null} />
+                    </TD>
+                    <TD>
+                      <ProjectStatusBadge status={String(p.status)} />
+                    </TD>
+                    <TD align="right" className="tabular-nums text-text-muted">
+                      {moneyIndian(p.contract_value)}
+                    </TD>
+                    <TD tone="muted">{p.priority ? String(p.priority) : '—'}</TD>
+                    <TD>
+                      <Link href={`/projects/${p.id}`} className="text-primary hover:underline">
+                        View
+                      </Link>
+                    </TD>
+                  </TR>
+                ))}
+              </TBody>
+            </Table>
+          </TableWrap>
         </div>
       )}
       {!listQuery.isLoading && !listQuery.isError && (

@@ -11,10 +11,12 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Input } from '@/components/ui/Input';
 import { NativeSelect } from '@/components/ui/Select';
+import { Table, TableWrap, THead, TBody, TR, TH, TD, SortableTH } from '@/components/ui/Table';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { statusLabel } from '@/lib/board-visuals';
 import { day, maybeDay } from '@/lib/finance';
+import { useSort } from '@/lib/useSort';
 import { TenderInstruments } from '@/components/tenders/TenderInstruments';
 
 type Row = Record<string, any>;
@@ -43,6 +45,15 @@ export default function TendersPage() {
     staleTime: 30_000,
   });
   const rows = list.data?.data ?? [];
+  type TenderSortKey = 'tender' | 'client' | 'status' | 'closing' | 'value' | 'eligibility';
+  const { sorted: sortedRows, sort, onSort } = useSort<Row, TenderSortKey>(rows, (t, key) => {
+    if (key === 'tender') return t.tender_no;
+    if (key === 'client') return t.client_name;
+    if (key === 'status') return t.status;
+    if (key === 'closing') return t.closing_date;
+    if (key === 'value') return t.bid_value ?? t.estimated_value;
+    return Number(t.outstanding_required ?? 0);
+  });
 
   return (
     <AppShell>
@@ -75,44 +86,45 @@ export default function TendersPage() {
       ) : rows.length === 0 ? (
         <div className="mt-3"><EmptyState title="No tenders" description="Tenders created here convert into projects once awarded." /></div>
       ) : (
-        <div className="mt-3 overflow-x-auto rounded-xl border border-border bg-surface">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-border text-2xs uppercase tracking-wide text-text-subtle">
-                <th className="p-3 font-medium">Tender</th>
-                <th className="p-3 font-medium">Client</th>
-                <th className="p-3 font-medium">Status</th>
-                <th className="p-3 font-medium">Closing</th>
-                <th className="p-3 text-right font-medium">Value</th>
-                <th className="p-3 font-medium">Eligibility</th>
-                <th className="p-3" />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((t) => {
+        <div className="mt-3 rounded-xl border border-border bg-surface">
+          <TableWrap>
+            <Table>
+              <THead>
+                <TR>
+                  <SortableTH<TenderSortKey> sortKey="tender" sort={sort} onSort={onSort}>Tender</SortableTH>
+                  <SortableTH<TenderSortKey> sortKey="client" sort={sort} onSort={onSort}>Client</SortableTH>
+                  <SortableTH<TenderSortKey> sortKey="status" sort={sort} onSort={onSort}>Status</SortableTH>
+                  <SortableTH<TenderSortKey> sortKey="closing" sort={sort} onSort={onSort}>Closing</SortableTH>
+                  <SortableTH<TenderSortKey> sortKey="value" sort={sort} onSort={onSort} align="right">Value</SortableTH>
+                  <SortableTH<TenderSortKey> sortKey="eligibility" sort={sort} onSort={onSort}>Eligibility</SortableTH>
+                  <TH />
+                </TR>
+              </THead>
+              <TBody>
+                {sortedRows.map((t) => {
                 const outstanding = Number(t.outstanding_required ?? 0);
                 const closingSoon =
                   t.closing_date &&
                   !['AWARDED','REJECTED','CANCELLED'].includes(String(t.status)) &&
                   new Date(String(t.closing_date)).getTime() - Date.now() < 7 * 86_400_000;
                 return (
-                  <tr key={t.id} className="border-b border-border last:border-0 hover:bg-surface-sunken">
-                    <td className="p-3">
+                  <TR key={t.id}>
+                    <TD>
                       <span className="font-medium text-text">{t.tender_no}</span>
                       {t.reference_number ? <span className="ml-2 font-mono text-2xs text-text-subtle">{t.reference_number}</span> : null}
                       {t.department ? <p className="text-2xs text-text-subtle">{t.department}</p> : null}
-                    </td>
-                    <td className="p-3 text-text-muted">{t.client_name ?? '—'}</td>
-                    <td className="p-3">
+                    </TD>
+                    <TD tone="muted">{t.client_name ?? '—'}</TD>
+                    <TD>
                       <span className={`rounded px-1.5 py-0.5 text-2xs font-semibold ${statusTone(String(t.status))}`}>
                         {statusLabel(String(t.status))}
                       </span>
-                    </td>
-                    <td className={`p-3 tabular-nums ${closingSoon ? 'font-medium text-danger' : 'text-text-muted'}`}>
+                    </TD>
+                    <TD className={`tabular-nums ${closingSoon ? 'font-medium text-danger' : 'text-text-muted'}`}>
                       {day(t.closing_date)}
-                    </td>
-                    <td className="p-3 text-right tabular-nums text-text-muted">{money(t.bid_value ?? t.estimated_value)}</td>
-                    <td className="p-3">
+                    </TD>
+                    <TD align="right" className="tabular-nums text-text-muted">{money(t.bid_value ?? t.estimated_value)}</TD>
+                    <TD>
                       {outstanding > 0 ? (
                         <span className="rounded bg-warning-subtle px-1.5 py-0.5 text-2xs font-semibold text-warning">
                           {outstanding} outstanding
@@ -120,15 +132,16 @@ export default function TendersPage() {
                       ) : (
                         <span className="text-2xs text-text-subtle">Complete</span>
                       )}
-                    </td>
-                    <td className="p-3 text-right">
+                    </TD>
+                    <TD align="right">
                       <Button variant="secondary" onClick={() => setSelected(String(t.id))}>Open</Button>
-                    </td>
-                  </tr>
+                    </TD>
+                  </TR>
                 );
               })}
-            </tbody>
-          </table>
+              </TBody>
+            </Table>
+          </TableWrap>
         </div>
       )}
 
