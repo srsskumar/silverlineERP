@@ -53,7 +53,7 @@ depending on project scope.
 | MA-015 | DECISION | org-holidays | The screen's own header says it is "the lookup a field employee actually needs". Live, EMPLOYEE (and tl, pm, payroll, inventory) lack `holiday.read`, so they get the locked state. | `/auth/me` for all roles; `/holidays` 403. | FIXED: owner decision 2026-10-01 #1 ("approved") granted `holiday.read` to EMPLOYEE and every role this finding named (a6d61e6) |
 | MA-016 | P3 | employees | The directory fetches the first 50 (`limit=50`) and ignores `next_cursor`/`has_more`, with no "more" affordance. Search is server-side, so a specific person is still findable, but browsing stops at 50. | Live `has_more:true` for hr. | OPEN: minor, would need cursor paging UI |
 | MA-017 | P3 | automation, analytics | The project chips come from `getProjects()` (`limit=100`, first page only). Admin sees 74 today; past 100 projects the rest are unreachable. The same helper feeds tasks quick-add. | Live `/projects` for admin: 74, `has_more`. | OPEN |
-| MA-018 | P3 (web) | web analytics | The web advisory prints `prediction_timestamp` as a raw ISO instant. Mobile already uses `day()`. | Web `/analytics` source. | OPEN: web, outside this lane |
+| MA-018 | P3 (web) | web analytics | The web advisory prints `prediction_timestamp` as a raw ISO instant. Mobile already uses `day()`. | Web `/analytics` source. | FIXED: both occurrences (`app/analytics/page.tsx`'s delivery advisory and `components/v2/Advisories.tsx`'s workforce advisory) now use `day()`, matching mobile exactly | 2026-10-05 |
 
 Checked and clean (no finding): documents renew payload against
 `documentRenewSchema`. Client create (`{name, client_type}`) returns 201 and
