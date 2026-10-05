@@ -15,7 +15,7 @@ import { Modal, View } from "react-native";
 import { File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { randomUUID } from "expo-crypto";
-import { ApiError } from "../src/api/client";
+import { describeApiError } from "../src/errorFormat";
 import { useAuth } from "../src/auth/AuthContext";
 import {
   getExpenseClaim,
@@ -146,16 +146,17 @@ function ExpensesScreen() {
         // The claim exists; only the submit step failed (no approval policy,
         // etc.). It stays visible below as a DRAFT so it can be sent again.
         setFormError(
-          submitErr instanceof ApiError
-            ? `Claim saved, but could not be submitted yet: ${submitErr.message}`
-            : "Claim saved, but could not be submitted yet.",
+          `Claim saved, but could not be submitted yet: ${describeApiError(submitErr, "unknown reason")}`,
         );
       }
       resetForm();
       setShowForm(false);
       void list.refetch();
     } catch (e) {
-      setFormError(e instanceof ApiError ? e.message : "Could not save the claim");
+      // M-003: this read only the top-level message, which for a
+      // multi-field validation failure is the fixed generic string
+      // "Validation failed" -- the actual reason lives in field_errors.
+      setFormError(describeApiError(e, "Could not save the claim"));
     } finally {
       setSubmitting(false);
     }
@@ -169,7 +170,7 @@ function ExpensesScreen() {
       await postExpenseClaimSubmit(detail.data.id, detail.data.version);
       refresh();
     } catch (e) {
-      setActionError(e instanceof ApiError ? e.message : "Could not submit this claim");
+      setActionError(describeApiError(e, "Could not submit this claim"));
     } finally {
       setBusy(false);
     }
@@ -183,7 +184,7 @@ function ExpensesScreen() {
       await postExpenseClaimWithdraw(detail.data.id, detail.data.version, "Withdrawn from mobile");
       refresh();
     } catch (e) {
-      setActionError(e instanceof ApiError ? e.message : "Could not withdraw this claim");
+      setActionError(describeApiError(e, "Could not withdraw this claim"));
     } finally {
       setBusy(false);
     }
@@ -361,7 +362,7 @@ function ExpenseDetail({
       file.write(bytes);
       await Sharing.shareAsync(file.uri, { mimeType: r.mime_type ?? undefined, dialogTitle: r.file_name });
     } catch (e) {
-      setReceiptError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Could not open this receipt");
+      setReceiptError(describeApiError(e, "Could not open this receipt"));
     } finally {
       if (file?.exists) file.delete();
       setViewingId(null);
@@ -375,7 +376,7 @@ function ExpenseDetail({
       await deleteExpenseReceipt(claim.id, r.id);
       refreshReceipts();
     } catch (e) {
-      setReceiptError(e instanceof ApiError ? e.message : "Could not remove this receipt");
+      setReceiptError(describeApiError(e, "Could not remove this receipt"));
     } finally {
       setRemovingId(null);
     }

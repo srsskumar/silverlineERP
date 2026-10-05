@@ -21,6 +21,7 @@ import {
 } from "../../src/device/auth";
 import { registerForPushNotifications } from "../../src/device/push";
 import { discardOp, listOps, retryOp } from "../../src/sync/queue";
+import { describeApiError } from "../../src/errorFormat";
 import { reviewLink } from "../../src/survey/reviewLink";
 import { useSyncEngine } from "../../src/sync/engine";
 import {
@@ -83,8 +84,11 @@ function MoreScreen() {
       setPreferenceError("");
       await apiFetch("/api/v1/auth/preferences", { method: "PATCH", body: { [key]: value } });
       await preferences.refetch();
-    } catch {
-      setPreferenceError("Connect to the internet to update notification preferences.");
+    } catch (e) {
+      // M-006: this used to say "Connect to the internet..." for any
+      // failure at all, including a genuine 403/422/500 while fully
+      // online, because the catch block never looked at what was thrown.
+      setPreferenceError(describeApiError(e, "Connect to the internet to update notification preferences."));
     }
   }
 
