@@ -9,7 +9,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  buildWorld, idem, joinProgramme, uniq, workDate, type CatalogueWorld, type Headers,
+  buildWorld, idem, joinProgramme, uniq, workDate, NOW, type CatalogueWorld, type Headers,
 } from "./fixture.js";
 
 let w: CatalogueWorld;
@@ -133,6 +133,28 @@ describe("the dashboard", () => {
     expect(await at()).toBe("DATA_SUBMITTED");
     await setStage(villageA, "DATA_SUBMISSION", "COMPLETED");
     expect(await at()).toBe("DATA_APPROVED");
+  });
+
+  it("SG-010: shows the ladder as it stood on an earlier date, not today's live position", async () => {
+    // villageA just climbed the whole ladder to DATA_APPROVED, above, all of
+    // it today -- survey_stage_history has no row before today for it, so
+    // "as of yesterday" should fall back to before any of that happened:
+    // NOT_STARTED (start-gt's own transition to GT_IN_PROGRESS is also
+    // today's history, so yesterday predates even that).
+    const yesterday = workDate(new Date(NOW.getTime() - 86_400_000));
+    const past = await get(w.admin,
+      `/api/v1/survey/projects/${programmeId}/dashboard?to=${yesterday}`);
+    expect(past.status, JSON.stringify(past.body)).toBe(200);
+    const pastVillage = (past.data.villages as Array<{ id: string; position: string }>)
+      .find(v => v.id === villageA);
+    expect(pastVillage?.position).toBe("NOT_STARTED");
+
+    // Today's own query (no `to`, or `to` = today) is untouched by the
+    // reconstruction and still reads the live row.
+    const live = await get(w.admin, `/api/v1/survey/projects/${programmeId}/dashboard`);
+    const liveVillage = (live.data.villages as Array<{ id: string; position: string }>)
+      .find(v => v.id === villageA);
+    expect(liveVillage?.position).toBe("DATA_APPROVED");
   });
 
   it("filters to one rung and keeps the roll-up honest", async () => {

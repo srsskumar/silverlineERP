@@ -5668,8 +5668,46 @@ export async function registerSurveyRoutes(
         [id, u.orgId])).rows;
 
       const asOf = today(u.orgId);
+      /*
+       * SG-010: `to` already bounded acres done elsewhere on this screen, but
+       * position (the ladder rung, the stage filter) always read the live
+       * survey_village_stages row regardless -- "as of 30 June" and "as of
+       * today" showed the same ladder.
+       *
+       * Reconstructed from survey_stage_history rather than from the stage
+       * row: that table is a point-in-time log of every state transition
+       * (changed_at, to_state), which is the one thing actually kept per
+       * day. Stage *dates* (started_on/completed_on) are not logged the same
+       * way -- only their current value exists -- so the lateness/variance
+       * reasoning below still reads live data even when `to` is in the past;
+       * reconstructing a date nobody recorded would be inventing it, not
+       * reporting it. A stage with no history row at or before `to` had not
+       * yet transitioned as of that date, which villagePosition() already
+       * treats the same as an absent key (NOT_STARTED).
+       */
+      const historicalStages = to < asOf
+        ? new Map<string, Record<string, StageState>>(
+          Object.entries(
+            (await pool.query(
+              `SELECT DISTINCT ON (h.survey_village_id, s.code)
+                      h.survey_village_id, s.code, h.to_state
+                 FROM survey_stage_history h
+                 JOIN survey_stages s ON s.id = h.stage_id
+                WHERE h.org_id = $1 AND h.survey_village_id = ANY($2::uuid[])
+                  AND h.changed_at < ($3::date + interval '1 day')
+                ORDER BY h.survey_village_id, s.code, h.changed_at DESC`,
+              [u.orgId, rows.map(r => r.village_id), to])).rows
+              .reduce((acc: Record<string, Record<string, StageState>>, h) => {
+                (acc[h.survey_village_id] ??= {})[h.code] = h.to_state as StageState;
+                return acc;
+              }, {}),
+          ),
+        )
+        : null;
       const villages = rows.map(r => {
-        const stages = (r.stages ?? {}) as Record<string, StageState>;
+        const stages = (historicalStages
+          ? historicalStages.get(String(r.village_id)) ?? {}
+          : r.stages ?? {}) as Record<string, StageState>;
         const plan = (r.stage_plan ?? []) as Array<Record<string, string | null>>;
         // The worst stage is the one worth naming on a list of 1,200 villages.
         const worst = villageVariances(plan.map(pl => ({
