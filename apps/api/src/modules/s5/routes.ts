@@ -221,6 +221,17 @@ const NOTIF_COLS = `n.id, n.type, n.title, n.body, n.entity_type, n.entity_id,
     WHEN 'task' THEN
       (SELECT '/projects/' || t.project_id || '/tasks/' || t.id
          FROM tasks t WHERE t.id = n.entity_id)
+    -- MA-014: entity_id is the comment's own id, not the task's; the task
+    -- it was posted on is where the mention actually needs reading.
+    WHEN 'comment' THEN
+      (SELECT '/projects/' || t.project_id || '/tasks/' || t.id
+         FROM comments c JOIN tasks t ON t.id = c.task_id
+        WHERE c.id = n.entity_id)
+    -- MA-014: no per-row deep link exists on the exceptions screen yet
+    -- (same limit 'report'/'report_schedule' already accept above), so
+    -- this lands on the list rather than staying NULL ("no screen for
+    -- this") for a screen that does exist.
+    WHEN 'attendance_exception' THEN '/attendance/exceptions'
     WHEN 'survey_village' THEN
       (SELECT '/survey?tab=villages&project=' || sv.survey_project_id
               || '&village=' || sv.id

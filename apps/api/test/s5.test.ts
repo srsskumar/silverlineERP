@@ -961,6 +961,11 @@ describe("notifications inbox", () => {
     const found = box.data.find((n) => n.type === "MENTION");
     expect(found).toBeDefined();
     expect(found?.body).toContain(author.username);
+    // MA-014: entity_id on a MENTION is the comment's own id, not the
+    // task's -- href must resolve through comments -> tasks rather than
+    // reading entity_id as a task id (which would 404) or falling through
+    // to NULL ("no screen for this", even though the task screen exists).
+    expect(found?.href).toBe(`/projects/${p.id}/tasks/${t.id}`);
   });
 
   it("emits LEAVE_DECIDED to the requester's linked user", async () => {
@@ -1035,6 +1040,10 @@ describe("notifications inbox", () => {
     const found = box.data.find((n) => n.type === "ATTENDANCE_DECIDED");
     expect(found).toBeDefined();
     expect(found?.entity_id).toBe(exc.id);
+    // MA-014: used to fall through to NULL ("no screen for this") even
+    // though the exceptions screen exists -- no per-row deep link yet, so
+    // this lands on the list, the same way 'report'/'report_schedule' do.
+    expect(found?.href).toBe("/attendance/exceptions");
   });
 
   it("supports unread filter, idempotent read, and read-all counts", async () => {
