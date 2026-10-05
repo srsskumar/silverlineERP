@@ -2739,7 +2739,7 @@ export async function registerSurveyRoutes(
         // another's village before villageOr404 existed. An entry carries a
         // village too, and amending it is exactly the write GCP PATCH was
         // fixed against, so it gets the same check.
-        await villageOr404(db, u.orgId, String(row.survey_village_id), u);
+        const village = await villageOr404(db, u.orgId, String(row.survey_village_id), u);
         await requireCrewForReturn(db, u, String(row.survey_village_id));
         version(req, row as { version: number });
 
@@ -2780,7 +2780,12 @@ export async function registerSurveyRoutes(
 
         const sets: string[] = [], values: unknown[] = [id];
         for (const key of ['teams_deployed', 'dgps_base', 'dgps_rovers', 'notes',
-          'govt_staff_present', 'crew_present'] as const) {
+          'govt_staff_present', 'crew_present',
+          // SG-016: these four were accepted by this schema and silently
+          // dropped -- a correction to why a day ran low or GT ran late had
+          // nowhere to go once the day was already filed.
+          'low_progress_reason', 'low_progress_remarks',
+          'gt_variance_reason', 'gt_variance_remarks'] as const) {
           if (input[key] !== undefined) { values.push(input[key]); sets.push(`${key} = $${values.length}`); }
         }
         if (sets.length) {
@@ -2808,6 +2813,99 @@ export async function registerSurveyRoutes(
                ON CONFLICT (entry_id, measure_id) DO UPDATE SET quantity = EXCLUDED.quantity`,
               [u.orgId, id, measure.id, quantity]);
             }
+        }
+
+        /*
+         * SG-016: a corrected rover day replaces the day's rover rows
+         * wholesale, the same way `values` replaces a measure's figure --
+         * not merged, because the array is the day's whole account of who
+         * carried what, and a partial list would silently orphan whichever
+         * rover was left out. Validated the same way the day was validated
+         * when it was first filed (§45/§46 of checkRoverDay's own rules,
+         * and the same carrying-your-own-instrument ownership check).
+         */
+        if (input.rovers) {
+          const roverRows = input.rovers;
+          const problems = checkRoverDay(roverRows.map(r => ({
+            assetId: r.asset_id, status: r.status,
+            idleReason: r.idle_reason, remarks: r.remarks, areaAc: r.area_ac,
+          })));
+          if (problems.length) fail('ROVER_DAY_INVALID', problems.join(' '), 422);
+          for (const r of roverRows) await inOrg(db, 'assets', r.asset_id, u.orgId);
+
+          const supervises = u.permissions.includes('survey.manage')
+            || u.permissions.includes('survey.assign');
+          if (!supervises && roverRows.length) {
+            const mine = (await db.query(
+              `SELECT a.asset_id,
+                      (holder.reports_to = me.id) AS reports_to_me,
+                      (a.employee_id = me.id)     AS is_mine
+                 FROM asset_assignments a
+                 JOIN employees holder ON holder.id = a.employee_id
+                 JOIN users caller ON caller.id = $1
+                 JOIN employees me ON me.id = caller.employee_id
+                WHERE a.org_id = $2 AND a.returned_at IS NULL
+                  AND a.asset_id = ANY($3::uuid[])`,
+              [u.id, u.orgId, roverRows.map(r => r.asset_id)])).rows;
+            const allowed = new Map(mine.map(r => [String(r.asset_id), r]));
+            for (const r of roverRows) {
+              const held = allowed.get(String(r.asset_id));
+              if (!held || !(held.is_mine || held.reports_to_me)) {
+                fail('ROVER_NOT_YOURS',
+                  'That instrument is not issued to you. You can record the day for a rover you '
+                  + 'are carrying, or for somebody who reports to you — anything else has to be '
+                  + 'filed by their team lead or project manager.', 403);
+              }
+            }
+          }
+
+          await db.query('DELETE FROM survey_entry_rovers WHERE entry_id = $1', [id]);
+          for (const r of roverRows) {
+            await db.query(
+              `INSERT INTO survey_entry_rovers(org_id, entry_id, asset_id, status,
+                 idle_reason, remarks, area_ac, employee_id)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+              [u.orgId, id, r.asset_id, r.status,
+                r.idle_reason ?? null, r.remarks ?? null, r.area_ac ?? null,
+                r.employee_id ?? null]);
+          }
+          // The count is derived from the rows, the same as on creation, so
+          // the two can never disagree after an amendment either.
+          const roversUsed = roverRows.filter(r => r.status === 'UTILIZED').length;
+          await db.query('UPDATE survey_entries SET dgps_rovers = $2 WHERE id = $1', [id, roversUsed]);
+        }
+
+        /*
+         * SG-016: the low-progress reason was demanded when the day was
+         * first filed, but a later amendment could remove the measures (or
+         * the rovers) that made it low without ever being asked again --
+         * the requirement existed once, at creation, and nowhere after.
+         * Re-read the day's current state rather than trust the patch body:
+         * a field this PATCH did not touch (an existing reason, say) still
+         * has to count, and only the row itself has the merged truth.
+         */
+        {
+          const current = (await db.query(
+            'SELECT dgps_rovers, low_progress_reason FROM survey_entries WHERE id = $1', [id])).rows[0];
+          const areaToday = Object.entries(Object.fromEntries((await db.query(
+            `SELECT mm.code, ev.quantity FROM survey_entry_values ev
+               JOIN survey_measures mm ON mm.id = ev.measure_id
+              WHERE ev.entry_id = $1`, [id])).rows.map(r => [r.code, Number(r.quantity)])))
+            .filter(([code]) => m.byCode.get(code)?.basis === 'EXTENT')
+            .reduce((t, [, v]) => t + Number(v ?? 0), 0);
+          const roversOut = input.rovers ? input.rovers.length : Number(current.dgps_rovers ?? 0);
+          const programme = await inOrg(db, 'survey_projects', village.survey_project_id, u.orgId);
+          const low = checkLowProgress({
+            areaToday,
+            threshold: programme.low_progress_threshold_ac === null
+              ? null : Number(programme.low_progress_threshold_ac),
+            roversOut,
+          });
+          if (low.needsReason && !current.low_progress_reason) {
+            fail('LOW_PROGRESS_REASON_REQUIRED',
+              `${areaToday} acres is below the ${low.threshold} acre threshold for this programme. Say why.`,
+              422);
+          }
         }
 
         const updated = (await db.query(
