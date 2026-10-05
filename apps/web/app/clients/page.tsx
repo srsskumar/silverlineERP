@@ -24,7 +24,7 @@ export default function Page(){
       {key:'name',label:'Organisation name',required:true},
       {key:'client_type',label:'Type',type:'select',required:true,options:choices(['GOVERNMENT','PRIVATE'])},
       {key:'category',label:'Category'},
-      {key:'gstin',label:'GSTIN'},
+      {key:'gstin',label:'GSTIN',type:'gstin'},
       {key:'pan',label:'PAN'},
       {key:'state',label:'State'},{key:'district',label:'District'},
       {key:'payment_terms',label:'Payment terms'},

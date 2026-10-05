@@ -1,5 +1,5 @@
 import {z} from 'zod';
-export const PROVIDERS=['SMS','WHATSAPP','WEATHER','ACCOUNTING'] as const;
+export const PROVIDERS=['SMS','WHATSAPP','WEATHER','ACCOUNTING','GSTIN'] as const;
 export type Provider=typeof PROVIDERS[number];
 export class ProviderError extends Error {constructor(readonly code:string,readonly retryable:boolean){super(code);}}
 /** Operators configure their own vendor adapter. Credentials never leave the server. */
@@ -20,3 +20,23 @@ export async function callProvider(provider:Provider,payload:unknown,key:string,
  }catch{throw new ProviderError('INVALID_PROVIDER_RESPONSE',false);}
 }
 export const weatherResponse=z.object({observed_at:z.string().datetime(),summary:z.string().max(500),temperature_c:z.number().min(-100).max(70),precipitation_probability:z.number().min(0).max(1),alerts:z.array(z.object({severity:z.enum(['INFO','WATCH','WARNING']),message:z.string().max(500)})).max(20)});
+/**
+ * What the operator's GSTIN adapter is expected to normalize the GSTN
+ * taxpayer lookup into, independent of whichever GSP/aggregator they've
+ * actually wired up behind PROVIDER_GSTIN_URL. `legal_name` is the one a
+ * client's own record should be checked against -- a trade name is what
+ * the business calls itself, not who it legally is, and the two are often
+ * deliberately different.
+ */
+export const gstinVerificationResponse=z.object({
+ gstin:z.string().length(15),
+ legal_name:z.string().trim().max(200),
+ trade_name:z.string().trim().max(200).nullable(),
+ // The taxpayer's own GST registration status -- distinct from this call's
+ // own outcome (route-level `status`: VERIFIED/UNAVAILABLE/NOT_CONFIGURED),
+ // so the two are never spread into the same field.
+ registration_status:z.enum(['ACTIVE','CANCELLED','SUSPENDED','PROVISIONAL']),
+ registration_date:z.string().nullable(),
+ state:z.string().trim().max(100).nullable(),
+ constitution:z.string().trim().max(100).nullable(),
+});

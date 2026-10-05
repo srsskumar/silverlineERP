@@ -23,7 +23,7 @@ export function Panel({title,children}:{title:string;children:ReactNode}){return
 export function Can({permission,children}:{permission:string|string[];children:ReactNode}){const {session}=useAuth();const wanted=Array.isArray(permission)?permission:[permission];return wanted.some(p=>session?.permissions.includes(p))?<>{children}</>:null;}
 export interface Field {
  key:string;label:string;
- type?:'text'|'date'|'number'|'password'|'email'|'checkbox'|'textarea'|'select'|'multi_select'|'employee'|'user';
+ type?:'text'|'date'|'number'|'password'|'email'|'checkbox'|'textarea'|'select'|'multi_select'|'employee'|'user'|'gstin';
  required?:boolean;options?:{value:string;label:string}[];source?:string;labelKey?:string;default?:unknown;
  /**
   * Endpoint that creates a missing option, e.g. 'project-categories'.
@@ -76,6 +76,42 @@ function SelectField({field,value,onChange}:{field:Field;value:unknown;onChange:
   emptyHint={field.hint}
  />;
 }
+type GstinResult={status:'VERIFIED'|'NOT_CONFIGURED'|'UNAVAILABLE';legal_name:string|null;trade_name:string|null;registration_status:string|null};
+/**
+ * A GSTIN's own check digit (already enforced by the field's validation)
+ * proves the number is self-consistent, not that it was ever issued or is
+ * still active -- a cancelled registration or a transposed-but-valid number
+ * both pass that. This calls out to the GST Network (through the operator's
+ * own configured provider) for the one question the checksum can't answer:
+ * is this a real, currently active taxpayer, and what is their legal name.
+ *
+ * Advisory, like the duplicate-client check next to it: it reports what it
+ * finds and lets the person decide, rather than blocking a save the provider
+ * has not been configured to make possible yet.
+ */
+function GstinField({value,onChange}:{value:unknown;onChange:(v:unknown)=>void}){
+ const [result,setResult]=useState<GstinResult|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState<unknown>(null);
+ const gstin=String(value??'');
+ const verify=async()=>{
+  setBusy(true);setError(null);setResult(null);
+  try{const {data}=await apiRequest<GstinResult>(`/api/v1/integrations/gstin-verify?gstin=${encodeURIComponent(gstin)}`);setResult(data);}
+  catch(e){setError(e);}
+  finally{setBusy(false);}
+ };
+ return <div className="space-y-1.5">
+  <div className="flex gap-2">
+   <Input className="w-full" value={gstin} onChange={e=>{onChange(e.target.value);setResult(null);setError(null);}}/>
+   <Button type="button" variant="secondary" loading={busy} disabled={gstin.length!==15} onClick={verify}>Verify</Button>
+  </div>
+  {result?.status==='VERIFIED'?<p className="text-xs text-success">
+    {result.legal_name}{result.trade_name?` (${result.trade_name})`:''} — {result.registration_status?.toLowerCase()}
+   </p>
+   :result?.status==='NOT_CONFIGURED'?<p className="text-xs text-text-subtle">GSTIN verification is not set up for this organisation yet.</p>
+   :result?.status==='UNAVAILABLE'?<p className="text-xs text-warning">Could not reach the GST Network just now — try again shortly.</p>
+   :error?<p className="text-xs text-danger">That GSTIN could not be checked.</p>
+   :null}
+ </div>;
+}
 
 /*
  * signOutMessage: for the few changes that revoke every session on the
@@ -95,7 +131,7 @@ export function MutationForm({path,fields,method='POST',version,initial={},submi
   * blank is the one behaviour every caller needs regardless of what else
   * they do with onSaved (redirect, open the new record, refetch a list).
   */
- return <form className="space-y-4" onSubmit={async e=>{e.preventDefault();setBusy(true);setError(undefined);setSaved(false);try{const body=Object.fromEntries(Object.entries(values).filter(([,v])=>v!==''));const {data}=await apiRequest<Row>('/api/v1/'+path,{method,body:transform?transform(body):body,headers:{...(version!==undefined?{'If-Match':String(version)}:{})}});setSaved(true);if(signOutMessage){signOutWithNotice(signOutMessage);return;}setValues(blank());await client.invalidateQueries();onSaved?.(data);}catch(e){setError(e);}finally{setBusy(false);}}}><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{fields.map(f=><label key={f.key} className="block text-sm font-medium text-text-muted"><span className="mb-1 block">{f.label}{f.required?' *':''}</span>{f.type==='employee'?<EmployeePicker value={String(values[f.key]??'')} onChange={v=>setValues({...values,[f.key]:v})} hint={f.hint}/>:f.type==='user'?<UserPicker value={String(values[f.key]??'')} onChange={v=>setValues({...values,[f.key]:v})} hint={f.hint}/>:f.source||f.type==='select'||f.type==='multi_select'?<SelectField field={f} value={values[f.key]} onChange={v=>setValues({...values,[f.key]:v})}/>:f.type==='checkbox'?<input type="checkbox" checked={!!values[f.key]} onChange={e=>setValues({...values,[f.key]:e.target.checked})}/>:f.type==='textarea'?<Textarea className="w-full" required={f.required} value={String(values[f.key])} onChange={e=>setValues({...values,[f.key]:e.target.value})}/>:<Input className="w-full" type={f.type??'text'} required={f.required} step={f.type==='number'?'any':undefined} value={String(values[f.key])} onChange={e=>setValues({...values,[f.key]:e.target.value})}/>}</label>)}</div>{error?<ErrorCard error={error}/>:null}<div className="flex items-center gap-3"><Button type="submit" loading={busy}>{submit}</Button>{saved?<p role="status" className="text-sm text-success">Saved successfully.</p>:null}</div></form>;
+ return <form className="space-y-4" onSubmit={async e=>{e.preventDefault();setBusy(true);setError(undefined);setSaved(false);try{const body=Object.fromEntries(Object.entries(values).filter(([,v])=>v!==''));const {data}=await apiRequest<Row>('/api/v1/'+path,{method,body:transform?transform(body):body,headers:{...(version!==undefined?{'If-Match':String(version)}:{})}});setSaved(true);if(signOutMessage){signOutWithNotice(signOutMessage);return;}setValues(blank());await client.invalidateQueries();onSaved?.(data);}catch(e){setError(e);}finally{setBusy(false);}}}><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{fields.map(f=><label key={f.key} className="block text-sm font-medium text-text-muted"><span className="mb-1 block">{f.label}{f.required?' *':''}</span>{f.type==='employee'?<EmployeePicker value={String(values[f.key]??'')} onChange={v=>setValues({...values,[f.key]:v})} hint={f.hint}/>:f.type==='user'?<UserPicker value={String(values[f.key]??'')} onChange={v=>setValues({...values,[f.key]:v})} hint={f.hint}/>:f.type==='gstin'?<GstinField value={values[f.key]} onChange={v=>setValues({...values,[f.key]:v})}/>:f.source||f.type==='select'||f.type==='multi_select'?<SelectField field={f} value={values[f.key]} onChange={v=>setValues({...values,[f.key]:v})}/>:f.type==='checkbox'?<input type="checkbox" checked={!!values[f.key]} onChange={e=>setValues({...values,[f.key]:e.target.checked})}/>:f.type==='textarea'?<Textarea className="w-full" required={f.required} value={String(values[f.key])} onChange={e=>setValues({...values,[f.key]:e.target.value})}/>:<Input className="w-full" type={f.type??'text'} required={f.required} step={f.type==='number'?'any':undefined} value={String(values[f.key])} onChange={e=>setValues({...values,[f.key]:e.target.value})}/>}</label>)}</div>{error?<ErrorCard error={error}/>:null}<div className="flex items-center gap-3"><Button type="submit" loading={busy}>{submit}</Button>{saved?<p role="status" className="text-sm text-success">Saved successfully.</p>:null}</div></form>;
 }
 /*
  * Sorts on the server, not the page already in memory.
