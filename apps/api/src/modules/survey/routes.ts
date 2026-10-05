@@ -2520,7 +2520,14 @@ export async function registerSurveyRoutes(
           idleReason: r.idle_reason, remarks: r.remarks, areaAc: r.area_ac,
         })));
         if (problems.length) fail('ROVER_DAY_INVALID', problems.join(' '), 422);
-        for (const r of roverRows) await inOrg(db, 'assets', r.asset_id, u.orgId);
+        for (const r of roverRows) {
+          await inOrg(db, 'assets', r.asset_id, u.orgId);
+          // employee_id has no org-scoped FK at the database level (unlike
+          // asset_id's own inOrg check above), so an unvalidated value here
+          // could attribute a day's rover work to another organisation's
+          // employee row.
+          if (r.employee_id) await inOrg(db, 'employees', r.employee_id, u.orgId);
+        }
 
         /*
          * A crew member reports the instrument in their own hands.
@@ -2831,7 +2838,10 @@ export async function registerSurveyRoutes(
             idleReason: r.idle_reason, remarks: r.remarks, areaAc: r.area_ac,
           })));
           if (problems.length) fail('ROVER_DAY_INVALID', problems.join(' '), 422);
-          for (const r of roverRows) await inOrg(db, 'assets', r.asset_id, u.orgId);
+          for (const r of roverRows) {
+            await inOrg(db, 'assets', r.asset_id, u.orgId);
+            if (r.employee_id) await inOrg(db, 'employees', r.employee_id, u.orgId);
+          }
 
           const supervises = u.permissions.includes('survey.manage')
             || u.permissions.includes('survey.assign');
