@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { dateStringSchema } from './s1.js';
-import { isValidUdyam, isValidGstRate } from './india.js';
+import { isValidUdyam, isValidGstRate, isValidGstin } from './india.js';
 import type { RoleCode } from './rbac.js';
 import { ApiError } from './errors.js';
 
@@ -27,6 +27,10 @@ export const decimalSchema = z.union([z.string(), z.number().finite()]).transfor
  */
 export const MSME_CATEGORIES = ['MICRO', 'SMALL', 'MEDIUM'] as const;
 export const vendorSchema = z.object({code:text,name:text,contact:z.string().max(1000).optional(),tax_id:z.string().max(100).optional(),status:z.enum(['ACTIVE','INACTIVE']).default('ACTIVE'),
+ // Not a column on vendors, same as clients' own gstin: becomes the primary
+ // row in party_gst_registrations (party_type='VENDOR'), one per state.
+ gstin:z.string().trim().toUpperCase().refine(isValidGstin,
+   'That GSTIN fails its check digit or names an unknown state').optional(),
  msme_registered:z.boolean().optional(),
  udyam_number:z.string().trim().toUpperCase().max(25)
    .refine(v=>isValidUdyam(v),'Not a valid Udyam number (format UDYAM-XX-00-0000000)')

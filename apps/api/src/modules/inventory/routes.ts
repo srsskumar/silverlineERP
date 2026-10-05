@@ -3,13 +3,13 @@ import { likeContains } from "../../common/like.js";
 import {scopedReads} from "../../common/scopedReads.js";
 import type { FastifyInstance,FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
-import { vendorSchema,itemSchema,stockSchema,invoiceSchema,invoiceLinesUpdateSchema,computeInvoice,assetSchema,assetLookupSchema,assetAssignSchema,assetBulkAssignSchema,assetTransferSchema,assetAllocationEditSchema,assetLookupCode,assetTransitionSchema,assetAuditSchema,assetLocation,percentOf,type InvoiceLineInput as GstInvoiceLineInput } from '@silverline/shared';
+import { vendorSchema,itemSchema,stockSchema,invoiceSchema,invoiceLinesUpdateSchema,computeInvoice,assetSchema,assetLookupSchema,assetAssignSchema,assetBulkAssignSchema,assetTransferSchema,assetAllocationEditSchema,assetLookupCode,assetTransitionSchema,assetAuditSchema,assetLocation,percentOf,parseGstin,type InvoiceLineInput as GstInvoiceLineInput } from '@silverline/shared';
 import { buildAuthenticate,requirePermission,requireAnyPermission,scopesForPermission } from '../../common/auth.js';
 import { actor,parse,page,inOrg,mutate,version,fail,projectAccess,employeeAccess,sortClause } from '../../common/domain.js';
 
 /** Sortable columns behind each path's own table, for the shared list loop below. */
 const LIST_SORT_COLUMNS: Record<string, Record<string, string>> = {
- vendors: { code: 'a.code', name: 'a.name', contact: 'a.contact', status: 'a.status' },
+ vendors: { code: 'a.code', name: 'a.name', contact: 'a.contact', status: 'a.status', gstin: 'gstin' },
  inventory_items: { code: 'a.code', name: 'a.name', unit: 'a.unit', low_stock_threshold: 'a.low_stock_threshold' },
  assets: { asset_code: 'a.asset_code', name: 'a.name', status: 'a.status', condition: 'a.condition' },
 };
@@ -105,18 +105,38 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
           ||' · '||a.asset_code AS picker_label,
         (SELECT p.name FROM asset_assignments x JOIN projects p ON p.id=x.project_id
           WHERE x.asset_id=a.id AND x.returned_at IS NULL LIMIT 1) AS held_for_project`
-     :'';
+     :table==='vendors'
+      // Same join clients' own list needed (§6.5): gstin lives in
+      // party_gst_registrations now, not a column on this table.
+      ?`,(SELECT r.gstin FROM party_gst_registrations r
+           WHERE r.party_type='VENDOR' AND r.party_id=a.id AND r.is_primary) AS gstin`
+      :'';
    const order=sortClause(req,LIST_SORT_COLUMNS[table]??{},'a.created_at DESC,a.id DESC','a.id');
    const rows=await pool.query(`SELECT a.*${extra} FROM ${table} a WHERE ${where} ORDER BY ${order} LIMIT $2 OFFSET $3`,values);
    return {data:rows.rows.slice(0,limit),has_more:rows.rows.length>limit,next_offset:rows.rows.length>limit?offset+limit:null};
   });
   app.post(`/api/v1/${path}`,{preHandler:guard(`${permission}.manage`)},async(req,reply)=>{
-   const input=parse(schema as any,req.body) as Record<string,unknown>,u=actor(req);
+   const parsed=parse(schema as any,req.body) as Record<string,unknown>,u=actor(req);
    const row=await mutate(pool,req,`${permission}.create`,table,async db=>{
+    // gstin is accepted on the request for convenience but is not a column
+    // on vendors any more than it is on clients (§6.5) -- it becomes the
+    // primary party_gst_registrations row below, same pattern as crm's
+    // client.create.
+    const {gstin,...input}=parsed;
     if(input.vendor_id)await inOrg(db,'vendors',String(input.vendor_id),u.orgId);
     if(table==='assets')await checkAssetVocabulary(db,u.orgId,input);
     const keys=Object.keys(input),values=[u.orgId,u.id,...Object.values(input)];
-    const r=await db.query(`INSERT INTO ${table}(org_id,created_by,${keys.join(',')}) VALUES(${values.map((_,i)=>`$${i+1}`).join(',')}) RETURNING *`,values);return r.rows[0];
+    const r=await db.query(`INSERT INTO ${table}(org_id,created_by,${keys.join(',')}) VALUES(${values.map((_,i)=>`$${i+1}`).join(',')}) RETURNING *`,values);
+    const created=r.rows[0];
+    if(table==='vendors'&&gstin){
+     const parsedGstin=parseGstin(String(gstin));
+     if(!parsedGstin)fail('VALIDATION_ERROR','That GSTIN could not be parsed');
+     await db.query(
+      `INSERT INTO party_gst_registrations(org_id,created_by,party_type,party_id,gstin,state_code,is_primary)
+       VALUES($1,$2,'VENDOR',$3,$4,$5,TRUE)`,
+      [u.orgId,u.id,created.id,String(gstin).toUpperCase(),parsedGstin.stateCode]);
+    }
+    return created;
    });return reply.code(201).send(row);
   });
   app.patch(`/api/v1/${path}/:id`,{preHandler:guard(`${permission}.manage`)},async req=>{
@@ -129,6 +149,9 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    // deactivated item. Keep only the keys the caller actually sent.
    const sent=(req.body??{}) as Record<string,unknown>;
    const input=Object.fromEntries(Object.entries(parsed).filter(([k])=>k in sent));
+   // Same rule as a client's own gstin: one per state, managed through the
+   // dedicated registrations endpoint after creation, not a generic PATCH.
+   if(table==='vendors'&&'gstin' in input)fail('VALIDATION_ERROR','A vendor holds one GSTIN per state. Manage them through /parties/vendor/:id/gst-registrations.');
    return mutate(pool,req,`${permission}.update`,table,async db=>{
     const old=await inOrg(db,table,id,u.orgId,true);if(table==='assets')await assetAccess(req,id);version(req,old as {version:number});
     if(input.vendor_id)await inOrg(db,'vendors',String(input.vendor_id),u.orgId);
