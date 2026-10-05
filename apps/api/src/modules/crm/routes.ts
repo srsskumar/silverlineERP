@@ -61,9 +61,16 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
     if (q.search) { values.push(likeContains(q.search)); where += ` AND (name ILIKE $${values.length} ESCAPE '!' OR code ILIKE $${values.length} ESCAPE '!')`; }
     if (q.client_type) { values.push(q.client_type); where += ` AND client_type = $${values.length}`; }
     if (q.status) { values.push(q.status); where += ` AND status = $${values.length}`; }
-    const order = sortClause(req, { code: 'code', name: 'name', client_type: 'client_type', status: 'status' }, 'name, id');
+    const order = sortClause(req, { code: 'code', name: 'name', client_type: 'client_type', gstin: 'gstin', status: 'status' }, 'name, id');
+    // gstin moved off this table into party_gst_registrations (migration 037,
+    // one row per state) -- the primary one is what the register used to show
+    // as a single column, so it's joined back in rather than left to read as
+    // permanently blank.
     const rows = (await pool.query(
-      `SELECT * FROM clients WHERE ${where} ORDER BY ${order} LIMIT $2 OFFSET $3`, values)).rows;
+      `SELECT clients.*,
+              (SELECT r.gstin FROM party_gst_registrations r
+                WHERE r.party_type = 'CLIENT' AND r.party_id = clients.id AND r.is_primary) AS gstin
+         FROM clients WHERE ${where} ORDER BY ${order} LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit, next_offset: rows.length > limit ? offset + limit : null };
   });
 
