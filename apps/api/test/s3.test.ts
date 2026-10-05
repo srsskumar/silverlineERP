@@ -889,15 +889,19 @@ describe("leave request create", () => {
     const { emp, eId, types } = await chainFixture();
     const adminH = await adminHeaders();
     const from = minusDays(10);
+    const to = minusDays(8);
     await setBalance(adminH, eId, types["SL"] as string, yr(from), 10);
     const res = await fileLeave(emp.headers, {
       leave_type_id: types["SL"],
       from_date: from,
-      to_date: minusDays(8),
+      to_date: to,
       reason: "was sick, filing late",
     });
     expect(res.statusCode).toBe(201);
-    expect((res.json() as { total_days: number }).total_days).toBe(3);
+    // SL is paid (D-012 sandwich rule), so a Sunday landing in this 3-day
+    // window is not debited -- workingDaysCount so the expectation doesn't
+    // depend on which weekday "today" happens to be.
+    expect((res.json() as { total_days: number }).total_days).toBe(workingDaysCount(from, to));
   });
 
   it("rejects over-balance requests with the exact available (422 INSUFFICIENT_BALANCE)", async () => {
