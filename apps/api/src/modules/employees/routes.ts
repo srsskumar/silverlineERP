@@ -35,6 +35,7 @@ import {
 } from "@silverline/shared";
 import { buildAuthenticate, requireAllPermissions, requirePermission } from "../../common/auth.js";
 import { mutate } from "../../common/domain.js";
+import { requireStaffing } from "../../common/surveyAuthority.js";
 import { resolveScopes, employeeScopeClause } from "../../common/scopes.js";
 import { writeAudit } from "../../common/audit.js";
 import {
@@ -2612,14 +2613,22 @@ export async function registerEmployeeRoutes(
               WHERE employee_id = $1 AND org_id = $2 AND released_on IS NULL`,
             [id, user.orgId])).rows as Array<{ survey_project_id: string; project_role: string }>;
           const wanted = new Map(input.programmes.map((p) => [p.survey_project_id, p.project_role]));
-          const changing =
-            current.length !== wanted.size
-            || current.some((c) => wanted.get(c.survey_project_id) !== c.project_role);
-          if (changing && !user.permissions.includes('survey.assign')) {
-            throw new ApiError({
-              status: 403, code: 'FORBIDDEN',
-              message: 'Changing survey programme assignments needs the survey.assign permission',
-            });
+          /*
+           * SV-029: `survey.assign` alone said nothing about which
+           * programme -- a shipped role never combines it with the
+           * directory-wide `users.manage` this whole route already needs,
+           * so it complies today, but a custom role mixing the two would
+           * pass for any programme in the organisation. Per-programme,
+           * mirroring the identical rule survey/routes.ts's own writes
+           * (enrolment, crew assignment) already apply through the same
+           * shared requireStaffing -- an admin, a team leader on that one
+           * programme, or its own PM, not a flat permission.
+           */
+          const current_by_id = new Map(current.map((c) => [c.survey_project_id, c.project_role]));
+          const touched = new Set([...current_by_id.keys(), ...wanted.keys()]
+            .filter((pid) => current_by_id.get(pid) !== wanted.get(pid)));
+          for (const programmeId of touched) {
+            await requireStaffing(db, user, programmeId, 'change this employee’s survey programme assignments');
           }
           for (const p of input.programmes) {
             const found = await db.query(

@@ -36,10 +36,14 @@ async function headersFor(username: string, password: string) {
 
 async function mkEmployee(withLogin: boolean, roles: string[] = ["EMPLOYEE"]) {
   const tag = randomUUID().slice(0, 8);
+  // Unique per call (not the fixed 9000000000 this file's other one-off
+  // fixtures use): a test needing two employees of its own, as SV-029's does,
+  // would otherwise collide on uk_emp_phone.
+  const phone = `+91${(7000000000 + (parseInt(tag, 16) % 900000000)).toString()}`;
   const emp = await pool.query(
     `INSERT INTO employees (org_id, emp_no, first_name, last_name, phone, date_of_joining)
-     VALUES ($1,$2,'Ravi','Kumar','+919000000000',CURRENT_DATE) RETURNING id`,
-    [orgId, `EMP${tag}`],
+     VALUES ($1,$2,'Ravi','Kumar',$3,CURRENT_DATE) RETURNING id`,
+    [orgId, `EMP${tag}`, phone],
   );
   const employeeId = emp.rows[0].id as string;
   let userId: string | null = null;
@@ -341,7 +345,7 @@ describe("survey programmes", () => {
     expect(res.statusCode).toBe(422);
   });
 
-  it("needs survey.assign to change a programme, but not to leave one alone", async () => {
+  it("needs staffing authority to change a programme, but not to leave one alone", async () => {
     const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
     const programme = await mkProgramme("HR cannot touch this");
     const { employeeId } = await mkEmployee(true);
@@ -367,9 +371,49 @@ describe("survey programmes", () => {
     });
     expect(unchanged.statusCode).toBe(200);
 
-    // Changing one is not.
+    // Changing one is not: HR_MANAGER has users.manage (reaches this route
+    // at all) but no staffing authority on any programme (not admin, not a
+    // team leader enrolled on it, not its PM).
     const changed = await put(hr, employeeId, { project_access: "ORGANISATION", programmes: [] });
     expect(changed.statusCode).toBe(403);
+  });
+
+  it("SV-029: staffing authority on one programme does not authorise another", async () => {
+    // Before this fix, changing *any* programme here needed only the flat
+    // survey.assign permission -- true on no shipped role alongside
+    // users.manage, so it complied today, but nothing stopped a custom role
+    // combining the two from editing a programme it had no standing on at
+    // all. The rule has to be per-programme, the same one
+    // survey/routes.ts's own writes already use.
+    const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
+    const programmeA = await mkProgramme("TL's own programme");
+    const programmeB = await mkProgramme("TL has nothing to do with this one");
+    const { employeeId: subjectId } = await mkEmployee(true);
+
+    // The actor: users.manage (reaches the route) + TEAM_LEAD (the role
+    // mayStaffProgramme defers to onProgramme for), enrolled only on A.
+    const { employeeId: actorEmployeeId, username: actorUsername } =
+      await mkEmployee(true, ["HR_MANAGER", "TEAM_LEAD"]);
+    await pool.query(
+      `INSERT INTO survey_project_employees
+         (org_id, survey_project_id, employee_id, project_role, assigned_on, created_by)
+       SELECT $1, $2, $3, 'TEAM_LEAD', CURRENT_DATE, id FROM users WHERE username = $4`,
+      [orgId, programmeA, actorEmployeeId, ADMIN_USERNAME]);
+    const tl = await headersFor(actorUsername, "Pass1234!");
+
+    // Putting the subject on B, which the actor has no standing on, is refused.
+    const onB = await put(tl, subjectId, {
+      project_access: "ORGANISATION",
+      programmes: [{ survey_project_id: programmeB, project_role: "GT_USER" }],
+    });
+    expect(onB.statusCode, JSON.stringify(onB.json())).toBe(403);
+
+    // The identical call against A, where the actor is TEAM_LEAD, succeeds.
+    const onA = await put(tl, subjectId, {
+      project_access: "ORGANISATION",
+      programmes: [{ survey_project_id: programmeA, project_role: "GT_USER" }],
+    });
+    expect(onA.statusCode, JSON.stringify(onA.json())).toBe(200);
   });
 });
 
