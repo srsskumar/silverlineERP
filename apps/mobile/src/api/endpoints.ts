@@ -1537,10 +1537,12 @@ export interface DirectoryEmployee {
 export async function getEmployeeDirectory(params?: {
   q?: string;
   status?: string;
+  cursor?: string;
 }): Promise<{ items: DirectoryEmployee[]; nextCursor: string | null; hasMore: boolean }> {
   const q = new URLSearchParams({ limit: "50" });
   if (params?.q) q.set("q", params.q);
   if (params?.status) q.set("status", params.status);
+  if (params?.cursor) q.set("cursor", params.cursor);
   const { data } = await cachedRead(`getEmployeeDirectory:${q.toString()}`, () =>
     apiFetch<{ data?: DirectoryEmployee[]; next_cursor?: string | null; has_more?: boolean }>(
       `/api/v1/employees?${q.toString()}`,

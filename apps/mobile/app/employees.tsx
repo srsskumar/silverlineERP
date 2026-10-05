@@ -9,7 +9,7 @@
  * this screen makes no attempt to request or reconstruct the full numbers.
  */
 import { router } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Modal, View } from "react-native";
 import { useAuth } from "../src/auth/AuthContext";
@@ -23,6 +23,7 @@ import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
+  Button,
   Card,
   Divider,
   EmptyState,
@@ -41,10 +42,18 @@ function EmployeesScreen() {
   const canRead = canDo("employee.read");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // MA-016: the directory API pages at 50 (has_more/next_cursor); this
+  // screen used to ask only for the first page and never read either,
+  // so browsing silently stopped at 50 past-the-first-50 people were
+  // still only reachable through search. Accumulates pages locally since
+  // this is a cursor, not an offset -- "go back" isn't a thing a cursor
+  // API supports, so "Load more" grows the list rather than replacing it.
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [accumulated, setAccumulated] = useState<DirectoryEmployee[]>([]);
 
   const directory = useQuery({
-    queryKey: ["employees", "directory", search],
-    queryFn: () => getEmployeeDirectory(search.trim() ? { q: search.trim() } : undefined),
+    queryKey: ["employees", "directory", search, cursor],
+    queryFn: () => getEmployeeDirectory({ ...(search.trim() ? { q: search.trim() } : {}), ...(cursor ? { cursor } : {}) }),
     enabled: canRead,
   });
   const detail = useQuery({
@@ -53,7 +62,15 @@ function EmployeesScreen() {
     enabled: Boolean(selectedId),
   });
 
-  const rows = directory.data?.items ?? [];
+  // A changed search starts over; a changed cursor is more of the same one.
+  useEffect(() => { setCursor(null); setAccumulated([]); }, [search]);
+  useEffect(() => {
+    if (!directory.data) return;
+    setAccumulated((prev) => (cursor ? [...prev, ...directory.data!.items] : directory.data!.items));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [directory.data]);
+
+  const rows = accumulated;
 
   const pull = usePullRefresh(canRead && directory);
 
@@ -104,6 +121,15 @@ function EmployeesScreen() {
               ))
             )}
           </Card>
+          {directory.data?.hasMore ? (
+            <Button
+              title="Load more"
+              variant="secondary"
+              loading={directory.isFetching}
+              onPress={() => setCursor(directory.data!.nextCursor)}
+              style={{ marginTop: space.md }}
+            />
+          ) : null}
         </>
       )}
 
