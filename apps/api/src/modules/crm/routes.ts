@@ -8,7 +8,7 @@ import {
   LEAD_STAGE_TRANSITIONS, type LeadStage, parseGstin,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
-import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
+import { actor, parse, page, inOrg, mutate, version, fail, sortClause } from '../../common/domain.js';
 
 /**
  * CRM: client/contact master, leads, opportunities and the activity timeline
@@ -61,8 +61,9 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
     if (q.search) { values.push(likeContains(q.search)); where += ` AND (name ILIKE $${values.length} ESCAPE '!' OR code ILIKE $${values.length} ESCAPE '!')`; }
     if (q.client_type) { values.push(q.client_type); where += ` AND client_type = $${values.length}`; }
     if (q.status) { values.push(q.status); where += ` AND status = $${values.length}`; }
+    const order = sortClause(req, { code: 'code', name: 'name', client_type: 'client_type', status: 'status' }, 'name, id');
     const rows = (await pool.query(
-      `SELECT * FROM clients WHERE ${where} ORDER BY name, id LIMIT $2 OFFSET $3`, values)).rows;
+      `SELECT * FROM clients WHERE ${where} ORDER BY ${order} LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit, next_offset: rows.length > limit ? offset + limit : null };
   });
 
@@ -199,8 +200,9 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
     let where = 'org_id = $1';
     if (q.client_id) { values.push(q.client_id); where += ` AND client_id = $${values.length}::uuid`; }
     if (q.search) { values.push(likeContains(q.search)); where += ` AND name ILIKE $${values.length} ESCAPE '!'`; }
+    const order = sortClause(req, { name: 'name', designation: 'designation', phone: 'phone', email: 'email', contact_type: 'contact_type' }, 'name, id');
     const rows = (await pool.query(
-      `SELECT * FROM contacts WHERE ${where} ORDER BY name, id LIMIT $2 OFFSET $3`, values)).rows;
+      `SELECT * FROM contacts WHERE ${where} ORDER BY ${order} LIMIT $2 OFFSET $3`, values)).rows;
     return { data: rows.slice(0, limit), has_more: rows.length > limit, next_offset: rows.length > limit ? offset + limit : null };
   });
 

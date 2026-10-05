@@ -4,7 +4,7 @@ import type { Pool } from 'pg';
 import { z } from 'zod';
 import { automationSchema,webhookSchema,assertAutomationActionValues } from '@silverline/shared';
 import { buildAuthenticate,requirePermission } from '../../common/auth.js';
-import { actor,parse,page,inOrg,mutate,version,fail,projectAccess } from '../../common/domain.js';
+import { actor,parse,page,inOrg,mutate,version,fail,projectAccess,sortClause } from '../../common/domain.js';
 import { encryptPii,decryptPii } from '../../common/crypto.js';
 import { resolveScopes } from '../../common/scopes.js';
 
@@ -12,7 +12,8 @@ export async function registerAutomationRoutes(app:FastifyInstance,opts:{pool:Po
  const {pool}=opts,auth=buildAuthenticate(opts),guard=(p:string)=>requirePermission(auth,p);
  app.get('/api/v1/automation-rules',{preHandler:guard('automation.read')},async req=>{
   const u=actor(req),{limit,offset,q}=page(req);if(q.project_id)await projectAccess(pool,req,q.project_id);else if(!resolveScopes(u.scopes).global)fail('PROJECT_REQUIRED','Choose a project in your scope');
-  return {data:(await pool.query('SELECT * FROM automation_rules WHERE org_id=$1 AND ($2::uuid IS NULL OR project_id=$2) ORDER BY created_at DESC, id DESC LIMIT $3 OFFSET $4',[u.orgId,q.project_id??null,limit,offset])).rows};
+  const order=sortClause(req,{name:'name',trigger:'trigger',active:'active',last_run_at:'last_run_at'},'created_at DESC, id DESC');
+  return {data:(await pool.query(`SELECT * FROM automation_rules WHERE org_id=$1 AND ($2::uuid IS NULL OR project_id=$2) ORDER BY ${order} LIMIT $3 OFFSET $4`,[u.orgId,q.project_id??null,limit,offset])).rows};
  });
  app.post('/api/v1/automation-rules',{preHandler:guard('automation.manage')},async(req,reply)=>{
   const i=parse(automationSchema,req.body),u=actor(req);
@@ -61,13 +62,14 @@ export async function registerAutomationRoutes(app:FastifyInstance,opts:{pool:Po
  });
  app.get('/api/v1/automation-rules/:id/executions',{preHandler:guard('automation.read')},async req=>{
   const id=(req.params as {id:string}).id,u=actor(req),row=await inOrg(pool,'automation_rules',id,u.orgId);if(row.project_id)await projectAccess(pool,req,row.project_id);
-  return {data:(await pool.query('SELECT * FROM automation_executions WHERE org_id=$1 AND rule_id=$2 ORDER BY created_at DESC LIMIT 100',[u.orgId,id])).rows};
+  const order=sortClause(req,{created_at:'created_at',status:'status'},'created_at DESC');
+  return {data:(await pool.query(`SELECT * FROM automation_executions WHERE org_id=$1 AND rule_id=$2 ORDER BY ${order} LIMIT 100`,[u.orgId,id])).rows};
  });
- app.get('/api/v1/webhooks',{preHandler:guard('webhook.manage')},async req=>({data:(await pool.query('SELECT id,name,url,events,active,version,created_at FROM webhook_subscriptions WHERE org_id=$1 ORDER BY created_at DESC LIMIT 100',[actor(req).orgId])).rows}));
+ app.get('/api/v1/webhooks',{preHandler:guard('webhook.manage')},async req=>{const order=sortClause(req,{name:'name',url:'url',active:'active'},'created_at DESC');return {data:(await pool.query(`SELECT id,name,url,events,active,version,created_at FROM webhook_subscriptions WHERE org_id=$1 ORDER BY ${order} LIMIT 100`,[actor(req).orgId])).rows};});
  app.post('/api/v1/webhooks',{preHandler:guard('webhook.manage')},async(req,reply)=>{
   const i=parse(webhookSchema,req.body),u=actor(req),secret=randomBytes(32).toString('hex');
   const row=await mutate(pool,req,'webhook.create','webhook',async db=>(await db.query('INSERT INTO webhook_subscriptions(org_id,name,url,events,active,secret_encrypted,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,name,url,events,active,version',[u.orgId,i.name,i.url,JSON.stringify(i.events),i.active,encryptPii(secret),u.id])).rows[0]);const stored=(await pool.query('SELECT secret_encrypted FROM webhook_subscriptions WHERE id=$1 AND org_id=$2',[row.id,u.orgId])).rows[0];return reply.code(201).send({...row,secret:decryptPii(stored.secret_encrypted)});
  });
  app.patch('/api/v1/webhooks/:id',{preHandler:guard('webhook.manage')},async req=>{const id=(req.params as {id:string}).id,u=actor(req),i=parse(z.object({active:z.boolean()}),req.body);return mutate(pool,req,'webhook.update','webhook',async db=>{const row=await inOrg(db,'webhook_subscriptions',id,u.orgId,true);version(req,row as {version:number});return (await db.query('UPDATE webhook_subscriptions SET active=$2,version=version+1 WHERE id=$1 RETURNING id,name,url,events,active,version',[id,i.active])).rows[0];});});
- app.get('/api/v1/webhooks/:id/deliveries',{preHandler:guard('webhook.manage')},async req=>{const id=(req.params as {id:string}).id,u=actor(req);await inOrg(pool,'webhook_subscriptions',id,u.orgId);return {data:(await pool.query('SELECT * FROM webhook_deliveries WHERE subscription_id=$1 ORDER BY created_at DESC LIMIT 100',[id])).rows};});
+ app.get('/api/v1/webhooks/:id/deliveries',{preHandler:guard('webhook.manage')},async req=>{const id=(req.params as {id:string}).id,u=actor(req);await inOrg(pool,'webhook_subscriptions',id,u.orgId);const order=sortClause(req,{created_at:'created_at',status:'status',attempts:'attempts',response_status:'response_status'},'created_at DESC');return {data:(await pool.query(`SELECT * FROM webhook_deliveries WHERE subscription_id=$1 ORDER BY ${order} LIMIT 100`,[id])).rows};});
 }

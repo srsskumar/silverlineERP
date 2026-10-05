@@ -6,7 +6,7 @@ import type { Pool } from 'pg';
 import { z } from 'zod';
 import { cycleSchema,customFieldSchema,taskWorkflowSchema,defaultTaskWorkflow, projectTypeSchema} from '@silverline/shared';
 import { buildAuthenticate,requirePermission,scopesForPermission } from '../../common/auth.js';
-import { actor,parse,page,inOrg,mutate,version,fail,projectAccess } from '../../common/domain.js';
+import { actor,parse,page,inOrg,mutate,version,fail,projectAccess,sortClause } from '../../common/domain.js';
 import { resolveScopes,taskScopeClause,employeeScopeClause } from '../../common/scopes.js';
 
 /**
@@ -105,7 +105,8 @@ export async function registerPlanningRoutes(app:FastifyInstance,opts:{pool:Pool
  }
  app.get('/api/v1/cycles',{preHandler:guard('cycle.read')},async req=>{
   const {limit,offset,q}=page(req);if(!q.project_id)fail('PROJECT_REQUIRED','Choose a project');await projectAccess(pool,req,q.project_id);
-  const r=await pool.query('SELECT * FROM cycles WHERE org_id=$1 AND project_id=$2 ORDER BY start_date DESC,id LIMIT $3 OFFSET $4',[actor(req).orgId,q.project_id,limit+1,offset]);return {data:r.rows.slice(0,limit),has_more:r.rows.length>limit};
+  const order=sortClause(req,{name:'name',start_date:'start_date',end_date:'end_date',status:'status'},'start_date DESC,id');
+  const r=await pool.query(`SELECT * FROM cycles WHERE org_id=$1 AND project_id=$2 ORDER BY ${order} LIMIT $3 OFFSET $4`,[actor(req).orgId,q.project_id,limit+1,offset]);return {data:r.rows.slice(0,limit),has_more:r.rows.length>limit};
  });
  app.post('/api/v1/cycles',{preHandler:guard('cycle.manage')},async(req,reply)=>{
   const i=parse(cycleSchema,req.body),u=actor(req);await fullProject(req,i.project_id);

@@ -2,7 +2,7 @@ import type {FastifyInstance} from 'fastify';
 import type {Pool} from 'pg';
 import {z} from 'zod';
 import {buildAuthenticate,requirePermission,scopesForPermission} from '../../common/auth.js';
-import {actor,parse,mutate,fail,page,projectAccess} from '../../common/domain.js';
+import {actor,parse,mutate,fail,page,projectAccess,sortClause} from '../../common/domain.js';
 import {resolveScopes} from '../../common/scopes.js';
 import {encryptPii} from '../../common/crypto.js';
 import {callProvider,providerConfig,PROVIDERS,ProviderError,weatherResponse} from './gateway.js';
@@ -10,7 +10,7 @@ import {createRateLimiter} from '../../common/rateLimit.js';
 export async function registerIntegrationRoutes(app:FastifyInstance,opts:{pool:Pool;jwtSecret:string}){
  const {pool}=opts,auth=buildAuthenticate(opts),guard=(p:string)=>requirePermission(auth,p);
  app.get('/api/v1/integrations',{preHandler:guard('admin.configure')},async()=>({data:PROVIDERS.map(name=>({id:name,name,status:providerConfig(name).enabled?'CONFIGURED':'DISABLED'}))}));
- app.get('/api/v1/integrations/jobs',{preHandler:guard('admin.configure')},async req=>{const {limit,offset}=page(req),rows=(await pool.query('SELECT id,provider,status,attempts,error,created_at,updated_at FROM provider_jobs WHERE org_id=$1 ORDER BY created_at DESC,id LIMIT $2 OFFSET $3',[actor(req).orgId,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
+ app.get('/api/v1/integrations/jobs',{preHandler:guard('admin.configure')},async req=>{const {limit,offset}=page(req),order=sortClause(req,{provider:'provider',status:'status',attempts:'attempts',error:'error',created_at:'created_at'},'created_at DESC,id'),rows=(await pool.query(`SELECT id,provider,status,attempts,error,created_at,updated_at FROM provider_jobs WHERE org_id=$1 ORDER BY ${order} LIMIT $2 OFFSET $3`,[actor(req).orgId,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
  app.post('/api/v1/integrations/accounting-export',{preHandler:guard('inventory.manage')},async(req,reply)=>{
   const u=actor(req),i=parse(z.object({invoice_ids:z.array(z.string().uuid()).min(1).max(100)}),req.body);
   if(!resolveScopes(await scopesForPermission(req,'inventory.manage')).global)fail('FORBIDDEN','Accounting exports require organization-wide invoice access',403);

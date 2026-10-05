@@ -12,7 +12,7 @@ import {
   toFieldErrors,
 } from "@silverline/shared";
 import { buildAuthenticate, requirePermission } from "../../common/auth.js";
-import { actor, mutate, version } from "../../common/domain.js";
+import { actor, mutate, version, sortClause } from "../../common/domain.js";
 import { VERSION_HEADER } from "../../common/ifMatch.js";
 
 /**
@@ -65,13 +65,17 @@ export async function registerCatalogueRoutes(
       values.push(likeContains(q.q));
       clauses.push(`(name ILIKE $${values.length} ESCAPE '!' OR code ILIKE $${values.length} ESCAPE '!')`);
     }
+    const order = sortClause(req, {
+      code: "code", name: "name", kind: "kind", uom: "uom", hsn_sac: "hsn_sac",
+      standard_rate: "standard_rate", gst_rate: "gst_rate", status: "status",
+    }, "kind, name");
     const rows = await pool.query(
       `SELECT id, code, name, kind, uom, hsn_sac,
               standard_rate::float8 AS standard_rate, gst_rate::float8 AS gst_rate,
               notes, status, version
          FROM catalogue_items
         WHERE ${clauses.join(" AND ")}
-        ORDER BY kind, name
+        ORDER BY ${order}
         LIMIT 1000`,
       values,
     );

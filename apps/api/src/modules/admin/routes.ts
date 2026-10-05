@@ -3,7 +3,7 @@ import type { Pool } from 'pg';
 import bcrypt from 'bcrypt';
 import { z } from 'zod';
 import { buildAuthenticate,requirePermission } from '../../common/auth.js';
-import { actor,parse,page,mutate,inOrg,fail } from '../../common/domain.js';
+import { actor,parse,page,mutate,inOrg,fail,sortClause } from '../../common/domain.js';
 import { isIndianMobile,formatIndianMobile,MFA_POLICIES,mfaFloorRole,GST_STATE_CODES,canManageAccount,MODULE_CATALOG,MODULE_CODES } from '@silverline/shared';
 
 export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jwtSecret:string}) {
@@ -24,7 +24,7 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
  }
  async function keepAdministrator(db:import('pg').PoolClient,org:string){const admins=await db.query("SELECT u.id FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN role_permissions rp ON rp.role_id=ur.role_id WHERE u.org_id=$1 AND u.auth_status='ACTIVE' AND ur.scope_type IS NULL AND ur.scope_id IS NULL AND rp.permission_code IN('users.manage','admin.configure') GROUP BY u.id HAVING count(DISTINCT rp.permission_code)=2 LIMIT 1",[org]);if(!admins.rowCount)fail('LAST_ADMIN','Keep at least one active organization administrator',409);}
 
- app.get('/api/v1/admin/users',{preHandler:guard('users.read')},async req=>{const {limit,offset}=page(req),rows=(await pool.query("SELECT u.id,u.username,u.email,u.phone,u.auth_status,u.employee_id,u.mfa_enabled,u.mfa_policy,u.must_change_password,u.password_set_at,u.last_login_at,COALESCE((SELECT json_agg(json_build_object('role_id',r.id,'code',r.code,'scope_type',ur.scope_type,'scope_id',ur.scope_id)) FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id),'[]') AS roles FROM users u WHERE org_id=$1 ORDER BY username LIMIT $2 OFFSET $3",[actor(req).orgId,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
+ app.get('/api/v1/admin/users',{preHandler:guard('users.read')},async req=>{const {limit,offset}=page(req),order=sortClause(req,{username:'u.username',phone:'u.phone',email:'u.email',auth_status:'u.auth_status',mfa_enabled:'u.mfa_enabled',mfa_policy:'u.mfa_policy',must_change_password:'u.must_change_password'},'u.username'),rows=(await pool.query(`SELECT u.id,u.username,u.email,u.phone,u.auth_status,u.employee_id,u.mfa_enabled,u.mfa_policy,u.must_change_password,u.password_set_at,u.last_login_at,COALESCE((SELECT json_agg(json_build_object('role_id',r.id,'code',r.code,'scope_type',ur.scope_type,'scope_id',ur.scope_id)) FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id),'[]') AS roles FROM users u WHERE org_id=$1 ORDER BY ${order} LIMIT $2 OFFSET $3`,[actor(req).orgId,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
  app.post('/api/v1/admin/users',{preHandler:guard('users.manage')},async(req,reply)=>{
   const i=parse(z.object({username:z.string().trim().min(3).max(100),password:z.string().min(12).max(128),email:z.string().email().optional(),employee_id:z.string().uuid().optional(),
    // The number they sign in with (§34). Stored in one written form so it can
@@ -116,7 +116,7 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
    }
    return {id,updated:true};});
  });
- app.get('/api/v1/admin/roles',{preHandler:guard('users.read')},async req=>({data:(await pool.query("SELECT r.*,COALESCE((SELECT json_agg(permission_code) FROM role_permissions WHERE role_id=r.id),'[]') AS permissions FROM roles r WHERE org_id IS NULL OR org_id=$1 ORDER BY name",[actor(req).orgId])).rows}));
+ app.get('/api/v1/admin/roles',{preHandler:guard('users.read')},async req=>{const order=sortClause(req,{name:'r.name',code:'r.code',mfa_required:'r.mfa_required',is_system_role:'r.is_system_role'},'r.name','r.id');return {data:(await pool.query(`SELECT r.*,COALESCE((SELECT json_agg(permission_code) FROM role_permissions WHERE role_id=r.id),'[]') AS permissions FROM roles r WHERE org_id IS NULL OR org_id=$1 ORDER BY ${order}`,[actor(req).orgId])).rows};});
  /**
   * Whether a role's holders must set up an authenticator (§34).
   *
@@ -194,13 +194,13 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
    return (await db.query('UPDATE organizations SET name=COALESCE($2,name),settings=$3::jsonb WHERE id=$1 RETURNING id,name,settings',[u.orgId,i.name??null,JSON.stringify(merged)])).rows[0];
   });
  });
- app.get('/api/v1/auth/sessions',{preHandler:auth},async req=>({data:(await pool.query('SELECT id,family,device,ip,created_at,last_used_at,expires_at FROM sessions WHERE user_id=$1 AND revoked=false ORDER BY created_at DESC LIMIT 100',[actor(req).id])).rows}));
+ app.get('/api/v1/auth/sessions',{preHandler:auth},async req=>{const order=sortClause(req,{device:'device',ip:'ip',created_at:'created_at',last_used_at:'last_used_at'},'created_at DESC');return {data:(await pool.query(`SELECT id,family,device,ip,created_at,last_used_at,expires_at FROM sessions WHERE user_id=$1 AND revoked=false ORDER BY ${order} LIMIT 100`,[actor(req).id])).rows};});
  app.post('/api/v1/auth/sessions/:id/revoke',{preHandler:auth},async req=>{const u=actor(req),id=(req.params as {id:string}).id;return mutate(pool,req,'session.revoke','session',async db=>{const r=await db.query('UPDATE sessions SET revoked=true,revoked_at=now() WHERE user_id=$1 AND family=(SELECT family FROM sessions WHERE id=$2 AND user_id=$1) RETURNING id',[u.id,id]);if(!r.rowCount)fail('NOT_FOUND','Session not found',404);return {id,revoked:true};});});
  app.post('/api/v1/devices/register',{preHandler:auth},async req=>{
   const i=parse(z.object({device_id:z.string().min(8).max(255),push_token:z.string().max(512).optional()}),req.body),u=actor(req);
   const result=await pool.query('INSERT INTO device_registrations(org_id,user_id,device_id,push_token) VALUES($1,$2,$3,$4) ON CONFLICT(user_id,device_id) DO UPDATE SET push_token=COALESCE(EXCLUDED.push_token,device_registrations.push_token),last_seen_at=now() RETURNING id,revoked_at,wipe_requested_at',[u.orgId,u.id,i.device_id,i.push_token??null]);return result.rows[0];
  });
- app.get('/api/v1/admin/devices',{preHandler:guard('users.manage')},async req=>({data:(await pool.query('SELECT id,user_id,device_id,revoked_at,wipe_requested_at,last_seen_at FROM device_registrations WHERE org_id=$1 ORDER BY last_seen_at DESC LIMIT 100',[actor(req).orgId])).rows}));
+ app.get('/api/v1/admin/devices',{preHandler:guard('users.manage')},async req=>{const order=sortClause(req,{device_id:'device_id',last_seen_at:'last_seen_at',revoked_at:'revoked_at'},'last_seen_at DESC');return {data:(await pool.query(`SELECT id,user_id,device_id,revoked_at,wipe_requested_at,last_seen_at FROM device_registrations WHERE org_id=$1 ORDER BY ${order} LIMIT 100`,[actor(req).orgId])).rows};});
  app.post('/api/v1/admin/devices/:id/revoke',{preHandler:guard('users.manage')},async req=>{
   const id=(req.params as {id:string}).id,u=actor(req);return mutate(pool,req,'device.revoke','device',async db=>{const row=(await db.query('UPDATE device_registrations SET revoked_at=now(),wipe_requested_at=now() WHERE org_id=$1 AND id=$2 RETURNING id,user_id,device_id',[u.orgId,id])).rows[0];if(!row)fail('NOT_FOUND','Device not found',404);await db.query('UPDATE sessions SET revoked=true,revoked_at=now() WHERE user_id=$1 AND device_id=$2',[row.user_id,row.device_id]);return row;});
  });

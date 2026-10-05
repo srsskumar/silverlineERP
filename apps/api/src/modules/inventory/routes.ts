@@ -5,7 +5,14 @@ import type { FastifyInstance,FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import { vendorSchema,itemSchema,stockSchema,invoiceSchema,invoiceLinesUpdateSchema,computeInvoice,assetSchema,assetLookupSchema,assetAssignSchema,assetBulkAssignSchema,assetTransferSchema,assetAllocationEditSchema,assetLookupCode,assetTransitionSchema,assetAuditSchema,assetLocation,percentOf,type InvoiceLineInput as GstInvoiceLineInput } from '@silverline/shared';
 import { buildAuthenticate,requirePermission,requireAnyPermission,scopesForPermission } from '../../common/auth.js';
-import { actor,parse,page,inOrg,mutate,version,fail,projectAccess,employeeAccess } from '../../common/domain.js';
+import { actor,parse,page,inOrg,mutate,version,fail,projectAccess,employeeAccess,sortClause } from '../../common/domain.js';
+
+/** Sortable columns behind each path's own table, for the shared list loop below. */
+const LIST_SORT_COLUMNS: Record<string, Record<string, string>> = {
+ vendors: { code: 'a.code', name: 'a.name', contact: 'a.contact', status: 'a.status' },
+ inventory_items: { code: 'a.code', name: 'a.name', unit: 'a.unit', low_stock_threshold: 'a.low_stock_threshold' },
+ assets: { asset_code: 'a.asset_code', name: 'a.name', status: 'a.status', condition: 'a.condition' },
+};
 import { itemDeltaSql,itemOnHand,lowStockLevel,notifyLowStockCrossing } from '../../common/stockLedger.js';
 
 export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Pool;jwtSecret:string}) {
@@ -99,7 +106,8 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
         (SELECT p.name FROM asset_assignments x JOIN projects p ON p.id=x.project_id
           WHERE x.asset_id=a.id AND x.returned_at IS NULL LIMIT 1) AS held_for_project`
      :'';
-   const rows=await pool.query(`SELECT a.*${extra} FROM ${table} a WHERE ${where} ORDER BY a.created_at DESC,a.id DESC LIMIT $2 OFFSET $3`,values);
+   const order=sortClause(req,LIST_SORT_COLUMNS[table]??{},'a.created_at DESC,a.id DESC','a.id');
+   const rows=await pool.query(`SELECT a.*${extra} FROM ${table} a WHERE ${where} ORDER BY ${order} LIMIT $2 OFFSET $3`,values);
    return {data:rows.rows.slice(0,limit),has_more:rows.rows.length>limit,next_offset:rows.rows.length>limit?offset+limit:null};
   });
   app.post(`/api/v1/${path}`,{preHandler:guard(`${permission}.manage`)},async(req,reply)=>{
@@ -132,7 +140,8 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
  }
  app.get('/api/v1/inventory/transactions',{preHandler:guard('inventory.read')},async req=>{
   const u=actor(req),{limit,offset,q}=page(req);
-  const rows=await pool.query(`SELECT t.*,i.name AS item_name FROM stock_transactions t JOIN inventory_items i ON i.id=t.item_id WHERE t.org_id=$1 AND ($4::uuid IS NULL OR t.item_id=$4) ORDER BY t.created_at DESC,t.id DESC LIMIT $2 OFFSET $3`,[u.orgId,limit+1,offset,q.item_id||null]);
+  const order=sortClause(req,{item_name:'i.name',direction:'t.direction',quantity:'t.quantity',reference:'t.reference',created_at:'t.created_at'},'t.created_at DESC,t.id DESC','t.id');
+  const rows=await pool.query(`SELECT t.*,i.name AS item_name FROM stock_transactions t JOIN inventory_items i ON i.id=t.item_id WHERE t.org_id=$1 AND ($4::uuid IS NULL OR t.item_id=$4) ORDER BY ${order} LIMIT $2 OFFSET $3`,[u.orgId,limit+1,offset,q.item_id||null]);
   return {data:rows.rows.slice(0,limit),has_more:rows.rows.length>limit};
  });
  app.post('/api/v1/inventory/transactions',{preHandler:guard('inventory.manage')},async(req,reply)=>{
@@ -156,7 +165,7 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
  // Read behind invoice.read, the permission granted for exactly this. It was
  // gated on inventory.read, so the payables officer who holds invoice.read
  // and invoice.manage could match and pay an invoice but never list one.
- app.get('/api/v1/invoices',{preHandler:guard('invoice.read')},async req=>{const {limit,offset}=page(req),rows=(await pool.query('SELECT * FROM invoices WHERE org_id=$1 ORDER BY created_at DESC,id DESC LIMIT $2 OFFSET $3',[actor(req).orgId,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
+ app.get('/api/v1/invoices',{preHandler:guard('invoice.read')},async req=>{const {limit,offset}=page(req),order=sortClause(req,{serial_number:'serial_number',subtotal:'subtotal',tax:'tax',total:'total',payment_mode:'payment_mode'},'created_at DESC,id DESC'),rows=(await pool.query(`SELECT * FROM invoices WHERE org_id=$1 ORDER BY ${order} LIMIT $2 OFFSET $3`,[actor(req).orgId,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
  /**
   * Whether a vendor invoice's lines can still be changed, and why not if not
   * (fix round 1, item 1 on task 5c / finding B-004).

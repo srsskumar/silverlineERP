@@ -78,6 +78,23 @@ export function page(req:FastifyRequest) {
  if(!Number.isSafeInteger(limit)||!Number.isSafeInteger(offset)) fail('VALIDATION_ERROR','Invalid pagination');
  return {limit,offset,q};
 }
+/**
+ * `ORDER BY <column> <dir>, <tiebreaker>` from `?sort=&dir=`, safe to
+ * interpolate because `sort` only ever resolves through this allow-list —
+ * never the raw query value, the same shape `inOrg`'s table allow-list uses
+ * below. `columns` maps the client's column key (what `Collection` on the
+ * web side calls each column) to the SQL it actually sorts by; a `sort` not
+ * in that map, or no `sort` at all, falls back to `fallback` unchanged.
+ * `tiebreaker` keeps paginated order stable across ties and defaults to the
+ * row's own `id`, which every table behind `Collection` has.
+ */
+export function sortClause(req:FastifyRequest,columns:Record<string,string>,fallback:string,tiebreaker='id'):string {
+ const q=req.query as Record<string,string>;
+ const column=columns[q.sort as string];
+ if(!column) return fallback;
+ const dir=q.dir==='desc'?'DESC':'ASC';
+ return `${column} ${dir}, ${tiebreaker}`;
+}
 export async function inOrg(db:Pool|PoolClient,table:string,id:string,orgId:string,lock=false):Promise<Record<string,any>> {
  // Interpolated straight into SQL below, so this allow-list is the injection
  // guard, not a convenience. Every table a route passes here must be named.
