@@ -21,7 +21,7 @@ Not covered: web pages in a real browser (blocked: the public origin was refused
 | SV-009 | P3 | FIXED | A village extent couldn't be cleared. |
 | SV-010 | P3 | FIXED | Reversed plan dates were accepted. |
 | SV-015 | P3 | FIXED | The alert tests used the UTC day (the job itself was correct). |
-| SV-014 | P2 | OPEN, owner question | Any programme survey.enter holder can file or amend today's return for any village (verified live). The recommendation is to apply the GCP rule. Same as lane 2's SG-D1. |
+| SV-014 | P2 | FIXED | Any programme survey.enter holder can file or amend today's return for any village (verified live). The recommendation is to apply the GCP rule. Same as lane 2's SG-D1. Owner decision 2026-10-01 #5 approved the GCP rule for this; filing/amending a return is now crew-gated the same way (bd23149). |
 | SV-016 | P3 | OPEN | PUT finals has no If-Match, so concurrent certification is last-write-wins. |
 | SV-017 | P3 | OPEN | Survey route "today" is fixed to IST; alerts use the org timezone. |
 | SV-018 | P3 | OPEN | /projects/:id/employees enrolment uses directory scope, so a PM gets 403 while start-gt and crew assignment don't. |
@@ -56,7 +56,7 @@ Round 2 verification (slot d, `/tmp/svd-lane1-r2.log`): survey and village API t
 | SV-017 | P3 | FIXED 13bcfd1 | Survey "today" now uses the org's `settings.timezone` (default Asia/Kolkata), the same setting as `orgTodaySql`. Survey guards load the zone (`orgTimeZone`, cached 60 s); `today(orgId)` covers every default and check (crew assign/release, work date, stage dates, billing defaults, report periods, past-day amendment), and timestamps are converted to days in the org zone. Tested on the second tenant with a zone whose day differs from IST at run time. **Residual:** the shared `pastDate` schema check (mirrored on the phone) still reads IST. It only matters for an org east or west of IST around its midnight. |
 | SV-018 | P3 | FIXED b391ba7 | Programme enrolment and single crew assignment now use the survey rule (`mayStaffProgramme`: admin, a TL on the programme, or the survey project's PM) instead of the employee-directory record scope. That scope refused the project's own PM, while start-gt and crew/bulk (arrays, never checked) let the same PM through. **Outside survey:** the one exemption lives in `common/recordScope.ts`, for exactly those two paths. A PM of another project gets 403 `NOT_ON_THIS_PROGRAMME`; the employee must be ACTIVE. |
 
-Not touched, waiting on the owner: SV-001 (stage-completion rule), SV-014 (who may file returns).
+SV-001 (stage-completion rule) stays not-touched -- owner decision 2026-10-01 #2 declined it. SV-014 (who may file returns) was answered and fixed the same day (#5, bd23149).
 
 Round 3 final verification (slot d, `/tmp/svd-lane1-r3.log`): full apps/api suite 82 files, 2190 passed, 13 skipped, 0 failed; web tsc clean; survey tests-dom 39/39; `next build` exit 0.
 
