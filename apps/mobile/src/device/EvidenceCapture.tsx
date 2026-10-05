@@ -1,7 +1,7 @@
 import {useRef,useState} from 'react';
 import {Modal,ScrollView,View,useWindowDimensions} from 'react-native';
 import {File} from 'expo-file-system';
-import {getEmployeesMe,getProjects,type Task} from '../api/endpoints';
+import {getEmployeesMe,getProject,type Task} from '../api/endpoints';
 import {enqueueOp} from '../sync/queue';
 import {syncNow} from '../sync/engine';
 import {Banner,Button,Input,Muted,Row} from '../ui/primitives';
@@ -18,8 +18,10 @@ export function EvidenceCapture({task,onClose,onSaved}:{task:Task;onClose:()=>vo
   const capture=async()=>{
     setBusy(true);setError('');setReady(false);
     try{
-      const [employee,fix,projects]=await Promise.all([getEmployeesMe(),getPunchFix(),getProjects()]);
-      const project=projects.find(p=>p.id===task.project_id);
+      // MA-017: getProjects() caps at 100 with no paging, so a project past
+      // the first page would silently fall back to the task's own title.
+      // The task already names its project_id -- fetch that one directly.
+      const [employee,fix,project]=await Promise.all([getEmployeesMe(),getPunchFix(),task.project_id?getProject(task.project_id).catch(()=>null):Promise.resolve(null)]);
       await camera.capture({name:employee.full_name??employee.name??[employee.first_name,employee.last_name].filter(Boolean).join(' '),empNo:String(employee.emp_no??employee.employee_no??''),latitude:fix.latitude,longitude:fix.longitude,accuracy:fix.accuracy,timestamp:new Date().toISOString(),projectSite:project?.name??task.title,village:village.trim()||String(employee.village_name??'')});
     }catch(e){setError(e instanceof Error?e.message:'Capture failed');}finally{setBusy(false);}
   };

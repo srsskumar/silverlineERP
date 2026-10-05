@@ -28,6 +28,7 @@ import {
   Button,
   Card,
   EmptyState,
+  Input,
   ListRow,
   Loading,
   Muted,
@@ -45,10 +46,14 @@ function AnalyticsScreen() {
   const { canDo } = useAuth();
   const canRead = canDo(["analytics.read", "project.read"]);
   const [projectId, setProjectId] = useState<string | null>(null);
+  // MA-017: getProjects() caps at 100 with no paging, so past that many
+  // projects the chips below silently can't reach the rest. Search (already
+  // server-side) is the fix, same as planning.tsx.
+  const [search, setSearch] = useState("");
 
   const projects = useQuery({
-    queryKey: ["projects"],
-    queryFn: () => getProjects(),
+    queryKey: ["projects", search],
+    queryFn: () => getProjects({ q: search.trim() || undefined }),
     enabled: canRead,
   });
   const openProjects = (projects.data ?? []).filter(
@@ -87,6 +92,12 @@ function AnalyticsScreen() {
       ) : (
         <>
           <SectionLabel>Project</SectionLabel>
+          <Input
+            placeholder="Search projects by code or name"
+            value={search}
+            onChangeText={setSearch}
+            autoCapitalize="none"
+          />
           {projects.isError ? (
             <Banner
               tone="warning"

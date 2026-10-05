@@ -75,7 +75,12 @@ function TasksScreen() {
     if (link.id) setSelectedId(link.id);
   }, [link.id]);
   const { canDo, user } = useAuth();
-  const projects = useQuery({ queryKey: ["projects"], queryFn: () => getProjects() });
+  // MA-017: getProjects() caps at 100 with no paging; search is the fix.
+  const [projectSearch, setProjectSearch] = useState("");
+  const projects = useQuery({
+    queryKey: ["projects", projectSearch],
+    queryFn: () => getProjects({ q: projectSearch.trim() || undefined }),
+  });
   const [quickProject, setQuickProject] = useState("");
   const [quickTitle, setQuickTitle] = useState("");
   const [quickMsg, setQuickMsg] = useState<string | null>(null);
@@ -162,6 +167,12 @@ function TasksScreen() {
       {showQuickAdd && canDo("task.create") ? (
         <Card title="New task">
           <Subtle style={{ marginBottom: space.xs }}>Project</Subtle>
+          <Input
+            placeholder="Search projects by code or name"
+            value={projectSearch}
+            onChangeText={setProjectSearch}
+            autoCapitalize="none"
+          />
           {projects.isError ? (
             <Banner
               tone="warning"

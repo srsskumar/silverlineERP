@@ -27,6 +27,7 @@ import {
   Card,
   Divider,
   EmptyState,
+  Input,
   ListRow,
   Loading,
   Muted,
@@ -48,10 +49,12 @@ function ProjectFinanceScreen() {
   const canRead = canDo("rabill.read");
   const [projectId, setProjectId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // MA-017: getProjects() caps at 100 with no paging; search is the fix.
+  const [search, setSearch] = useState("");
 
   const projects = useQuery({
-    queryKey: ["projects"],
-    queryFn: () => getProjects(),
+    queryKey: ["projects", search],
+    queryFn: () => getProjects({ q: search.trim() || undefined }),
     enabled: canRead,
   });
   const openProjects = (projects.data ?? []).filter(
@@ -88,6 +91,12 @@ function ProjectFinanceScreen() {
       ) : (
         <>
           <SectionLabel>Project</SectionLabel>
+          <Input
+            placeholder="Search projects by code or name"
+            value={search}
+            onChangeText={setSearch}
+            autoCapitalize="none"
+          />
           {projects.isError ? (
             <Banner
               tone="warning"
