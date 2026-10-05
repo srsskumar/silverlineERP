@@ -41,6 +41,19 @@ export default defineConfig({
           environment: 'jsdom',
           include: ['tests-dom/**/*.test.tsx'],
           setupFiles: ['./tests-dom/setup.ts'],
+          /*
+           * vitest's own default (5000ms) is tuned for a test running
+           * alone; a handful of this suite's own tests mount a whole
+           * screen (the survey dashboard, the full documents register)
+           * and comfortably take 4-6s even by themselves. Three separate
+           * ones (tests-dom/survey-tabs, documents-legal-hold,
+           * table-shape) have each in turn timed out under the full
+           * suite's own CPU contention -- not slow code, just not enough
+           * room under concurrent load. A global floor fixes the whole
+           * class of flake rather than bumping one test at a time each
+           * time contention happens to find the next one.
+           */
+          testTimeout: 15000,
         },
       },
     ],
