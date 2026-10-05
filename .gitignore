@@ -27,3 +27,4 @@ ios/
 .env.supabase
 .env.deploy
 .worktrees/
+.claude/settings.local.json

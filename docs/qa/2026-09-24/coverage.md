@@ -134,7 +134,7 @@ Findings ledgers: `docs/qa/2026-09-24/findings-a.md` (Lane A modules), `findings
 | Holiday form: date/name/type/scope `<Input>`s, submit | org/holidays/page.tsx:66-94 | create form gated by `canManage = hasPermission(..., HOLIDAY_MANAGE)` (line 106) |
 | "New holiday" `<Button>` | org/holidays/page.tsx:132 | `canManage` |
 | Year filter `<Input>`, scope `<span title=...>` tooltip | org/holidays/page.tsx:121,159 | — |
-| No Edit or Deactivate control anywhere on the page (A-012, found round 3, OPEN) — `PATCH /holidays/:id` (date/name/type/active) exists server-side with no caller on web | — | — |
+| No Edit or Deactivate control anywhere on the page (A-012, found round 3, FIXED same day cb49061) — `PATCH /holidays/:id` (date/name/type/active) exists server-side, web now has an Edit dialog and a Deactivate/Reactivate dialog calling it | — | — |
 | Page gate | org/holidays/page.tsx:178 | `RequirePermission code={PERMISSIONS.HOLIDAY_READ}` |
 | Location create form (code/name, required) | org/locations/page.tsx:127-165 | `canManage = hasPermission(..., ORG_UNITS_MANAGE)` (line 177) |
 | Tab switch, search `<Input>`, "New {tab}" `<Button>` | org/locations/page.tsx:216,225-226 | `canManage` for create |
@@ -155,8 +155,7 @@ Findings ledgers: `docs/qa/2026-09-24/findings-a.md` (Lane A modules), `findings
 | POST /org/units | org:193 | `org.units.manage` |
 | PATCH /org/units/:id | org:339 | `org.units.manage` |
 
-**Parity**: ⚠ Holidays — web has create only in practice (A-012, round 3: no edit/deactivate UI
-exists despite the API supporting both), mobile is read-only by omission (no code path checks `holiday.manage` at all on mobile — not even a hidden button). If a holiday-manage-only field user needs to add a holiday, they must use web. Locations: correctly N/A per owner ruling — confirm `canSeeModule`/launcher never surfaces `org-locations` even when an admin explicitly enables it in module-visibility (the exclusion is a hardcoded array, not driven by the visibility table, so an admin toggling it "on" server-side would have no mobile effect — expected, but worth one negative test).
+**Parity**: ⚠ Holidays — web now has create, edit and deactivate/reactivate (A-012 fixed cb49061, same day), mobile is read-only by omission (no code path checks `holiday.manage` at all on mobile — not even a hidden button). If a holiday-manage-only field user needs to add a holiday, they must use web. Locations: correctly N/A per owner ruling — confirm `canSeeModule`/launcher never surfaces `org-locations` even when an admin explicitly enables it in module-visibility (the exclusion is a hardcoded array, not driven by the visibility table, so an admin toggling it "on" server-side would have no mobile effect — expected, but worth one negative test).
 
 ---
 
