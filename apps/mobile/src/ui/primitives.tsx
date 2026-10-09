@@ -327,6 +327,7 @@ export function Input({
       ) : null}
       <TextInput
         placeholderTextColor={t.textSubtle}
+        accessibilityLabel={rest.accessibilityLabel ?? label}
         style={[
           {
             minHeight: TOUCH_TARGET,

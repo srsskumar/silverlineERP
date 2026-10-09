@@ -43,6 +43,7 @@ import {
   Subtle,
 } from "../src/ui/primitives";
 import { space, useTheme } from "../src/theme";
+import { permissionLabel } from "../src/permissionLabels";
 import { formatMoneyOrNull as money } from "../src/money";
 import { codeLabel } from "../src/labels";
 
@@ -99,7 +100,7 @@ function ClientsScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to clients"
-          message="This screen needs the client.read permission."
+          message={`This screen needs permission to ${permissionLabel('client.read')}.`}
         />
       ) : (
         <>

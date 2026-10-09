@@ -41,6 +41,7 @@ import {
 import { radius, space } from "../src/theme";
 import { day } from "@silverline/shared";
 import { codeLabel } from "../src/labels";
+import { permissionLabel } from "../src/permissionLabels";
 
 function AnalyticsScreen() {
   const { canDo } = useAuth();
@@ -87,7 +88,7 @@ function AnalyticsScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to analytics"
-          message="This screen needs the analytics.read and project.read permissions."
+          message={`This screen needs permission to ${permissionLabel('analytics.read')} and ${permissionLabel('project.read')}.`}
         />
       ) : (
         <>

@@ -35,6 +35,8 @@ import { punchPlaceLine } from "../../src/attendance/place";
 import { validateAttendanceException } from "../../src/validators";
 import { useAuth } from "../../src/auth/AuthContext";
 import { PERMISSIONS, TAB_PERMISSIONS, can, canAny } from "../../src/rbac";
+import { listState } from "../../src/listState";
+import { LoadError } from "../../src/ui/LoadError";
 import {
   Badge,
   Banner,
@@ -55,6 +57,7 @@ import {
 import { MapCanvas } from "../../src/ui/MapCanvas";
 import { space, useTheme } from "../../src/theme";
 import { clock, day } from "@silverline/shared";
+import { permissionLabel } from "../../src/permissionLabels";
 
 /**
  * Why a day's return could not be filed.
@@ -303,7 +306,7 @@ function AttendanceScreen() {
           tone="info"
           icon="lock-closed-outline"
           title="You can see this but not punch"
-          message="Punching in or out needs the attendance.punch permission. Ask your project manager."
+          message={`Punching in or out needs permission to ${permissionLabel('attendance.punch')}. Ask your project manager.`}
         />
       ) : null}
 
@@ -463,8 +466,10 @@ function AttendanceScreen() {
 
       <SectionLabel>Recent punches</SectionLabel>
       <Card>
-        {history.isLoading ? (
+        {listState(history, (history.data ?? []).length) === "loading" ? (
           <Loading />
+        ) : listState(history, (history.data ?? []).length) === "error" ? (
+          <LoadError query={history} what="your attendance history" />
         ) : (history.data ?? []).length === 0 ? (
           <EmptyState
             icon="time-outline"

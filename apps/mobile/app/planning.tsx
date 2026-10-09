@@ -41,6 +41,7 @@ import {
   SectionLabel,
 } from "../src/ui/primitives";
 import { space } from "../src/theme";
+import { permissionLabel } from "../src/permissionLabels";
 
 function PlanningScreen() {
   const { canDo } = useAuth();
@@ -73,7 +74,7 @@ function PlanningScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to planning"
-          message="This screen needs the cycle.read and project.read permissions."
+          message={`This screen needs permission to ${permissionLabel('cycle.read')} and ${permissionLabel('project.read')}.`}
         />
       ) : !projectId ? (
         <>

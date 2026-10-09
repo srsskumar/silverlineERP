@@ -6,6 +6,8 @@
  * with no signal is saved locally and sent on reconnect.
  */
 import { withScreenBoundary } from "../../src/ui/ErrorBoundary";
+import { listState } from "../../src/listState";
+import { LoadError } from "../../src/ui/LoadError";
 import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Modal, View } from "react-native";
@@ -315,8 +317,10 @@ function Assets() {
         {audit ? `Expected assets (${expected.length} selected)` : `Register (${filtered.length})`}
       </SectionLabel>
       <Card>
-        {assets.isLoading ? (
+        {listState(assets, filtered.length) === "loading" ? (
           <Loading />
+        ) : listState(assets, filtered.length) === "error" ? (
+          <LoadError query={assets} what="assets" />
         ) : filtered.length === 0 ? (
           <EmptyState
             icon="cube-outline"

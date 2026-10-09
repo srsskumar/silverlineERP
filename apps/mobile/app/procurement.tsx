@@ -28,6 +28,8 @@ import { canGoNewer, canGoOlder, newerOffset, olderOffset } from "../src/paging"
 import { poStatusTone, requisitionCanSubmit, requisitionStatusTone } from "../src/procurementFormat";
 import { validateRequisitionCreate } from "../src/validators";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -48,6 +50,7 @@ import {
 import { space, useTheme } from "../src/theme";
 import { day } from "@silverline/shared";
 import { formatMoney as money } from "../src/money";
+import { permissionLabel } from "../src/permissionLabels";
 
 
 function ProcurementScreen() {
@@ -184,7 +187,7 @@ function ProcurementScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to procurement"
-          message="This screen needs the requisition.read permission."
+          message={`This screen needs permission to ${permissionLabel('requisition.read')}.`}
         />
       ) : (
         <>
@@ -208,7 +211,7 @@ function ProcurementScreen() {
               <EmptyState
                 icon="lock-closed-outline"
                 title="No access to requisitions"
-                message="This screen needs the requisition.read permission."
+                message={`This screen needs permission to ${permissionLabel('requisition.read')}.`}
               />
             ) : (
               <>
@@ -260,8 +263,10 @@ function ProcurementScreen() {
 
                 <SectionLabel>Requisitions</SectionLabel>
                 <Card>
-                  {requisitions.isLoading && reqOffset === 0 ? (
+                  {listState(requisitions, requisitionRows.length) === "loading" ? (
                     <Loading />
+                  ) : listState(requisitions, requisitionRows.length) === "error" ? (
+                    <LoadError query={requisitions} what="requisitions" />
                   ) : requisitionRows.length === 0 ? (
                     <EmptyState icon="clipboard-outline" title="No requisitions yet" />
                   ) : (
@@ -301,14 +306,16 @@ function ProcurementScreen() {
             <EmptyState
               icon="lock-closed-outline"
               title="No access to purchase orders"
-              message="This screen needs the po.read permission."
+              message={`This screen needs permission to ${permissionLabel('po.read')}.`}
             />
           ) : (
             <>
               <SectionLabel>Purchase orders</SectionLabel>
               <Card>
-                {orders.isLoading && poOffset === 0 ? (
+                {listState(orders, orderRows.length) === "loading" ? (
                   <Loading />
+                ) : listState(orders, orderRows.length) === "error" ? (
+                  <LoadError query={orders} what="purchase orders" />
                 ) : orderRows.length === 0 ? (
                   <EmptyState icon="cart-outline" title="No purchase orders yet" />
                 ) : (

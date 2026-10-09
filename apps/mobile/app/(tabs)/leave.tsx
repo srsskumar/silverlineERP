@@ -4,6 +4,9 @@
  * requests).
  */
 import { withScreenBoundary } from "../../src/ui/ErrorBoundary";
+import { listState } from "../../src/listState";
+import { LoadError } from "../../src/ui/LoadError";
+import { permissionLabel } from "../../src/permissionLabels";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { View } from "react-native";
@@ -189,8 +192,10 @@ function LeaveScreen() {
       ) : null}
 
       <Card title="Balances">
-        {balances.isLoading ? (
+        {listState(balances, (balances.data ?? []).length) === "loading" ? (
           <Loading />
+        ) : listState(balances, (balances.data ?? []).length) === "error" ? (
+          <LoadError query={balances} what="your leave balances" />
         ) : (balances.data ?? []).length === 0 ? (
           <EmptyState icon="calendar-outline" title="No balances yet" />
         ) : (
@@ -212,7 +217,9 @@ function LeaveScreen() {
       <SectionLabel>New request</SectionLabel>
       <Card>
         <Subtle style={{ marginBottom: space.xs }}>Leave type</Subtle>
-        {leaveTypes.length === 0 ? (
+        {types.isError ? (
+          <Subtle style={{ color: t.danger }}>Could not load leave types</Subtle>
+        ) : leaveTypes.length === 0 ? (
           <Subtle>Loading leave types…</Subtle>
         ) : (
           <Row gap={space.sm} style={{ flexWrap: "wrap", marginBottom: space.md }}>
@@ -286,8 +293,10 @@ function LeaveScreen() {
 
       <SectionLabel>My requests</SectionLabel>
       <Card>
-        {mine.isLoading ? (
+        {listState(mine, (mine.data ?? []).length) === "loading" ? (
           <Loading />
+        ) : listState(mine, (mine.data ?? []).length) === "error" ? (
+          <LoadError query={mine} what="your requests" />
         ) : (mine.data ?? []).length === 0 ? (
           <EmptyState icon="document-text-outline" title="No requests yet" />
         ) : (
@@ -311,10 +320,12 @@ function LeaveScreen() {
           <EmptyState
             icon="lock-closed-outline"
             title="No approval rights"
-            message="Approving leave needs the leave.decide or leave.admin permission."
+            message={`Approving leave needs permission to ${permissionLabel('leave.decide')} or ${permissionLabel('leave.admin')}.`}
           />
-        ) : inbox.isLoading ? (
+        ) : listState(inbox, (inbox.data ?? []).length) === "loading" ? (
           <Loading />
+        ) : listState(inbox, (inbox.data ?? []).length) === "error" ? (
+          <LoadError query={inbox} what="the approvals inbox" />
         ) : (inbox.data ?? []).length === 0 ? (
           <EmptyState icon="checkmark-done-outline" title="Nothing pending" />
         ) : (

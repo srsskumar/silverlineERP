@@ -16,6 +16,8 @@ import { useAuth } from "../src/auth/AuthContext";
 import { getProject, getProjects, type ProjectDetail } from "../src/api/endpoints";
 import { formatProjectKind, projectStatusTone } from "../src/projectsFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -34,6 +36,7 @@ import {
 } from "../src/ui/primitives";
 import { space, useTheme } from "../src/theme";
 import { formatMoneyOrNull as money } from "../src/money";
+import { permissionLabel } from "../src/permissionLabels";
 
 
 function ProjectsScreen() {
@@ -65,7 +68,7 @@ function ProjectsScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to projects"
-          message="This screen needs the project.read permission."
+          message={`This screen needs permission to ${permissionLabel('project.read')}.`}
         />
       ) : (
         <>
@@ -90,8 +93,10 @@ function ProjectsScreen() {
           </ScrollView>
 
           <Card>
-            {list.isLoading ? (
+            {listState(list, rows.length) === "loading" ? (
               <Loading />
+            ) : listState(list, rows.length) === "error" ? (
+              <LoadError query={list} what="projects" />
             ) : rows.length === 0 ? (
               <EmptyState icon="folder-outline" title="No projects found" />
             ) : (

@@ -23,6 +23,7 @@ import {
   type ApprovalInstance,
 } from "../src/api/endpoints";
 import { approvalStatusTone, formatDocumentType, validateApprovalDecision } from "../src/approvalsFormat";
+import { permissionLabel } from "../src/permissionLabels";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
 import { usePullRefresh } from "../src/ui/usePullRefresh";
 import { listState } from "../src/listState";
@@ -147,7 +148,7 @@ function ApprovalsScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to approvals"
-          message="This screen needs the approval.read permission."
+          message={`This screen needs permission to ${permissionLabel('approval.read')}.`}
         />
       ) : (
         <>

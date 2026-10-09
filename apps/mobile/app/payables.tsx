@@ -17,6 +17,8 @@ import { useAuth } from "../src/auth/AuthContext";
 import { getApAgeing, getPaymentRuns, type ApVendor } from "../src/api/endpoints";
 import { oldestBucket, partyTone, paymentRunTone, payableFlagTone, AGEING_BUCKET_LABELS } from "../src/ledgersFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -36,6 +38,7 @@ import {
 import { space, useTheme } from "../src/theme";
 import { day } from "@silverline/shared";
 import { formatMoney as money } from "../src/money";
+import { permissionLabel } from "../src/permissionLabels";
 
 
 function PayablesScreen() {
@@ -71,7 +74,7 @@ function PayablesScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to payables"
-          message="This screen needs the ap.read permission."
+          message={`This screen needs permission to ${permissionLabel('ap.read')}.`}
         />
       ) : ageing.isLoading ? (
         <Loading />
@@ -115,8 +118,10 @@ function PayablesScreen() {
             <>
               <SectionLabel>Payment runs</SectionLabel>
               <Card>
-                {runs.isLoading ? (
+                {listState(runs, paymentRuns.length) === "loading" ? (
                   <Loading />
+                ) : listState(runs, paymentRuns.length) === "error" ? (
+                  <LoadError query={runs} what="payment runs" />
                 ) : paymentRuns.length === 0 ? (
                   <EmptyState icon="card-outline" title="No payment runs yet" />
                 ) : (

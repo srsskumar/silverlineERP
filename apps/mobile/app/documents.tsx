@@ -30,6 +30,7 @@ import {
   documentStateTone,
   validateDocumentRenew,
 } from "../src/documentsFormat";
+import { permissionLabel } from "../src/permissionLabels";
 import { listState } from "../src/listState";
 import { LoadError } from "../src/ui/LoadError";
 import { describeApiError } from "../src/errorFormat";
@@ -95,7 +96,7 @@ function DocumentsScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to the document register"
-          message="This screen needs the document.read permission."
+          message={`This screen needs permission to ${permissionLabel('document.read')}.`}
         />
       ) : (
         <>

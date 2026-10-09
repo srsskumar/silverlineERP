@@ -1,11 +1,11 @@
 'use client';
 
 import * as React from 'react';
+import nextDynamic from 'next/dynamic';
 import Link from '@/components/AppLink';
 import { useQuery } from '@tanstack/react-query';
 import { AppShell } from '@/components/AppShell';
 import { RequirePermission } from '@/components/RequirePermission';
-import { KanbanBoard } from '@/components/KanbanBoard';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { NativeSelect } from '@/components/ui/Select';
@@ -15,9 +15,25 @@ import { PERMISSIONS, hasPermission } from '@/lib/permissions';
 import { useAuth } from '@/components/AuthProvider';
 import { landingRoute } from '@/lib/landing';
 import { getProject, listProjects } from '@/lib/projects';
-import { getBoard, listBoards } from '@/lib/boards';
+import { getBoard, listBoards, type BoardDetailData } from '@/lib/boards';
 import { TASK_STATUSES } from '@/lib/validation';
 import { queryKeys } from '@/lib/query-keys';
+
+interface KanbanBoardProps {
+  projectId: string;
+  board: BoardDetailData;
+  workflowStatuses: string[];
+  assigneeMe?: boolean;
+}
+
+// The board is a drag-and-drop editor (@dnd-kit) a visitor may never touch
+// this visit; it does not belong in the dashboard's own initial bundle any
+// more than the map library belongs in attendance's (see that page's own
+// PunchClusterMap for the identical pattern this copies).
+const KanbanBoard = nextDynamic<KanbanBoardProps>(
+  () => import('@/components/KanbanBoard').then((module) => module.KanbanBoard),
+  { ssr: false, loading: () => <Skeleton className="h-[420px] w-full" /> },
+);
 
 export const dynamic = 'force-static';
 

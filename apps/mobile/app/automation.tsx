@@ -47,6 +47,7 @@ import {
 import { radius, space, useTheme } from "../src/theme";
 import { day, dayTime } from "@silverline/shared";
 import { codeLabel } from "../src/labels";
+import { permissionLabel } from "../src/permissionLabels";
 
 function AutomationScreen() {
   const { canDo } = useAuth();
@@ -87,7 +88,7 @@ function AutomationScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to automation"
-          message="This screen needs the automation.read permission."
+          message={`This screen needs permission to ${permissionLabel('automation.read')}.`}
         />
       ) : (
         <>

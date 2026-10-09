@@ -38,6 +38,7 @@ import {
 } from "../src/ui/primitives";
 import { space, useTheme } from "../src/theme";
 import { formatMoney as money } from "../src/money";
+import { permissionLabel } from "../src/permissionLabels";
 
 
 function PayrollScreen() {
@@ -72,7 +73,7 @@ function PayrollScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to payroll"
-          message="This screen needs the payroll.read permission."
+          message={`This screen needs permission to ${permissionLabel('payroll.read')}.`}
         />
       ) : (
         <>

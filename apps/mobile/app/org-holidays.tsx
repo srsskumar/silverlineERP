@@ -19,6 +19,7 @@ import { LoadError } from "../src/ui/LoadError";
 import { BackHeader, Button, Card, EmptyState, ListRow, Loading, Muted, Row, Screen } from "../src/ui/primitives";
 import { space } from "../src/theme";
 import { day } from "@silverline/shared";
+import { permissionLabel } from "../src/permissionLabels";
 
 function OrgHolidaysScreen() {
   const { canDo } = useAuth();
@@ -45,7 +46,7 @@ function OrgHolidaysScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to holidays"
-          message="This screen needs the holiday.read permission."
+          message={`This screen needs permission to ${permissionLabel('holiday.read')}.`}
         />
       ) : (
         <>

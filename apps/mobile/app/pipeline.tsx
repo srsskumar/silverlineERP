@@ -48,6 +48,7 @@ import {
 } from "../src/ui/primitives";
 import { space, useTheme } from "../src/theme";
 import { formatMoneyOrNull as money } from "../src/money";
+import { permissionLabel } from "../src/permissionLabels";
 
 
 function PipelineScreen() {
@@ -108,7 +109,7 @@ function PipelineScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to the pipeline"
-          message="This screen needs the lead.read permission."
+          message={`This screen needs permission to ${permissionLabel('lead.read')}.`}
         />
       ) : (
         <>

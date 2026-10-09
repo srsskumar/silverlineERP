@@ -2,6 +2,7 @@
 
 import Link from '@/components/AppLink';
 import { Button } from './ui/Button';
+import { permissionLabel } from '@/lib/permissionLabels';
 
 /**
  * 403 panel rendered by RequirePermission and the /403 route.
@@ -9,9 +10,11 @@ import { Button } from './ui/Button';
  * Naming the permission is half the answer. Somebody who has just been told
  * they need "employee.read" still has to work out that permissions live on
  * roles, that they cannot grant themselves one, and who can — so the panel
- * says all three. It matches what the API says when it refuses the same
- * request, because hearing two different explanations for one refusal is
- * worse than hearing neither.
+ * says all three. The raw code still shows (in a technical aside, not the
+ * main sentence) to match what the API says when it refuses the same
+ * request — hearing two different explanations for one refusal is worse
+ * than hearing neither — but the primary sentence is now plain English
+ * rather than a dotted permission code (A-013-adjacent QA finding).
  */
 export function Forbidden({ required }: { required?: string }) {
   return (
@@ -21,9 +24,9 @@ export function Forbidden({ required }: { required?: string }) {
       <p className="text-sm text-text-muted">
         {required ? (
           <>
-            This page needs the{' '}
-            <code className="rounded bg-surface-sunken px-1">{required}</code>{' '}
-            permission, which your roles do not include.
+            This page needs permission to {permissionLabel(required)}, which your roles do
+            not include{' '}
+            <code className="rounded bg-surface-sunken px-1 text-xs">({required})</code>.
           </>
         ) : (
           <>Your roles do not include permission to view this page.</>

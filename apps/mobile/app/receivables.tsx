@@ -33,6 +33,7 @@ import {
 import { space, useTheme } from "../src/theme";
 import { day } from "@silverline/shared";
 import { formatMoney as money } from "../src/money";
+import { permissionLabel } from "../src/permissionLabels";
 
 
 function ReceivablesScreen() {
@@ -60,7 +61,7 @@ function ReceivablesScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to receivables"
-          message="This screen needs the ar.read permission."
+          message={`This screen needs permission to ${permissionLabel('ar.read')}.`}
         />
       ) : ageing.isLoading ? (
         <Loading />

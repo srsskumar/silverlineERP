@@ -15,6 +15,7 @@ import { Modal, View } from "react-native";
 import { useAuth } from "../src/auth/AuthContext";
 import { getEmployee, getEmployeeDirectory, type DirectoryEmployee } from "../src/api/endpoints";
 import { employeeStatusTone, formatEmployeeName } from "../src/employeesFormat";
+import { permissionLabel } from "../src/permissionLabels";
 import { day } from "@silverline/shared";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
 import { usePullRefresh } from "../src/ui/usePullRefresh";
@@ -84,7 +85,7 @@ function EmployeesScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to the directory"
-          message="This screen needs the employee.read permission."
+          message={`This screen needs permission to ${permissionLabel('employee.read')}.`}
         />
       ) : (
         <>

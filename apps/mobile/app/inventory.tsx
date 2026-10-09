@@ -23,6 +23,8 @@ import {
 import { isLowStock, stockTone } from "../src/inventoryFormat";
 import { validateStockTransaction } from "../src/validators";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -41,6 +43,7 @@ import {
   Subtle,
 } from "../src/ui/primitives";
 import { space, useTheme } from "../src/theme";
+import { permissionLabel } from "../src/permissionLabels";
 
 function InventoryScreen() {
   const { canDo } = useAuth();
@@ -66,14 +69,16 @@ function InventoryScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to inventory"
-          message="This screen needs the inventory.read permission."
+          message={`This screen needs permission to ${permissionLabel('inventory.read')}.`}
         />
       ) : (
         <>
           <Input placeholder="Search by name or code" value={search} onChangeText={setSearch} autoCapitalize="none" />
           <Card>
-            {items.isLoading ? (
+            {listState(items, rows.length) === "loading" ? (
               <Loading />
+            ) : listState(items, rows.length) === "error" ? (
+              <LoadError query={items} what="inventory" />
             ) : rows.length === 0 ? (
               <EmptyState icon="cube-outline" title="No items found" />
             ) : (
@@ -216,8 +221,10 @@ function ItemDetail({
 
       <SectionLabel>Recent movements</SectionLabel>
       <Card>
-        {txns.isLoading ? (
+        {listState(txns, (txns.data ?? []).length) === "loading" ? (
           <Loading />
+        ) : listState(txns, (txns.data ?? []).length) === "error" ? (
+          <LoadError query={txns} what="recent movements" />
         ) : (txns.data ?? []).length === 0 ? (
           <EmptyState icon="swap-vertical-outline" title="No movements recorded" />
         ) : (

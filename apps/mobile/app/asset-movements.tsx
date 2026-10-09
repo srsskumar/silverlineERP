@@ -38,6 +38,7 @@ import {
 } from "../src/ui/primitives";
 import { space, useTheme } from "../src/theme";
 import { day, dayTime as when } from "@silverline/shared";
+import { permissionLabel } from "../src/permissionLabels";
 
 function AssetMovementsScreen() {
   const { canDo } = useAuth();
@@ -67,7 +68,7 @@ function AssetMovementsScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to asset movements"
-          message="This screen needs the asset.read permission."
+          message={`This screen needs permission to ${permissionLabel('asset.read')}.`}
         />
       ) : listState(moves, rows.length) === "loading" ? (
         <Loading />

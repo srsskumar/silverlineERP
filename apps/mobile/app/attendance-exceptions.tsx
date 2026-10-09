@@ -40,6 +40,7 @@ import {
   SectionLabel,
 } from "../src/ui/primitives";
 import { space, useTheme } from "../src/theme";
+import { permissionLabel } from "../src/permissionLabels";
 
 interface TrackedException {
   id: string;
@@ -93,7 +94,7 @@ function AttendanceExceptionsScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to attendance exceptions"
-          message="This screen needs the attendance.read permission."
+          message={`This screen needs permission to ${permissionLabel('attendance.read')}.`}
         />
       ) : (
         <>
@@ -142,7 +143,7 @@ function AttendanceExceptionsScreen() {
               ))
             )}
             {known.length > 0 && !canDecide ? (
-              <Muted style={{ marginTop: space.sm }}>Deciding needs the attendance.decide permission.</Muted>
+              <Muted style={{ marginTop: space.sm }}>{`Deciding needs permission to ${permissionLabel('attendance.decide')}.`}</Muted>
             ) : null}
           </Card>
         </>

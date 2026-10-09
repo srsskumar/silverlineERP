@@ -34,6 +34,9 @@ import { categoryLabel, expenseClaimActions, expenseStatusTone } from "../src/ex
 import { canAddReceipt, claimTakesReceipts, formatReceiptSize, receiptIcon } from "../src/expenseReceiptsFormat";
 import { ReceiptCapture } from "../src/device/ReceiptCapture";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { listState } from "../src/listState";
+import { permissionLabel } from "../src/permissionLabels";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -213,7 +216,7 @@ function ExpensesScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to expenses"
-          message="This screen needs the expense.read permission."
+          message={`This screen needs permission to ${permissionLabel('expense.read')}.`}
         />
       ) : (
         <>
@@ -251,8 +254,10 @@ function ExpensesScreen() {
 
           <SectionLabel>My claims</SectionLabel>
           <Card>
-            {list.isLoading ? (
+            {listState(list, rows.length) === "loading" ? (
               <Loading />
+            ) : listState(list, rows.length) === "error" ? (
+              <LoadError query={list} what="your claims" />
             ) : rows.length === 0 ? (
               <EmptyState icon="receipt-outline" title="No claims yet" />
             ) : (
@@ -417,8 +422,10 @@ function ExpenseDetail({
 
       <SectionLabel>Receipts</SectionLabel>
       <Card>
-        {receipts.isLoading ? (
+        {listState(receipts, (receipts.data ?? []).length) === "loading" ? (
           <Loading />
+        ) : listState(receipts, (receipts.data ?? []).length) === "error" ? (
+          <LoadError query={receipts} what="receipts" />
         ) : (receipts.data ?? []).length === 0 ? (
           <EmptyState icon="receipt-outline" title="No receipts attached" />
         ) : (

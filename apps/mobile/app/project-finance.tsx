@@ -19,6 +19,8 @@ import { getProjectRaBills, getProjects, getRaBill, type RaBill } from "../src/a
 import { raBillAmount, raBillOverdue, raBillStatusTone } from "../src/raBillsFormat";
 import { payableFlagTone } from "../src/ledgersFormat";
 import { withScreenBoundary } from "../src/ui/ErrorBoundary";
+import { listState } from "../src/listState";
+import { LoadError } from "../src/ui/LoadError";
 import {
   BackHeader,
   Badge,
@@ -39,6 +41,7 @@ import {
 import { radius, space, useTheme } from "../src/theme";
 import { day } from "@silverline/shared";
 import { formatMoney as money } from "../src/money";
+import { permissionLabel } from "../src/permissionLabels";
 
 
 // The Indian day, not the UTC one: until 05:30 IST those differ (fix round 1).
@@ -86,7 +89,7 @@ function ProjectFinanceScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to project finance"
-          message="This screen needs the rabill.read permission."
+          message={`This screen needs permission to ${permissionLabel('rabill.read')}.`}
         />
       ) : (
         <>
@@ -128,8 +131,10 @@ function ProjectFinanceScreen() {
             <>
               <SectionLabel>Bills</SectionLabel>
               <Card>
-                {bills.isLoading ? (
+                {listState(bills, rows.length) === "loading" ? (
                   <Loading />
+                ) : listState(bills, rows.length) === "error" ? (
+                  <LoadError query={bills} what="bills" />
                 ) : rows.length === 0 ? (
                   <EmptyState icon="receipt-outline" title="No bills raised on this project yet" />
                 ) : (

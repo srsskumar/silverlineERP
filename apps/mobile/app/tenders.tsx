@@ -45,6 +45,7 @@ import {
 } from "../src/ui/primitives";
 import { space, useTheme } from "../src/theme";
 import { formatMoneyOrNull as money } from "../src/money";
+import { permissionLabel } from "../src/permissionLabels";
 
 
 function TendersScreen() {
@@ -96,7 +97,7 @@ function TendersScreen() {
         <EmptyState
           icon="lock-closed-outline"
           title="No access to tenders"
-          message="This screen needs the tender.read permission."
+          message={`This screen needs permission to ${permissionLabel('tender.read')}.`}
         />
       ) : (
         <>
