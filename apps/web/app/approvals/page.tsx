@@ -8,6 +8,7 @@ import { AppShell } from '@/components/AppShell';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { Textarea } from '@/components/ui/Input';
 import { NativeSelect } from '@/components/ui/Select';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -17,6 +18,7 @@ import { Badge } from '@/components/ui/Badge';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
 import { statusLabel } from '@/lib/board-visuals';
+import { permissionLabel } from '@/lib/permissionLabels';
 import { Field, Notice, RecordSheet, Section, StatusBadge, Stat } from '@/components/finance/Primitives';
 import {
   approvalTone, day, documentHref, documentTypeLabel, money, slaState, DOCUMENT_TYPE_LABELS,
@@ -144,10 +146,10 @@ export default function ApprovalsPage() {
           ) : null}
         </Toolbar>
 
-        {active.error ? <ErrorCard error={active.error} onRetry={() => void active.refetch()} /> : null}
-
         {active.isLoading ? (
           <Skeleton className="h-64 w-full" />
+        ) : active.isError ? (
+          <ErrorCard title="Could not load approvals" error={active.error} onRetry={() => void active.refetch()} />
         ) : rows.length === 0 ? (
           <EmptyState
             title={tab === 'inbox' ? 'Nothing waiting on you' : 'No requests'}
@@ -367,12 +369,12 @@ function ApprovalDetail({ id, onClose, onChanged }: { id: string; onClose: () =>
                 </Notice>
               ) : !canAct ? (
                 <Notice title="You can view this but not decide">
-                  Acting on an approval needs the approval.act permission.
+                  Deciding on this needs permission to {permissionLabel('approval.act')}.
                 </Notice>
               ) : null}
 
-              <textarea
-                className="mt-2 w-full rounded-md border border-border bg-surface p-2 text-sm"
+              <Textarea
+                className="mt-2"
                 rows={2}
                 maxLength={2000}
                 placeholder={canDecideNow ? 'Comments (required when rejecting)' : 'Reason for withdrawing'}

@@ -7,6 +7,7 @@ import { closeProject, parseProjectOpenTasks, type Project } from '@/lib/project
 import { requestIdOf } from '@/lib/form-errors';
 import { Button } from './ui/Button';
 import { ErrorCard } from './ui/ErrorCard';
+import { Textarea } from './ui/Input';
 
 /**
  * Close-project dialog. The server refuses with 422 PROJECT_HAS_OPEN_TASKS
@@ -57,10 +58,9 @@ export function CloseProjectDialog({
           <label htmlFor="close-reason" className="text-sm font-medium text-text-muted">
             Reason (optional)
           </label>
-          <textarea
+          <Textarea
             id="close-reason"
             rows={2}
-            className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
             placeholder="e.g. All deliverables accepted…"
             value={reason}
             onChange={(e) => setReason(e.target.value)}

@@ -8,6 +8,7 @@ import { AppShell } from '@/components/AppShell';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ErrorCard } from '@/components/ui/ErrorCard';
+import { permissionLabel } from '@/lib/permissionLabels';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader, PageBody } from '@/components/ui/Page';
@@ -185,11 +186,13 @@ export default function ExpensePoliciesPage() {
             </Section>
           </Card>
         ) : (
-          <Notice title="Read only">Changing policy needs the expense.policy.manage permission.</Notice>
+          <Notice title="Read only">Changing policy needs permission to {permissionLabel('expense.policy.manage')}.</Notice>
         )}
 
         {list.isLoading ? (
           <Skeleton className="h-48 w-full" />
+        ) : list.isError ? (
+          <ErrorCard title="Could not load policies" error={list.error} onRetry={() => void list.refetch()} />
         ) : rows.length === 0 ? (
           <EmptyState
             title="No policies"

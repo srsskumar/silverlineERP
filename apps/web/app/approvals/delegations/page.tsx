@@ -21,6 +21,7 @@ import { PersonName } from '@/components/PersonName';
 import { UserPicker } from '@/components/UserPicker';
 import { Notice, Section } from '@/components/finance/Primitives';
 import { day, DOCUMENT_TYPE_LABELS } from '@/lib/finance';
+import { permissionLabel } from '@/lib/permissionLabels';
 
 type Row = Record<string, any>;
 
@@ -193,12 +194,14 @@ export default function DelegationsPage() {
           </Card>
         ) : (
           <Notice title="You cannot delegate">
-            Handing over approval authority needs the approval.delegate permission.
+            Handing over approval authority needs permission to {permissionLabel('approval.delegate')}.
           </Notice>
         )}
 
         {list.isLoading ? (
           <Skeleton className="h-40 w-full" />
+        ) : list.isError ? (
+          <ErrorCard title="Could not load delegations" error={list.error} onRetry={() => void list.refetch()} />
         ) : rows.length === 0 ? (
           <EmptyState
             title="No delegations"

@@ -205,6 +205,8 @@ export function ViewAsDialog({
           <div className="max-h-56 space-y-1.5 overflow-y-auto pr-1">
             {targets.isLoading ? (
               <p className="px-1 py-6 text-center text-xs text-text-subtle">Looking…</p>
+            ) : targets.isError ? (
+              <p className="px-1 py-6 text-center text-xs text-danger">Could not search accounts.</p>
             ) : (targets.data ?? []).length === 0 ? (
               <p className="px-1 py-6 text-center text-xs text-text-subtle">
                 No accounts match that.

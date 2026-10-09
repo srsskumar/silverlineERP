@@ -28,12 +28,9 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { FormField } from '@/components/ui/FormField';
-import { Input } from '@/components/ui/Input';
+import { Input, Textarea } from '@/components/ui/Input';
 
 export const dynamic = 'force-static';
-
-const inputClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
 
 interface KnownException {
   id: string;
@@ -102,7 +99,7 @@ function RegularizeCard({ onCreated }: { onCreated: (ex: AttendanceException) =>
         </FormField>
         <div className="sm:col-span-2">
           <FormField label="Reason *" htmlFor="reg-reason" error={errors.reason?.message}>
-            <textarea id="reg-reason" rows={2} className={inputClass} {...register('reason')} />
+            <Textarea id="reg-reason" rows={2} invalid={!!errors.reason} {...register('reason')} />
           </FormField>
         </div>
         {submitError ? (

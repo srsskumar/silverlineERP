@@ -43,6 +43,8 @@ const DOMAIN_LABELS: Record<string, string> = {
   report: 'reports',
   payroll: 'payroll',
   payslip: 'payslips',
+  match: 'three-way matches',
+  'expense.policy': 'expense policies',
 };
 
 const ACTION_LABELS: Record<string, string> = {
@@ -58,6 +60,7 @@ const ACTION_LABELS: Record<string, string> = {
   upload: 'upload',
   delete: 'delete',
   configure: 'configure',
+  delegate: 'delegate',
   allocate: 'allocate',
   reconcile: 'reconcile',
   punch: 'record a punch for',
@@ -72,6 +75,8 @@ const ACTION_LABELS: Record<string, string> = {
   generate: 'generate',
   approve: 'approve',
   lock: 'lock',
+  act: 'act on',
+  override: 'override',
 };
 
 /**

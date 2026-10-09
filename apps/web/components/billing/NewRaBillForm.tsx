@@ -127,6 +127,8 @@ export function NewRaBill({
         >
           {boq.isLoading ? (
             <Skeleton className="h-16 w-full" />
+          ) : boq.isError ? (
+            <p className="text-sm text-danger">Could not load the BOQ. Try again.</p>
           ) : (boq.data ?? []).length === 0 ? (
             <p className="text-sm text-text-muted">No active BOQ on this project — nothing to measure against.</p>
           ) : (

@@ -188,6 +188,8 @@ export function BoardToolbar({
         >
           {labelsQuery.isLoading ? (
             <p className="text-xs text-text-muted">Loading labels…</p>
+          ) : labelsQuery.isError ? (
+            <p className="text-xs text-danger">Could not load labels.</p>
           ) : labels.length === 0 ? (
             <p className="text-xs text-text-muted">No labels in this project yet.</p>
           ) : (

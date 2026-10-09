@@ -79,10 +79,10 @@ export default function TendersPage() {
         </div>
       </div>
 
-      {list.error ? <div className="mt-3"><ErrorCard error={list.error} onRetry={() => void list.refetch()} /></div> : null}
-
       {list.isLoading ? (
         <Skeleton className="mt-3 h-80 w-full" />
+      ) : list.isError ? (
+        <div className="mt-3"><ErrorCard title="Could not load tenders" error={list.error} onRetry={() => void list.refetch()} /></div>
       ) : rows.length === 0 ? (
         <div className="mt-3"><EmptyState title="No tenders" description="Tenders created here convert into projects once awarded." /></div>
       ) : (

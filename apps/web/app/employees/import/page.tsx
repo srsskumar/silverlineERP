@@ -8,6 +8,7 @@ import { ImportReport } from '@/components/ImportReport';
 import { Button } from '@/components/ui/Button';
 import { ErrorCard } from '@/components/ui/ErrorCard';
 import { FormField } from '@/components/ui/FormField';
+import { Textarea } from '@/components/ui/Input';
 import { PERMISSIONS } from '@/lib/permissions';
 import { bulkImportEmployees, type BulkImportResult } from '@/lib/employees';
 import { parseEmployeeCsv } from '@/lib/csv';
@@ -67,7 +68,7 @@ function ImportForm() {
           {fileName && <p className="mt-1 text-xs text-text-muted">Loaded: {fileName}</p>}
           <div className="mt-3">
             <FormField label="Or paste CSV text" htmlFor="import-text">
-              <textarea
+              <Textarea
                 id="import-text"
                 rows={10}
                 value={text}
@@ -76,7 +77,7 @@ function ImportForm() {
                   setReport(null);
                 }}
                 placeholder={SAMPLE_CSV}
-                className="w-full rounded-md border border-border bg-surface px-3 py-2 font-mono text-xs text-text focus:outline-none focus:ring-2 focus:ring-ring"
+                className="font-mono text-xs"
               />
             </FormField>
           </div>

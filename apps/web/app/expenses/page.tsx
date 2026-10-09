@@ -162,10 +162,10 @@ export default function ExpensesPage() {
           <ToolbarSpacer />
         </Toolbar>
 
-        {list.error ? <ErrorCard error={list.error} onRetry={() => void list.refetch()} /> : null}
-
         {list.isLoading ? (
           <Skeleton className="h-64 w-full" />
+        ) : list.isError ? (
+          <ErrorCard title="Could not load expense claims" error={list.error} onRetry={() => void list.refetch()} />
         ) : rows.length === 0 ? (
           <EmptyState
             title="No claims"

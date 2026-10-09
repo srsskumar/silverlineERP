@@ -10,6 +10,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { Button } from './ui/Button';
 import { ErrorCard } from './ui/ErrorCard';
 import { FormField } from './ui/FormField';
+import { Textarea } from './ui/Input';
 
 /**
  * A-010: creation deliberately lands an employee in DRAFT (an incomplete
@@ -72,10 +73,10 @@ export function ActivateDialog({
           noValidate
         >
           <FormField label="Reason" htmlFor="activate-reason" error={errors.reason?.message}>
-            <textarea
+            <Textarea
               id="activate-reason"
               rows={3}
-              className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring"
+              invalid={!!errors.reason}
               {...register('reason')}
             />
           </FormField>

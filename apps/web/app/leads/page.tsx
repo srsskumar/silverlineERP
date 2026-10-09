@@ -86,10 +86,10 @@ export default function LeadsPage() {
         </Link>
       </div>
 
-      {leads.error ? <div className="mt-3"><ErrorCard error={leads.error} onRetry={() => void leads.refetch()} /></div> : null}
-
       {leads.isLoading ? (
         <Skeleton className="mt-3 h-96 w-full" />
+      ) : leads.isError ? (
+        <div className="mt-3"><ErrorCard title="Could not load leads" error={leads.error} onRetry={() => void leads.refetch()} /></div>
       ) : rows.length === 0 ? (
         <div className="mt-3">
           <EmptyState

@@ -4,6 +4,7 @@ import * as React from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { apiRequest } from '@/lib/apiClient';
 import { Button } from '@/components/ui/Button';
+import { Textarea } from '@/components/ui/Input';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogBody, DialogFooter,
 } from '@/components/ui/Dialog';
@@ -70,8 +71,8 @@ export function ReversePaymentDialog({ claim, onDone }: { claim: Row; onDone: ()
           <label className="block text-2xs text-text-subtle" htmlFor={`reverse-reason-${claim.id}`}>
             Reason
           </label>
-          <textarea id={`reverse-reason-${claim.id}`}
-            className="mt-1 w-full rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text"
+          <Textarea id={`reverse-reason-${claim.id}`}
+            className="mt-1"
             rows={3} maxLength={1000} value={reason}
             onChange={(e) => setReason(e.target.value)} />
           {!ready ? (

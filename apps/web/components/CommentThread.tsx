@@ -13,6 +13,7 @@ import { Button } from './ui/Button';
 import { EmptyState } from './ui/EmptyState';
 import { ErrorCard } from './ui/ErrorCard';
 import { Spinner } from './ui/Spinner';
+import { Textarea } from './ui/Input';
 import { dayTime } from '@/lib/finance';
 
 /**
@@ -102,10 +103,10 @@ export function CommentThread({
           <label htmlFor={`comment-box-${taskId}`} className="text-sm font-medium text-text-muted">
             Add a comment
           </label>
-          <textarea
+          <Textarea
             id={`comment-box-${taskId}`}
             rows={3}
-            className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
+            invalid={!!errors.body}
             placeholder="Write an update, question, or decision…"
             {...register('body')}
           />

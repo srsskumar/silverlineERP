@@ -11,7 +11,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { Button } from './ui/Button';
 import { ErrorCard } from './ui/ErrorCard';
 import { FormField } from './ui/FormField';
-import { Input } from './ui/Input';
+import { Input, Textarea } from './ui/Input';
 
 export function ExitDialog({
   employeeId,
@@ -74,10 +74,10 @@ export function ExitDialog({
             <Input id="exit-date" type="date" invalid={!!errors.exit_date} {...register('exit_date')} />
           </FormField>
           <FormField label="Reason" htmlFor="exit-reason" error={errors.reason?.message}>
-            <textarea
+            <Textarea
               id="exit-reason"
               rows={3}
-              className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:outline-none focus:ring-2 focus:ring-ring"
+              invalid={!!errors.reason}
               {...register('reason')}
             />
           </FormField>

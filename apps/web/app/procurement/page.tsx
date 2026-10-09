@@ -179,10 +179,10 @@ export default function ProcurementPage() {
           ) : null}
         </Toolbar>
 
-        {list.error ? <ErrorCard error={list.error} onRetry={() => void list.refetch()} /> : null}
-
         {list.isLoading ? (
           <Skeleton className="h-64 w-full" />
+        ) : list.isError ? (
+          <ErrorCard title={`Could not load ${tab}`} error={list.error} onRetry={() => void list.refetch()} />
         ) : rows.length === 0 ? (
           <EmptyState
             title={`No ${tab}`}
@@ -802,6 +802,8 @@ function RfqDetail({ id, onClose, onChanged }: { id: string; onClose: () => void
           <Section title="Comparison">
             {comparison.isLoading ? (
               <Skeleton className="h-32 w-full" />
+            ) : comparison.isError ? (
+              <ErrorCard title="Could not load the comparison" error={comparison.error} onRetry={() => void comparison.refetch()} />
             ) : evaluations.length === 0 ? (
               <p className="text-sm text-text-muted">No quotes received yet.</p>
             ) : (

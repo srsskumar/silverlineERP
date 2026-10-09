@@ -11,9 +11,7 @@ import { Button } from './ui/Button';
 import { ErrorCard } from './ui/ErrorCard';
 import { FormField } from './ui/FormField';
 import { ConflictDialog, useConflict } from './ConflictDialog';
-
-const inputClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-subtle focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1';
+import { Textarea } from './ui/Input';
 
 /**
  * Approve / reject a pending leave request with If-Match versioning.
@@ -99,10 +97,10 @@ export function DecisionButtons({
           htmlFor="leave-decision-note"
           error={errors.note?.message}
         >
-          <textarea
+          <Textarea
             id="leave-decision-note"
             rows={2}
-            className={inputClass}
+            invalid={!!errors.note}
             placeholder="Decision rationale…"
             {...register('note')}
           />

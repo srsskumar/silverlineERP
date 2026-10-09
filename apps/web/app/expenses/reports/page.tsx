@@ -92,10 +92,10 @@ export default function ExpenseReportsPage() {
           ) : null}
         </Toolbar>
 
-        {report.error ? <ErrorCard error={report.error} onRetry={() => void report.refetch()} /> : null}
-
         {report.isLoading ? (
           <Skeleton className="h-64 w-full" />
+        ) : report.isError ? (
+          <ErrorCard title="Could not load this report" error={report.error} onRetry={() => void report.refetch()} />
         ) : rows.length === 0 ? (
           <EmptyState
             title="Nothing to report"

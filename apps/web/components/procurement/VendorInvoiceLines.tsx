@@ -15,6 +15,7 @@ import { NativeSelect } from '@/components/ui/Select';
 import { Field, Notice, RecordSheet, Section } from '@/components/finance/Primitives';
 import { useAuth } from '@/components/AuthProvider';
 import { hasPermission } from '@/lib/permissions';
+import { permissionLabel } from '@/lib/permissionLabels';
 import { useToast } from '@/components/ui/Toast';
 import { applyFieldErrors } from '@/lib/form-errors';
 import { money, day, businessToday } from '@/lib/finance';
@@ -319,7 +320,7 @@ export function VendorInvoiceLines({ invoiceId, onClose }: { invoiceId: string; 
                 ) : null}
                 {!lastMatch.matched && !lastMatch.override_by && !canOverride ? (
                   <p className="text-2xs text-text-subtle">
-                    Releasing payment against this needs the match.override permission.
+                    Releasing payment against this needs permission to {permissionLabel('match.override')}.
                   </p>
                 ) : null}
               </div>
