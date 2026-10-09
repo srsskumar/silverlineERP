@@ -151,6 +151,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <TooltipProvider delayDuration={300}>
       <div className="flex min-h-screen bg-canvas">
+        {/* Skip-link: the first focusable element, hidden until a keyboard
+            user tabs to it. Without one, reaching <main> means tabbing
+            through the whole nav rail and header on every page load. */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:rounded focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-fg"
+        >
+          Skip to main content
+        </a>
         {/* Desktop rail. The sidebar is its own scroll container so long nav
             never pushes the page, and the brand/footer stay pinned. */}
         <aside className="sticky top-0 hidden h-screen w-sidebar shrink-0 flex-col border-r border-border bg-surface md:flex">
@@ -275,7 +284,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </DropdownMenu>
           </header>
 
-          <main className="min-w-0 flex-1 px-3 py-4 md:px-5 md:py-5">{children}</main>
+          <main id="main-content" tabIndex={-1} className="min-w-0 flex-1 px-3 py-4 md:px-5 md:py-5">{children}</main>
           {canViewAs ? <ViewAsDialog open={viewAsOpen} onOpenChange={setViewAsOpen} /> : null}
         </div>
       </div>
