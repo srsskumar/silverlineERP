@@ -168,7 +168,8 @@ function checkSdkPackages(sdkRoot) {
  * enough once ANDROID_HOME is set.
  */
 function checkAdb(sdkRoot) {
-  const sdkAdb = sdkRoot ? path.join(sdkRoot, 'platform-tools', 'adb') : null;
+  const adbName = process.platform === 'win32' ? 'adb.exe' : 'adb';
+  const sdkAdb = sdkRoot ? path.join(sdkRoot, 'platform-tools', adbName) : null;
   const sdkAdbExists = sdkAdb !== null && existsSync(sdkAdb);
   const version = run('adb', ['version']);
   const onPath = version.ok;
@@ -287,7 +288,8 @@ function checkDevice(adbUsable, sdkRoot) {
     return;
   }
 
-  const avdBinary = sdkRoot ? path.join(sdkRoot, 'emulator', 'emulator') : null;
+  const emulatorName = process.platform === 'win32' ? 'emulator.exe' : 'emulator';
+  const avdBinary = sdkRoot ? path.join(sdkRoot, 'emulator', emulatorName) : null;
   const avds = avdBinary && existsSync(avdBinary) ? run(avdBinary, ['-list-avds']) : run('emulator', ['-list-avds']);
   const names = avds.ok ? avds.out.split('\n').map(line => line.trim()).filter(name => name && !name.includes(' ')) : [];
 
