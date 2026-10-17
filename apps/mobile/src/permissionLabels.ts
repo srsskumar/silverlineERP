@@ -37,6 +37,10 @@ const LABELS: Record<string, string> = {
   'tender.read': 'view tenders',
   'leave.decide': 'decide leave requests',
   'leave.admin': 'administer leave',
+  'location.read': 'view storage locations',
+  'stockcount.read': 'view stock counts',
+  'reservation.read': 'view stock reservations',
+  'stock.read': 'view stock',
 };
 
 export function permissionLabel(code: string): string {

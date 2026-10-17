@@ -1,5 +1,6 @@
 import {deviceId} from "../device/registration";
 import { cachedRead } from "../sync/db";
+import { buildStockCountBody } from "../stockFormat";
 /**
  * Typed endpoint wrappers over apiFetch. All paths carry the /api/v1 prefix.
  *
@@ -1238,6 +1239,173 @@ export async function postInventoryTransaction(
     body: input,
   });
   return asItem(data, "data");
+}
+
+// --- Stock: locations, counts, reservations, reorder (§44, B-008) ------------
+//
+// Multi-location stock -- a disjoint permission set from the single-location
+// inventory module above (location.read/manage, stockcount.read/manage,
+// reservation.read, stock.read vs inventory.read/manage). Had API routes
+// (apps/api/src/modules/stock/routes.ts) and no mobile UI at all; this
+// mirrors apps/web/components/v2/StockSection.tsx + StockReservationsTab.tsx's
+// scope exactly -- list+create locations, record one line per physical count
+// (no repeater here either, see stockFormat.ts's buildStockCountBody),
+// list reservations, list reorder suggestions. No release/approve action:
+// those stay desktop-only for this pass, same reasoning as this file's other
+// write actions (see this file's header comment).
+
+export interface StockLocation {
+  id: string;
+  code: string;
+  name: string;
+  kind: "WAREHOUSE" | "SITE" | "SUB_LOCATION" | string;
+  parent_id?: string | null;
+  parent_name?: string | null;
+  project_id?: string | null;
+  project_code?: string | null;
+  address_line?: string | null;
+  active: boolean;
+  version: number;
+  [k: string]: unknown;
+}
+
+export async function getStockLocations(params?: { kind?: string; project_id?: string }): Promise<StockLocation[]> {
+  const q = new URLSearchParams();
+  if (params?.kind) q.set("kind", params.kind);
+  if (params?.project_id) q.set("project_id", params.project_id);
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  const { data } = await cachedRead(`getStockLocations:${suffix}`, () =>
+    apiFetch<{ data?: StockLocation[] }>(`/api/v1/stock-locations${suffix}`));
+  return asList<StockLocation>(data);
+}
+
+/**
+ * POST /api/v1/stock-locations (`location.manage`) — matches shared
+ * stockLocationSchema. `active` is left to the server's default(true), same
+ * as web's STOCK_LOCATION_FIELDS (apps/web/lib/stock-forms.ts).
+ */
+export async function postStockLocation(input: {
+  code: string;
+  name: string;
+  kind: "WAREHOUSE" | "SITE" | "SUB_LOCATION";
+  parent_id?: string;
+  project_id?: string;
+  address_line?: string;
+}): Promise<StockLocation> {
+  const { data } = await apiFetch("/api/v1/stock-locations", { method: "POST", body: input });
+  return asItem<StockLocation>(data, "data");
+}
+
+export interface StockCountLine {
+  id?: string;
+  item_id: string;
+  item_code?: string;
+  item_name?: string;
+  unit?: string;
+  system_quantity: number | string;
+  counted_quantity: number | string;
+  variance: number | string;
+  batch_no?: string | null;
+  remarks?: string | null;
+  [k: string]: unknown;
+}
+
+export interface StockCount {
+  id: string;
+  count_no: string;
+  location_id: string;
+  location_name?: string;
+  counted_on: string;
+  status: "DRAFT" | "COUNTED" | "APPROVED" | string;
+  variance_count?: number;
+  line_count?: number;
+  notes?: string | null;
+  version: number;
+  lines?: StockCountLine[];
+  [k: string]: unknown;
+}
+
+export async function getStockCounts(params?: { status?: string }): Promise<StockCount[]> {
+  const q = new URLSearchParams({ limit: "50" });
+  if (params?.status) q.set("status", params.status);
+  const { data } = await cachedRead(`getStockCounts:${q.toString()}`, () =>
+    apiFetch<{ data?: StockCount[] }>(`/api/v1/stock-counts?${q.toString()}`));
+  return asList<StockCount>(data);
+}
+
+/** The count with its lines (system/counted quantity and variance per line). */
+export async function getStockCount(id: string): Promise<StockCount> {
+  const { data } = await cachedRead(`stock-count:${id}`, () => apiFetch(`/api/v1/stock-counts/${id}`));
+  return asItem<StockCount>(data, "data");
+}
+
+/**
+ * POST /api/v1/stock-counts (`stockcount.manage`) — one item per count, same
+ * constraint as web's form (no repeater field there either). Folds the
+ * single line into the `lines` array stockCountSchema requires via
+ * src/stockFormat.ts's buildStockCountBody.
+ */
+export async function postStockCount(input: {
+  count_no: string;
+  location_id: string;
+  counted_on: string;
+  item_id: string;
+  counted_quantity: number;
+  batch_no?: string;
+  remarks?: string;
+}): Promise<StockCount> {
+  const { data } = await apiFetch("/api/v1/stock-counts", {
+    method: "POST",
+    body: buildStockCountBody(input),
+  });
+  return asItem<StockCount>(data, "data");
+}
+
+export interface StockReservation {
+  id: string;
+  item_id: string;
+  item_code?: string;
+  item_name?: string;
+  location_id: string;
+  location_name?: string;
+  quantity: number | string;
+  project_id?: string | null;
+  project_code?: string | null;
+  state: "ACTIVE" | "RELEASED" | "EXPIRED" | "CONSUMED" | string;
+  expires_on?: string | null;
+  notes?: string | null;
+  version: number;
+  [k: string]: unknown;
+}
+
+/** List-only on mobile — reservation.read. Creating/releasing stays desktop-only (see header comment). */
+export async function getStockReservations(params?: { state?: string }): Promise<StockReservation[]> {
+  const q = new URLSearchParams();
+  if (params?.state) q.set("state", params.state);
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  const { data } = await cachedRead(`getStockReservations:${suffix}`, () =>
+    apiFetch<{ data?: StockReservation[] }>(`/api/v1/stock-reservations${suffix}`));
+  return asList<StockReservation>(data);
+}
+
+export interface StockReorderSuggestion {
+  item_id: string;
+  code: string;
+  name: string;
+  unit: string;
+  onHand: number;
+  reserved: number;
+  available: number;
+  reorder_quantity: number | null;
+  belowReorder: boolean;
+  [k: string]: unknown;
+}
+
+/** List-only (stock.read) — items at or below their reorder level, already filtered server-side. */
+export async function getStockReorderSuggestions(): Promise<StockReorderSuggestion[]> {
+  const { data } = await cachedRead("getStockReorderSuggestions", () =>
+    apiFetch<{ data?: StockReorderSuggestion[] }>("/api/v1/stock/reorder"));
+  return asList<StockReorderSuggestion>(data);
 }
 
 // --- CRM: Clients (§6.3) ------------------------------------------------------

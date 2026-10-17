@@ -293,3 +293,77 @@ export function validateStockTransaction(input: {
   req(errors, "reference", input.reference, "A reference is required");
   return result(errors);
 }
+
+/**
+ * POST /api/v1/stock-locations (B-008) — shared stockLocationSchema
+ * (packages/shared/src/inventory.ts). A SITE needs a project and a
+ * SUB_LOCATION needs a parent — both refused server-side by the schema's
+ * own superRefine with no further detail, so this is the cheap client
+ * pre-check that catches the same two cases.
+ */
+export function validateStockLocationCreate(input: {
+  code: string;
+  name: string;
+  kind: string;
+  parent_id?: string;
+  project_id?: string;
+}): ValidationResult {
+  const errors: FieldError[] = [];
+  if (!req(errors, "code", input.code, "A location code is required")) {
+    // pushed above
+  } else if ((input.code as string).trim().length > 30) {
+    errors.push({ field: "code", message: "Code must be ≤ 30 characters" });
+  }
+  if (!req(errors, "name", input.name, "Name is required")) {
+    // pushed above
+  } else if ((input.name as string).trim().length > 150) {
+    errors.push({ field: "name", message: "Name must be ≤ 150 characters" });
+  }
+  if (!["WAREHOUSE", "SITE", "SUB_LOCATION"].includes(input.kind)) {
+    errors.push({ field: "kind", message: "Choose a location kind" });
+  }
+  if (input.kind === "SITE" && !input.project_id) {
+    errors.push({ field: "project_id", message: "A site location has to say which project it belongs to" });
+  }
+  if (input.kind === "SUB_LOCATION" && !input.parent_id) {
+    errors.push({ field: "parent_id", message: "A sub-location has to sit inside another location" });
+  }
+  return result(errors);
+}
+
+/**
+ * POST /api/v1/stock-counts (B-008) — shared stockCountSchema, narrowed to
+ * the single line this screen records (same constraint as web's form; see
+ * src/stockFormat.ts's buildStockCountBody, which folds this into the
+ * `lines` array the API requires). counted_quantity allows zero (schema's
+ * own min(0), not a positive-only check) — counting nothing left is a real
+ * count result.
+ */
+export function validateStockCountCreate(input: {
+  count_no: string;
+  location_id: string;
+  counted_on: string;
+  item_id: string;
+  counted_quantity: number | string;
+}): ValidationResult {
+  const errors: FieldError[] = [];
+  if (!req(errors, "count_no", input.count_no, "A count number is required")) {
+    // pushed above
+  } else if ((input.count_no as string).trim().length > 50) {
+    errors.push({ field: "count_no", message: "Count number must be ≤ 50 characters" });
+  }
+  if (!isUuid(input.location_id)) {
+    errors.push({ field: "location_id", message: "Choose a location" });
+  }
+  if (!isDateString(input.counted_on)) {
+    errors.push({ field: "counted_on", message: "Must be a date in YYYY-MM-DD format" });
+  }
+  if (!isUuid(input.item_id)) {
+    errors.push({ field: "item_id", message: "Choose an item" });
+  }
+  const quantity = Number(input.counted_quantity);
+  if (!Number.isFinite(quantity) || quantity < 0) {
+    errors.push({ field: "counted_quantity", message: "Counted quantity must be zero or more" });
+  }
+  return result(errors);
+}
