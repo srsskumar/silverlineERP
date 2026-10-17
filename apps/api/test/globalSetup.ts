@@ -8,6 +8,7 @@
  */
 import { Client } from "pg";
 import { TEST_SHARDS, shardDatabaseUrl, testDatabaseUrl } from "./database.js";
+import { VOLATILE_TABLES } from "./tables.js";
 
 function nameOf(url: string): string {
   return decodeURIComponent(new URL(url).pathname.slice(1));
@@ -65,5 +66,58 @@ export async function setup(): Promise<void> {
     }
   } finally {
     await admin.end();
+  }
+
+  /*
+   * `organizations` is deliberately left out of every file's own TRUNCATE
+   * -- see test/catalogue/fixture.ts -- so that per-worker shards can reuse
+   * seeded reference data instead of rebuilding it fifty-nine times over.
+   * That is only safe when each worker's database is thrown away between
+   * runs, which was the point of sharding in the first place. It never
+   * shards in this configuration: `poolOptions.forks.singleFork` means
+   * there is exactly one worker for the whole suite, so
+   * `testDatabaseUrl()`'s shard formula resolves to shard 0 on every call,
+   * and every file -- across every invocation of this test command,
+   * forever, since nothing ever drops this database -- writes into the one
+   * base database. Organizations that `seedDatabase()` has created across
+   * literal years of test runs were still sitting in this table (471 of
+   * them, found while chasing a flaky suite). That matters beyond tidiness:
+   * `seedDatabase()` backfills a default payroll policy for every
+   * organization that has ever existed (src/database/seed.ts, by design --
+   * a real install only ever seeds once, and the backfill is for a
+   * migration-like upgrade of an existing one), so its cost grows with the
+   * lifetime total, not with this run's size, and that cost is paid on
+   * every file's `beforeAll` and, in files that reseed per test
+   * (test/s2.test.ts), on every single test. The result is real, growing,
+   * run-to-run-varying latency with no bound, which is exactly the kind of
+   * hidden timing difference that turns into "a different file fails every
+   * time" once enough of the suite's date/window logic is sensitive to it.
+   *
+   * Truncated here, once, before any test file runs, rather than added to
+   * every file's own list: the fix is for the cross-run accumulation this
+   * configuration allows, not for what any one file does during its own
+   * run. `roles` stays out of it deliberately -- some of its rows (the
+   * system roles 031/071/098/100 insert directly, GOVT_OBSERVER among them,
+   * per fresh-database.test.ts) are written once by a migration that
+   * `migrate()` will not run again, so truncating the table would lose them
+   * for the rest of this run with nothing left to put them back. Only the
+   * org-scoped rows a test created on top of them -- the ones that would
+   * block truncating `organizations` on the foreign key -- are cleared.
+   */
+  const baseClient = new Client({ connectionString: base });
+  await baseClient.connect();
+  try {
+    await baseClient.query("DELETE FROM roles WHERE org_id IS NOT NULL");
+    await baseClient.query(`TRUNCATE TABLE ${VOLATILE_TABLES}`);
+    // Not folded into the TRUNCATE above: `roles` carries a (now all-null)
+    // foreign key to `organizations`, and Postgres refuses to truncate a
+    // table some other table references unless that other table is
+    // truncated in the same statement too -- which `roles` cannot be (see
+    // the comment above). DELETE has no such restriction; it only checks
+    // the rows actually being removed, and the DELETE just above already
+    // cleared every row that pointed at an organization.
+    await baseClient.query("DELETE FROM organizations");
+  } finally {
+    await baseClient.end();
   }
 }

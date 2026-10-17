@@ -84,8 +84,11 @@ afterAll(async () => {
  *  permission-tagged, so the matrix covers them mechanically. Plus two
  *  that qa/policy (stage 1) had already added: GET /api/v1/documents/
  *  due-for-purge and POST /api/v1/documents/purge (guard('document.delete')).
- *  484 in all. */
-const EXPECTED_ROUTE_COUNT = 484;
+ *  484 in all. Bumped to 485 for the GSTIN-verification work (5f9dc9b):
+ *  GET /api/v1/integrations/gstin-verify (guardAny(['client.manage',
+ *  'inventory.manage'])), rate-limited and permission-tagged, so it too is
+ *  covered mechanically. */
+const EXPECTED_ROUTE_COUNT = 485;
 
 interface Violation {
   route: string;
@@ -230,6 +233,50 @@ describe("auth-state matrix", () => {
     expect(violations, violations.map((v) => `${v.route} :: ${v.check} :: ${v.detail}`).join("\n")).toEqual([]);
     expect(secretHits, secretHits.join("\n")).toEqual([]);
   }, 120_000);
+});
+
+describe("universal-permission routes (no role lacks the permission)", () => {
+  // notification.read is held by every seeded system role (098/100 closed
+  // the last two gaps, GOVT_OBSERVER and SALES_BD_EXECUTIVE/BID_TENDER_
+  // MANAGER -- see fresh-database.test.ts and s5.test.ts's "round-2 govt
+  // crawl" note), so `roleLacking` has nothing to hand the main loop above
+  // for GET /notifications, PATCH /notifications/:id/read and POST
+  // /notifications/read-all: they show up in [contract]'s "no wrong-role
+  // tester found" log instead of getting a real 403 check. Same contract
+  // gap as every other route in the matrix, just with no seeded role left
+  // to exercise it -- so one is made for the duration of this test, the
+  // same way other suites in this repo borrow a row's state for one check
+  // and hand it back (e.g. supply.test.ts's settings mutate/restore).
+  it("still refuses a caller without notification.read on all three notification routes", async () => {
+    const role = (
+      await w.pool.query("SELECT id FROM roles WHERE code = $1 AND org_id IS NULL", ["EMPLOYEE"])
+    ).rows[0] as { id: string };
+    await w.pool.query(
+      "DELETE FROM role_permissions WHERE role_id = $1 AND permission_code = 'notification.read'",
+      [role.id],
+    );
+    try {
+      const checks: Array<[string, string]> = [
+        ["GET", "/api/v1/notifications"],
+        ["PATCH", fillPath("/api/v1/notifications/:id/read")],
+        ["POST", "/api/v1/notifications/read-all"],
+      ];
+      for (const [method, path] of checks) {
+        const res = await inject(method, path, w.role.EMPLOYEE);
+        expect(res.statusCode, `${method} ${path} (got ${res.statusCode}) body=${res.body.slice(0, 200)}`).toBe(403);
+      }
+    } finally {
+      // Handed back regardless of how the checks above came out, so a
+      // failure here never leaves EMPLOYEE short of a grant every other
+      // test in this file (and the next role-permission-index build) relies
+      // on being universal.
+      await w.pool.query(
+        `INSERT INTO role_permissions (role_id, permission_code) VALUES ($1, 'notification.read')
+         ON CONFLICT (role_id, permission_code) DO NOTHING`,
+        [role.id],
+      );
+    }
+  });
 });
 
 describe("shared-secret route (jobs/run)", () => {

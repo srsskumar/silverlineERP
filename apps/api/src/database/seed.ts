@@ -243,15 +243,22 @@ export async function seedDatabase(
 
   if (process.env.NODE_ENV === 'production' && !process.env.SEED_ADMIN_PASSWORD) throw new Error('SEED_ADMIN_PASSWORD is required for production initialization');
   const passwordHash = await bcrypt.hash(process.env.SEED_ADMIN_PASSWORD ?? ADMIN_PASSWORD, rounds);
-  await pool.query(
+  // One statement, not an INSERT ... DO NOTHING followed by a separate
+  // SELECT: this org is reused across calls (the lookup above), and under
+  // the test suite's repeated reseeding of the same org (every file, and
+  // every single test in test/s2.test.ts) the two-step version left a gap
+  // where the follow-up SELECT could come back empty -- `adminRow.rows[0]`
+  // undefined, crashing the caller -- even though nothing else was ever
+  // supposed to be racing it. DO UPDATE (a no-op password rehash on an
+  // already-correct row) keeps this idempotent and re-runnable exactly as
+  // before, but RETURNING means there is no window where the row this
+  // statement just guaranteed exists isn't the one handed back.
+  const adminRow = await pool.query(
     `INSERT INTO users (org_id, username, phone, email, password_hash)
      VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (org_id, username) DO NOTHING`,
+     ON CONFLICT (org_id, username) DO UPDATE SET password_hash = EXCLUDED.password_hash
+     RETURNING id`,
     [orgId, ADMIN_USERNAME, "+910000000000", "admin@silverline.local", passwordHash],
-  );
-  const adminRow = await pool.query(
-    "SELECT id FROM users WHERE org_id = $1 AND username = $2",
-    [orgId, ADMIN_USERNAME],
   );
   const adminId = adminRow.rows[0].id as string;
 
