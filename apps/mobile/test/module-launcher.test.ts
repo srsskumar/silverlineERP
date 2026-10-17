@@ -105,6 +105,18 @@ describe("buildModuleLauncher", () => {
     }
   });
 
+  it("routes My payslip to its real screen, not Coming soon (A-002)", () => {
+    const groups = buildModuleLauncher(
+      [...CATALOG, { code: "my-payslip", label: "My payslip", group: "People" }],
+      {},
+    );
+    const myPayslip = groups.flatMap((g) => g.items).find((i) => i.code === "my-payslip")!;
+    assert.ok(myPayslip, "my-payslip should be listed (not web-only, not excluded)");
+    assert.equal(myPayslip.comingSoon, false);
+    assert.equal(myPayslip.route, "/my-payslip");
+    assert.equal(BUILT_MODULE_ROUTES["my-payslip"], "/my-payslip");
+  });
+
   it("respects an absent modules map by showing everything not excluded", () => {
     const groups = buildModuleLauncher(CATALOG, undefined);
     const codes = groups.flatMap((g) => g.items.map((i) => i.code));

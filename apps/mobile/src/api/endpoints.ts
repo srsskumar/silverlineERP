@@ -2016,6 +2016,42 @@ export async function getPayrollRunPayslips(
   return asPage<PayrollRunPayslipRow>(data);
 }
 
+/**
+ * The caller's own slip for a period — GET /api/v1/payslips/me, the same
+ * route the More tab's Payslip card already calls (src/ui/Payslip.tsx), and
+ * what the dedicated /my-payslip screen (BUILT_MODULE_ROUTES) uses too.
+ * 404s as NO_PAYSLIP (nothing calculated for the window) or NO_EMPLOYEE_LINK
+ * (no linked employee record) — both ordinary ApiErrors a caller reads by
+ * `.code` (src/myPayslip.ts's isNoPayslip/isNoEmployeeLink), not failures to
+ * show as a generic load error.
+ */
+export interface MyPayslip {
+  id: string;
+  period: { start: string; end: string };
+  run_status: string;
+  employee: { emp_no: string; name: string; designation?: string | null };
+  earnings: Record<string, number>;
+  deductions: Record<string, number>;
+  gross: number;
+  total_deductions: number;
+  net_pay: number;
+  version: number;
+  [k: string]: unknown;
+}
+
+export async function getMyPayslip(params: {
+  period_start: string;
+  period_end: string;
+}): Promise<MyPayslip> {
+  const q = new URLSearchParams({
+    period_start: params.period_start,
+    period_end: params.period_end,
+  });
+  const { data } = await cachedRead(`getMyPayslip:${q.toString()}`, () =>
+    apiFetch(`/api/v1/payslips/me?${q.toString()}`));
+  return asItem<MyPayslip>(data);
+}
+
 // --- Planning (cycles) -----------------------------------------------------
 //
 // apps/api/src/modules/planning/routes.ts: GET /api/v1/cycles?project_id=

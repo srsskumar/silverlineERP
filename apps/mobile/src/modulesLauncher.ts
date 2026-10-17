@@ -61,7 +61,7 @@ export const WEB_ONLY_CODES: readonly string[] = [
   "cost-heads", "shifts",
 ];
 
-/** Catalog codes this round of mobile work actually built a screen for. */
+/** Catalog codes mobile has built a real screen for (not "Coming soon"). */
 export const BUILT_MODULE_ROUTES: Readonly<Record<string, string>> = {
   documents: "/documents",
   approvals: "/approvals",
@@ -82,6 +82,7 @@ export const BUILT_MODULE_ROUTES: Readonly<Record<string, string>> = {
   planning: "/planning",
   reports: "/reports",
   "asset-movements": "/asset-movements",
+  "my-payslip": "/my-payslip",
   analytics: "/analytics",
   automation: "/automation",
   "org-holidays": "/org-holidays",

@@ -27,6 +27,7 @@ const LABELS: Record<string, string> = {
   'holiday.read': 'view the holiday calendar',
   'ap.read': 'view payables',
   'payroll.read': 'view payroll',
+  'payslip.read': 'view your payslip',
   'lead.read': 'view leads',
   'cycle.read': 'view cycles',
   'requisition.read': 'view requisitions',
