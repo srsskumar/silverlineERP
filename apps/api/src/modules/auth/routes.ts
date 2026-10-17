@@ -333,6 +333,10 @@ export async function registerAuthRoutes(
          WHERE u.id = $1 GROUP BY u.mfa_policy`, [user.id])).rows[0] as
           { mfa_policy: string; roles: Array<{ code: string; mfa_required: boolean }> }
           | undefined;
+      // A-005 (QA 2026-09-24, accepted risk): same intentional non-prod
+      // relaxation as the enrollment gate in common/auth.ts -- seeded
+      // QA/e2e accounts have no real TOTP secrets, so this block-disable
+      // floor only needs to hold in production.
       if (app.appConfig.nodeEnv === 'production'
           && mfaRequired(policy?.roles ?? [], (policy?.mfa_policy ?? 'INHERIT') as MfaPolicy)) {
         throw new ApiError({

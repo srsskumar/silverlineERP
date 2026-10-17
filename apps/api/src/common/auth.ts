@@ -153,6 +153,11 @@ export function buildAuthenticate(ctx: AuthContext) {
      * itself the permission to change this setting, so opting out of it would
      * itself be the attack.
      */
+    // A-005 (QA 2026-09-24, accepted risk): the floor above is intentionally
+    // inert outside production. Seeded QA/e2e accounts have no real TOTP
+    // secrets, and forcing enrollment or blocking disable in staging would
+    // break that automation for no production-safety benefit -- non-prod
+    // environments are not where this floor needs to hold.
     const mfaEnrollmentRequired =
       req.server.appConfig.nodeEnv === 'production'
       && !row.mfa_enabled
