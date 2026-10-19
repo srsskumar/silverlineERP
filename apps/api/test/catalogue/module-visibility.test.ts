@@ -163,6 +163,17 @@ describe("GET /api/v1/auth/me exposes the caller's own resolved modules", () => 
     const modules = res.json().modules as Record<string, boolean>;
     for (const m of MODULE_CATALOG) expect(typeof modules[m.code], m.code).toBe("boolean");
   });
+
+  it("shows a module via anyOf even without its named permission", async () => {
+    // EMPLOYEE holds attendance.punch (migration 016 deliberately revoked its
+    // attendance.read), and "attendance" is named after attendance.read with
+    // anyOf: ["attendance.punch"] -- the same anyOf web's navItemVisible
+    // already honors. Without it, EMPLOYEE's mobile app has no way to reach
+    // the one screen that role punches in and out from.
+    const h = await signIn(await usernameOf(w.roleUserId.EMPLOYEE));
+    const res = await w.app.inject({ method: "GET", url: "/api/v1/auth/me", headers: h });
+    expect(res.json().modules.attendance).toBe(true);
+  });
 });
 
 describe("the invariant: visibility never gates the API", () => {

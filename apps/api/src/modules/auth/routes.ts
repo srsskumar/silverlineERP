@@ -474,7 +474,20 @@ export async function registerAuthRoutes(
         modules[m.code] = user.roles.some((roleCode) => {
           const override = overrideMap.get(`${roleCode}:${m.code}`);
           if (override !== undefined) return override;
-          return m.permission ? (heldByRole.get(roleCode)?.has(m.permission) ?? false) : true;
+          // Mirrors web's navItemVisible (lib/landing.ts): named permission or
+          // any alternative makes it worth opening, but every `requires` must
+          // still hold. Checking only `m.permission` left `anyOf` (attendance,
+          // survey) and `requires` (dashboard, planning, project finance,
+          // analytics) silently unenforced here -- e.g. EMPLOYEE holds
+          // attendance.punch but not attendance.read, so modules.attendance
+          // resolved false and the mobile Attendance tab, this role's one
+          // daily action, was unreachable even though the route itself never
+          // gated on module visibility.
+          const held = heldByRole.get(roleCode);
+          const named = !m.permission || (held?.has(m.permission) ?? false);
+          const alternative = (m.anyOf ?? []).some((code) => held?.has(code) ?? false);
+          if (!named && !alternative) return false;
+          return (m.requires ?? []).every((code) => held?.has(code) ?? false);
         });
       }
       return reply.status(200).send({
