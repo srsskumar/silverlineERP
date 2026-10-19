@@ -249,14 +249,23 @@ export async function seedDatabase(
   // every single test in test/s2.test.ts) the two-step version left a gap
   // where the follow-up SELECT could come back empty -- `adminRow.rows[0]`
   // undefined, crashing the caller -- even though nothing else was ever
-  // supposed to be racing it. DO UPDATE (a no-op password rehash on an
-  // already-correct row) keeps this idempotent and re-runnable exactly as
-  // before, but RETURNING means there is no window where the row this
-  // statement just guaranteed exists isn't the one handed back.
+  // supposed to be racing it. DO UPDATE ... RETURNING guarantees a row
+  // comes back even when the admin user already existed, with no window
+  // where the row this statement just guaranteed exists isn't the one
+  // handed back.
+  //
+  // The update touches `username` (a no-op; it's the conflict key, so it's
+  // always already equal to itself), never `password_hash`. Re-running the
+  // seed -- e.g. a redeploy step that still has the original
+  // SEED_ADMIN_PASSWORD in its environment -- must not silently reset an
+  // admin's password back to the seed value if it was changed since
+  // (README's "Existing user passwords are preserved by the seed" promise;
+  // security review flagged this when it still wrote EXCLUDED.password_hash
+  // on conflict).
   const adminRow = await pool.query(
     `INSERT INTO users (org_id, username, phone, email, password_hash)
      VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (org_id, username) DO UPDATE SET password_hash = EXCLUDED.password_hash
+     ON CONFLICT (org_id, username) DO UPDATE SET username = users.username
      RETURNING id`,
     [orgId, ADMIN_USERNAME, "+910000000000", "admin@silverline.local", passwordHash],
   );
