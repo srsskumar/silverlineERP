@@ -11,9 +11,81 @@
 import type { Pool } from "pg";
 import { S3_PERMISSIONS } from "@silverline/shared";
 import { writeAudit } from "../../common/audit.js";
+import { scopesForUserPermission } from "../../common/auth.js";
+import { employeeScopeClause, resolveScopes } from "../../common/scopes.js";
 import { emitNotification } from "../s5/notify.js";
 
 const LEAVE_DECIDE = S3_PERMISSIONS.LEAVE_DECIDE;
+
+/**
+ * Whether `userId`'s leave.decide scope covers `employeeId` -- the same
+ * question the decision route asks (scopesForPermission + employeeAccess),
+ * asked here before anyone is named. The cascade used to take whichever
+ * HR manager had the lowest id, and an HR manager scoped to another
+ * district was then refused with "Employee outside your scope" on the very
+ * request the chain had handed them (found 2026-10-28). No employee to
+ * cover means nothing to check.
+ */
+async function coversEmployee(
+  db: Pick<Pool, "query">,
+  orgId: string,
+  userId: string,
+  employeeId: string | null | undefined,
+): Promise<boolean> {
+  if (!employeeId) return true;
+  const scopes = resolveScopes(await scopesForUserPermission(db, userId, orgId, LEAVE_DECIDE));
+  if (scopes.global) return true;
+  const values: unknown[] = [employeeId, orgId];
+  const clause = await employeeScopeClause(db as Pool, orgId, scopes, values);
+  const r = await db.query(
+    `SELECT 1 FROM employees WHERE id=$1 AND org_id=$2 AND ${clause}`,
+    values,
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** ACTIVE holders of one of `roleCodes` in id order, minus `exclude`. */
+async function candidatesByRole(
+  db: Pick<Pool, "query">,
+  orgId: string,
+  roleCodes: string[],
+  exclude: Iterable<string>,
+): Promise<string[]> {
+  const excludeArr = Array.from(new Set(exclude));
+  const guard = excludeArr.length > 0 ? excludeArr : ["00000000-0000-0000-0000-000000000000"];
+  const res = await db.query(
+    `SELECT DISTINCT u.id FROM users u
+     JOIN user_roles ur ON ur.user_id = u.id
+     JOIN roles r ON r.id = ur.role_id
+     WHERE u.org_id = $1 AND u.auth_status = 'ACTIVE' AND r.code = ANY($2::text[])
+       AND u.id != ALL($3::uuid[])
+     ORDER BY u.id ASC`,
+    [orgId, roleCodes, guard],
+  );
+  return (res.rows as Array<{ id: string }>).map((r) => r.id);
+}
+
+/**
+ * HR managers who can act on this employee first, then admins who can;
+ * only when nobody covers them, the first candidate of either tier, so a
+ * request is never left without an approver.
+ */
+async function coveringApprover(
+  db: Pick<Pool, "query">,
+  orgId: string,
+  exclude: Iterable<string>,
+  requesterEmployeeId: string | null | undefined,
+): Promise<string | null> {
+  const hr = await candidatesByRole(db, orgId, ["HR_MANAGER"], exclude);
+  for (const id of hr) {
+    if (await coversEmployee(db, orgId, id, requesterEmployeeId)) return id;
+  }
+  const admin = await candidatesByRole(db, orgId, ["ADMIN", "SUPER_ADMIN"], exclude);
+  for (const id of admin) {
+    if (await coversEmployee(db, orgId, id, requesterEmployeeId)) return id;
+  }
+  return hr[0] ?? admin[0] ?? null;
+}
 
 export interface ApprovalStepLike {
   step: number;
@@ -70,31 +142,9 @@ export async function step2Approver(
   db: Pick<Pool, "query">,
   orgId: string,
   applicantUserId: string | null,
+  requesterEmployeeId?: string | null,
 ): Promise<string | null> {
-  const excluded = applicantUserId ?? "00000000-0000-0000-0000-000000000000";
-  const hr = await db.query(
-    `SELECT u.id FROM users u
-     JOIN user_roles ur ON ur.user_id = u.id
-     JOIN roles r ON r.id = ur.role_id
-     WHERE u.org_id = $1 AND u.auth_status = 'ACTIVE' AND r.code = 'HR_MANAGER'
-       AND u.id != $2::uuid
-     ORDER BY u.id ASC
-     LIMIT 1`,
-    [orgId, excluded],
-  );
-  const hrId = (hr.rows[0] as { id: string } | undefined)?.id;
-  if (hrId) return hrId;
-  const admin = await db.query(
-    `SELECT u.id FROM users u
-     JOIN user_roles ur ON ur.user_id = u.id
-     JOIN roles r ON r.id = ur.role_id
-     WHERE u.org_id = $1 AND u.auth_status = 'ACTIVE' AND r.code IN ('ADMIN', 'SUPER_ADMIN')
-       AND u.id != $2::uuid
-     ORDER BY u.id ASC
-     LIMIT 1`,
-    [orgId, excluded],
-  );
-  return (admin.rows[0] as { id: string } | undefined)?.id ?? null;
+  return coveringApprover(db, orgId, applicantUserId ? [applicantUserId] : [], requesterEmployeeId);
 }
 
 /** Whether `userId` is still a step-2-eligible approver: active, holds
@@ -140,30 +190,7 @@ async function isEligibleStep1Approver(
   return (res.rowCount ?? 0) > 0;
 }
 
-/** First ACTIVE user in the org holding one of `roleCodes`, excluding
- * every id in `exclude` (the applicant, plus whoever holds the *other*
- * step of this same request's chain — never double up one person across
- * both steps), ordered by lowest id for determinism. */
-async function firstEligibleByRole(
-  db: Pick<Pool, "query">,
-  orgId: string,
-  roleCodes: string[],
-  exclude: Iterable<string>,
-): Promise<string | null> {
-  const excludeArr = Array.from(new Set(exclude));
-  const guard = excludeArr.length > 0 ? excludeArr : ["00000000-0000-0000-0000-000000000000"];
-  const res = await db.query(
-    `SELECT u.id FROM users u
-     JOIN user_roles ur ON ur.user_id = u.id
-     JOIN roles r ON r.id = ur.role_id
-     WHERE u.org_id = $1 AND u.auth_status = 'ACTIVE' AND r.code = ANY($2::text[])
-       AND u.id != ALL($3::uuid[])
-     ORDER BY u.id ASC
-     LIMIT 1`,
-    [orgId, roleCodes, guard],
-  );
-  return (res.rows[0] as { id: string } | undefined)?.id ?? null;
-}
+
 
 /**
  * Step-2 fallback cascade (HR manager, then admin), given an arbitrary
@@ -176,10 +203,9 @@ async function step2FallbackCascade(
   db: Pick<Pool, "query">,
   orgId: string,
   exclude: Iterable<string>,
+  requesterEmployeeId?: string | null,
 ): Promise<string | null> {
-  const hr = await firstEligibleByRole(db, orgId, ["HR_MANAGER"], exclude);
-  if (hr) return hr;
-  return firstEligibleByRole(db, orgId, ["ADMIN", "SUPER_ADMIN"], exclude);
+  return coveringApprover(db, orgId, exclude, requesterEmployeeId);
 }
 
 /**
@@ -195,6 +221,7 @@ async function step1FallbackCascade(
   orgId: string,
   ineligibleApproverUserId: string,
   exclude: Iterable<string>,
+  requesterEmployeeId?: string | null,
 ): Promise<string | null> {
   const excludeSet = new Set(exclude);
   const linked = await db.query(
@@ -208,7 +235,7 @@ async function step1FallbackCascade(
       return mgr;
     }
   }
-  return step2FallbackCascade(db, orgId, excludeSet);
+  return step2FallbackCascade(db, orgId, excludeSet, requesterEmployeeId);
 }
 
 export interface ReassignableRequest {
@@ -361,8 +388,8 @@ async function reassignStep(
   }
 
   const fresh = isFinalStep
-    ? await step2FallbackCascade(db, req.org_id, exclude)
-    : await step1FallbackCascade(db, req.org_id, holder, exclude);
+    ? await step2FallbackCascade(db, req.org_id, exclude, req.employee_id)
+    : await step1FallbackCascade(db, req.org_id, holder, exclude, req.employee_id);
   if (!fresh) {
     // Nobody eligible at all right now (org has no HR manager or admin
     // left, or every candidate would duplicate the other step) -- leave

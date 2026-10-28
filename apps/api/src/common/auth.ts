@@ -386,7 +386,15 @@ const SCOPED_TO_OWN_WORK=(permission:string):boolean=>
  * it on purpose.
  */
 export async function scopesForPermission(req:FastifyRequest,permission:string){
- const rows=(await req.server.db.query(
+ return scopesForUserPermission(req.server.db,req.authUser!.id,req.authUser!.orgId,permission);
+}
+/**
+ * The same answer scopesForPermission gives, for code that has no request:
+ * the leave approver resolver asks it of each candidate, so the chain only
+ * ever names someone the decision route will then let act.
+ */
+export async function scopesForUserPermission(db:Pick<Pool,'query'>,userId:string,orgId:string,permission:string){
+ const rows=(await db.query(
   `SELECT ur.scope_type, ur.scope_id, r.code,
           /*
            * Safe by default, including for an organisation created after
@@ -402,7 +410,7 @@ export async function scopesForPermission(req:FastifyRequest,permission:string){
      LEFT JOIN role_scope_policies p
        ON p.role_code = r.code AND p.org_id = $3
     WHERE ur.user_id = $1 AND rp.permission_code = $2`,
-  [req.authUser!.id,permission,req.authUser!.orgId])).rows;
+  [userId,permission,orgId])).rows;
  const scoped=rows
   .filter(r=>r.code!=='CLIENT_VIEWER'||r.scope_type==='project')
   .map(r=>{
@@ -419,9 +427,9 @@ export async function scopesForPermission(req:FastifyRequest,permission:string){
     * belong.
     */
    if(r.default_scope==='ASSIGNED'&&SCOPED_TO_OWN_WORK(permission)){
-    return {scope_type:'self',scope_id:req.authUser!.id};
+    return {scope_type:'self',scope_id:userId};
    }
    return {scope_type:null,scope_id:null};
   });
- return scoped.length?scoped:[{scope_type:'restricted',scope_id:req.authUser!.id}];
+ return scoped.length?scoped:[{scope_type:'restricted',scope_id:userId}];
 }

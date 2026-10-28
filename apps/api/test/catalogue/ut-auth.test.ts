@@ -446,6 +446,99 @@ describe("UT-AUTH-06 evaluate self-approval", () => {
     expect(after.rows[0].status).toBe("PENDING");
   });
 
+  /**
+   * The step-2 cascade used to take whichever HR manager had the lowest
+   * user id, scope or no scope, and then the decision route refused that
+   * very person with "Employee outside your scope". Which HR manager won
+   * depended on random ids, which is why this describe's next test failed
+   * about every other run (found 2026-10-28). The fixture's own, org-wide
+   * HR manager is disabled for the duration so the only HR candidates are
+   * the ones each test creates.
+   */
+  async function withFixtureHrDisabled<T>(run: () => Promise<T>): Promise<T> {
+    // Every HR manager alive at this point -- the fixture's and the ones
+    // earlier tests in this file created -- so the cascade sees only the
+    // candidates the test itself makes.
+    const alive = await w.pool.query(
+      `UPDATE users SET auth_status = 'DISABLED'
+        WHERE org_id = $1 AND auth_status = 'ACTIVE'
+          AND id IN (SELECT ur.user_id FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+                      WHERE r.code = 'HR_MANAGER')
+        RETURNING id`,
+      [w.orgId],
+    );
+    const ids = alive.rows.map((r) => r.id as string);
+    try {
+      return await run();
+    } finally {
+      await w.pool.query("UPDATE users SET auth_status = 'ACTIVE' WHERE id = ANY($1::uuid[])", [ids]);
+    }
+  }
+
+  async function scopedHrManager(districtId: string): Promise<string> {
+    const username = `cat_hr_scoped_${uniq()}`;
+    const userId = await createUser(w.pool, w.orgId, { username, roles: ["HR_MANAGER"] });
+    await w.pool.query(
+      `UPDATE user_roles SET scope_type = 'district', scope_id = $2
+        WHERE user_id = $1`,
+      [userId, districtId],
+    );
+    return userId;
+  }
+
+  async function fileForSiteEmployee(daysAhead: number): Promise<{ id: string; current_approver_id: string }> {
+    const created = await w.app.inject({
+      method: "POST",
+      url: "/api/v1/leave/requests",
+      headers: { ...w.siteUser, ...idem() },
+      payload: {
+        employee_id: w.siteEmployee,
+        leave_type_id: await casualLeaveTypeId(),
+        from_date: nonSundayFutureDate(daysAhead),
+        to_date: nonSundayFutureDate(daysAhead),
+        reason: "Catalogue scoped-approver probe",
+      },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    return created.json() as { id: string; current_approver_id: string };
+  }
+
+  it("never names an HR manager whose scope does not cover the requester", async () => {
+    await withFixtureHrDisabled(async () => {
+      // The site employee sits on chain B; an HR manager scoped to district A
+      // could never act on their request, and the org-wide admin is the next
+      // tier down.
+      const outOfScope = await scopedHrManager(w.chainA.district);
+      const request = await fileForSiteEmployee(23);
+      expect(request.current_approver_id).not.toBe(outOfScope);
+      const approver = await headersForUserId(w, request.current_approver_id);
+      const decision = await w.app.inject({
+        method: "POST",
+        url: `/api/v1/leave/requests/${request.id}/decision`,
+        headers: { ...approver, ...(await ifMatch(w, "leave_requests", request.id)), ...idem() },
+        payload: { decision: "APPROVE" },
+      });
+      expect(decision.statusCode, decision.body).toBe(200);
+    });
+  });
+
+  it("names the HR manager whose scope does cover the requester", async () => {
+    await withFixtureHrDisabled(async () => {
+      await scopedHrManager(w.chainA.district);
+      const inScope = await scopedHrManager(w.chainB.district);
+      const request = await fileForSiteEmployee(24);
+      expect(request.current_approver_id).toBe(inScope);
+      const approver = await headersForUserId(w, inScope);
+      const decision = await w.app.inject({
+        method: "POST",
+        url: `/api/v1/leave/requests/${request.id}/decision`,
+        headers: { ...approver, ...(await ifMatch(w, "leave_requests", request.id)), ...idem() },
+        payload: { decision: "APPROVE" },
+      });
+      expect(decision.statusCode, decision.body).toBe(200);
+    });
+  });
+
   it("allows the authorized approver the chain actually named", async () => {
     const created = await w.app.inject({
       method: "POST",

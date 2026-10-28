@@ -1040,7 +1040,7 @@ export async function registerLeaveRoutes(
     const chain = assembleApprovalChain({
       requesterUserId,
       step1UserId: await step1Approver(db, user.orgId, employeeId),
-      step2UserId: await step2Approver(db, user.orgId, requesterUserId),
+      step2UserId: await step2Approver(db, user.orgId, requesterUserId, employeeId),
     });
     if (!chain) {
       return sendRuleError(reply, req.requestId, {
