@@ -1,0 +1,7 @@
+{
+  "builtAt": "2026-10-28T11:26:04.686Z",
+  "apiUrl": "https://silverline-erp-api.vercel.app",
+  "architecture": "arm64-v8a",
+  "profile": "production",
+  "commit": "ac26330"
+}
