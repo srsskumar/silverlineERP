@@ -474,7 +474,7 @@ describe("UT-AUTH-06 evaluate self-approval", () => {
       },
       payload: { decision: "APPROVE" },
     });
-    expect(decision.statusCode).toBe(200);
+    expect(decision.statusCode, decision.body).toBe(200);
   });
 
   it("denies an out-of-scope user who merely holds the decide grant", async () => {
@@ -971,6 +971,17 @@ describe("setting your own password", () => {
     expect(signIn.json().must_change_password).toBe(true);
     const token = signIn.json().access_token as string;
 
+    // The session says so too, not only the sign-in response: a client that
+    // restores a session, or checks after a redirect, has to be able to see
+    // the block without the password (it used to see nothing and send the
+    // person to a dashboard that 403ed on everything).
+    const me = await w.app.inject({
+      method: "GET", url: "/api/v1/auth/me",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(me.statusCode).toBe(200);
+    expect(me.json().user.must_change_password).toBe(true);
+
     // And can do nothing else.
     const blocked = await w.app.inject({
       method: "GET", url: "/api/v1/employees",
@@ -987,6 +998,11 @@ describe("setting your own password", () => {
 
     const after = await login({ username, password: "TheirOwn@2026ab" });
     expect(after.json().must_change_password).toBe(false);
+    const meAfter = await w.app.inject({
+      method: "GET", url: "/api/v1/auth/me",
+      headers: { authorization: `Bearer ${after.json().access_token}` },
+    });
+    expect(meAfter.json().user.must_change_password).toBe(false);
     const ok = await w.app.inject({
       method: "GET", url: "/api/v1/employees",
       headers: { authorization: `Bearer ${after.json().access_token}` },

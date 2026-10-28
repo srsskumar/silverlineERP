@@ -414,7 +414,7 @@ export async function registerAuthRoutes(
       }
       const row = await opts.pool.query(
         `SELECT id, username, email, phone, org_id, auth_status,
-                mfa_enabled, last_login_at
+                mfa_enabled, must_change_password, last_login_at
          FROM users WHERE id = $1`,
         [user.id],
       );
@@ -426,6 +426,14 @@ export async function registerAuthRoutes(
         org_id: string;
         auth_status: string;
         mfa_enabled: boolean;
+        /**
+         * §34: a password somebody else chose is still in force. Said here
+         * as well as at sign-in, so a client that restores a session, or
+         * reaches a screen by any route other than the login form, can send
+         * the person to the change-password screen instead of to pages
+         * that will all answer 403.
+         */
+        must_change_password: boolean;
         last_login_at: Date | null;
       };
       /*

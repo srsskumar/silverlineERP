@@ -44,8 +44,11 @@ export default function PasswordScreen() {
     try {
       await changeOwnPassword(current, next);
       // Every session is gone, this one included. Signing out locally keeps
-      // the app from holding a token the server has already revoked.
-      await logout();
+      // the app from holding a token the server has already revoked -- and
+      // the sign-out call itself may be refused with that revoked token,
+      // which is not a failure of the change: the password is set, so the
+      // way forward is the login screen either way.
+      await logout().catch(() => undefined);
       router.replace("/(auth)/login");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not change the password");

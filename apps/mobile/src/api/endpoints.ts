@@ -78,6 +78,8 @@ export interface MeResponse {
     auth_status: string;
     mfa_enabled: boolean;
     mfa_enrollment_required?:boolean;
+    /** A password somebody else chose is still in force; every non-auth request is 403 until replaced (§34). */
+    must_change_password?: boolean;
     timezone?:string;
     last_login_at: string | null;
   };

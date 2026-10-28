@@ -25,7 +25,7 @@ function isLockout(error: unknown): boolean {
 
 export default function LoginPage() {
   const router = useRouter();
-  const { status, login } = useAuth();
+  const { status, login, session } = useAuth();
   const [submitError, setSubmitError] = React.useState<unknown>(null);
 
   const {
@@ -36,8 +36,13 @@ export default function LoginPage() {
   } = useForm<LoginFormValues>({ resolver: zodResolver(loginSchema) });
 
   React.useEffect(() => {
-    if (status === 'authenticated') router.replace('/dashboard');
-  }, [status, router]);
+    // The session arrives before onSubmit's own redirect runs, and this used
+    // to send a must-change-password account to a dashboard that then 403ed
+    // on everything. Same destination rule as onSubmit.
+    if (status === 'authenticated') {
+      router.replace(session?.user.must_change_password ? '/security' : '/dashboard');
+    }
+  }, [status, router, session]);
 
   const onSubmit = async (values: LoginFormValues) => {
     setSubmitError(null);

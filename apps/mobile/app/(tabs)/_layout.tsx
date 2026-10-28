@@ -64,6 +64,9 @@ export default function TabsLayout() {
   if (!ready) return null;
   if (!signedIn) return <Redirect href="/(auth)/login" />;
   if (user?.mfa_enrollment_required) return <Redirect href="/(auth)/enroll" />;
+  // Not only on the way in from the login screen: a restored session, or a
+  // race with this redirect, used to land here and 403 on every tab (§34).
+  if (user?.must_change_password) return <Redirect href="/(auth)/password" />;
 
   return (
     <Tabs

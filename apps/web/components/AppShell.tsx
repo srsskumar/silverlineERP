@@ -119,6 +119,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     if (status === 'unauthenticated') router.replace('/login');
     if(session?.user.mfa_enrollment_required&&pathname!=='/security')router.replace('/security');
+    // A password somebody else chose: the API answers 403 to every page but
+    // Account security until it is replaced, so that is the only page to be
+    // on. Decided here, on the session, not only on the way in from login,
+    // where a redirect to the dashboard used to win the race (§34).
+    if(session?.user.must_change_password&&pathname!=='/security')router.replace('/security');
   }, [status, router, session, pathname]);
 
   const visibleGroups = NAV_GROUPS.map((group) => ({
