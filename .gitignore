@@ -28,3 +28,6 @@ ios/
 .env.deploy
 .worktrees/
 .claude/settings.local.json
+
+# Graphify knowledge graph (regenerate with /graphify .)
+graphify-out/

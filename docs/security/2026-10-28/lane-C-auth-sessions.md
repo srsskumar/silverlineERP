@@ -1,0 +1,65 @@
+# Lane C — Authentication, sessions, account security (2026-10-28)
+
+Read-only review of `apps/api/src/common/auth.ts`, `modules/auth/{routes,service}.ts`, `modules/admin/routes.ts`, `common/rateLimit.ts`, `config.ts`, `packages/shared/src/{auth,impersonation}.ts`, web `lib/apiClient.ts` + `app/login/page.tsx`, mobile `auth/AuthContext.tsx` + `device/*.ts`. All paths below are relative to the repo root.
+
+## Confirmed findings
+
+**C-1 — Medium — ADMIN can mint a SUPER_ADMIN account (role-name escalation).**
+`apps/api/src/modules/admin/routes.ts:152-165` (PUT `/admin/users/:id/roles`) only checks that the caller holds every *permission* the granted role carries (line 160) and that the *target's current* roles are manageable (`mayManage`, line 159). Nothing checks the role *code*. The seed gives SUPER_ADMIN and ADMIN the same full permission set (`apps/api/src/database/seed.ts:125`), so the subset check passes. Attack: an ADMIN does `POST /admin/users` (line 28, password of their choosing, `must_change_password` defaults false), then `PUT .../roles` with the SUPER_ADMIN `role_id`, then logs in as it. Result: an account only super-admins may manage/impersonate (`packages/shared/src/impersonation.ts:141-157`, `75-99`) controlled by an ADMIN; the "only a super administrator can change a super administrator" rule (`account-authority.test.ts:112,121`) is bypassed by creation rather than modification. Fix: in the roles loop refuse `role.code==='SUPER_ADMIN'` unless `u.roles.includes('SUPER_ADMIN')` (reuse `mfaFloorRole`/`accessBeyond.superAdmin`), and add a RED test "an administrator cannot grant SUPER_ADMIN".
+
+**C-2 — Medium — Impersonator can hijack push and sessions of the subject.**
+`IMPERSONATION_FORBIDDEN_PATHS` (`packages/shared/src/impersonation.ts:166-173`) omits `/api/v1/devices/register` (`admin/routes.ts:199-202`, also exempted from the MFA gate at `common/auth.ts:230`), `/api/v1/auth/sessions` and `/api/v1/auth/sessions/:id/revoke` (`admin/routes.ts:197-198`), and `/api/v1/auth/preferences` (`modules/jobs/routes.ts:53-54`). While viewing as an employee an admin can register *their own* `push_token` under the subject (`ON CONFLICT ... DO UPDATE SET push_token`) and keep receiving the subject's notifications after the session ends; list the subject's real sessions (IP, UA) and revoke them; flip their notification channels. Fix: add those four paths to the list (the `impersonationBlocks` test at `impersonation.test.ts:399` will pick them up); consider blocking by prefix `/api/v1/auth/sessions`.
+
+**C-3 — Medium — No MFA recovery path; "ask an administrator" leads nowhere.**
+`routes.ts:340-346` refuses self-disable for required roles with *"Ask an administrator for account recovery"*, and `service.ts:533-534` needs a valid code anyway. But `PATCH /admin/users/:id` (`admin/routes.ts:51-59`) has no field that clears `mfa_enabled`/`mfa_secret`; the only writer of `mfa_secret = NULL` is `service.ts:540`. No recovery codes exist. A SUPER_ADMIN who loses their phone is locked out permanently short of a DB edit. Fix: `mfa_reset:true` on the admin PATCH, gated by `mayManage`, refused for self (same as line 75), revoking sessions and writing an explicit `auth.mfa_reset` audit row; optionally one-time recovery codes.
+
+**C-4 — Medium — Auth rate limits are in-process memory but the API is deployed serverless.**
+`common/rateLimit.ts:4-17,73-99` keeps counters in a `Map` ("one process on one box"); `apps/api/vercel.json` + `apps/api/api/index.js` run the same app as a Vercel function, and `docs/DEPLOY_VERCEL.md:40` sets `TRUST_PROXY=true`. Each instance/cold start has an empty counter, so the 10/min IP and account limits (`routes.ts:57-86`) are largely decorative; the DB-backed lockout (`service.ts:617-620`, 5 tries/15 min) is the only real brute-force control, and unauthenticated endpoints without a DB counter (`/auth/password-reset-request`, `/auth/refresh`) have effectively none. Fix: persist auth counters in Postgres (fixed-window row keyed by dimension+key, like `v2_operations`), or use Vercel's rate limiting at the edge.
+
+**C-5 — Low — Lockout reply is a username oracle.**
+`service.ts:193-203` returns `423 ACCOUNT_LOCKED` *before* the password check and without the dummy `bcrypt.compare`. Five wrong guesses then distinguish "exists & active" (423) from "unknown/disabled" (401), and the 423 path is also measurably faster than `login-timing.test.ts` guards against. Fix: do the dummy compare on the locked path and return the generic 401 (the lockout still holds server-side); or document as accepted.
+
+**C-6 — Low — Security events missing from the audit trail.**
+(a) Refresh-token reuse (`service.ts:384-395`) throws `REFRESH_TOKEN_REUSED`; `routes.ts:167-190` audits only success, so family revocation on theft leaves no row. (b) `DEVICE_REVOKED` login refusal (`service.ts:237`) is not in the audited code list at `routes.ts:142`. (c) Failed-login attribution looks up `username = $1` only (`routes.ts:143-146`), so a failure on a *mobile-number* sign-in is recorded with `actor_id NULL`. (d) Wrong code on `/mfa/verify`, `/mfa/disable` and wrong current password on `/auth/password` throw before `writeAudit` (`routes.ts:287,347,386`). Fix: audit in `catch` blocks as login does, and reuse `findLoginUser` for attribution.
+
+**C-7 — Low — Admin security changes are audited without saying what changed.**
+`admin/routes.ts:79` uses `mutate(...,'user.security_update','user',...)`; `common/domain.ts` (mutate, `safe=entity==='user'?{id}:value`) stores `after_state={id}`. A password reset, a disable and a phone edit are indistinguishable in `audit_events`. Fix: return `{id, changed:['password','auth_status']}` (field names only, never values) from the mutate callback.
+
+**C-8 — Low — Any `users.manage` holder can remote-wipe any device in the org.**
+`admin/routes.ts:204-206` revokes + sets `wipe_requested_at` and kills sessions for any `device_registrations` row in the org with no `mayManage` check; the mobile client wipes local data on `DEVICE_REVOKED` (`apps/mobile/src/auth/AuthContext.tsx:136`). An HR manager can wipe a super-admin's phone. Fix: `await mayManage(db,req,row.user_id)` before the update.
+
+**C-9 — Low — `must_change_password` gate exemption is a prefix, not a list.**
+`common/auth.ts:252-254` exempts everything under `/api/v1/auth/`, which includes `mfa/setup|verify|disable`, `sessions*`, `preferences`, `impersonate/targets` and `POST /auth/impersonate`. An admin whose password was set by another admin can start a view-as session (a full subject token, not gated by the admin's own flag) before ever choosing a password. Fix: exempt an explicit allow-list (`/auth/password`, `/auth/me`, `/auth/logout`, `/auth/impersonate/stop`).
+
+**C-10 — Low — Password policy is length-only; bcrypt truncation.**
+`packages/shared/src/auth.ts:39-41` and `admin/routes.ts:29,51`: 12–128 chars, no breached/common-password or username check; 128 > bcrypt's 72-byte input so trailing bytes are silently ignored; `loginSchema.password` (`auth.ts:18`) has no max (bounded only by the 8 MB body limit, `createApp.ts:95`). Admin-set passwords default `must_change_password=false` (`admin/routes.ts:35,48`) — documented choice, but ASVS 2.1.x expects a forced change. Fix: cap at 72 bytes (or pre-hash), add a top-10k denylist in shared, consider defaulting the flag to true.
+
+**C-11 — Low — Web tokens in localStorage with no CSP on Vercel.**
+`apps/web/lib/apiClient.ts:103-134` persists access + 7-day refresh token (and, during view-as, the admin's own pair, lines 180-185) in `localStorage`. `apps/web/public/_headers:28` carries a CSP (with `'unsafe-inline'`) but that file is Cloudflare-only; `apps/web/vercel.json` sets no `Content-Security-Policy`. Any XSS (there are two `dangerouslySetInnerHTML` theme scripts, `app/layout.tsx:36`, `global-error.tsx:40`, currently static) yields full session theft; rotation + reuse detection only limits *parallel* use. Fix: mirror the CSP into `vercel.json` headers (nonce the theme script to drop `'unsafe-inline'`), and shorten the refresh TTL for web or keep the refresh token in memory only. No open redirect: `app/login/page.tsx:43,52` uses fixed destinations, no `next`/`returnTo` parameter.
+
+## Needs manual verification
+- Vercel edge sanitises client-supplied `X-Forwarded-For` before the function sees it; with `TRUST_PROXY=true` (`DEPLOY_VERCEL.md:40`) a passthrough would let clients pick their own rate-limit bucket and forge `actor_ip` in audit rows.
+- `NODE_ENV=production` is actually set on the Vercel API project: the JWT-secret/encryption-key strength checks (`config.ts:162-166`), the MFA enrolment floor (`auth.ts:161-164`) and the disable-refusal (`routes.ts:340`) are all inert otherwise (A-005 accepted for staging only).
+- Whether the `jobs/run` cron and worker tokens (`modules/jobs/*.ts`, `automation/worker.ts:104`: `type:'access', worker:true, 60 s`, no session row) are reachable only with the JWT secret on Vercel — they bypass session revocation, MFA and password gates by design.
+
+## Verified safe (sampled)
+- JWT: HS256 pinned (`auth.ts:62`); `type`, `sub`, `family` or 60 s worker window checked (`:70`); user status, session liveness (revoked/expired/idle via `session_timeout_minutes`), device revocation, roles/permissions all re-read from DB per request (`:77-121`); impersonation register row re-checked per request (`:187-199`). No `aud`/`iss`, acceptable for a single issuer. Production secret ≥32 chars and not the dev default (`config.ts:162-165`).
+- Refresh: 256-bit random, stored as SHA-256 (`service.ts:111-117`); rotated under `FOR UPDATE` (`:357`); reuse revokes the whole family and the revocation commits even though the request fails (`:341-345, 384-395`); idle + absolute expiry (`:355, 397`); device binding inherited (`:383, 427`); 15 min access / 7 day refresh (`:9-10`).
+- Revocation on password change (`:316`), MFA enable/disable (`:530, 551`), admin status/password/policy change (`admin/routes.ts:100-102`), role change (`:164`), role-visibility change (`:315`), device revoke (`:205`); logout revokes by refresh token *and* bearer family (`service.ts:456-479`).
+- Login: bcrypt cost 12 (`:310`, admin `:35,78`); dummy hash on unknown/disabled accounts (`:189, 208`); generic messages; limiter keyed by IP **and** typed account (`routes.ts:64-66`), refresh by IP, MFA/password/impersonate per user; `TRUST_PROXY` defaults to loopback (`config.ts:117`).
+- TOTP: window 0, counter-based single-use with compare-and-set (`service.ts:575-616`); secret AES-GCM encrypted (`:501`); setup refused while enabled (`:498`); SUPER_ADMIN floor cannot be exempted at API or table (`admin/routes.ts:88,140`, `shared/auth.ts:175`).
+- Self-service: current password required and same-password refused (`service.ts:291-308`); admin cannot set own password/MFA policy (`admin/routes.ts:75`), own roles (`:154`) or disable self (`:60`); `keepAdministrator` (`:25`); grants limited to held permissions (`:150,160`); `mayManage` blocks lower admins on sensitive accounts.
+- Impersonation: permission + strict subset + SUPER_ADMIN bar (`impersonation.ts:75-99`); reason required, ≤120 min; throwaway refresh hash (`service.ts:717-722`); nested impersonate and refresh blocked incl. percent-encoded paths (test `:215`); start/stop audited and every mutation carries `impersonator_id` (`domain.ts` mutate).
+- Sessions list/revoke scoped to own `user_id` (`admin/routes.ts:197-198`). Audit table refuses UPDATE/DELETE by trigger (`077_security_hardening.sql:36-39`; TRUNCATE intentionally allowed). Request logs redact `authorization`/cookies (`createApp.ts:85-89`).
+- Mobile: tokens only in SecureStore (`device/auth.ts:16-45`); device credential lock after 5 min in background (`AuthContext.tsx:127`, `unlock.ts:26-41`); remote wipe on `DEVICE_REVOKED` (`AuthContext.tsx:136`); `device_id` is a random UUID kept in SecureStore (`device/registration.ts:4`) — client-controlled but only scoped `(user_id, device_id)`.
+
+## Test coverage gaps
+- No test that an ADMIN cannot grant SUPER_ADMIN to a *new/other* account (C-1); `account-authority.test.ts:121` only covers replacing an existing super-admin's roles.
+- `impersonation.test.ts:195` covers password/MFA only; add devices/register, sessions list/revoke, preferences (C-2).
+- No test for an admin MFA reset path (C-3) — nothing to test until it exists.
+- `auth-rate-limits.test.ts` runs in one process; nothing exercises limits across instances or persistence (C-4).
+- `login-timing.test.ts` has no case for the locked-account branch (C-5).
+- No audit assertions for refresh reuse, DEVICE_REVOKED, mobile-number login failures, wrong-TOTP, wrong-current-password (C-6); no assertion on `after_state` content for `user.security_update` (C-7).
+- No test that a non-super admin cannot revoke a super-admin's device (C-8).
+- No test enumerating which `/api/v1/auth/*` routes are reachable under `must_change_password` (C-9); `ut-auth.test.ts:963` only checks that non-auth routes are blocked.
+- Web: no test that `vercel.json` ships a CSP equivalent to `_headers` (C-11).
