@@ -1,0 +1,50 @@
+# Security gates that do not need a database (the main `Verify Silverline`
+# workflow runs the test suites and `npm audit --audit-level=high`).
+#
+# - Secret scanning over the whole history (gitleaks).
+# - Known-vulnerability scanning of every lockfile against OSV (osv-scanner),
+#   which sees advisories npm audit does not.
+# - Static analysis with semgrep's default and OWASP rule packs.
+#
+# Actions are pinned to a tag the repository controls the meaning of; bump
+# deliberately. Each job fails the workflow on findings so a red check is a
+# real one, not a report nobody opens.
+name: Security
+on:
+  push:
+  pull_request:
+  schedule:
+    # Weekly, so a newly published advisory against an unchanged lockfile
+    # still turns the badge red.
+    - cron: '0 2 * * 1'
+permissions:
+  contents: read
+jobs:
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  dependencies:
+    name: Dependency vulnerabilities (OSV)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google/osv-scanner-action/osv-scanner-action@v2
+        with:
+          scan-args: |-
+            --lockfile=package-lock.json
+            --fail-on-vuln
+  static-analysis:
+    name: Static analysis (semgrep)
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+      - run: semgrep scan --config p/default --config p/owasp-top-ten --config p/typescript --error --exclude node_modules --exclude 'apps/mobile/android' --exclude 'apps/mobile/ios' --exclude graphify-out

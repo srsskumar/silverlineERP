@@ -31,7 +31,12 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
-      - run: npm audit --audit-level=high
+      # Production dependencies, critical only, here; the Security workflow
+      # (osv-scanner, with dated and reasoned ignores in osv-scanner.toml)
+      # is the gate for highs and for dev tooling. Until 2026-10-28 this step
+      # had never run: the job failed earlier, on a test-database setup bug,
+      # on every push since 2026-10-09.
+      - run: npm audit --omit=dev --audit-level=critical
       - uses: actions/upload-artifact@v4
         with:
           name: verified-builds

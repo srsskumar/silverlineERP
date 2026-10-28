@@ -1,0 +1,63 @@
+# Advisories the Security workflow (.github/workflows/security.yml) is told
+# to ignore, each with the reason and a date after which it is reported
+# again. An entry here is a decision with an owner, not a suppression: when
+# the date passes, the gate goes red until the upgrade lands or the entry is
+# renewed with a new reason. See docs/security/2026-10-28/SECURITY_FINDINGS.md
+# (DEP-*) for the full write-up of each.
+
+# zod 3.x: memory exhaustion on oversized constrained collections. Every
+# request body is capped at 8 MiB by Fastify's bodyLimit and the schemas
+# bound their arrays, so the input that triggers it cannot arrive. Fix is
+# zod 4, which changes the schema API used across packages/shared.
+[[IgnoredVulns]]
+id = "GHSA-mrhx-c7xc-m3w5"
+ignoreUntil = 2026-12-31
+reason = "DoS needs an oversized body the 8 MiB bodyLimit refuses; zod 4 migration tracked as DEP-2"
+
+# postcss 8.4.31 pinned by next 15.x: quadratic selector parsing at build
+# time only; nothing parses untrusted CSS at runtime. Fixed by next 16.
+[[IgnoredVulns]]
+id = "GHSA-qx2v-qp2m-jg93"
+ignoreUntil = 2026-12-31
+reason = "build-time only, via next 15's pinned postcss; next 16 upgrade tracked as DEP-3"
+[[IgnoredVulns]]
+id = "GHSA-6g55-p6wh-862q"
+ignoreUntil = 2026-12-31
+reason = "build-time only, via next 15's pinned postcss; next 16 upgrade tracked as DEP-3"
+
+# deepmerge, reached only through @expo/config / @expo/cli: merges the app's
+# own config files at build time, never untrusted input. Clears when Expo's
+# tooling moves off it (DEP-5).
+[[IgnoredVulns]]
+id = "GHSA-gcqx-w48m-w2h4"
+ignoreUntil = 2026-12-31
+reason = "build-time config merging of trusted files via @expo/config; tracked as DEP-5"
+
+# vitest 3 / @vitest/mocker / tinypool / vite: test runner and dev server
+# only, never installed in a production image or shipped to a client. The
+# mocker advisories need a browser-mode server nobody runs. vitest 4 moves
+# the project config format; tracked as DEP-4.
+[[IgnoredVulns]]
+id = "GHSA-82fw-gwwq-j7x9"
+ignoreUntil = 2026-12-31
+reason = "dev-only test runner; vitest 4 upgrade tracked as DEP-4"
+[[IgnoredVulns]]
+id = "GHSA-qxg6-89mg-rqv8"
+ignoreUntil = 2026-12-31
+reason = "dev-only test runner; vitest 4 upgrade tracked as DEP-4"
+[[IgnoredVulns]]
+id = "GHSA-5gmw-xhrv-c9v3"
+ignoreUntil = 2026-12-31
+reason = "dev-only (tinypool via vitest); vitest 4 upgrade tracked as DEP-4"
+[[IgnoredVulns]]
+id = "GHSA-85c8-ppgw-ccpr"
+ignoreUntil = 2026-12-31
+reason = "dev-only (tinypool via vitest); vitest 4 upgrade tracked as DEP-4"
+[[IgnoredVulns]]
+id = "GHSA-698v-4r3x-3vcv"
+ignoreUntil = 2026-12-31
+reason = "dev-only (vite via vitest); vitest 4 upgrade tracked as DEP-4"
+[[IgnoredVulns]]
+id = "GHSA-r825-w8mm-5pxw"
+ignoreUntil = 2026-12-31
+reason = "dev-only (vite via vitest); vitest 4 upgrade tracked as DEP-4"
