@@ -415,6 +415,66 @@ describe("UT-ATT-04 punch with mock-location indicator", () => {
     expect(records.rows[0].n).toBe(0);
   });
 
+  it("refuses a mock location before any hold can take it: skewed clock, approved leave", async () => {
+    // A hold raises a PENDING exception an approver can put onto the day,
+    // so a mock punch that reached one first would have a way in. Clock
+    // skew is the easiest for a client to manufacture.
+    const { employeeId } = await freshWorker();
+    const skewed = await punch({
+      employee_id: employeeId,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
+      mock_location: true,
+      client_timestamp: heldAt(),
+    });
+    expect(skewed.statusCode).toBe(422);
+    expect((skewed.json() as { code: string }).code).toBe("MOCK_LOCATION");
+    const pending = await w.pool.query(
+      "SELECT COUNT(*)::int AS n FROM attendance_exceptions WHERE employee_id = $1 AND status = 'PENDING'",
+      [employeeId],
+    );
+    expect(pending.rows[0].n).toBe(0);
+  });
+
+  it("will not approve an exception whose punch was a mock location, however it was raised", async () => {
+    // Defence in depth for the check above: should any path ever raise a
+    // PENDING exception on a mock event, approving it still cannot put the
+    // punch onto the day.
+    const { employeeId } = await freshWorker();
+    await punch({
+      employee_id: employeeId,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
+      mock_location: true,
+    });
+    const exception = await w.pool.query(
+      "UPDATE attendance_exceptions SET status = 'PENDING', reviewed_at = NULL, review_note = NULL WHERE employee_id = $1 RETURNING id, version",
+      [employeeId],
+    );
+    expect(exception.rowCount).toBe(1);
+    const decision = await w.app.inject({
+      method: "PATCH",
+      url: `/api/v1/attendance/exceptions/${exception.rows[0].id}/decision`,
+      headers: { ...w.admin, "If-Match": `"${exception.rows[0].version}"` },
+      payload: { decision: "APPROVE", note: "forced" },
+    });
+    expect(decision.statusCode).toBe(422);
+    expect((decision.json() as { code: string }).code).toBe("MOCK_LOCATION");
+    const records = await w.pool.query(
+      "SELECT COUNT(*)::int AS n FROM attendance_records WHERE employee_id = $1",
+      [employeeId],
+    );
+    expect(records.rows[0].n).toBe(0);
+    // Rejecting it is still allowed.
+    const reject = await w.app.inject({
+      method: "PATCH",
+      url: `/api/v1/attendance/exceptions/${exception.rows[0].id}/decision`,
+      headers: { ...w.admin, "If-Match": `"${exception.rows[0].version}"` },
+      payload: { decision: "REJECT", note: "mock" },
+    });
+    expect(reject.statusCode).toBe(200);
+  });
+
   it("refuses a mock location even when the device also looks like an emulator", async () => {
     const { employeeId } = await freshWorker();
     const res = await punch({

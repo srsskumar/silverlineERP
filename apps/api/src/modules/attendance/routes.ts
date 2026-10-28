@@ -1048,6 +1048,45 @@ export async function registerAttendanceRoutes(
           }
         : null;
 
+    /*
+     * 1b. Mock locations are refused (decision 2026-10-28), not held -- and
+     * refused here, before the clock-skew, future-clock and approved-leave
+     * holds. Each hold raises a PENDING exception an approver can put onto
+     * the day, so a mock punch that reached one first would have had a way
+     * in; a skewed client_timestamp is the easiest thing for a client to
+     * manufacture.
+     *
+     * The attempt is still evidence HR should be able to see, so the event
+     * and an exception born REJECTED are written here and kept: mutationRoute
+     * rolls a refusal's transaction back unless the request says otherwise
+     * (keepWritesOnRefusal), and a refusal that left no trace would be
+     * indistinguishable from a punch that never happened. (A second
+     * connection cannot do this: the employee row is locked FOR UPDATE above,
+     * and the event's foreign key would wait on it forever.) REJECTED is
+     * final -- the decision route only moves PENDING, and refuses to approve
+     * a mock event whatever its status -- so nobody can approve it onto the
+     * day. A replay with the same key finds the event in step 4 and is
+     * refused the same way.
+     */
+    if (d.mock_location === true) {
+      const reason = "Mock location detected; punch refused (no review: decision 2026-10-28)";
+      const refused = await insertPunch(db, {
+        employeeId: emp.id, d, clientTime, serverNow, idemKey, storedSignals,
+        ip: punchIp, userAgent: punchUserAgent,
+      });
+      const rec = await todayRecord(db, emp.id, workDateFor(serverNow));
+      await db.query(
+        `INSERT INTO attendance_exceptions
+           (employee_id, attendance_record_id, exception_type, reason, source, status,
+            submitted_by, attendance_event_id, reviewed_at, review_note)
+         VALUES ($1::uuid, $2::uuid, 'SYSTEM_FLAG', $3, 'SYSTEM', 'REJECTED', NULL, $4::uuid,
+                 NOW(), 'Refused automatically: mock location')`,
+        [emp.id, rec?.id ?? null, reason, refused.id],
+      );
+      req.keepWritesOnRefusal = true;
+      return refuseMockLocation(reply, req.requestId);
+    }
+
     // 2. Skew vs server clock > 15 min → review + SYSTEM exception.
     if (Math.abs(clientTime.getTime() - serverNow.getTime()) > SKEW_MS) {
       const workDate = workDateFor(serverNow);
@@ -1244,37 +1283,9 @@ export async function registerAttendanceRoutes(
       );
     }
 
-    /*
-     * 9. Mock locations are refused (decision 2026-10-28), not held.
-     *
-     * The attempt is still evidence HR should be able to see, so the event
-     * and an exception born REJECTED are written here and kept: mutationRoute
-     * rolls a refusal's transaction back unless the request says otherwise
-     * (keepWritesOnRefusal), and a refusal that left no trace would be
-     * indistinguishable from a punch that never happened. (A second
-     * connection cannot do this: the employee row is locked FOR UPDATE above,
-     * and the event's foreign key would wait on it forever.) REJECTED is
-     * final -- the decision route only moves PENDING -- so nobody can approve
-     * it onto the day. A replay with the same key finds the event in step 4
-     * and is refused the same way.
-     */
-    if (d.mock_location === true) {
-      const reason = "Mock location detected; punch refused (no review: decision 2026-10-28)";
-      const refused = await storeEvent();
-      await db.query(
-        `INSERT INTO attendance_exceptions
-           (employee_id, attendance_record_id, exception_type, reason, source, status,
-            submitted_by, attendance_event_id, reviewed_at, review_note)
-         VALUES ($1::uuid, $2::uuid, 'SYSTEM_FLAG', $3, 'SYSTEM', 'REJECTED', NULL, $4::uuid,
-                 NOW(), 'Refused automatically: mock location')`,
-        [emp.id, record?.id ?? null, reason, refused.id],
-      );
-      req.keepWritesOnRefusal = true;
-      return refuseMockLocation(reply, req.requestId);
-    }
 
-    // 9b. Emulator or impossible travel → review. Placed after mock_location
-    // so the more specific MOCK_LOCATION code still wins when both apply.
+    // 9. Emulator or impossible travel → review. A mock location never gets
+    // this far: it is refused in step 1b, before any hold.
     if (suspectedEmulator || serverMovement?.impossible_travel === true) {
       return holdForReview(
         "DEVICE_SIGNAL",
@@ -1763,6 +1774,22 @@ export async function registerAttendanceRoutes(
       }
       const { decision, note } = parsed.data;
       const next = decision === "APPROVE" ? "APPROVED" : "REJECTED";
+      // No mock locations (decision 2026-10-28), whatever raised the
+      // exception: a punch the OS itself called fake cannot be approved onto
+      // the day. Rejecting it is still allowed.
+      if (next === "APPROVED" && cur.attendance_event_id) {
+        const mock = await db.query(
+          "SELECT mock_location FROM attendance_events WHERE id = $1::uuid",
+          [cur.attendance_event_id],
+        );
+        if ((mock.rows[0] as { mock_location: boolean } | undefined)?.mock_location === true) {
+          return sendError(reply, req.requestId, {
+            status: 422,
+            code: "MOCK_LOCATION",
+            message: "This punch was made from a mock location and cannot be approved onto the day",
+          });
+        }
+      }
       /*
        * Approving a punch onto a day of approved leave would pay that day
        * twice, once as leave and once as attendance. The leave has to go
