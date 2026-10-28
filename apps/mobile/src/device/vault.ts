@@ -1,8 +1,9 @@
 import {AESEncryptionKey,AESSealedData,aesEncryptAsync,aesDecryptAsync} from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
+import {THIS_DEVICE_ONLY} from './auth';
 const keys=new Map<string,Promise<AESEncryptionKey>>();
 async function keyFor(account:string):Promise<AESEncryptionKey>{
- if(!keys.has(account))keys.set(account,(async()=>{const name=`silverline.vault.${account}`;const saved=await SecureStore.getItemAsync(name);if(saved)return AESEncryptionKey.import(saved,'hex');const key=await AESEncryptionKey.generate();await SecureStore.setItemAsync(name,await key.encoded('hex'));return key;})());
+ if(!keys.has(account))keys.set(account,(async()=>{const name=`silverline.vault.${account}`;const saved=await SecureStore.getItemAsync(name);if(saved)return AESEncryptionKey.import(saved,'hex');const key=await AESEncryptionKey.generate();await SecureStore.setItemAsync(name,await key.encoded('hex'),THIS_DEVICE_ONLY);return key;})());
  return keys.get(account)!;
 }
 export async function seal(account:string,value:string):Promise<string>{const encrypted=await aesEncryptAsync(new TextEncoder().encode(value),await keyFor(account));return 'aes1:'+await encrypted.combined('base64');}

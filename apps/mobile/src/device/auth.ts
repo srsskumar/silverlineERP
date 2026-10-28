@@ -13,13 +13,22 @@ const ACCESS_KEY = "silverline.access_token";
 const REFRESH_KEY = "silverline.refresh_token";
 const BIO_KEY = "silverline.biometric_enabled";
 
+/**
+ * Keychain items that never leave this device: not in an iCloud or encrypted
+ * iTunes backup, not restorable onto another phone. A session is a property
+ * of the device that registered it (security review D-4, 2026-10-28).
+ */
+export const THIS_DEVICE_ONLY: SecureStore.SecureStoreOptions = {
+  keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+};
+
 export async function saveTokens(
   accessToken: string,
   refreshToken: string,
 ): Promise<void> {
   await Promise.all([
-    SecureStore.setItemAsync(ACCESS_KEY, accessToken),
-    SecureStore.setItemAsync(REFRESH_KEY, refreshToken),
+    SecureStore.setItemAsync(ACCESS_KEY, accessToken, THIS_DEVICE_ONLY),
+    SecureStore.setItemAsync(REFRESH_KEY, refreshToken, THIS_DEVICE_ONLY),
   ]);
 }
 
@@ -69,7 +78,7 @@ export async function setBiometricEnabled(enabled: boolean): Promise<void> {
     });
     if (!ok.success) throw new Error("Biometric enrolment was not confirmed");
   }
-  await SecureStore.setItemAsync(BIO_KEY, enabled ? "1" : "0");
+  await SecureStore.setItemAsync(BIO_KEY, enabled ? "1" : "0", THIS_DEVICE_ONLY);
 }
 
 /**

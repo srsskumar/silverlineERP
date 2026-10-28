@@ -41,5 +41,6 @@ module.exports = ({ config }) => ({
     ...(config.plugins || []),
     ['./plugins/with-api-network-policy', resolvePolicy(process.env)],
     './plugins/with-ios-scene-lifecycle',
+    './plugins/with-no-backup',
   ],
 });

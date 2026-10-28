@@ -106,6 +106,14 @@ export default function Enroll() {
                 void Clipboard.setStringAsync(secret).then(() => {
                   setCopied(true);
                   setTimeout(() => setCopied(false), 2000);
+                  // Long enough to paste into the authenticator, not long
+                  // enough to still be there for the next app that reads
+                  // the clipboard (security review D-5, 2026-10-28).
+                  setTimeout(() => {
+                    void Clipboard.getStringAsync().then((now) => {
+                      if (now === secret) void Clipboard.setStringAsync("");
+                    });
+                  }, 60_000);
                 });
               }}
             />
