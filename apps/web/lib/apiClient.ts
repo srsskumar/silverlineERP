@@ -135,7 +135,11 @@ export function setTokens(accessToken: string | null, refreshToken: string | nul
 
 export function clearTokens(): void {
   setTokens(null, null);
-  if (isBrowser()) window.localStorage.removeItem(IMPERSONATION_KEY);
+  if (isBrowser()) {
+    window.sessionStorage.removeItem(IMPERSONATION_KEY);
+    // Anything an earlier build left in the persistent store.
+    window.localStorage.removeItem(IMPERSONATION_KEY);
+  }
 }
 
 /* ------------------------------------------------------------------ §075
@@ -163,9 +167,17 @@ export interface ImpersonationState {
   original_refresh: string | null;
 }
 
+/*
+ * sessionStorage, not localStorage: the state holds the administrator's own
+ * refresh token for as long as the view lasts, and that token is worth more
+ * than the borrowed one. A tab-scoped store means it is gone when the tab
+ * is, and never visible to another tab's script (security review D-2,
+ * 2026-10-28). A view-as session therefore does not survive a closed tab,
+ * which is the right outcome for a session that was meant to be short.
+ */
 export function getImpersonation(): ImpersonationState | null {
   if (!isBrowser()) return null;
-  const raw = window.localStorage.getItem(IMPERSONATION_KEY);
+  const raw = window.sessionStorage.getItem(IMPERSONATION_KEY);
   if (!raw) return null;
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -179,7 +191,7 @@ export function getImpersonation(): ImpersonationState | null {
 
 export function beginImpersonation(state: ImpersonationState, borrowedAccessToken: string): void {
   if (!isBrowser()) return;
-  window.localStorage.setItem(IMPERSONATION_KEY, JSON.stringify(state));
+  window.sessionStorage.setItem(IMPERSONATION_KEY, JSON.stringify(state));
   // No refresh token: a borrowed session lasts exactly as long as it was granted.
   setTokens(borrowedAccessToken, null);
 }
@@ -200,7 +212,7 @@ export function restoreOwnSession(): boolean {
   const state = getImpersonation();
   if (!state) return false;
   if (isBrowser()) {
-    window.localStorage.removeItem(IMPERSONATION_KEY);
+    window.sessionStorage.removeItem(IMPERSONATION_KEY);
   }
   setTokens(state.original_access, state.original_refresh);
   if (isBrowser()) window.dispatchEvent(new CustomEvent(IMPERSONATION_ENDED_EVENT));

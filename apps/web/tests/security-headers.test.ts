@@ -34,3 +34,41 @@ describe('Permissions-Policy', () => {
     }
   });
 });
+
+/*
+ * Vercel ignores public/_headers (a Cloudflare Pages format), so for a
+ * month the production deployment shipped with no Content-Security-Policy
+ * at all while this file said it had one (security review D-1, 2026-10-28).
+ * Both carriers must say the same thing.
+ */
+import vercel from '../vercel.json';
+
+function vercelHeader(name: string): string | undefined {
+  const all = (vercel as { headers: Array<{ source: string; headers: Array<{ key: string; value: string }> }> }).headers
+    .find((h) => h.source === '/(.*)')?.headers ?? [];
+  return all.find((h) => h.key === name)?.value;
+}
+
+function cloudflareHeader(name: string): string | undefined {
+  const line = HEADERS.split('\n').find((l) => l.trim().startsWith(name + ':'));
+  return line?.split(':').slice(1).join(':').trim();
+}
+
+describe('the Vercel deployment carries the same security headers', () => {
+  it('has a Content-Security-Policy that is not open to any origin', () => {
+    const csp = vercelHeader('Content-Security-Policy');
+    expect(csp).toBeTruthy();
+    expect(csp).toContain("default-src 'self'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("object-src 'none'");
+    expect(csp).not.toMatch(/connect-src[^;]*\shttps:(\s|;|$)/);
+    expect(csp).toBe(cloudflareHeader('Content-Security-Policy'));
+  });
+
+  it('isolates the browsing context and pins the rest', () => {
+    expect(vercelHeader('Cross-Origin-Opener-Policy')).toBe('same-origin');
+    for (const name of ['Strict-Transport-Security', 'X-Content-Type-Options', 'X-Frame-Options', 'Referrer-Policy', 'Permissions-Policy']) {
+      expect(vercelHeader(name), name).toBe(cloudflareHeader(name));
+    }
+  });
+});
