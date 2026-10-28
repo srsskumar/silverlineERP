@@ -167,7 +167,7 @@ export async function buildApp(
     // A predicate rather than a list, so preview deployments keep working.
     // See originAllowed: patterns must name the project, never all of
     // *.vercel.app, because this API is called with credentials.
-    origin(origin, callback) {
+    origin(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
       // A missing Origin is a same-origin or non-browser caller (curl, the
       // mobile app); CORS does not apply to those.
       if (!origin) return callback(null, true);

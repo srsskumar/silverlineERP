@@ -257,6 +257,68 @@ describe("UT-AUTH-04 apply repeated-login lock or challenge policy", () => {
   });
 });
 
+describe("security events reach the audit trail", () => {
+  // Each of these threw before the audit row was written, so the trail
+  // showed the successes and none of the attempts (C-6, 2026-10-28).
+  async function freshUser(): Promise<{ id: string; username: string }> {
+    const username = `cat_audit_${uniq()}`;
+    const id = await createUser(w.pool, w.orgId, { username });
+    return { id, username };
+  }
+  async function auditRows(actorId: string, action: string): Promise<Array<{ reason: string | null }>> {
+    return (await w.pool.query(
+      "SELECT reason FROM audit_events WHERE actor_id = $1 AND action = $2", [actorId, action],
+    )).rows as Array<{ reason: string | null }>;
+  }
+
+  it("writes a wrong current password on a change attempt", async () => {
+    const u = await freshUser();
+    const token = (await login({ username: u.username, password: PASSWORD })).json().access_token as string;
+    const res = await w.app.inject({
+      method: "POST", url: "/api/v1/auth/password",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { current_password: "not-the-password-1", new_password: "Replacement@2026ab" },
+    });
+    expect(res.statusCode).toBe(401);
+    expect(await auditRows(u.id, "auth.password_change_failed")).toHaveLength(1);
+  });
+
+  it("writes a refresh token presented twice, which revoked the family", async () => {
+    const u = await freshUser();
+    const first = (await login({ username: u.username, password: PASSWORD })).json() as { refresh_token: string };
+    const rotated = await w.app.inject({ method: "POST", url: "/api/v1/auth/refresh", payload: { refresh_token: first.refresh_token } });
+    expect(rotated.statusCode).toBe(200);
+    const replay = await w.app.inject({ method: "POST", url: "/api/v1/auth/refresh", payload: { refresh_token: first.refresh_token } });
+    expect(replay.statusCode).toBe(401);
+    expect(replay.json().code).toBe("REFRESH_TOKEN_REUSED");
+    expect(await auditRows(u.id, "auth.refresh_reused")).toHaveLength(1);
+  });
+
+  it("writes a sign-in refused because the device was revoked", async () => {
+    const u = await freshUser();
+    const deviceId = `dev-${uniq()}-revoked`;
+    await w.pool.query(
+      "INSERT INTO device_registrations (org_id, user_id, device_id, revoked_at, wipe_requested_at) VALUES ($1, $2, $3, now(), now())",
+      [w.orgId, u.id, deviceId],
+    );
+    const res = await login({ username: u.username, password: PASSWORD, device_id: deviceId });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().code).toBe("DEVICE_REVOKED");
+    const rows = await auditRows(u.id, "auth.login_failed");
+    expect(rows.map((r) => r.reason)).toContain("DEVICE_REVOKED");
+  });
+
+  it("writes a wrong code at authenticator setup", async () => {
+    const u = await freshUser();
+    const token = (await login({ username: u.username, password: PASSWORD })).json().access_token as string;
+    const headers = { authorization: `Bearer ${token}` };
+    expect((await w.app.inject({ method: "POST", url: "/api/v1/auth/mfa/setup", headers, payload: {} })).statusCode).toBe(200);
+    const res = await w.app.inject({ method: "POST", url: "/api/v1/auth/mfa/verify", headers, payload: { code: "000000" } });
+    expect(res.statusCode).toBe(401);
+    expect(await auditRows(u.id, "auth.mfa_verify_failed")).toHaveLength(1);
+  });
+});
+
 describe("UT-AUTH-05 resolve role permissions with global and scoped grants", () => {
   it("denies by default — a user with no roles holds no permissions", async () => {
     const username = `cat_noroles_${uniq()}`;
@@ -1083,6 +1145,17 @@ describe("setting your own password", () => {
     expect(blocked.statusCode).toBe(403);
     expect(blocked.json().code).toBe("PASSWORD_CHANGE_REQUIRED");
 
+    // The exemption is an allow-list of what the change itself needs, not
+    // everything under /auth/: the sessions list, and starting a view-as
+    // session, used to be reachable on a password somebody else chose (C-9).
+    for (const [method, url] of [["GET", "/api/v1/auth/sessions"], ["POST", "/api/v1/auth/impersonate"]] as const) {
+      const r = await w.app.inject({
+        method, url, headers: { authorization: `Bearer ${token}` }, payload: {},
+      });
+      expect(r.statusCode, `${method} ${url}: ${r.body}`).toBe(403);
+      expect(r.json().code, `${method} ${url}`).toBe("PASSWORD_CHANGE_REQUIRED");
+    }
+
     // Changing it lifts the block.
     const changed = await change({ authorization: `Bearer ${token}` }, {
       current_password: "BrandNew@2026xy", new_password: "TheirOwn@2026ab",
@@ -1259,16 +1332,53 @@ describe("choosing which roles need an authenticator", () => {
       [...MFA_DEFAULT_REQUIRED_ROLES].sort());
   });
 
+  async function effective(headers: Headers, code: string): Promise<boolean> {
+    const res = await w.app.inject({ method: "GET", url: "/api/v1/admin/roles", headers });
+    expect(res.statusCode).toBe(200);
+    const row = (res.json() as { data: Array<{ code: string; mfa_required: boolean }> }).data
+      .find((r) => r.code === code);
+    expect(row, code).toBeTruthy();
+    return row!.mfa_required;
+  }
+
   it("lets an organisation excuse a field role", async () => {
-    // The whole point of the setting.
+    // The whole point of the setting -- and it is the organisation's
+    // setting. The system roles are one shared row each, so writing the
+    // excuse onto the row excused every tenant's team leads at once (A-1,
+    // 2026-10-28). The row now stays as seeded and the organisation keeps
+    // its own answer beside it.
     const r = await setRoleMfa("TEAM_LEAD", false);
     expect(r.statusCode, r.body).toBe(200);
+    expect(await effective(w.admin, "TEAM_LEAD")).toBe(false);
     expect((await w.pool.query(
       "SELECT mfa_required FROM roles WHERE code = 'TEAM_LEAD'")).rows[0].mfa_required)
-      .toBe(false);
+      .toBe(true);
 
     // And put it back.
     expect((await setRoleMfa("TEAM_LEAD", true)).statusCode).toBe(200);
+    expect(await effective(w.admin, "TEAM_LEAD")).toBe(true);
+  });
+
+  it("never reaches another organisation", async () => {
+    const r = await setRoleMfa("TEAM_LEAD", false);
+    expect(r.statusCode, r.body).toBe(200);
+    try {
+      expect(await effective(w.other.admin, "TEAM_LEAD")).toBe(true);
+      // Nor does the other organisation's own choice reach this one.
+      const theirs = await w.app.inject({
+        method: "PATCH", url: `/api/v1/admin/roles/${await roleId("AUDITOR")}/mfa`,
+        headers: { ...w.other.admin, ...idem() }, payload: { mfa_required: false },
+      });
+      expect(theirs.statusCode, theirs.body).toBe(200);
+      expect(await effective(w.admin, "AUDITOR")).toBe(true);
+      expect(await effective(w.other.admin, "AUDITOR")).toBe(false);
+    } finally {
+      await setRoleMfa("TEAM_LEAD", true);
+      await w.app.inject({
+        method: "PATCH", url: `/api/v1/admin/roles/${await roleId("AUDITOR")}/mfa`,
+        headers: { ...w.other.admin, ...idem() }, payload: { mfa_required: true },
+      });
+    }
   });
 
   it("will not let a super administrator be excused", async () => {

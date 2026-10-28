@@ -12,7 +12,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  activate, buildWorld, idem, uniq, uniquePhone, workDate,
+  activate, buildWorld, createUser, idem, loginAs, uniq, uniquePhone, workDate,
   type CatalogueWorld, type Headers,
 } from "./fixture.js";
 
@@ -48,6 +48,22 @@ beforeAll(async () => { w = await buildWorld(); }, 180_000);
 afterAll(async () => { await w?.app.close(); await w?.pool.end(); });
 
 describe("showing the work before doing it", () => {
+  it("refuses a caller whose record scope does not cover one of the people", async () => {
+    // PATCH /employees/:id applies the caller's record scope; the bulk
+    // form of the same change did not, so an HR manager scoped to one
+    // district could move anybody in the organisation (A-2, 2026-10-28).
+    const username = `cat_bulk_scoped_${uniq()}`;
+    const userId = await createUser(w.pool, w.orgId, { username, roles: ["HR_MANAGER"] });
+    await w.pool.query(
+      "UPDATE user_roles SET scope_type = 'district', scope_id = $2 WHERE user_id = $1",
+      [userId, w.chainB.district],
+    );
+    const scoped = await loginAs(w.app, username);
+    const outside = await employee({ district_id: w.chainA.district });
+    const r = await bulk({ employee_ids: [outside.id], changes: { designation_id: null }, dry_run: false }, scoped);
+    expect(r.status, JSON.stringify(r.body)).toBe(403);
+  });
+
   it("changes nothing on a dry run", async () => {
     const a = await employee({ department: "Old" });
     const b = await employee({ department: "Old" });

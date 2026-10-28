@@ -204,6 +204,30 @@ describe("what the borrowed session may do", () => {
     }
   });
 
+  it("cannot register a device, read or revoke sessions, or change preferences as the subject", async () => {
+    // Each of these let the borrowed session outlive or outreach the view:
+    // a push token registered under the subject keeps delivering their
+    // notifications to the administrator's phone after stopping; the
+    // sessions list shows the subject's real devices and IPs and can sign
+    // them out; preferences flip the subject's channels (C-2, 2026-10-28).
+    const admin = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
+    const employeeId = await createUser(`imp_reach_${randomUUID().slice(0, 8)}`, ["EMPLOYEE"]);
+    const token = (await viewAs(admin, employeeId)).json() as { access_token: string };
+    const borrowed = { authorization: `Bearer ${token.access_token}` };
+
+    const probes: Array<[string, string, unknown]> = [
+      ["POST", "/api/v1/devices/register", { device_id: `dev-${randomUUID()}`, push_token: "tok" }],
+      ["GET", "/api/v1/auth/sessions", undefined],
+      ["POST", `/api/v1/auth/sessions/${randomUUID()}/revoke`, undefined],
+      ["PATCH", "/api/v1/auth/preferences", { push: false }],
+    ];
+    for (const [method, url, payload] of probes) {
+      const res = await app.inject({ method: method as "GET", url, headers: borrowed, payload });
+      expect(res.statusCode, `${method} ${url}: ${res.body}`).toBe(403);
+      expect(res.body, `${method} ${url}`).toContain("IMPERSONATION_FORBIDDEN");
+    }
+  });
+
   /*
    * The block list used to read req.url, the still-encoded request target,
    * while find-my-way decodes it before choosing a handler. "%70assword"

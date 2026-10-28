@@ -154,3 +154,27 @@ describe("the endpoints that had no limit", () => {
     expect((await start()).statusCode).toBe(429);
   });
 });
+
+/*
+ * The limiters used to count in process memory. On Vercel every concurrent
+ * request can land on a fresh instance, so "ten a minute" was true of each
+ * instance and of none of the deployment (security review C-4, 2026-10-28).
+ * The count now lives in the database, where a second instance sees it.
+ */
+describe("the count is shared between instances", () => {
+  it("refuses on a second app what the first app has already used up", async () => {
+    const other = await buildApp({ databaseUrl: TEST_DB, jwtSecret: JWT_SECRET, loginRateLimitMax: MAX });
+    try {
+      const username = `shared_${randomUUID().slice(0, 8)}`;
+      const headers = { "x-forwarded-for": "198.51.100.77" };
+      for (let i = 0; i < MAX; i++) {
+        const res = await app.inject({ method: "POST", url: "/api/v1/auth/login", headers, payload: { username, password: "wrong-password-1" } });
+        expect(res.statusCode, `attempt ${i + 1}`).toBe(401);
+      }
+      const res = await other.inject({ method: "POST", url: "/api/v1/auth/login", headers, payload: { username, password: "wrong-password-1" } });
+      expect(res.statusCode).toBe(429);
+    } finally {
+      await other.close();
+    }
+  });
+});

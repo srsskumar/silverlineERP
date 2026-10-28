@@ -2355,6 +2355,19 @@ export async function registerEmployeeRoutes(
       const found = new Set(rows.map((r) => String(r.id)));
       const missing = input.employee_ids.filter((id) => !found.has(id));
 
+      // The same record scope PATCH /employees/:id applies, person by
+      // person: a caller scoped to one district changes nobody outside it
+      // here either (A-2, 2026-10-28). Refused whole rather than trimmed,
+      // so a wrong filter is a visible mistake, not a partial one.
+      for (const row of rows) {
+        if (!(await employeeInScope(user.orgId, user, String(row.id)))) {
+          await client.query("ROLLBACK");
+          return sendError(reply, req.requestId, {
+            status: 403, code: "FORBIDDEN", message: "Employee outside your scope",
+          });
+        }
+      }
+
       /*
        * Validated once, against the change rather than per row.
        *

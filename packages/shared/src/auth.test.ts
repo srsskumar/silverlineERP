@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mfaRequired, mfaFloorRole } from './auth.js';
+import { changePasswordSchema, loginSchema, mfaFloorRole, mfaRequired } from './auth.js';
 
 describe('deciding who needs two-factor authentication', () => {
   const lead = { code: 'TEAM_LEAD', mfa_required: true };
@@ -49,5 +49,21 @@ describe('deciding who needs two-factor authentication', () => {
 
   it('requires nothing of an account with no roles at all', () => {
     expect(mfaRequired([])).toBe(false);
+  });
+});
+
+describe('password length', () => {
+  // bcrypt reads the first 72 bytes and silently ignores the rest, so a
+  // 128-character password was really a 72-character one that the person
+  // believed was longer (C-10, 2026-10-28). The ceiling now says so.
+  it('refuses a new password bcrypt would truncate', () => {
+    const ok = changePasswordSchema.safeParse({ current_password: 'old-one', new_password: 'a'.repeat(72) });
+    expect(ok.success).toBe(true);
+    const long = changePasswordSchema.safeParse({ current_password: 'old-one', new_password: 'a'.repeat(73) });
+    expect(long.success).toBe(false);
+  });
+  it('bounds what a sign-in attempt may send as a password', () => {
+    expect(loginSchema.safeParse({ username: 'x', password: 'p'.repeat(256) }).success).toBe(true);
+    expect(loginSchema.safeParse({ username: 'x', password: 'p'.repeat(257) }).success).toBe(false);
   });
 });

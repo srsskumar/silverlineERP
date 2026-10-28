@@ -103,10 +103,12 @@ export function buildAuthenticate(ctx: AuthContext) {
     const rolesRes = await ctx.pool.query(
       // mfa_required rides along on a query that already runs, so making the
       // requirement configurable costs nothing per request.
-      `SELECT r.code, r.mfa_required FROM roles r
+      // The organisation's own answer beside the shared row's default (117).
+      `SELECT r.code, COALESCE(p.mfa_required, r.mfa_required) AS mfa_required FROM roles r
        JOIN user_roles ur ON ur.role_id = r.id
+       LEFT JOIN role_mfa_policies p ON p.role_code = r.code AND p.org_id = $2
        WHERE ur.user_id = $1`,
-      [row.id],
+      [row.id, row.org_id],
     );
     const roleFlags = rolesRes.rows as Array<{ code: string; mfa_required: boolean }>;
     const roles = roleFlags.map((r) => r.code);
@@ -251,7 +253,7 @@ export function buildAuthenticate(ctx: AuthContext) {
      */
     if (row.must_change_password
         && !req.authUser.worker
-        && !req.url.startsWith("/api/v1/auth/")) {
+        && !PASSWORD_CHANGE_ALLOWED.has(req.routeOptions.url ?? req.url)) {
       throw new ApiError({
         status: 403,
         code: "PASSWORD_CHANGE_REQUIRED",
@@ -385,6 +387,22 @@ const SCOPED_TO_OWN_WORK=(permission:string):boolean=>
  * the role row still wins — it is narrower than any default and somebody set
  * it on purpose.
  */
+/**
+ * What an account on a password somebody else chose may still do: change
+ * it, see who it is, keep the session alive while on that screen, and leave.
+ * An allow-list, not the whole of /auth/: the sessions list and starting a
+ * view-as session are not part of choosing a password (C-9, 2026-10-28).
+ * Keyed by the matched route pattern, which no encoding of the request
+ * line can affect.
+ */
+const PASSWORD_CHANGE_ALLOWED = new Set([
+  "/api/v1/auth/password",
+  "/api/v1/auth/me",
+  "/api/v1/auth/refresh",
+  "/api/v1/auth/logout",
+  "/api/v1/auth/impersonate/stop",
+]);
+
 export async function scopesForPermission(req:FastifyRequest,permission:string){
  return scopesForUserPermission(req.server.db,req.authUser!.id,req.authUser!.orgId,permission);
 }

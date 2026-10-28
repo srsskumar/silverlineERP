@@ -39,9 +39,62 @@ export function createWindowCounter(opts: { max: number; windowMs: number }) {
   };
 }
 
+/**
+ * Where an authentication limiter keeps its counts.
+ *
+ * In memory it is one process's view, which was the whole picture on one
+ * box. On Vercel every concurrent request can land on a fresh instance with
+ * empty counters, so a limit "per minute" was true of each instance and of
+ * none of the deployment (security review C-4, 2026-10-28). The database
+ * store below is what the auth routes use; the in-memory one remains for
+ * tests and for anything that has no pool to hand.
+ */
+export interface WindowStore {
+  /** Milliseconds until `key` may try again in `dimension`; 0 when it may try now. */
+  wait(dimension: string, key: string, now: number): Promise<number>;
+  record(dimension: string, key: string, now: number): Promise<void>;
+}
+
+export function createPgWindowStore(
+  pool: { query: (text: string, values?: unknown[]) => Promise<{ rows: unknown[] }> },
+  opts: { max: number; windowMs: number; /** Which limiter these are: sign-in hits must not spend refresh or code attempts. */ scope: string },
+): WindowStore {
+  let sinceSweep = 0;
+  const scoped = (dimension: string) => `${opts.scope}:${dimension}`.slice(0, 32);
+  return {
+    async wait(dimension, key, now) {
+      dimension = scoped(dimension);
+      const r = await pool.query(
+        `SELECT hit_at FROM auth_rate_hits
+          WHERE dimension = $1 AND key = $2 AND hit_at > to_timestamp($3 / 1000.0)
+          ORDER BY hit_at ASC`,
+        [dimension, key, now - opts.windowMs],
+      );
+      const times = (r.rows as Array<{ hit_at: Date | string }>).map((x) => new Date(x.hit_at).getTime());
+      if (times.length < opts.max) return 0;
+      return Math.max(1, (times[times.length - opts.max] ?? now) + opts.windowMs - now);
+    },
+    async record(dimension, key, now) {
+      dimension = scoped(dimension);
+      await pool.query(
+        "INSERT INTO auth_rate_hits (dimension, key, hit_at) VALUES ($1, $2, to_timestamp($3 / 1000.0))",
+        [dimension, key, now],
+      );
+      // Rows age out of every window; sweep them every so often rather than
+      // on every hit, since the lookup index already ignores them.
+      if (++sinceSweep >= 100) {
+        sinceSweep = 0;
+        await pool.query("DELETE FROM auth_rate_hits WHERE hit_at <= to_timestamp($1 / 1000.0)", [now - opts.windowMs]);
+      }
+    },
+  };
+}
+
 export interface AuthRateLimitOptions {
   max: number;
   windowMs: number;
+  /** Shared counters (see WindowStore); in-process memory when absent. */
+  store?: WindowStore;
   /**
    * The buckets a request counts against, by dimension -- typically
    * `{ ip: req.ip, account: <username or user id> }`. Each dimension has its
@@ -82,7 +135,9 @@ export function createAuthRateLimit(opts: AuthRateLimitOptions) {
     const keys = Object.entries(opts.keys(req)).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string" && entry[1] !== "",
     );
-    const wait = Math.max(0, ...keys.map(([dimension, key]) => counter(dimension).wait(key, now)));
+    const waits = await Promise.all(keys.map(([dimension, key]) =>
+      opts.store ? opts.store.wait(dimension, key, now) : counter(dimension).wait(key, now)));
+    const wait = Math.max(0, ...waits);
     if (wait > 0) {
       // Whole seconds, rounded up: Retry-After has no finer unit, and
       // rounding down would invite a retry that is refused again.
@@ -94,7 +149,10 @@ export function createAuthRateLimit(opts: AuthRateLimitOptions) {
         retryable: true,
       });
     }
-    for (const [dimension, key] of keys) counter(dimension).record(key, now);
+    for (const [dimension, key] of keys) {
+      if (opts.store) await opts.store.record(dimension, key, now);
+      else counter(dimension).record(key, now);
+    }
   };
 }
 

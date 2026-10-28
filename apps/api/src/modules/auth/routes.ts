@@ -19,7 +19,7 @@ import {
 import { writeAudit } from "../../common/audit.js";
 import { buildAuthenticate, requirePermission } from "../../common/auth.js";
 import { sendError } from "../../common/httpErrors.js";
-import { createAuthRateLimit, typedAccount } from "../../common/rateLimit.js";
+import { createAuthRateLimit, typedAccount, createPgWindowStore } from "../../common/rateLimit.js";
 import {
   changePassword,
   disableMfa,
@@ -55,23 +55,29 @@ export async function registerAuthRoutes(
    * into the database.
    */
   const limit = (
+    scope: string,
     max: number,
     keys: Parameters<typeof createAuthRateLimit>[0]["keys"],
     message?: string,
-  ) => createAuthRateLimit({ max, windowMs: opts.loginRateLimitWindowMs, keys, message });
+  ) => createAuthRateLimit({
+    max, windowMs: opts.loginRateLimitWindowMs, keys, message,
+    // Counted in the database, so every instance of the API shares the limit;
+    // scoped per limiter, so sign-in attempts never spend refreshes or codes.
+    store: createPgWindowStore(opts.pool, { max, windowMs: opts.loginRateLimitWindowMs, scope }),
+  });
   const byUser = (req: FastifyRequest) => ({ ip: req.ip, account: req.authUser?.id });
   // Guessing a password: by the name being guessed at, as well as by address.
-  const loginRateLimit = limit(opts.loginRateLimitMax,
+  const loginRateLimit = limit("login", opts.loginRateLimitMax,
     (req) => ({ ip: req.ip, account: typedAccount(req) }),
     "Too many sign-in attempts, try again later");
   // Guessing a six-digit code, or a current password, from inside a session.
-  const mfaRateLimit = limit(opts.loginRateLimitMax, byUser,
+  const mfaRateLimit = limit("mfa", opts.loginRateLimitMax, byUser,
     "Too many authentication codes, try again later");
-  const passwordRateLimit = limit(opts.loginRateLimitMax, byUser,
+  const passwordRateLimit = limit("password", opts.loginRateLimitMax, byUser,
     "Too many password attempts, try again later");
   // Each request notifies people; the ten-minute rule below stops repeats
   // for one account, this stops one address walking through all of them.
-  const resetRequestRateLimit = limit(opts.loginRateLimitMax,
+  const resetRequestRateLimit = limit("reset", opts.loginRateLimitMax,
     (req) => ({ ip: req.ip, account: typedAccount(req) }));
   /*
    * Refresh runs itself: every open tab and every phone refreshes every
@@ -80,10 +86,10 @@ export async function registerAuthRoutes(
    * against is somebody replaying guesses at a 256-bit token, which a limit
    * cannot make harder, and a loop hammering the database, which it can.
    */
-  const refreshRateLimit = limit(opts.loginRateLimitMax * 6, (req) => ({ ip: req.ip }));
+  const refreshRateLimit = limit("refresh", opts.loginRateLimitMax * 6, (req) => ({ ip: req.ip }));
   // Each call writes a new secret or mints a token: nobody needs many.
-  const mfaSetupRateLimit = limit(opts.loginRateLimitMax, byUser);
-  const impersonateRateLimit = limit(opts.loginRateLimitMax, byUser);
+  const mfaSetupRateLimit = limit("mfa_setup", opts.loginRateLimitMax, byUser);
+  const impersonateRateLimit = limit("impersonate", opts.loginRateLimitMax, byUser);
 
   const metaOf = (req: {
     ip: string;
@@ -139,7 +145,7 @@ export async function registerAuthRoutes(
             reason: "unknown username",
             requestId: req.requestId,
           });
-        } else if (err instanceof ApiError && ["INVALID_CREDENTIALS","INVALID_MFA_CODE","ACCOUNT_LOCKED"].includes(err.code)) {
+        } else if (err instanceof ApiError && ["INVALID_CREDENTIALS","INVALID_MFA_CODE","ACCOUNT_LOCKED","DEVICE_REVOKED"].includes(err.code)) {
           const row = await opts.pool.query(
             "SELECT id, org_id FROM users WHERE username = $1 ORDER BY created_at ASC LIMIT 1",
             [parsed.data.username],
@@ -284,7 +290,19 @@ export async function registerAuthRoutes(
           fieldErrors: toFieldErrors(parsed.error),
         });
       }
-      await verifyMfa(ctx, user.id, parsed.data.code);
+      try {
+        await verifyMfa(ctx, user.id, parsed.data.code);
+      } catch (err) {
+        if (err instanceof ApiError && err.code === "INVALID_MFA_CODE") {
+          await writeAudit(opts.pool, {
+            orgId: user.orgId, actorId: user.id, actorIp: req.ip,
+            actorUserAgent: metaOf(req).userAgent,
+            action: "auth.mfa_verify_failed", entityType: "user", entityId: user.id,
+            reason: err.code, requestId: req.requestId,
+          });
+        }
+        throw err;
+      }
       await writeAudit(opts.pool, {
         orgId: user.orgId,
         actorId: user.id,
@@ -325,11 +343,12 @@ export async function registerAuthRoutes(
       const policy = (await opts.pool.query(
         `SELECT u.mfa_policy,
                 COALESCE(json_agg(json_build_object('code', r.code,
-                  'mfa_required', r.mfa_required)) FILTER (WHERE r.id IS NOT NULL),
+                  'mfa_required', COALESCE(p.mfa_required, r.mfa_required))) FILTER (WHERE r.id IS NOT NULL),
                   '[]') AS roles
          FROM users u
          LEFT JOIN user_roles ur ON ur.user_id = u.id
          LEFT JOIN roles r ON r.id = ur.role_id
+         LEFT JOIN role_mfa_policies p ON p.role_code = r.code AND p.org_id = u.org_id
          WHERE u.id = $1 GROUP BY u.mfa_policy`, [user.id])).rows[0] as
           { mfa_policy: string; roles: Array<{ code: string; mfa_required: boolean }> }
           | undefined;
@@ -344,7 +363,19 @@ export async function registerAuthRoutes(
           message: 'Your role requires MFA. Ask an administrator for account recovery.',
         });
       }
-      await disableMfa(ctx, user.id, parsed.data.code);
+      try {
+        await disableMfa(ctx, user.id, parsed.data.code);
+      } catch (err) {
+        if (err instanceof ApiError && err.code === "INVALID_MFA_CODE") {
+          await writeAudit(opts.pool, {
+            orgId: user.orgId, actorId: user.id, actorIp: req.ip,
+            actorUserAgent: metaOf(req).userAgent,
+            action: "auth.mfa_disable_failed", entityType: "user", entityId: user.id,
+            reason: err.code, requestId: req.requestId,
+          });
+        }
+        throw err;
+      }
       await writeAudit(opts.pool, {
         orgId: user.orgId,
         actorId: user.id,
@@ -383,7 +414,21 @@ export async function registerAuthRoutes(
           fieldErrors: toFieldErrors(parsed.error),
         });
       }
-      await changePassword(ctx, user.id, parsed.data);
+      try {
+        await changePassword(ctx, user.id, parsed.data);
+      } catch (err) {
+        // The attempt is the event a reviewer wants: somebody holding this
+        // session tried a password that was not the owner's (C-6).
+        if (err instanceof ApiError && err.code === "INVALID_CREDENTIALS") {
+          await writeAudit(opts.pool, {
+            orgId: user.orgId, actorId: user.id, actorIp: req.ip,
+            actorUserAgent: metaOf(req).userAgent,
+            action: "auth.password_change_failed", entityType: "user", entityId: user.id,
+            reason: err.code, requestId: req.requestId,
+          });
+        }
+        throw err;
+      }
       await writeAudit(opts.pool, {
         orgId: user.orgId,
         actorId: user.id,

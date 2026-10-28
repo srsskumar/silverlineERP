@@ -133,6 +133,122 @@ describe("changing somebody else's account", () => {
     expect(held.rows.map((r) => r.code)).toContain("SUPER_ADMIN");
   });
 
+  it("refuses an administrator granting SUPER_ADMIN to any account", async () => {
+    // The permission-subset check passes -- the seed gives ADMIN and
+    // SUPER_ADMIN the same permissions -- so without a check on the role
+    // itself an ADMIN could mint a super administrator it then controls,
+    // and "only a super administrator changes a super administrator" would
+    // be true of every account but the ones an ADMIN made (C-1, 2026-10-28).
+    const admin = await headersFor((await createUser("adm", ["ADMIN"])).username);
+    const target = await createUser("emp", ["EMPLOYEE"]);
+    const superRole = await pool.query("SELECT id FROM roles WHERE code = 'SUPER_ADMIN'");
+    const res = await app.inject({
+      method: "PUT", url: `/api/v1/admin/users/${target.id}/roles`,
+      headers: admin, payload: { roles: [{ role_id: superRole.rows[0].id }] },
+    });
+    expect(res.statusCode, res.body).toBe(403);
+    const held = await pool.query(
+      "SELECT r.code FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = $1",
+      [target.id],
+    );
+    expect(held.rows.map((r) => r.code)).toEqual(["EMPLOYEE"]);
+  });
+
+  it("still lets a super administrator grant SUPER_ADMIN", async () => {
+    const root = await headersFor(ADMIN_USERNAME, ADMIN_PASSWORD);
+    const target = await createUser("emp", ["EMPLOYEE"]);
+    const superRole = await pool.query("SELECT id FROM roles WHERE code = 'SUPER_ADMIN'");
+    const res = await app.inject({
+      method: "PUT", url: `/api/v1/admin/users/${target.id}/roles`,
+      headers: root, payload: { roles: [{ role_id: superRole.rows[0].id }] },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+  });
+
+  it("refuses an HR manager wiping a super administrator's device", async () => {
+    // users.manage let anyone holding it revoke -- and remote-wipe -- any
+    // device in the organisation, with none of the "can you manage that
+    // account" test every other change to an account goes through (C-8).
+    const hr = await headersFor((await createUser("hr", ["HR_MANAGER"])).username);
+    const orgId = (await pool.query("SELECT org_id FROM users WHERE id = $1", [superAdminId])).rows[0].org_id;
+    const device = await pool.query(
+      `INSERT INTO device_registrations (org_id, user_id, device_id) VALUES ($1, $2, $3) RETURNING id`,
+      [orgId, superAdminId, `dev-${randomUUID()}`],
+    );
+    const res = await app.inject({
+      method: "POST", url: `/api/v1/admin/devices/${device.rows[0].id}/revoke`, headers: hr,
+    });
+    expect(res.statusCode, res.body).toBe(403);
+    const after = await pool.query("SELECT revoked_at FROM device_registrations WHERE id = $1", [device.rows[0].id]);
+    expect(after.rows[0].revoked_at).toBeNull();
+  });
+
+  it("still lets an HR manager wipe an employee's device", async () => {
+    const hr = await headersFor((await createUser("hr", ["HR_MANAGER"])).username);
+    const emp = await createUser("emp", ["EMPLOYEE"]);
+    const orgId = (await pool.query("SELECT org_id FROM users WHERE id = $1", [emp.id])).rows[0].org_id;
+    const device = await pool.query(
+      `INSERT INTO device_registrations (org_id, user_id, device_id) VALUES ($1, $2, $3) RETURNING id`,
+      [orgId, emp.id, `dev-${randomUUID()}`],
+    );
+    const res = await app.inject({
+      method: "POST", url: `/api/v1/admin/devices/${device.rows[0].id}/revoke`, headers: hr,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+  });
+
+  it("lets an administrator reset a person's authenticator, signs them out, and says so", async () => {
+    // Until now there was no recovery path at all: a lost phone meant a
+    // database edit. The reset goes through the same "may you change that
+    // account" test as a password reset, revokes every session, and leaves
+    // its own audit row rather than hiding inside user.security_update
+    // (C-3, 2026-10-28).
+    const admin = await headersFor((await createUser("adm", ["ADMIN"])).username);
+    const target = await createUser("emp", ["EMPLOYEE"]);
+    await pool.query(
+      "UPDATE users SET mfa_enabled = true, mfa_secret = 'sealed-secret', mfa_last_counter = 42 WHERE id = $1",
+      [target.id],
+    );
+    const theirs = await headersFor(target.username);
+    const res = await patchUser(admin, target.id, { mfa_reset: true });
+    expect(res.statusCode, res.body).toBe(200);
+    const row = await pool.query("SELECT mfa_enabled, mfa_secret, mfa_last_counter FROM users WHERE id = $1", [target.id]);
+    expect(row.rows[0]).toEqual({ mfa_enabled: false, mfa_secret: null, mfa_last_counter: null });
+    expect((await app.inject({ method: "GET", url: "/api/v1/auth/me", headers: theirs })).statusCode).toBe(401);
+    const audit = await pool.query(
+      "SELECT action FROM audit_events WHERE entity_id = $1 AND action = 'auth.mfa_reset'",
+      [target.id],
+    );
+    expect(audit.rowCount).toBe(1);
+  });
+
+  it("refuses an HR manager resetting an administrator's authenticator, and anyone their own", async () => {
+    const hr = await headersFor((await createUser("hr", ["HR_MANAGER"])).username);
+    const admin = await createUser("adm", ["ADMIN"]);
+    expect((await patchUser(hr, admin.id, { mfa_reset: true })).statusCode).toBe(403);
+    const self = await headersFor(admin.username);
+    const own = await patchUser(self, admin.id, { mfa_reset: true });
+    expect(own.statusCode).toBeGreaterThanOrEqual(400);
+    expect((own.json() as { code: string }).code).toBe("SELF_SECURITY_CHANGE");
+  });
+
+  it("records which fields a security update changed, never their values", async () => {
+    // user.security_update used to store {id} and nothing else, so a
+    // password reset, a disable and a phone edit read identically (C-7).
+    const admin = await headersFor((await createUser("adm", ["ADMIN"])).username);
+    const target = await createUser("emp", ["EMPLOYEE"]);
+    const res = await patchUser(admin, target.id, { phone: "9876501234", must_change_password: true });
+    expect(res.statusCode, res.body).toBe(200);
+    const audit = await pool.query(
+      "SELECT after_state FROM audit_events WHERE entity_id = $1 AND action = 'user.security_update' ORDER BY created_at DESC LIMIT 1",
+      [target.id],
+    );
+    expect(audit.rowCount).toBe(1);
+    const after = audit.rows[0].after_state as { id: string; changed: string[] };
+    expect([...after.changed].sort()).toEqual(["must_change_password", "phone"]);
+    expect(JSON.stringify(after)).not.toContain("9876501234");
+  });
+
   it("refuses an HR manager resetting a payroll officer or a super administrator", async () => {
     const hr = await headersFor((await createUser("hr", ["HR_MANAGER"])).username);
     const payroll = await createUser("pay", ["PAYROLL_OFFICER"]);

@@ -170,6 +170,13 @@ export const IMPERSONATION_FORBIDDEN_PATHS = [
   '/api/v1/auth/mfa/disable',
   '/api/v1/auth/refresh',
   '/api/v1/auth/impersonate',
+  // A push token registered under the subject would keep delivering their
+  // notifications after the view ends; the sessions list shows their real
+  // devices and can sign them out; preferences flip their channels.
+  '/api/v1/devices/register',
+  '/api/v1/auth/sessions',
+  '/api/v1/auth/sessions/:id/revoke',
+  '/api/v1/auth/preferences',
 ] as const;
 
 export function impersonationBlocks(path: string): boolean {

@@ -1,4 +1,5 @@
 import {encryptPii,decryptPii} from "../../common/crypto.js";
+import { writeAudit } from "../../common/audit.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
@@ -387,6 +388,14 @@ async function rotateRefresh(
       "UPDATE sessions SET revoked = true, revoked_at = NOW() WHERE family = $1",
       [sess.family],
     );
+    // The one event in this file that most needs a row: a token presented
+    // twice is the signature of a stolen one (C-6, 2026-10-28).
+    await writeAudit(ctx.pool, {
+      orgId: sess.org_id, actorId: sess.user_id, actorIp: meta.ip ?? null,
+      actorUserAgent: meta.userAgent ?? null,
+      action: "auth.refresh_reused", entityType: "session", entityId: sess.user_id,
+      reason: "family revoked", requestId: meta.requestId,
+    });
     throw new ApiError({
       status: 401,
       code: "REFRESH_TOKEN_REUSED",

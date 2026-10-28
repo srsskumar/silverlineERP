@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import bcrypt from 'bcrypt';
+import {writeAudit} from '../../common/audit.js';
 import { z } from 'zod';
 import { buildAuthenticate,requirePermission } from '../../common/auth.js';
 import { actor,parse,page,mutate,inOrg,fail,sortClause } from '../../common/domain.js';
@@ -26,7 +27,7 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
 
  app.get('/api/v1/admin/users',{preHandler:guard('users.read')},async req=>{const {limit,offset}=page(req),order=sortClause(req,{username:'u.username',phone:'u.phone',email:'u.email',auth_status:'u.auth_status',mfa_enabled:'u.mfa_enabled',mfa_policy:'u.mfa_policy',must_change_password:'u.must_change_password'},'u.username'),rows=(await pool.query(`SELECT u.id,u.username,u.email,u.phone,u.auth_status,u.employee_id,u.mfa_enabled,u.mfa_policy,u.must_change_password,u.password_set_at,u.last_login_at,COALESCE((SELECT json_agg(json_build_object('role_id',r.id,'code',r.code,'scope_type',ur.scope_type,'scope_id',ur.scope_id)) FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id),'[]') AS roles FROM users u WHERE org_id=$1 ORDER BY ${order} LIMIT $2 OFFSET $3`,[actor(req).orgId,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
  app.post('/api/v1/admin/users',{preHandler:guard('users.manage')},async(req,reply)=>{
-  const i=parse(z.object({username:z.string().trim().min(3).max(100),password:z.string().min(12).max(128),email:z.string().email().optional(),employee_id:z.string().uuid().optional(),
+  const i=parse(z.object({username:z.string().trim().min(3).max(100),password:z.string().min(12).max(72),email:z.string().email().optional(),employee_id:z.string().uuid().optional(),
    // The number they sign in with (§34). Stored in one written form so it can
    // be dialled from a contact card and matched without normalising on read.
    phone:z.string().trim().max(20).optional(),
@@ -48,7 +49,7 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
    return (await db.query('INSERT INTO users(org_id,username,password_hash,email,employee_id,phone,must_change_password,password_set_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()) RETURNING id,username,email,phone,auth_status,employee_id,must_change_password',[u.orgId,i.username,hash,i.email??null,i.employee_id??null,phone,i.must_change_password??false])).rows[0];});return reply.code(201).send(row);
  });
  app.patch('/api/v1/admin/users/:id',{preHandler:guard('users.manage')},async req=>{
-  const id=(req.params as {id:string}).id,u=actor(req),i=parse(z.object({auth_status:z.enum(['ACTIVE','DISABLED']).optional(),password:z.string().min(12).max(128).optional(),
+  const id=(req.params as {id:string}).id,u=actor(req),i=parse(z.object({auth_status:z.enum(['ACTIVE','DISABLED']).optional(),password:z.string().min(12).max(72).optional(),
    phone:z.string().trim().max(20).nullable().optional(),
    // Whether this particular account needs an authenticator, regardless of
    // what its roles say. "This person handles payroll" and "this phone cannot
@@ -56,7 +57,10 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
    mfa_policy:z.enum(MFA_POLICIES).optional(),
    // Ask the person to set their own password. Optional in both directions:
    // it can be turned on for an account and turned off again.
-   must_change_password:z.boolean().optional()}),req.body);
+   must_change_password:z.boolean().optional(),
+   // Account recovery for a lost authenticator (C-3): clears the secret so
+   // the person enrols afresh at next sign-in. Never for your own account.
+   mfa_reset:z.literal(true).optional()}),req.body);
   if(id===u.id&&i.auth_status==='DISABLED')fail('SELF_DISABLE','You cannot disable your own account');
   /*
    * Your own password and your own two-factor policy are not yours to set
@@ -72,7 +76,7 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
    * the security screen, the policy through another administrator, which is
    * already the rule for your own roles.
    */
-  if(id===u.id&&(i.password!==undefined||i.mfa_policy!==undefined))fail('SELF_SECURITY_CHANGE','Change your own password under Account security, and ask another administrator to change your two-factor policy');
+  if(id===u.id&&(i.password!==undefined||i.mfa_policy!==undefined||i.mfa_reset))fail('SELF_SECURITY_CHANGE','Change your own password under Account security, and ask another administrator to change your two-factor policy or reset your authenticator');
   if(i.phone&&!isIndianMobile(i.phone))fail('VALIDATION_ERROR','Enter a ten-digit Indian mobile number',422);
   const phone=i.phone===undefined?undefined:(i.phone===null?null:formatIndianMobile(i.phone));
   const hash=i.password?await bcrypt.hash(i.password,12):null;
@@ -97,7 +101,14 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
     * password here signs the account out ...") which never promises that
     * for those two fields.
     */
-   if(i.auth_status!==undefined||i.password!==undefined||i.mfa_policy!==undefined){
+   if(i.mfa_reset){
+    await db.query('UPDATE users SET mfa_enabled=false,mfa_secret=NULL,mfa_last_counter=NULL,updated_at=now() WHERE id=$1',[id]);
+    // Its own row in the trail, not a line inside user.security_update: a
+    // reset is the one change that lets somebody else enrol an authenticator
+    // on this account, which is exactly what a reviewer looks for.
+    await writeAudit(db,{orgId:u.orgId,actorId:u.id,actorIp:req.ip,action:'auth.mfa_reset',entityType:'user',entityId:id,reason:'administrator reset',requestId:req.requestId,impersonatorId:u.impersonator?.id??null});
+   }
+   if(i.auth_status!==undefined||i.password!==undefined||i.mfa_policy!==undefined||i.mfa_reset){
     await db.query('UPDATE sessions SET revoked=true,revoked_at=now() WHERE user_id=$1',[id]);
    }
    /*
@@ -114,9 +125,12 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
        WHERE user_id=$1 AND org_id=$3 AND resolved_at IS NULL`,
      [id,u.id,u.orgId]);
    }
-   return {id,updated:true};});
+   const changed=(['auth_status','password','phone','mfa_policy','must_change_password','mfa_reset'] as const).filter(k=>i[k]!==undefined);
+   return {id,updated:true,changed};});
  });
- app.get('/api/v1/admin/roles',{preHandler:guard('users.read')},async req=>{const order=sortClause(req,{name:'r.name',code:'r.code',mfa_required:'r.mfa_required',is_system_role:'r.is_system_role'},'r.name','r.id');return {data:(await pool.query(`SELECT r.*,COALESCE((SELECT json_agg(permission_code) FROM role_permissions WHERE role_id=r.id),'[]') AS permissions FROM roles r WHERE org_id IS NULL OR org_id=$1 ORDER BY ${order}`,[actor(req).orgId])).rows};});
+ app.get('/api/v1/admin/roles',{preHandler:guard('users.read')},async req=>{const order=sortClause(req,{name:'r.name',code:'r.code',mfa_required:'COALESCE(p.mfa_required,r.mfa_required)',is_system_role:'r.is_system_role'},'r.name','r.id');
+  // mfa_required is this organisation's answer (role_mfa_policies, 117), not the shared row's default; the later column of the same name wins.
+  return {data:(await pool.query(`SELECT r.*,COALESCE(p.mfa_required,r.mfa_required) AS mfa_required,COALESCE((SELECT json_agg(permission_code) FROM role_permissions WHERE role_id=r.id),'[]') AS permissions FROM roles r LEFT JOIN role_mfa_policies p ON p.role_code=r.code AND p.org_id=$1 WHERE r.org_id IS NULL OR r.org_id=$1 ORDER BY ${order}`,[actor(req).orgId])).rows};});
  /**
   * Whether a role's holders must set up an authenticator (§34).
   *
@@ -132,13 +146,17 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
  app.patch('/api/v1/admin/roles/:id/mfa',{preHandler:guard('admin.configure')},async req=>{
   const id=(req.params as {id:string}).id,u=actor(req),i=parse(z.object({mfa_required:z.boolean()}),req.body);
   return mutate(pool,req,'role.mfa_update','role',async db=>{
-   const role=(await db.query('SELECT id,code,org_id FROM roles WHERE id=$1 AND (org_id IS NULL OR org_id=$2)',[id,u.orgId])).rows[0] as {id:string;code:string}|undefined;
+   const role=(await db.query('SELECT id,code,org_id FROM roles WHERE id=$1 AND (org_id IS NULL OR org_id=$2)',[id,u.orgId])).rows[0] as {id:string;code:string;org_id:string|null}|undefined;
    if(!role)fail('NOT_FOUND','No such role',404);
    // A super administrator can grant itself the permission to change this
    // setting, so letting it switch its own requirement off would make every
    // control below it decorative. The table refuses this too.
    if(!i.mfa_required&&mfaFloorRole(role!.code))fail('MFA_REQUIRED','A super administrator must keep two-factor authentication',422);
-   await db.query('UPDATE roles SET mfa_required=$2 WHERE id=$1',[id,i.mfa_required]);
+   // A shared system role is every tenant's row: the organisation's choice is
+   // recorded beside it (role_mfa_policies, 117), never written onto it. A
+   // role the organisation owns is its own to change.
+   if(role!.org_id===null)await db.query('INSERT INTO role_mfa_policies(org_id,role_code,mfa_required,updated_by) VALUES($1,$2,$3,$4) ON CONFLICT(org_id,role_code) DO UPDATE SET mfa_required=EXCLUDED.mfa_required,updated_at=now(),updated_by=EXCLUDED.updated_by',[u.orgId,role!.code,i.mfa_required,u.id]);
+   else await db.query('UPDATE roles SET mfa_required=$2 WHERE id=$1 AND org_id=$3',[id,i.mfa_required,u.orgId]);
    // Nothing is revoked. Somebody who already enrolled keeps their
    // authenticator -- the setting decides who must have one, not who may.
    return {id,code:role!.code,mfa_required:i.mfa_required};
@@ -157,7 +175,9 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
    // The roles they hold now, not only the ones being handed out: stripping
    // an administrator of theirs is as far beyond the caller as granting.
    await mayManage(db,req,id);
-   for(const r of i.roles){const role=await db.query('SELECT id,code FROM roles WHERE id=$1 AND (org_id IS NULL OR org_id=$2)',[r.role_id,u.orgId]);if(!role.rowCount)fail('NOT_FOUND','Role not found',404);if(role.rows[0].code==='CLIENT_VIEWER'&&r.scope_type!=='project')fail('INVALID_SCOPE','Client viewers require an explicit project scope');const grants=await db.query('SELECT permission_code FROM role_permissions WHERE role_id=$1',[r.role_id]);if(grants.rows.some(g=>!u.permissions.includes(g.permission_code)))fail('FORBIDDEN','Cannot grant permissions you do not hold',403);if(u.scopes.some(s=>s.scope_type)&&!u.scopes.some(s=>!s.scope_type)&&!u.scopes.some(s=>s.scope_type===r.scope_type&&s.scope_id===r.scope_id))fail('FORBIDDEN','Cannot grant a scope you do not hold',403);if(Boolean(r.scope_type)!==Boolean(r.scope_id))fail('INVALID_SCOPE','Scope type and record are required together');
+   for(const r of i.roles){const role=await db.query('SELECT id,code FROM roles WHERE id=$1 AND (org_id IS NULL OR org_id=$2)',[r.role_id,u.orgId]);if(!role.rowCount)fail('NOT_FOUND','Role not found',404);
+    // The permission-subset check below cannot tell ADMIN from SUPER_ADMIN (the seed gives them the same permissions), and an account holding SUPER_ADMIN is one only a super administrator may change -- so only a super administrator may make one.
+    if(role.rows[0].code==='SUPER_ADMIN'&&!u.roles.includes('SUPER_ADMIN'))fail('FORBIDDEN','Only a super administrator can grant SUPER_ADMIN',403);if(role.rows[0].code==='CLIENT_VIEWER'&&r.scope_type!=='project')fail('INVALID_SCOPE','Client viewers require an explicit project scope');const grants=await db.query('SELECT permission_code FROM role_permissions WHERE role_id=$1',[r.role_id]);if(grants.rows.some(g=>!u.permissions.includes(g.permission_code)))fail('FORBIDDEN','Cannot grant permissions you do not hold',403);if(u.scopes.some(s=>s.scope_type)&&!u.scopes.some(s=>!s.scope_type)&&!u.scopes.some(s=>s.scope_type===r.scope_type&&s.scope_id===r.scope_id))fail('FORBIDDEN','Cannot grant a scope you do not hold',403);if(Boolean(r.scope_type)!==Boolean(r.scope_id))fail('INVALID_SCOPE','Scope type and record are required together');
     if(r.scope_id){const table=r.scope_type==='project'?'projects':r.scope_type==='team'?'employees':'org_units';const found=await db.query(`SELECT 1 FROM ${table} WHERE id=$1 AND org_id=$2`,[r.scope_id,u.orgId]);if(!found.rowCount)fail('INVALID_SCOPE','Scope record does not belong to this organization');}
    }
    await db.query('DELETE FROM user_roles WHERE user_id=$1',[id]);for(const r of i.roles)await db.query('INSERT INTO user_roles(user_id,role_id,scope_type,scope_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[id,r.role_id,r.scope_type,r.scope_id]);
@@ -202,7 +222,10 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
  });
  app.get('/api/v1/admin/devices',{preHandler:guard('users.manage')},async req=>{const order=sortClause(req,{device_id:'device_id',last_seen_at:'last_seen_at',revoked_at:'revoked_at'},'last_seen_at DESC');return {data:(await pool.query(`SELECT id,user_id,device_id,revoked_at,wipe_requested_at,last_seen_at FROM device_registrations WHERE org_id=$1 ORDER BY ${order} LIMIT 100`,[actor(req).orgId])).rows};});
  app.post('/api/v1/admin/devices/:id/revoke',{preHandler:guard('users.manage')},async req=>{
-  const id=(req.params as {id:string}).id,u=actor(req);return mutate(pool,req,'device.revoke','device',async db=>{const row=(await db.query('UPDATE device_registrations SET revoked_at=now(),wipe_requested_at=now() WHERE org_id=$1 AND id=$2 RETURNING id,user_id,device_id',[u.orgId,id])).rows[0];if(!row)fail('NOT_FOUND','Device not found',404);await db.query('UPDATE sessions SET revoked=true,revoked_at=now() WHERE user_id=$1 AND device_id=$2',[row.user_id,row.device_id]);return row;});
+  const id=(req.params as {id:string}).id,u=actor(req);return mutate(pool,req,'device.revoke','device',async db=>{const owner=(await db.query('SELECT user_id FROM device_registrations WHERE org_id=$1 AND id=$2',[u.orgId,id])).rows[0];if(!owner)fail('NOT_FOUND','Device not found',404);
+   // A wipe is the most drastic thing that can be done to an account's phone, so it goes through the same "may you change that account" test as a password reset.
+   await mayManage(db,req,owner.user_id);
+   const row=(await db.query('UPDATE device_registrations SET revoked_at=now(),wipe_requested_at=now() WHERE org_id=$1 AND id=$2 RETURNING id,user_id,device_id',[u.orgId,id])).rows[0];if(!row)fail('NOT_FOUND','Device not found',404);await db.query('UPDATE sessions SET revoked=true,revoked_at=now() WHERE user_id=$1 AND device_id=$2',[row.user_id,row.device_id]);return row;});
  });
 
  /**

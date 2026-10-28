@@ -15,7 +15,9 @@ export const loginSchema = z.object({
    * name somebody generated for them.
    */
   username: z.string().min(1, "Enter your username or mobile number"),
-  password: z.string().min(1, "Password is required"),
+  // Bounded so a sign-in attempt cannot carry an 8 MiB "password" through
+  // bcrypt; the first 72 bytes are all bcrypt ever reads anyway.
+  password: z.string().min(1, "Password is required").max(256, "That is too long"),
   /** Required when the account has MFA enabled; omit otherwise. */
   totp_code: totpCode.optional(),
   device_id: z.string().min(8).max(255).optional(),
@@ -38,7 +40,9 @@ export const changePasswordSchema = z.object({
   current_password: z.string().min(1, "Enter your current password"),
   new_password: z.string()
     .min(12, "Use at least 12 characters")
-    .max(128, "That is too long"),
+    // bcrypt reads the first 72 bytes and silently ignores the rest, so a
+    // longer password is a shorter one the person believes is longer.
+    .max(72, "Use at most 72 characters"),
 }).refine(v => v.current_password !== v.new_password, {
   message: "Choose a password you have not been given",
   path: ["new_password"],
