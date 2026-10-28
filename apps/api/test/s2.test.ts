@@ -443,9 +443,10 @@ describe("attendance punches", () => {
     const mocked = await activeEmployee(h, { village_id: ids.village });
 
     expect((await punch(h, checkinBody(clean), nextKey())).statusCode).toBe(201);
+    // Refused, but kept as evidence: the map still shows where the attempt was made.
     expect(
       (await punch(h, checkinBody(mocked, { mock_location: true }), nextKey())).statusCode,
-    ).toBe(202);
+    ).toBe(422);
 
     const res = await app.inject({
       method: "GET",
@@ -465,7 +466,7 @@ describe("attendance punches", () => {
       expect(typeof row.lng).toBe("number");
     }
     const outcomes = body.data.map((r) => r.outcome).sort();
-    expect(outcomes).toEqual(["ok", "review"]);
+    expect(outcomes).toEqual(["ok", "rejected"]);
     // The fence verdict is gone from the marker, not merely blank.
     for (const row of body.data) {
       expect(row).not.toHaveProperty("geofence_result");
@@ -511,13 +512,22 @@ describe("attendance punches", () => {
     expect((res.json() as { event: { gps_accuracy: number } }).event.gps_accuracy).toBe(500);
   });
 
-  it("reviews mock locations (202 MOCK_LOCATION, never auto-accepts)", async () => {
+  it("refuses mock locations (422 MOCK_LOCATION, evidence kept, nothing on the day)", async () => {
     const h = await adminHeaders();
     const ids = await unitChain(h, "K");
     const empId = await activeEmployee(h, { village_id: ids.village });
     const res = await punch(h, checkinBody(empId, { mock_location: true }), nextKey());
-    expect(res.statusCode).toBe(202);
+    expect(res.statusCode).toBe(422);
     expect((res.json() as { code: string }).code).toBe("MOCK_LOCATION");
+    const db = await pool.query(
+      `SELECT x.status, x.source FROM attendance_exceptions x
+         JOIN attendance_events ev ON ev.id = x.attendance_event_id
+        WHERE ev.employee_id = $1::uuid AND ev.mock_location`,
+      [empId],
+    );
+    expect(db.rowCount).toBe(1);
+    expect((db.rows[0] as { status: string }).status).toBe("REJECTED");
+    expect((db.rows[0] as { source: string }).source).toBe("SYSTEM");
   });
 
   it("reviews 30-minute skew (202 TIMESTAMP_SKEW + SYSTEM_FLAG)", async () => {

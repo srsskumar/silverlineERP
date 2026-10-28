@@ -8,7 +8,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { placeLabel, punchPlaceLine } from "../src/attendance/place";
+import { coordinateLabel, placeLabel, punchPlaceLine } from "../src/attendance/place";
 
 const clock = (iso: string) => iso.slice(11, 16);
 
@@ -60,5 +60,13 @@ describe("punchPlaceLine", () => {
     // A record from an older API, with no place fields at all, reads as it always did.
     assert.equal(punchPlaceLine({ check_in_at: "2026-09-23T03:44:00.000Z" }, clock), "In 03:44");
     assert.equal(punchPlaceLine({}, clock), undefined);
+  });
+});
+
+describe("coordinateLabel", () => {
+  it("prints the fix as signed decimal degrees to 5 places, or says there is none", () => {
+    assert.equal(coordinateLabel({ latitude: 17.4581234, longitude: 78.3647891 }), "17.45812, 78.36479");
+    assert.equal(coordinateLabel({ latitude: -33.8688, longitude: 151.2093 }), "-33.86880, 151.20930");
+    assert.equal(coordinateLabel(null), "No location yet");
   });
 });

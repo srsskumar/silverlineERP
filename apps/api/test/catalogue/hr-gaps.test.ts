@@ -96,8 +96,9 @@ async function siteWorker(): Promise<{ employeeId: string }> {
 /**
  * A punch the server holds back for review.
  *
- * Mock location is the hold that survives the removal of the geo-fence: it
- * is an anti-fraud signal, not a boundary, and it never auto-accepts.
+ * Clock skew is the hold that survives the removal of the geo-fence: a
+ * signal, not a boundary, and it never auto-accepts. (A mock location is
+ * refused outright since 2026-10-28, so it is no longer a hold.)
  */
 function heldPunch(employeeId: string, over: Record<string, unknown> = {}) {
   return {
@@ -105,7 +106,7 @@ function heldPunch(employeeId: string, over: Record<string, unknown> = {}) {
     latitude: GEO.atSite.lat,
     longitude: GEO.atSite.lng,
     gps_accuracy: 8,
-    mock_location: true,
+    client_timestamp: new Date(Date.now() - 30 * 60_000).toISOString(),
     ...over,
   };
 }
@@ -184,7 +185,7 @@ describe("HR-1 approving a held-back punch records the attendance", () => {
     const held = await punch(heldPunch(employeeId));
     expect(held.statusCode).toBe(202);
     const heldBody = held.json() as PunchBody;
-    expect(heldBody.code).toBe("MOCK_LOCATION");
+    expect(heldBody.code).toBe("TIMESTAMP_SKEW");
     expect(await recordsOf(employeeId)).toHaveLength(0);
 
     const approved = await decide(heldBody.exception_id!, "APPROVE");

@@ -5,6 +5,7 @@ import type {FastifyRequest,FastifyReply} from 'fastify';
 import type {Pool} from 'pg';
 import {ApiError} from '@silverline/shared';
 import {idempotencyKeyOf} from './idempotency.js';
+declare module 'fastify'{interface FastifyRequest{/** Commit this request's writes even though it answers 4xx (see mutationRoute). */keepWritesOnRefusal?:boolean;}}
 /** Keep response, receipt and domain changes in one commit before sending a success. */
 export async function mutationRoute(pool:Pool,req:FastifyRequest,reply:FastifyReply,handler:(db:Pool,reply:FastifyReply)=>Promise<unknown>):Promise<FastifyReply>{
  const db=await pool.connect(),key=idempotencyKeyOf(req),user=req.authUser?.id,hash=createHash('sha256').update(JSON.stringify([req.method,req.url,req.body??null])).digest('hex');
@@ -25,7 +26,12 @@ export async function mutationRoute(pool:Pool,req:FastifyRequest,reply:FastifyRe
   }
   const result=await inTransaction(pool,db,()=>handler(db as unknown as Pool,capture));
   if(!hasPayload)payload=result;
-  if(reply.statusCode>=400)await db.query('ROLLBACK');
+  // A refusal normally leaves nothing behind. A handler that must keep a
+  // record of what it refused (an attendance punch from a mock location:
+  // the attempt is evidence) sets keepWritesOnRefusal, and its writes are
+  // committed without the receipt or audit a success would get -- the
+  // refusal replays by re-running the handler, which finds those writes.
+  if(reply.statusCode>=400){if(req.keepWritesOnRefusal)await db.query('COMMIT');else await db.query('ROLLBACK');}
   else {
    if(user&&['/api/v1/attendance/events','/api/v1/attendance/exceptions','/api/v1/attendance/regularize'].includes(req.url)){
     const body=payload as Record<string,any>;

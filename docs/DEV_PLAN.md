@@ -21,7 +21,7 @@ Tabs: Home (My Work + today attendance + sync pill) | Attendance (big check-in/o
 
 Offline: SQLite subset (7 tables: meta, employees/tasks/projects/attendance/leave/notifications cache + `pending_ops` + `upload_sessions`), every mutation gets client UUID + `Idempotency-Key`, states QUEUED→SYNCING→SYNCED/FAILED/CONFLICT/REVIEW with visible chips + SyncQueueSheet, FIFO sync (approvals last), jittered backoff, bulk `POST /sync/batch` (≤50 ops). Critical fields (status, decisions, exit) get manual conflict sheet; non-critical is last-write-wins. Photos: watermark burned on-device, ≤200KB, direct-to-R2, text syncs first.
 
-Device: GPS accuracy gate (>100m blocks or routes to exception), mock-location flag → `REQUIRES_REVIEW`, biometric + PIN fallback with tokens only in SecureStore, FCM payloads carry IDs only (no PII), revoked session → full local purge.
+Device: GPS accuracy gate (>100m blocks or routes to exception), mock-location flag → refused outright (`422 MOCK_LOCATION`, decision 2026-10-28 below), biometric + PIN fallback with tokens only in SecureStore, FCM payloads carry IDs only (no PII), revoked session → full local purge.
 
 ## 4. Backend Requirements (per module, S0→S6)
 
@@ -55,6 +55,12 @@ Silverline ERP has no geo-fencing. Removed end to end: the geo-fence CRUD, emplo
 ## Owner request 2026-09-23: coordinates and place names on every punch
 
 Each punch keeps, beside latitude/longitude/accuracy, its UTM northing and easting on WGS-1984 with the zone and hemisphere (`packages/shared/src/utm.ts`, Krüger series, no dependency; the owner's sites are 44N), the device's ellipsoidal altitude when it has one and the orthometric height on the EGM96 geoid from the shipped 15' grid (`apps/api/src/common/geoid.ts`, `apps/api/src/data/egm96-15.pgm`, MIT-licensed GeographicLib data), and the place it was made from -- village/town, district, state -- reverse geocoded by the worker after the punch (`apps/api/src/modules/jobs/placeNames.ts`, Nominatim `/reverse`, cached at ~100 m, one request a second, three failures then given up). Migration 085 adds the columns; `npm run backfill:utm` fills UTM for older punches. Screens show the place (or "resolving…") on the register, the day's detail, the punch clock and the phone's history, and the detail prints `UTM 44N E … N …` with the datum and geoid named. No new permission: whoever can see the punch can see where it was made. In the same change a device clock up to five minutes ahead of the server (`attendance_future_tolerance_minutes`) no longer has its punches refused as "in the future".
+
+## Decision 2026-10-28: no mock locations, and no map on the punch screen
+
+A punch whose device reports a mock location is refused, not held for review. The server answers `422 MOCK_LOCATION`, stores the event as evidence (coordinates, device signals, IP) and raises the system exception already `REJECTED`, so HR can see the attempt but nobody can approve it onto the day; a replay with the same Idempotency-Key is refused the same way. The phone refuses first, before queuing, with a message that says to turn mock locations off in Developer options. Emulator and impossible-travel signals still go to review as before. The reason: the coordinates and accuracy stored with the punch are the attendance evidence, so a position the OS itself says is fake has no review value.
+
+The attendance screen on the phone shows the fix as coordinates and accuracy instead of a map (no Google Maps key is needed for capture; `MapCanvas` is kept but unused). The stored position is the evidence; a map tile is not.
 
 ## 6. Risk Register (top, merged)
 

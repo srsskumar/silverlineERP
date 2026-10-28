@@ -461,7 +461,10 @@ and recreate it against `system-images;android-36;google_apis;arm64-v8a`.
 
 ### The map is a blank grey grid
 
-Expected today. See [The Google Maps API key](#the-google-maps-api-key); the key
+Only `MapCanvas` draws a map, and since 2026-10-28 no screen uses it: the
+attendance screen shows the punch coordinates and accuracy as text (owner
+decision: the stored position is the evidence, a map is not). If a map is
+reintroduced, see [The Google Maps API key](#the-google-maps-api-key); the key
 is not currently injected into the manifest.
 
 ### The app asks for location only while in use

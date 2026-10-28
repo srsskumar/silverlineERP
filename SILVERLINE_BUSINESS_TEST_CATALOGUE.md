@@ -59,7 +59,7 @@ Silverline has no geo-fencing (owner decision, 2026-09-22). The UT-GEO-01..11 ro
 | UT-ATT-01 | P0 | Check in as active eligible employee with a position | Immutable event and workday record created; position and accuracy stored, no fence verdict | 8.1 |
 | UT-ATT-02 | RETIRED | Check in outside effective fence | No geo-fencing: a punch is accepted from anywhere | 9.1, 23.2 (withdrawn) |
 | UT-ATT-03 | RETIRED | Punch with accuracy above threshold | No geo-fencing: accuracy is stored, never judged | 9.1 (withdrawn) |
-| UT-ATT-04 | P0 | Punch with mock-location indicator | Reject or flag according to policy; evidence and reason are retained | 9.3 |
+| UT-ATT-04 | P0 | Punch with mock-location indicator | Refused (`422 MOCK_LOCATION`, decision 2026-10-28); the event is stored as evidence and the exception is raised already REJECTED, so it cannot be approved onto the day; a replay is refused the same way | 9.3 |
 | UT-ATT-05 | P0 | Detect impossible travel | Creates review signal and does not accuse or autonomously reject outside policy | 9.3 |
 | UT-ATT-06 | P0 | Retry identical punch and retry same Idempotency Key | Returns ALREADY_APPLIED and creates one event and one payroll effect | 8.1, BR-07 |
 | UT-ATT-07 | P0 | Check out without check in and duplicate check in | Stable business errors; attendance state remains valid | 8.1, 20 |
@@ -134,7 +134,7 @@ Use real PostgreSQL, API, Web and an Android 9 or newer emulator/device. Stub on
 | E2E-08 | P0 | Employee checks in and out from the site | Both immutable events and one complete workday record exist; each punch keeps its position | 8.1 |
 | E2E-09 | RETIRED | Employee stands inside polygon and on tolerated edge | No geo-fencing | 9.1 (withdrawn) |
 | E2E-10 | RETIRED | Employee punches outside boundary and submits reason/photo | No geo-fencing; a held-back punch explained and decided is covered by E2E-11 and HR-1 | 9.1, 23.2 (withdrawn) |
-| E2E-11 | P0 | Device reports mock location or impossible travel | UI explains the stable decision; configured review behavior and evidence are present; poor accuracy is stored, not held | 9.3 |
+| E2E-11 | P0 | Device reports mock location or impossible travel | UI explains the stable decision; a mock location is refused with its evidence kept, impossible travel is held for review; poor accuracy is stored, not held | 9.3 |
 | E2E-12 | P0 | Employee checks in offline, force-closes app, reopens and reconnects | Queue is visible; event syncs exactly once; final attendance becomes visible | 13.1, 23.2 |
 | E2E-13 | P0 | Network drops after server commits but before client receives response | Retry returns ALREADY_APPLIED; one attendance event exists | BR-07, 20 |
 | E2E-14 | P0 | Admin exits employee, then employee attempts punch/task/asset workflows | All three fail with useful reason; audit records exit and denied effects | BR-01 |

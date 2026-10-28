@@ -3,7 +3,9 @@
  *
  * The heuristics themselves live in @silverline/shared so the server runs the
  * identical check — this file is only the part that needs the native device
- * APIs. Everything collected here is advisory and never blocks a punch.
+ * APIs. Everything collected here is advisory and never blocks a punch --
+ * except the OS mock-location flag on the fix itself, which refuses the punch
+ * up front (../attendance/mockGuard, owner decision 2026-10-28).
  */
 
 import * as Device from "expo-device";

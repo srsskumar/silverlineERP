@@ -51,3 +51,17 @@ export function punchPlaceLine(
   }
   return parts.length ? parts.join(" · ") : undefined;
 }
+
+/**
+ * The fix as the crew sees it on the punch screen: signed decimal degrees to
+ * five places (about a metre), which is the form a surveyor can read back or
+ * type into another tool. The screen shows no map (owner decision
+ * 2026-10-28: the stored coordinates and accuracy are the evidence, a map
+ * tile is not), so this line is the whole readout.
+ */
+export function coordinateLabel(
+  fix: { latitude: number; longitude: number } | null | undefined,
+): string {
+  if (!fix) return "No location yet";
+  return `${fix.latitude.toFixed(5)}, ${fix.longitude.toFixed(5)}`;
+}

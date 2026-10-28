@@ -803,11 +803,30 @@ export async function registerAttendanceRoutes(
     return (ins.rows[0] as { id: string }).id;
   }
 
+  /**
+   * Refuse a mock-location punch (owner decision 2026-10-28: no mock
+   * locations). Not a hold: there is no review that could make a position
+   * the OS itself calls fake into attendance evidence. retryable is false so
+   * the phone's queue abandons the op instead of resending it.
+   */
+  function refuseMockLocation(
+    reply: Parameters<typeof sendError>[0],
+    requestId: string,
+  ) {
+    return sendError(reply, requestId, {
+      status: 422,
+      code: "MOCK_LOCATION",
+      message:
+        "Mock location detected; the punch was refused. Turn off mock locations " +
+        "(Developer options) and punch again.",
+      retryable: false,
+    });
+  }
+
   function review(
     reply: Parameters<typeof sendError>[0],
     code:
       | "TIMESTAMP_SKEW"
-      | "MOCK_LOCATION"
       | "DEVICE_SIGNAL"
       | "ON_APPROVED_LEAVE",
     exceptionId: string,
@@ -964,6 +983,10 @@ export async function registerAttendanceRoutes(
       [idemKey, emp.id],
     );
     const seenRow = seen.rows[0] as EventRow | undefined;
+    if (seenRow?.mock_location) {
+      // The attempt was kept as evidence; the answer is still no.
+      return refuseMockLocation(reply, req.requestId);
+    }
     if (seenRow) {
       const linkedRecord =
         (await recordForEvent(db, seenRow.id)) ??
@@ -1221,12 +1244,33 @@ export async function registerAttendanceRoutes(
       );
     }
 
-    // 9. Mock locations never auto-accept.
+    /*
+     * 9. Mock locations are refused (decision 2026-10-28), not held.
+     *
+     * The attempt is still evidence HR should be able to see, so the event
+     * and an exception born REJECTED are written here and kept: mutationRoute
+     * rolls a refusal's transaction back unless the request says otherwise
+     * (keepWritesOnRefusal), and a refusal that left no trace would be
+     * indistinguishable from a punch that never happened. (A second
+     * connection cannot do this: the employee row is locked FOR UPDATE above,
+     * and the event's foreign key would wait on it forever.) REJECTED is
+     * final -- the decision route only moves PENDING -- so nobody can approve
+     * it onto the day. A replay with the same key finds the event in step 4
+     * and is refused the same way.
+     */
     if (d.mock_location === true) {
-      return holdForReview(
-        "MOCK_LOCATION",
-        "Mock location detected; manual review required",
+      const reason = "Mock location detected; punch refused (no review: decision 2026-10-28)";
+      const refused = await storeEvent();
+      await db.query(
+        `INSERT INTO attendance_exceptions
+           (employee_id, attendance_record_id, exception_type, reason, source, status,
+            submitted_by, attendance_event_id, reviewed_at, review_note)
+         VALUES ($1::uuid, $2::uuid, 'SYSTEM_FLAG', $3, 'SYSTEM', 'REJECTED', NULL, $4::uuid,
+                 NOW(), 'Refused automatically: mock location')`,
+        [emp.id, record?.id ?? null, reason, refused.id],
       );
+      req.keepWritesOnRefusal = true;
+      return refuseMockLocation(reply, req.requestId);
     }
 
     // 9b. Emulator or impossible travel → review. Placed after mock_location
@@ -1448,7 +1492,7 @@ export async function registerAttendanceRoutes(
         lng: Number(r.lng),
         // One field the map can colour by, rather than making the client
         // re-derive precedence from separate flags.
-        outcome: r.mock_location || r.flagged === true ? "review" : "ok",
+        outcome: r.mock_location ? "rejected" : r.flagged === true ? "review" : "ok",
       })),
       // No cursor: the map draws a bounded working set, not a paged list.
       truncated: res.rows.length === limit,
@@ -1479,16 +1523,24 @@ export async function registerAttendanceRoutes(
         message: "Attendance record not found",
       });
     }
+    // The day's events are the ones that fall on work_date in the
+    // organization's own zone -- the zone the punch route used to choose
+    // work_date in the first place. A fixed Asia/Kolkata here matched a
+    // Kiritimati tenant's events to the wrong day for the part of every day
+    // when the two zones disagree on the date, and the detail came back
+    // with no events at all (2026-10-28).
+    const { timeZone } = await orgClock(opts.pool, user.orgId);
     const events = await opts.pool.query(
       `SELECT ${EVENT_COLS} FROM attendance_events
        WHERE employee_id = $1::uuid
-         AND (server_timestamp AT TIME ZONE 'Asia/Kolkata')::date = $2::date
+         AND (server_timestamp AT TIME ZONE $3)::date = $2::date
        ORDER BY server_timestamp ASC`,
       [
         row.employee_id,
         row.work_date instanceof Date
           ? row.work_date.toISOString().slice(0, 10)
           : String(row.work_date).slice(0, 10),
+        timeZone,
       ],
     );
     return reply.status(200).send({

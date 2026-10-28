@@ -1690,7 +1690,8 @@ describe("UT-LP-10 convert client time around midnight and DST-independent IST b
         },
       });
       expect([201, 202]).toContain(res.statusCode);
-      const workDateShown = (res.json() as { record?: { work_date: string } }).record?.work_date;
+      const shown = (res.json() as { record?: { id: string; work_date: string } }).record;
+      const workDateShown = shown?.work_date;
       if (workDateShown) {
         const expected = new Intl.DateTimeFormat("en-CA", {
           timeZone: "Pacific/Kiritimati",
@@ -1699,6 +1700,19 @@ describe("UT-LP-10 convert client time around midnight and DST-independent IST b
           day: "2-digit",
         }).format(new Date());
         expect(workDateShown).toBe(expected);
+      }
+      // The day's detail lists the punch in that same zone. It used to match
+      // events to the day in a fixed Asia/Kolkata, so for roughly a third
+      // of every day (10:00-18:30 UTC) a Kiritimati tenant's record showed
+      // no events at all.
+      if (shown) {
+        const detail = await w.app.inject({
+          method: "GET",
+          url: `/api/v1/attendance/records/${shown.id}`,
+          headers: w.other.admin,
+        });
+        expect(detail.statusCode).toBe(200);
+        expect((detail.json() as { events: unknown[] }).events).toHaveLength(1);
       }
     } finally {
       await w.pool.query("UPDATE organizations SET timezone = 'Asia/Kolkata' WHERE id = $1", [

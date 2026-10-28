@@ -406,7 +406,8 @@ describe("E2E-08 employee checks in and out from the site", () => {
 // E2E-10 (punch outside the boundary) is retired with the geo-fence. The
 // second half of that workflow -- a held-back punch the employee explains
 // and an approver decides -- still exists for the holds that remain, and is
-// kept here against the mock-location hold.
+// kept here against the clock-skew hold (a mock location is refused outright
+// since 2026-10-28; see E2E-11).
 describe("employee's held-back punch is explained and decided", () => {
   it("requires review, reaches an approver, and is not counted as normal attendance", async () => {
     const worker = await fieldWorker();
@@ -416,7 +417,7 @@ describe("employee's held-back punch is explained and decided", () => {
       latitude: GEO.atSite.lat,
       longitude: GEO.atSite.lng,
       gps_accuracy: 8,
-      mock_location: true,
+      client_timestamp: new Date(Date.now() - 30 * 60_000).toISOString(),
     });
     expect(res.statusCode).toBe(202);
     const systemExceptionId = (res.json() as { exception_id: string }).exception_id;
@@ -490,42 +491,35 @@ describe("employee's held-back punch is explained and decided", () => {
 describe("E2E-11 device reports mock location or impossible travel", () => {
   // Poor accuracy was judged against the fence's threshold and went with the
   // fence: a wide accuracy circle is stored as evidence, not held.
-  const cases: Array<{
-    label: string;
-    code: string;
-    build: (employeeId: string) => Record<string, unknown>;
-  }> = [
-    {
-      label: "mock location",
-      code: "MOCK_LOCATION",
-      build: (employeeId) => ({
-        employee_id: employeeId,
-        latitude: GEO.atSite.lat,
-        longitude: GEO.atSite.lng,
-        mock_location: true,
-      }),
-    },
-  ];
+  it("explains the mock-location refusal and keeps the evidence", async () => {
+    const worker = await fieldWorker();
 
-  for (const probe of cases) {
-    it(`explains the ${probe.label} decision and keeps the evidence`, async () => {
-      const worker = await fieldWorker();
-
-      const res = await punch(worker.headers, probe.build(worker.employeeId));
-      expect(res.statusCode).toBe(202);
-      const body = res.json() as { code: string; message: string; exception_id: string };
-      expect(body.code).toBe(probe.code);
-      // The UI has something to show the user, not just a status code.
-      expect(body.message.length).toBeGreaterThan(10);
-
-      const exception = await w.pool.query(
-        "SELECT reason, status FROM attendance_exceptions WHERE id = $1",
-        [body.exception_id],
-      );
-      expect(exception.rows[0].status).toBe("PENDING");
-      expect(exception.rows[0].reason).toBeTruthy();
+    const res = await punch(worker.headers, {
+      employee_id: worker.employeeId,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
+      mock_location: true,
     });
-  }
+    // Refused, not held (decision 2026-10-28): there is no review to wait for.
+    expect(res.statusCode).toBe(422);
+    const body = res.json() as { code: string; message: string };
+    expect(body.code).toBe("MOCK_LOCATION");
+    // The UI has something to show the user, not just a status code.
+    expect(body.message.length).toBeGreaterThan(10);
+
+    const event = await w.pool.query(
+      "SELECT id, mock_location FROM attendance_events WHERE employee_id = $1",
+      [worker.employeeId],
+    );
+    expect(event.rowCount).toBe(1);
+    expect(event.rows[0].mock_location).toBe(true);
+    const exception = await w.pool.query(
+      "SELECT reason, status FROM attendance_exceptions WHERE attendance_event_id = $1",
+      [event.rows[0].id],
+    );
+    expect(exception.rows[0].status).toBe("REJECTED");
+    expect(exception.rows[0].reason).toBeTruthy();
+  });
 
   it("stores a wide accuracy circle as evidence rather than holding the punch", async () => {
     const worker = await fieldWorker();

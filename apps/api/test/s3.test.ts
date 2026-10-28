@@ -629,6 +629,10 @@ describe("leave balances: open-year (R5-008)", () => {
     expect(res.statusCode).toBe(422);
   });
 
+  // Both zone tests put the organization back afterwards: the organization
+  // row outlives every file's TRUNCATE, so a zone left behind here reached
+  // every later file in the same worker, and an attendance record made at
+  // 10:00-18:30 UTC then had a Kiritimati work date (found 2026-10-28).
   it("fix round 1, item 5: resolves 'current year' from the org's own timezone, not a fixed IST", async () => {
     const { adminH } = await chainFixture();
     // Any valid IANA zone that is not Asia/Kolkata -- this only has to prove
@@ -638,16 +642,23 @@ describe("leave balances: open-year (R5-008)", () => {
       "UPDATE organizations SET settings = jsonb_set(settings, '{timezone}', '\"Pacific/Kiritimati\"') WHERE id = $1",
       [orgId],
     );
-    const expectedYear = Number(
-      (
-        await pool.query(
-          "SELECT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Pacific/Kiritimati'))::int AS y",
-        )
-      ).rows[0].y,
-    );
-    const outOfRange = await openYear(adminH, { year: expectedYear + 5 });
-    expect(outOfRange.statusCode).toBe(422);
-    expect((outOfRange.json() as { message: string }).message).toContain(String(expectedYear));
+    try {
+      const expectedYear = Number(
+        (
+          await pool.query(
+            "SELECT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Pacific/Kiritimati'))::int AS y",
+          )
+        ).rows[0].y,
+      );
+      const outOfRange = await openYear(adminH, { year: expectedYear + 5 });
+      expect(outOfRange.statusCode).toBe(422);
+      expect((outOfRange.json() as { message: string }).message).toContain(String(expectedYear));
+    } finally {
+      await pool.query(
+        "UPDATE organizations SET settings = settings - 'timezone' WHERE id = $1",
+        [orgId],
+      );
+    }
   });
 
   it("fix round 1, item 5: defaults the omitted year to the org's own next year", async () => {
@@ -656,16 +667,23 @@ describe("leave balances: open-year (R5-008)", () => {
       "UPDATE organizations SET settings = jsonb_set(settings, '{timezone}', '\"Pacific/Kiritimati\"') WHERE id = $1",
       [orgId],
     );
-    const expectedYear = Number(
-      (
-        await pool.query(
-          "SELECT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Pacific/Kiritimati'))::int AS y",
-        )
-      ).rows[0].y,
-    );
-    const res = await openYear(adminH, {}, "?dry_run=1");
-    expect(res.statusCode).toBe(200);
-    expect((res.json() as { data: { year: number } }).data.year).toBe(expectedYear + 1);
+    try {
+      const expectedYear = Number(
+        (
+          await pool.query(
+            "SELECT EXTRACT(YEAR FROM (now() AT TIME ZONE 'Pacific/Kiritimati'))::int AS y",
+          )
+        ).rows[0].y,
+      );
+      const res = await openYear(adminH, {}, "?dry_run=1");
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as { data: { year: number } }).data.year).toBe(expectedYear + 1);
+    } finally {
+      await pool.query(
+        "UPDATE organizations SET settings = settings - 'timezone' WHERE id = $1",
+        [orgId],
+      );
+    }
   });
 
   it("requires leave.admin, not just leave.read (403)", async () => {

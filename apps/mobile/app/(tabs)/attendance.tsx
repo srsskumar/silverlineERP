@@ -31,7 +31,8 @@ import {
 import { loadLastFix, saveLastFix } from "../../src/device/lastFix";
 import { buildPunchSignals } from "../../src/device/signals";
 import { submitQueued } from "../../src/sync/engine";
-import { punchPlaceLine } from "../../src/attendance/place";
+import { coordinateLabel, punchPlaceLine } from "../../src/attendance/place";
+import { mockLocationRefusal } from "../../src/attendance/mockGuard";
 import { validateAttendanceException } from "../../src/validators";
 import { useAuth } from "../../src/auth/AuthContext";
 import { PERMISSIONS, TAB_PERMISSIONS, can, canAny } from "../../src/rbac";
@@ -40,6 +41,7 @@ import { LoadError } from "../../src/ui/LoadError";
 import {
   Badge,
   Banner,
+  Body,
   Button,
   Card,
   EmptyState,
@@ -54,7 +56,6 @@ import {
   Subtle,
   Title,
 } from "../../src/ui/primitives";
-import { MapCanvas } from "../../src/ui/MapCanvas";
 import { space, useTheme } from "../../src/theme";
 import { clock, day } from "@silverline/shared";
 import { permissionLabel } from "../../src/permissionLabels";
@@ -139,7 +140,7 @@ function AttendanceScreen() {
   });
   const villages = myVillages.data?.villages ?? [];
 
-  /** Takes a fix up front so the map is live before punching. */
+  /** Takes a fix up front so the position is known before punching. */
   const locate = useCallback(async () => {
     setBusy("locating");
     try {
@@ -190,8 +191,18 @@ function AttendanceScreen() {
       const fx = await getPunchFix();
       setFix(fx);
 
-      // Anti-fraud signals are advisory and never block the punch here — the
-      // server scores them and decides whether to raise a review.
+      // No mock locations (owner decision 2026-10-28): refused here, before
+      // the queue, in the words that clear it. The server refuses it too.
+      const refusal = mockLocationRefusal(fx);
+      if (refusal) {
+        setMsg(refusal);
+        setMsgTone("danger");
+        return;
+      }
+
+      // The remaining anti-fraud signals are advisory and never block the
+      // punch here — the server scores them and decides whether to raise a
+      // review.
       const previous = await loadLastFix();
       const signals = buildPunchSignals(previous, fx);
       await saveLastFix(fx);
@@ -199,9 +210,7 @@ function AttendanceScreen() {
         setSignalNote(
           signals.movement?.impossible_travel
             ? "This position is far from your last punch for the time elapsed. It will be flagged for review."
-            : signals.device.suspected_emulator
-              ? "This device looks like an emulator. The punch will be flagged for review."
-              : "Mock location is enabled. The punch will be flagged for review.",
+            : "This device looks like an emulator. The punch will be flagged for review.",
         );
       }
 
@@ -316,21 +325,25 @@ function AttendanceScreen() {
         title="Where you are"
         right={fix ? <StatusDot text="Located" tone="success" /> : null}
       >
-        <MapCanvas
-          center={fix ? { latitude: fix.latitude, longitude: fix.longitude } : null}
-          points={
-            fix
-              ? [{ id: "me", latitude: fix.latitude, longitude: fix.longitude, title: "You" }]
-              : []
-          }
-          height={220}
-        />
-
-        <Row style={{ marginTop: space.md, flexWrap: "wrap" }} gap={space.sm}>
+        {/* No map: the coordinates and accuracy are what gets stored with the
+            punch, so they are what the crew sees (owner decision 2026-10-28). */}
+        <Row style={{ flexWrap: "wrap" }} gap={space.sm}>
           <Ionicons name="locate-outline" size={15} color={t.textSubtle} />
+          <Body style={{ fontVariant: ["tabular-nums"] }}>{coordinateLabel(fix)}</Body>
+        </Row>
+        <Row style={{ marginTop: space.xs, flexWrap: "wrap" }} gap={space.sm}>
           <Muted>{accuracyLabel(fix)}</Muted>
           {fix?.mocked ? <Badge text="Mock location" tone="danger" /> : null}
         </Row>
+
+        {fix?.mocked ? (
+          <Banner
+            tone="danger"
+            icon="warning-outline"
+            title="Mock location detected"
+            message={mockLocationRefusal(fix) ?? ""}
+          />
+        ) : null}
 
         {poor ? (
           <Banner
@@ -432,7 +445,7 @@ function AttendanceScreen() {
             icon="log-in-outline"
             tone="success"
             loading={busy === "in"}
-            disabled={busyPunching}
+            disabled={busyPunching || fix?.mocked === true}
             onPress={() => void punch("CHECK_IN")}
             style={{ flex: 1 }}
           />
@@ -441,7 +454,7 @@ function AttendanceScreen() {
             icon="log-out-outline"
             variant="secondary"
             loading={busy === "out"}
-            disabled={busyPunching}
+            disabled={busyPunching || fix?.mocked === true}
             onPress={() => void punch("CHECK_OUT")}
             style={{ flex: 1 }}
           />

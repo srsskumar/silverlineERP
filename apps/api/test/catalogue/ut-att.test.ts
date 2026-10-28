@@ -44,6 +44,11 @@ interface PunchBody {
   message?: string;
 }
 
+/** A client clock far enough from the server's for the punch to be held (TIMESTAMP_SKEW). */
+function heldAt(): string {
+  return new Date(Date.now() - (SKEW_WINDOW_MIN + 5) * 60_000).toISOString();
+}
+
 async function punch(
   payload: Record<string, unknown>,
   headers: Headers = w.admin,
@@ -193,7 +198,8 @@ describe("a punch held back for review", () => {
   // threshold) are retired with the geo-fence. What they also pinned -- that
   // a held-back punch raises a PENDING system exception somebody with
   // attendance.decide can act on -- still holds for the holds that remain,
-  // and is kept here against the mock-location hold.
+  // and is kept here against the clock-skew hold (a mock location is refused
+  // outright since 2026-10-28; see UT-ATT-04).
   it("does not silently accept, and raises a review exception", async () => {
     const { employeeId } = await freshWorker();
 
@@ -202,13 +208,13 @@ describe("a punch held back for review", () => {
       latitude: GEO.atSite.lat,
       longitude: GEO.atSite.lng,
       gps_accuracy: 8,
-      mock_location: true,
+      client_timestamp: heldAt(),
     });
     // 202, not 201: the punch is recorded but not accepted as normal attendance.
     expect(res.statusCode).toBe(202);
     const body = res.json() as PunchBody;
     expect(body.review).toBe("REQUIRES_REVIEW");
-    expect(body.code).toBe("MOCK_LOCATION");
+    expect(body.code).toBe("TIMESTAMP_SKEW");
     expect(body.exception_id).toBeTruthy();
 
     // No complete workday record was manufactured from a held punch.
@@ -233,7 +239,7 @@ describe("a punch held back for review", () => {
       employee_id: employeeId,
       latitude: GEO.atSite.lat,
       longitude: GEO.atSite.lng,
-      mock_location: true,
+      client_timestamp: heldAt(),
     });
     const exceptionId = (res.json() as PunchBody).exception_id!;
 
@@ -284,7 +290,6 @@ describe("GPS accuracy", () => {
       latitude: GEO.atSite.lat,
       longitude: GEO.atSite.lng,
       gps_accuracy: 300,
-      mock_location: true,
     });
     const event = await w.pool.query(
       `SELECT lat, lng, gps_accuracy FROM attendance_events
@@ -297,37 +302,120 @@ describe("GPS accuracy", () => {
 });
 
 describe("UT-ATT-04 punch with mock-location indicator", () => {
-  it("never auto-accepts, and retains the evidence and the reason", async () => {
+  // Decision 2026-10-28: no mock locations. The punch is refused, not held:
+  // nobody can approve a position the OS itself says is fake onto the day.
+  // The attempt is still kept -- event and an already-REJECTED exception --
+  // so HR can see it happened.
+  it("refuses the punch (422 MOCK_LOCATION) and keeps the attempt as evidence", async () => {
     const { employeeId } = await freshWorker();
-
     const res = await punch({
+      employee_id: employeeId,
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
+      gps_accuracy: 8,
+      mock_location: true,
+    });
+    expect(res.statusCode).toBe(422);
+    const body = res.json() as { code: string; message: string; retryable: boolean };
+    expect(body.code).toBe("MOCK_LOCATION");
+    // The phone shows this; it has to say what to do, not just that it failed.
+    expect(body.message).toMatch(/mock location/i);
+    expect(body.retryable).toBe(false);
+
+    const event = await w.pool.query(
+      `SELECT id, mock_location, lat, lng FROM attendance_events
+        WHERE employee_id = $1 ORDER BY server_timestamp DESC LIMIT 1`,
+      [employeeId],
+    );
+    expect(event.rowCount).toBe(1);
+    expect(event.rows[0].mock_location).toBe(true);
+    expect(Number(event.rows[0].lat)).toBeCloseTo(GEO.atSite.lat, 5);
+
+    const exception = await w.pool.query(
+      `SELECT exception_type, source, status, reason, review_note
+         FROM attendance_exceptions WHERE attendance_event_id = $1`,
+      [event.rows[0].id],
+    );
+    expect(exception.rowCount).toBe(1);
+    expect(exception.rows[0].exception_type).toBe("SYSTEM_FLAG");
+    expect(exception.rows[0].source).toBe("SYSTEM");
+    expect(exception.rows[0].status).toBe("REJECTED");
+    expect(exception.rows[0].reason).toMatch(/mock location/i);
+
+    // Nothing reached the day.
+    const records = await w.pool.query(
+      "SELECT COUNT(*)::int AS n FROM attendance_records WHERE employee_id = $1",
+      [employeeId],
+    );
+    expect(records.rows[0].n).toBe(0);
+  });
+
+  it("refuses a replay with the same key the same way, without a second attempt row", async () => {
+    const { employeeId } = await freshWorker();
+    const key = idem();
+    const payload = {
+      employee_id: employeeId,
+      event_type: "CHECK_IN",
+      client_timestamp: new Date().toISOString(),
+      latitude: GEO.atSite.lat,
+      longitude: GEO.atSite.lng,
+      mock_location: true,
+    };
+    const send = () =>
+      w.app.inject({
+        method: "POST",
+        url: "/api/v1/attendance/events",
+        headers: { ...w.admin, ...key },
+        payload,
+      });
+    expect((await send()).statusCode).toBe(422);
+    const retry = await send();
+    // Not a 200 "applied": the offline queue would then believe the punch
+    // went through.
+    expect(retry.statusCode).toBe(422);
+    expect((retry.json() as { code: string }).code).toBe("MOCK_LOCATION");
+
+    const events = await w.pool.query(
+      "SELECT COUNT(*)::int AS n FROM attendance_events WHERE employee_id = $1",
+      [employeeId],
+    );
+    expect(events.rows[0].n).toBe(1);
+    const exceptions = await w.pool.query(
+      "SELECT COUNT(*)::int AS n FROM attendance_exceptions WHERE employee_id = $1",
+      [employeeId],
+    );
+    expect(exceptions.rows[0].n).toBe(1);
+  });
+
+  it("the refusal cannot be approved onto the day", async () => {
+    const { employeeId } = await freshWorker();
+    await punch({
       employee_id: employeeId,
       latitude: GEO.atSite.lat,
       longitude: GEO.atSite.lng,
       mock_location: true,
     });
-    // Inside the fence, good accuracy — and still not accepted, because the
-    // position itself cannot be trusted.
-    expect(res.statusCode).toBe(202);
-    const body = res.json() as PunchBody;
-    expect(body.code).toBe("MOCK_LOCATION");
-
-    const event = await w.pool.query(
-      `SELECT mock_location, lat, lng FROM attendance_events
-        WHERE employee_id = $1 ORDER BY server_timestamp DESC LIMIT 1`,
+    const exception = await w.pool.query(
+      "SELECT id, version FROM attendance_exceptions WHERE employee_id = $1",
       [employeeId],
     );
-    expect(event.rows[0].mock_location).toBe(true);
-    expect(Number(event.rows[0].lat)).toBeCloseTo(GEO.atSite.lat, 5);
-
-    const exception = await w.pool.query(
-      "SELECT reason FROM attendance_exceptions WHERE id = $1",
-      [body.exception_id],
+    const decision = await w.app.inject({
+      method: "PATCH",
+      url: `/api/v1/attendance/exceptions/${exception.rows[0].id}/decision`,
+      headers: { ...w.admin, "If-Match": `"${exception.rows[0].version}"` },
+      payload: { decision: "APPROVE", note: "trying anyway" },
+    });
+    // Already decided (REJECTED by the system): the single PENDING → decided
+    // transition is not available.
+    expect(decision.statusCode).toBeGreaterThanOrEqual(400);
+    const records = await w.pool.query(
+      "SELECT COUNT(*)::int AS n FROM attendance_records WHERE employee_id = $1",
+      [employeeId],
     );
-    expect(exception.rows[0].reason).toMatch(/mock location/i);
+    expect(records.rows[0].n).toBe(0);
   });
 
-  it("wins over the more general device-signal code when both apply", async () => {
+  it("refuses a mock location even when the device also looks like an emulator", async () => {
     const { employeeId } = await freshWorker();
     const res = await punch({
       employee_id: employeeId,
@@ -336,9 +424,9 @@ describe("UT-ATT-04 punch with mock-location indicator", () => {
       mock_location: true,
       device_signals: { device: { suspected_emulator: true } },
     });
-    expect(res.statusCode).toBe(202);
-    // The most specific explanation is the useful one for a reviewer.
-    expect((res.json() as PunchBody).code).toBe("MOCK_LOCATION");
+    expect(res.statusCode).toBe(422);
+    // The refusal is the more specific, and the final, answer.
+    expect((res.json() as { code: string }).code).toBe("MOCK_LOCATION");
   });
 
   it("flags a suspected emulator even without a mock-location flag", async () => {
@@ -565,11 +653,11 @@ describe("UT-ATT-06 retry identical punch and retry same Idempotency-Key", () =>
     const payload = {
       employee_id: employeeId,
       event_type: "CHECK_IN",
-      client_timestamp: new Date().toISOString(),
       latitude: GEO.atSite.lat,
       longitude: GEO.atSite.lng,
-      // The hold that is left once the fence is gone.
-      mock_location: true,
+      // The hold that is left once the fence is gone (a mock location is
+      // refused outright, and a refusal never replays as a review).
+      client_timestamp: heldAt(),
     };
     const first = await w.app.inject({
       method: "POST",
