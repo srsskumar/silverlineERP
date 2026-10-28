@@ -111,7 +111,7 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
       ?`,(SELECT r.gstin FROM party_gst_registrations r
            WHERE r.party_type='VENDOR' AND r.party_id=a.id AND r.is_primary) AS gstin`
       :'';
-   const order=sortClause(req,LIST_SORT_COLUMNS[table]??{},'a.created_at DESC,a.id DESC','a.id');
+   const order=sortClause(req,(Object.hasOwn(LIST_SORT_COLUMNS,table)?LIST_SORT_COLUMNS[table]:undefined)??{},'a.created_at DESC,a.id DESC','a.id');
    const rows=await pool.query(`SELECT a.*${extra} FROM ${table} a WHERE ${where} ORDER BY ${order} LIMIT $2 OFFSET $3`,values);
    return {data:rows.rows.slice(0,limit),has_more:rows.rows.length>limit,next_offset:rows.rows.length>limit?offset+limit:null};
   });

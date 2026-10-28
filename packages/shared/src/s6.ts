@@ -110,10 +110,29 @@ export type ReportType = (typeof REPORT_TYPES)[number];
 export const reportTypeSchema = z.enum(REPORT_TYPES);
 
 /** POST /api/v1/reports */
+/**
+ * The filters a report reads: ids, a date range, a status and a department,
+ * by the keys the routes look up (uuidFilter / dateFilter / textFilter in
+ * apps/api s6). It used to be a record of anything, persisted whole into the
+ * registry and every schedule and echoed back, bounded only by the body
+ * limit (B-2, 2026-10-28). Strict, so a key nobody reads is refused rather
+ * than stored.
+ */
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD");
+export const reportFiltersSchema = z.object({
+  employee_id: z.string().uuid().optional(),
+  project_id: z.string().uuid().optional(),
+  assignee_id: z.string().uuid().optional(),
+  from: isoDate.optional(),
+  to: isoDate.optional(),
+  status: z.string().max(64).optional(),
+  department: z.string().max(100).optional(),
+}).strict();
+
 export const reportCreateSchema = z.object({
   type: reportTypeSchema,
   format: z.enum(["csv","xlsx","pdf"]),
-  filters: z.record(z.string(), z.unknown()).optional(),
+  filters: reportFiltersSchema.optional(),
 });
 
 export type ReportCreateInput = z.infer<typeof reportCreateSchema>;

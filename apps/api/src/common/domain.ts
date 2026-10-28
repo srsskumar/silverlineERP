@@ -90,7 +90,9 @@ export function page(req:FastifyRequest) {
  */
 export function sortClause(req:FastifyRequest,columns:Record<string,string>,fallback:string,tiebreaker='id'):string {
  const q=req.query as Record<string,string>;
- const column=columns[q.sort as string];
+ // Own keys only: "constructor" is on every object literal and its value is
+ // a function whose source text would otherwise reach the ORDER BY.
+ const column=typeof q.sort==='string'&&Object.hasOwn(columns,q.sort)?columns[q.sort]:undefined;
  if(!column) return fallback;
  const dir=q.dir==='desc'?'DESC':'ASC';
  return `${column} ${dir}, ${tiebreaker}`;
@@ -180,7 +182,8 @@ export async function mutate<T>(pool:Pool,req:FastifyRequest,action:string,entit
   const object=value as Record<string,unknown>;
   const id=typeof object?.id==='string'?object.id:null;
   // Secrets and personal records are never copied into event payloads.
-  const safe=entity==='user'||entity==='webhook'||entity==='settings'?{id}:value;
+  // A security update may name which fields it touched (never their values), so a password reset, a disable and a phone edit stop reading identically in the trail.
+ const safe=entity==='user'||entity==='webhook'||entity==='settings'?{id,...(Array.isArray(object?.changed)?{changed:object.changed}:{})}:value;
   /*
    * actor_id stays whoever the system believed was acting, so ownership and
    * every report already written against it keep working; impersonator_id

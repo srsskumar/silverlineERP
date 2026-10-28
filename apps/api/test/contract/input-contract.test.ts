@@ -26,7 +26,8 @@
  * test is only meaningful against a call that actually succeeds).
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildWorld, type CatalogueWorld } from "../catalogue/fixture.js";
+import { buildWorld, loginAs, type CatalogueWorld } from "../catalogue/fixture.js";
+import { ADMIN_PASSWORD, ADMIN_USERNAME } from "../../src/database/seed.js";
 import { classify, fillPath, fillPathWithBadId } from "./support.js";
 
 let w: CatalogueWorld;
@@ -131,4 +132,38 @@ describe("input contract (write routes)", () => {
 
     expect(violations, violations.map((v) => `${v.route} :: ${v.check} :: ${v.detail}`).join("\n")).toEqual([]);
   }, 120_000);
+});
+
+/*
+ * Lookup tables used as allow-lists were plain object literals, so a key
+ * that lives on Object.prototype ("constructor", "toString", "__proto__")
+ * passed the "is it in the table" check and reached SQL -- as the source
+ * text of a built-in function, which Postgres refused with a 500 on every
+ * list route (B-1, 2026-10-28). Not an injection, but a 5xx anybody signed
+ * in could script.
+ */
+describe("prototype keys are not table entries", () => {
+  // The probes above include password and MFA changes that sign the
+  // fixture's admin out; a fresh sign-in is the honest session here.
+  async function admin() { return loginAs(w.app, ADMIN_USERNAME, ADMIN_PASSWORD); }
+
+  it("falls back to the default sort instead of 500ing", async () => {
+    const headers = await admin();
+    for (const sort of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      const res = await w.app.inject({
+        method: "GET", url: `/api/v1/admin/users?sort=${sort}`, headers,
+      });
+      expect(res.statusCode, `sort=${sort}: ${res.body.slice(0, 200)}`).toBe(200);
+    }
+  });
+
+  it("treats an unknown group_by as a validation error, not a crash", async () => {
+    const headers = await admin();
+    for (const groupBy of ["constructor", "__proto__"]) {
+      const res = await w.app.inject({
+        method: "GET", url: `/api/v1/expense-reports?group_by=${groupBy}`, headers,
+      });
+      expect(res.statusCode, `group_by=${groupBy}: ${res.body.slice(0, 200)}`).toBe(422);
+    }
+  });
 });

@@ -108,14 +108,19 @@ export async function drainSurveyAlertMail(pool: Pool): Promise<MailResult> {
        * unavailable, and the next pass is a better answer than dropping it.
        */
       const message = (error as Error).message.slice(0, 500);
+      // The attempt number written is this attempt's, read back from the
+      // previous error text. It used to write MAX_ATTEMPTS every time, so
+      // the second failure already counted as the last (B-3, 2026-10-28).
       await pool.query(
         `UPDATE survey_alert_sent
-            SET error = $2,
+            SET error = 'attempt ' || (COALESCE(
+                  (regexp_match(COALESCE(error, ''), '^attempt (\\d+)'))[1]::int, 0
+                ) + 1) || ': ' || $2,
                 status = CASE WHEN COALESCE(
                   (regexp_match(COALESCE(error, ''), '^attempt (\\d+)'))[1]::int, 0
                 ) + 1 >= $3 THEN 'FAILED' ELSE 'QUEUED' END
           WHERE id = $1`,
-        [row.id, `attempt ${MAX_ATTEMPTS}: ${message}`, MAX_ATTEMPTS]);
+        [row.id, message, MAX_ATTEMPTS]);
       failed += 1;
     }
   }

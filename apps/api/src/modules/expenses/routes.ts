@@ -999,7 +999,7 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
         join: 'JOIN expense_lines l ON l.claim_id = c.id', group: 'l.category',
       },
     };
-    const shape = grouping[groupBy];
+    const shape = Object.hasOwn(grouping, groupBy) ? grouping[groupBy] : undefined;
     if (!shape) {
       fail('VALIDATION_ERROR',
         `group_by must be one of employee, project, category, aging or exception`);
