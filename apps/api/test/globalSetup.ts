@@ -9,6 +9,7 @@
 import { Client } from "pg";
 import { TEST_SHARDS, shardDatabaseUrl, testDatabaseUrl } from "./database.js";
 import { VOLATILE_TABLES } from "./tables.js";
+import { migrate } from "../src/database/migrate.js";
 
 function nameOf(url: string): string {
   return decodeURIComponent(new URL(url).pathname.slice(1));
@@ -104,6 +105,17 @@ export async function setup(): Promise<void> {
    * org-scoped rows a test created on top of them -- the ones that would
    * block truncating `organizations` on the foreign key -- are cleared.
    */
+  /*
+   * Bring the base database up to the current schema before touching any
+   * table in it. Each file runs migrate() in its own beforeAll, so a
+   * database that has run the suite before already has every table; a
+   * brand-new one -- the CI service container, a fresh developer machine --
+   * has none, and the cleanup below failed on it with `relation "roles"
+   * does not exist`, which is why CI had been red on every push since
+   * 2026-10-09 without a single test having run (found 2026-10-28).
+   */
+  await migrate(base);
+
   const baseClient = new Client({ connectionString: base });
   await baseClient.connect();
   try {
