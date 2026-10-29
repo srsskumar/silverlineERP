@@ -26,8 +26,8 @@ const auditQuerySchema = cursorPageQuerySchema.extend({
    * only way to ask either was to page through the organisation's whole
    * history by hand.
    */
-  actor_id: z.string().uuid().optional(),
-  entity_id: z.string().uuid().optional(),
+  actor_id: z.string().guid().optional(),
+  entity_id: z.string().guid().optional(),
   /*
    * Calendar days, both ends inclusive, in the organisation's own timezone:
    * "the 3rd" means the 3rd in Kurnool, not from 05:30 IST as a UTC

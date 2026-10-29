@@ -27,9 +27,9 @@ export const PROGRAMME_ROLES = [
 
 export const assignmentsSchema = z.object({
   project_access: z.enum(PROJECT_ACCESS),
-  project_ids: z.array(z.string().uuid()).max(500).default([]),
+  project_ids: z.array(z.string().guid()).max(500).default([]),
   programmes: z.array(z.object({
-    survey_project_id: z.string().uuid(),
+    survey_project_id: z.string().guid(),
     project_role: z.enum(PROGRAMME_ROLES).default('GT_USER'),
   })).max(500).default([]),
 }).superRefine((value, ctx) => {

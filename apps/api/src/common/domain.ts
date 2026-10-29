@@ -39,7 +39,7 @@ function nulByteIn(value:unknown,path:string[]=[],depth=0):string|null {
  return null;
 }
 
-export function parse<T>(schema:z.ZodType<T, z.ZodTypeDef, unknown>,body:unknown):T {
+export function parse<T>(schema:z.ZodType<T, unknown>,body:unknown):T {
  const nul=nulByteIn(body);
  if(nul) throw new ApiError({status:422,code:'VALIDATION_ERROR',message:'Validation failed',
   fieldErrors:[{field:nul,message:`${fieldLabel(nul)} contains a character that cannot be stored. It usually comes from a corrupt export — retype the value or re-export the file.`,code:'invalid_string'}]});

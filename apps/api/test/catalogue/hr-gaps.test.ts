@@ -182,7 +182,8 @@ async function recordsOf(employeeId: string) {
 describe("HR-1 approving a held-back punch records the attendance", () => {
   it("turns an approved held-back check-in into a record, and the check-out then succeeds", async () => {
     const { employeeId } = await siteWorker();
-    const held = await punch(heldPunch(employeeId));
+    const heldRequest = heldPunch(employeeId);
+    const held = await punch(heldRequest);
     expect(held.statusCode).toBe(202);
     const heldBody = held.json() as PunchBody;
     expect(heldBody.code).toBe("TIMESTAMP_SKEW");
@@ -193,7 +194,9 @@ describe("HR-1 approving a held-back punch records the attendance", () => {
 
     const records = await recordsOf(employeeId);
     expect(records).toHaveLength(1);
-    expect(records[0].work_date).toBe(workDate());
+    // The record belongs to the day the punch was stamped, which in the half
+    // hour after midnight is yesterday, not the day the approval happens.
+    expect(records[0].work_date).toBe(workDate(new Date(heldRequest.client_timestamp as string)));
     expect(records[0].status).toBe("PARTIAL");
     // The very punch that was held back is the day's check-in.
     const event = await w.pool.query(

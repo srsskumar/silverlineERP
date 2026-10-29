@@ -120,7 +120,7 @@ export const orgUnitCreateSchema = z.object({
   type: orgUnitTypeSchema,
   code: z.string().min(1, "Code is required").max(50),
   name: z.string().min(1, "Name is required").max(255),
-  parent_id: z.string().uuid("parent_id must be a UUID").optional(),
+  parent_id: z.string().guid("parent_id must be a UUID").optional(),
 });
 
 export type OrgUnitCreateInput = z.infer<typeof orgUnitCreateSchema>;
@@ -166,10 +166,10 @@ export const employeeCreateSchema = z.object({
   phone_secondary: phoneSchema.optional(),
   email: z.string().email("Invalid email").max(255).optional(),
   address: z.string().max(2000).optional(),
-  district_id: z.string().uuid().optional(),
-  mandal_id: z.string().uuid().optional(),
-  village_id: z.string().uuid().optional(),
-  site_id: z.string().uuid().optional(),
+  district_id: z.string().guid().optional(),
+  mandal_id: z.string().guid().optional(),
+  village_id: z.string().guid().optional(),
+  site_id: z.string().guid().optional(),
   designation: z.string().max(100).optional(),
   /**
    * The designation chosen from the list, when it came from the list.
@@ -178,10 +178,10 @@ export const employeeCreateSchema = z.object({
    * reads the text, and a record whose title can only be resolved by a join
    * is a record that prints blank wherever the join was forgotten.
    */
-  designation_id: z.string().uuid().nullable().optional(),
+  designation_id: z.string().guid().nullable().optional(),
   department: z.string().max(100).optional(),
   date_of_joining: dateStringSchema,
-  reports_to: z.string().uuid().optional(),
+  reports_to: z.string().guid().optional(),
   salary_basic: z.number().min(0).optional(),
   bank_name: z.string().max(100).optional(),
   bank_account: z.string().max(100).optional(),
@@ -312,7 +312,7 @@ export const holidayCreateSchema = z.object({
   name: z.string().min(1, "Name is required").max(255),
   type: holidayTypeSchema,
   scope_type: z.string().max(50).optional(),
-  scope_id: z.string().uuid().optional(),
+  scope_id: z.string().guid().optional(),
 });
 
 export type HolidayCreateInput = z.infer<typeof holidayCreateSchema>;
@@ -586,18 +586,18 @@ export function designationCode(label: string): string {
  * would walk straight past all of it.
  */
 export const employeeBulkUpdateSchema = z.object({
-  employee_ids: z.array(z.string().uuid())
+  employee_ids: z.array(z.string().guid())
     .min(1, 'Choose at least one person')
     .max(500, 'That is more than 500 people at once'),
   changes: z.object({
-    designation_id: z.string().uuid().nullable().optional(),
+    designation_id: z.string().guid().nullable().optional(),
     designation: z.string().max(100).nullable().optional(),
     department: z.string().max(100).nullable().optional(),
-    reports_to: z.string().uuid().nullable().optional(),
-    district_id: z.string().uuid().nullable().optional(),
-    mandal_id: z.string().uuid().nullable().optional(),
-    village_id: z.string().uuid().nullable().optional(),
-    site_id: z.string().uuid().nullable().optional(),
+    reports_to: z.string().guid().nullable().optional(),
+    district_id: z.string().guid().nullable().optional(),
+    mandal_id: z.string().guid().nullable().optional(),
+    village_id: z.string().guid().nullable().optional(),
+    site_id: z.string().guid().nullable().optional(),
   }),
   /**
    * Show what would change, and write nothing.

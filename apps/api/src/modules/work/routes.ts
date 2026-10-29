@@ -485,19 +485,19 @@ const projectListQuerySchema = cursorPageQuerySchema.extend({
   status: z
     .enum(["DRAFT", "ACTIVE", "ON_HOLD", "COMPLETED_PENDING_CLOSE", "CLOSED", "CANCELLED"])
     .optional(),
-  workspace_id: z.string().uuid().optional(),
+  workspace_id: z.string().guid().optional(),
   q: z.string().min(1).max(200).optional(),
 });
 
 const taskListQuerySchema = cursorPageQuerySchema.extend({
   sort:z.enum(["created_desc","due_asc","priority_desc","title_asc"]).default("created_desc"),
-  project_id: z.string().uuid().optional(),
-  assignee_id: z.string().uuid().optional(),
+  project_id: z.string().guid().optional(),
+  assignee_id: z.string().guid().optional(),
   assignee_me: z.coerce.string().optional(),
   status: z.string().regex(/^[A-Z][A-Z0-9_]{0,29}$/)
     .optional(),
   sla: z.enum(["overdue", "at_risk", "on_schedule"]).optional(),
-  cycle_id:z.string().uuid().optional(),
+  cycle_id:z.string().guid().optional(),
   due_from:dateStringSchema.optional(),due_to:dateStringSchema.optional(),
   /*
    * When work actually began and ended, as opposed to when it was planned to.
@@ -508,7 +508,7 @@ const taskListQuerySchema = cursorPageQuerySchema.extend({
   finished_from:dateStringSchema.optional(),finished_to:dateStringSchema.optional(),
   priority:z.enum(['LOW','MEDIUM','HIGH','URGENT']).optional(),
   mentioned_me:z.enum(['true','false']).optional(),
-  custom_fields:z.string().max(5000).transform((value,ctx)=>{try{return JSON.parse(value);}catch{ctx.addIssue({code:'custom',message:'Use valid JSON for custom fields'});return z.NEVER;}}).pipe(z.record(z.union([z.string().max(5000),z.number().finite(),z.boolean(),z.array(z.string()).max(100)]))).optional(),
+  custom_fields:z.string().max(5000).transform((value,ctx)=>{try{return JSON.parse(value);}catch{ctx.addIssue({code:'custom',message:'Use valid JSON for custom fields'});return z.NEVER;}}).pipe(z.record(z.string(), z.union([z.string().max(5000),z.number().finite(),z.boolean(),z.array(z.string()).max(100)]))).optional(),
   q: z.string().min(1).max(200).optional(),
   /** Comma-separated label UUIDs — task must carry ANY of them (web FilterBar). */
   label_ids: z.string().min(1).max(2000).optional(),
@@ -1838,7 +1838,7 @@ export async function registerWorkRoutes(
     const sort=parsed.data.sort,sortExpression=sort==='due_asc'?"COALESCE(planned_end_date::text,'9999-12-31')":sort==='priority_desc'?"CASE priority WHEN 'URGENT' THEN '0' WHEN 'HIGH' THEN '1' WHEN 'MEDIUM' THEN '2' ELSE '3' END":"lower(title)";
     if(cursor&&sort!=='created_desc'){
       const decoded=decodeCursor<{id:string;sort:string;key:string}>(cursor);
-      if(!decoded||decoded.sort!==sort||!z.string().uuid().safeParse(decoded.id).success||typeof decoded.key!=='string'||decoded.key.length>1000)return sendError(reply,req.requestId,{status:422,code:'VALIDATION_ERROR',message:'Invalid cursor for this sort'});
+      if(!decoded||decoded.sort!==sort||!z.string().guid().safeParse(decoded.id).success||typeof decoded.key!=='string'||decoded.key.length>1000)return sendError(reply,req.requestId,{status:422,code:'VALIDATION_ERROR',message:'Invalid cursor for this sort'});
       values.push(decoded.key,decoded.id);clauses.push(`((${sortExpression}) COLLATE "C",id)>($${values.length-1}::text COLLATE "C",$${values.length}::uuid)`);
     }
     if (cursor&&sort==='created_desc') {

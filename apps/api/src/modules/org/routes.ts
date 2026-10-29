@@ -52,7 +52,7 @@ function parentPhrase(types: OrgUnitType[]): string {
 
 const listQuerySchema = cursorPageQuerySchema.extend({
   type: z.enum(["district", "division", "mandal", "village", "site"]).optional(),
-  parent_id: z.string().uuid().optional(),
+  parent_id: z.string().guid().optional(),
   q: z.string().min(1).max(200).optional(),
 });
 

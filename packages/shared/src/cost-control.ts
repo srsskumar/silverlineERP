@@ -213,7 +213,7 @@ export const COST_CONTROL_ROLE_GRANTS: Record<RoleCode, string[]> = {
 /* ----------------------------------------------------------------- schemas */
 
 const text = z.string().trim().min(1);
-const uuid = z.string().uuid();
+const uuid = z.string().guid();
 const money = z.coerce.number().finite().min(0);
 
 export const costHeadSchema = z.object({

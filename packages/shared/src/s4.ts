@@ -134,7 +134,7 @@ export const DEFAULT_TASK_WORKFLOW: Record<TaskStatus, TaskStatus[]> = {
 /** Workflow blob stored in `project_workflows` (statuses + edge map). */
 export const taskWorkflowSchema = z.object({
   statuses: z.array(taskStatusSchema),
-  allowed_transitions: z.record(z.array(taskStatusSchema)),
+  allowed_transitions: z.record(z.string(), z.array(taskStatusSchema)),
 });
 
 export type TaskWorkflow = z.infer<typeof taskWorkflowSchema>;
@@ -299,10 +299,10 @@ export const projectKindSchema = z.enum(PROJECT_KINDS);
 
 const projectBase = {
   description: z.string().max(5000).optional(),
-  project_type_id: z.string().uuid("project_type_id must be a UUID").optional(),
+  project_type_id: z.string().guid("project_type_id must be a UUID").optional(),
   project_manager_id: z
     .string()
-    .uuid("project_manager_id must be a UUID")
+    .guid("project_manager_id must be a UUID")
     .optional(),
   planned_start_date: dateStringSchema.optional(),
   planned_end_date: dateStringSchema.optional(),
@@ -312,8 +312,8 @@ const projectBase = {
   // them, so a directly created project had no client and no contract value —
   // and nothing downstream could report on its margin.
   project_kind: projectKindSchema.optional(),
-  client_id: z.string().uuid("client_id must be a UUID").optional(),
-  project_category_id: z.string().uuid("project_category_id must be a UUID").optional(),
+  client_id: z.string().guid("client_id must be a UUID").optional(),
+  project_category_id: z.string().guid("project_category_id must be a UUID").optional(),
   contract_value: z.coerce.number().finite().min(0).optional(),
   // Whether contract_value already includes GST. Recorded rather than assumed:
   // booking an inclusive figure as exclusive overstates every margin on the
@@ -341,7 +341,7 @@ const plannedDatesRule = { message: PLANNED_DATES_MESSAGE, path: ["planned_end_d
 
 /** POST /api/v1/projects */
 export const projectCreateSchema = z.object({
-  workspace_id: z.string().uuid("workspace_id must be a UUID"),
+  workspace_id: z.string().guid("workspace_id must be a UUID"),
   code: z.string().min(1, "Code is required").max(50),
   name: z.string().min(1, "Name is required").max(255),
   ...projectBase,
@@ -359,10 +359,10 @@ export const projectPatchSchema = z
     planned_end_date: dateStringSchema.optional(),
     status: projectStatusSchema.optional(),
     project_kind: projectKindSchema.optional(),
-    client_id: z.string().uuid("client_id must be a UUID").optional(),
-    project_category_id: z.string().uuid("project_category_id must be a UUID").optional(),
-    project_type_id: z.string().uuid("project_type_id must be a UUID").optional(),
-    project_manager_id: z.string().uuid("project_manager_id must be a UUID").optional(),
+    client_id: z.string().guid("client_id must be a UUID").optional(),
+    project_category_id: z.string().guid("project_category_id must be a UUID").optional(),
+    project_type_id: z.string().guid("project_type_id must be a UUID").optional(),
+    project_manager_id: z.string().guid("project_manager_id must be a UUID").optional(),
     contract_value: z.coerce.number().finite().min(0).optional(),
     contract_gst_included: z.boolean().optional(),
     contract_gst_rate: z.coerce.number().min(0).max(28).optional(),
@@ -393,7 +393,7 @@ const taskBase = {
   planned_end_date: dateStringSchema.optional(),
   priority: prioritySchema.optional(),
   estimated_hours: z.number().min(0).max(100000).optional(),
-  village_id: z.string().uuid("village_id must be a UUID").optional(),
+  village_id: z.string().guid("village_id must be a UUID").optional(),
 };
 
 /**
@@ -402,10 +402,10 @@ const taskBase = {
  * employee (if any) must be ACTIVE.
  */
 export const taskCreateSchema = z.object({
-  project_id: z.string().uuid("project_id must be a UUID"),
+  project_id: z.string().guid("project_id must be a UUID"),
   title: z.string().min(1, "Title is required").max(500),
-  assignee_id: z.string().uuid("assignee_id must be a UUID").optional(),
-  parent_task_id: z.string().uuid("parent_task_id must be a UUID").optional(),
+  assignee_id: z.string().guid("assignee_id must be a UUID").optional(),
+  parent_task_id: z.string().guid("parent_task_id must be a UUID").optional(),
   ...taskBase,
 }).refine(plannedDatesInOrder, plannedDatesRule);
 
@@ -424,7 +424,7 @@ export const taskPatchSchema = z
     planned_start_date: dateStringSchema.optional(),
     planned_end_date: dateStringSchema.optional(),
     estimated_hours: z.number().min(0).max(100000).optional(),
-    village_id: z.string().uuid("village_id must be a UUID").optional(),
+    village_id: z.string().guid("village_id must be a UUID").optional(),
   })
   .refine(
     (v) =>
@@ -459,7 +459,7 @@ export type TaskBoardPositionInput = z.infer<typeof taskBoardPositionSchema>;
 
 /** POST /api/v1/tasks/:id/assign — the ONLY way to change `assignee_id`. */
 export const taskAssignSchema = z.object({
-  assignee_id: z.string().uuid("assignee_id must be a UUID"),
+  assignee_id: z.string().guid("assignee_id must be a UUID"),
   reason: z.string().min(1, "Reason is required").max(2000),
 });
 
@@ -467,7 +467,7 @@ export type TaskAssignInput = z.infer<typeof taskAssignSchema>;
 
 /** POST /api/v1/tasks/:id/dependencies */
 export const taskDependencyCreateSchema = z.object({
-  predecessor_id: z.string().uuid("predecessor_id must be a UUID"),
+  predecessor_id: z.string().guid("predecessor_id must be a UUID"),
   dependency_type: dependencyTypeSchema.default("FINISH_TO_START"),
 });
 

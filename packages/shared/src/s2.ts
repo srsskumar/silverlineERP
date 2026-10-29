@@ -81,12 +81,12 @@ export const FUTURE_TOLERANCE_MIN = 5;
 // ---------------------------------------------------------------------------
 
 const latSchema = z
-  .number({ invalid_type_error: "latitude must be a number" })
+  .number({ error: (issue) => (issue.code === "invalid_type" ? "latitude must be a number" : undefined) })
   .min(-90, "latitude must be >= -90")
   .max(90, "latitude must be <= 90");
 
 const lngSchema = z
-  .number({ invalid_type_error: "longitude must be a number" })
+  .number({ error: (issue) => (issue.code === "invalid_type" ? "longitude must be a number" : undefined) })
   .min(-180, "longitude must be <= 180")
   .max(180, "longitude must be <= 180");
 
@@ -156,7 +156,7 @@ export type DeviceSignals = z.infer<typeof deviceSignalsSchema>;
 
 export const attendanceEventSchema = z
   .object({
-    employee_id: z.string().uuid("employee_id must be a UUID"),
+    employee_id: z.string().guid("employee_id must be a UUID"),
     event_type: attendanceEventTypeSchema,
     client_timestamp: z
       .string()
@@ -186,7 +186,7 @@ export const attendanceEventSchema = z
      * Optional: an office day and a training day have no village, and every
      * punch recorded before this existed has none either.
      */
-    survey_village_id: z.string().uuid().optional(),
+    survey_village_id: z.string().guid().optional(),
     /**
      * Why the day's return is not being filed at punch-out.
      *
@@ -279,11 +279,11 @@ export type AttendanceExceptionStatus = z.infer<
 
 /** POST /api/v1/attendance/exceptions */
 export const attendanceExceptionCreateSchema = z.object({
-  employee_id: z.string().uuid("employee_id must be a UUID"),
-  attendance_record_id: z.string().uuid().optional(),
+  employee_id: z.string().guid("employee_id must be a UUID"),
+  attendance_record_id: z.string().guid().optional(),
   exception_type: attendanceExceptionTypeSchema,
   reason: z.string().min(1, "Reason is required").max(2000),
-  document_id: z.string().uuid().optional(),
+  document_id: z.string().guid().optional(),
 });
 
 export type AttendanceExceptionCreateInput = z.infer<
@@ -302,7 +302,7 @@ export type AttendanceExceptionDecisionInput = z.infer<
 
 /** POST /api/v1/attendance/regularize (thin wrapper over REGULARIZATION). */
 export const attendanceRegularizeSchema = z.object({
-  employee_id: z.string().uuid("employee_id must be a UUID"),
+  employee_id: z.string().guid("employee_id must be a UUID"),
   work_date: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, "Must be a date in YYYY-MM-DD format")

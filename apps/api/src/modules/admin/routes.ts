@@ -27,7 +27,7 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
 
  app.get('/api/v1/admin/users',{preHandler:guard('users.read')},async req=>{const {limit,offset}=page(req),order=sortClause(req,{username:'u.username',phone:'u.phone',email:'u.email',auth_status:'u.auth_status',mfa_enabled:'u.mfa_enabled',mfa_policy:'u.mfa_policy',must_change_password:'u.must_change_password'},'u.username'),rows=(await pool.query(`SELECT u.id,u.username,u.email,u.phone,u.auth_status,u.employee_id,u.mfa_enabled,u.mfa_policy,u.must_change_password,u.password_set_at,u.last_login_at,COALESCE((SELECT json_agg(json_build_object('role_id',r.id,'code',r.code,'scope_type',ur.scope_type,'scope_id',ur.scope_id)) FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id),'[]') AS roles FROM users u WHERE org_id=$1 ORDER BY ${order} LIMIT $2 OFFSET $3`,[actor(req).orgId,limit+1,offset])).rows;return {data:rows.slice(0,limit),has_more:rows.length>limit};});
  app.post('/api/v1/admin/users',{preHandler:guard('users.manage')},async(req,reply)=>{
-  const i=parse(z.object({username:z.string().trim().min(3).max(100),password:z.string().min(12).max(72),email:z.string().email().optional(),employee_id:z.string().uuid().optional(),
+  const i=parse(z.object({username:z.string().trim().min(3).max(100),password:z.string().min(12).max(72),email:z.string().email().optional(),employee_id:z.string().guid().optional(),
    // The number they sign in with (§34). Stored in one written form so it can
    // be dialled from a contact card and matched without normalising on read.
    phone:z.string().trim().max(20).optional(),
@@ -168,7 +168,7 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
   const row=await mutate(pool,req,'role.create','role',async db=>{for(const p of i.permissions)if(!u.permissions.includes(p))fail('FORBIDDEN','Cannot grant permissions you do not hold',403);const r=(await db.query('INSERT INTO roles(org_id,code,name,is_system_role) VALUES($1,$2,$3,false) RETURNING *',[u.orgId,`${u.orgId.slice(0,8)}_${i.code}`,i.name])).rows[0];for(const p of new Set(i.permissions))await db.query('INSERT INTO role_permissions(role_id,permission_code) VALUES($1,$2)',[r.id,p]);return r;});return reply.code(201).send(row);
  });
  app.put('/api/v1/admin/users/:id/roles',{preHandler:guard('admin.configure')},async req=>{
-  const id=(req.params as {id:string}).id,u=actor(req),i=parse(z.object({roles:z.array(z.object({role_id:z.string().uuid(),scope_type:z.enum(['district','mandal','village','team','project']).nullable().default(null),scope_id:z.string().uuid().nullable().default(null)})).max(20)}),req.body);
+  const id=(req.params as {id:string}).id,u=actor(req),i=parse(z.object({roles:z.array(z.object({role_id:z.string().guid(),scope_type:z.enum(['district','mandal','village','team','project']).nullable().default(null),scope_id:z.string().guid().nullable().default(null)})).max(20)}),req.body);
   if(id===u.id)fail('SELF_ROLE_CHANGE','Use another administrator to change your own permissions');
   return mutate(pool,req,'user.roles','user',async db=>{
    await db.query('SELECT id FROM organizations WHERE id=$1 FOR UPDATE',[u.orgId]);await inOrg(db,'users',id,u.orgId,true);

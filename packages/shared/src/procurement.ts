@@ -424,7 +424,7 @@ export const PO_STATUS_TONES: Record<PoStatus, Tone> = {
 /* ---------------------------------------------------------------- schemas */
 
 const text = z.string().trim().min(1).max(255);
-const uuid = z.string().uuid();
+const uuid = z.string().guid();
 const qty = z.coerce.number().positive();
 const money = z.coerce.number().nonnegative();
 

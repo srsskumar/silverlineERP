@@ -685,14 +685,19 @@ function futureDate(daysAhead: number): string {
  * the request before routing was ever reached. `futureDate(10)` landing on
  * a Sunday under one particular run's calendar is exactly that trap.
  */
+/**
+ * The daysAhead-th non-Sunday from today. Counting only non-Sundays keeps
+ * distinct inputs on distinct dates; bumping a Sunday to Monday did not, and
+ * on Fridays two requests landed on one Monday and overlapped.
+ */
 function nonSundayFutureDate(daysAhead: number): string {
-  let d = daysAhead;
-  let date = futureDate(d);
-  while (new Date(`${date}T00:00:00Z`).getUTCDay() === 0) {
-    d += 1;
-    date = futureDate(d);
+  let seen = 0;
+  for (let d = 1; ; d += 1) {
+    const date = futureDate(d);
+    if (new Date(`${date}T00:00:00Z`).getUTCDay() === 0) continue;
+    seen += 1;
+    if (seen === daysAhead) return date;
   }
-  return date;
 }
 
 describe("UT-AUTH-07 mask Aadhaar PAN bank and phone data", () => {

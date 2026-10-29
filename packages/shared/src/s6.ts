@@ -120,9 +120,9 @@ export const reportTypeSchema = z.enum(REPORT_TYPES);
  */
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD");
 export const reportFiltersSchema = z.object({
-  employee_id: z.string().uuid().optional(),
-  project_id: z.string().uuid().optional(),
-  assignee_id: z.string().uuid().optional(),
+  employee_id: z.string().guid().optional(),
+  project_id: z.string().guid().optional(),
+  assignee_id: z.string().guid().optional(),
   from: isoDate.optional(),
   to: isoDate.optional(),
   status: z.string().max(64).optional(),

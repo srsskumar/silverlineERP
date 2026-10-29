@@ -100,7 +100,7 @@ export type BoardColumnInput = z.infer<typeof boardColumnInputSchema>;
 
 /** POST /api/v1/boards */
 export const boardCreateSchema = z.object({
-  project_id: z.string().uuid("project_id must be a UUID"),
+  project_id: z.string().guid("project_id must be a UUID"),
   name: z.string().min(1, "Name is required").max(255),
   view_type: boardViewTypeSchema,
   column_config: z.array(boardColumnInputSchema).max(50).optional(),
@@ -141,7 +141,7 @@ export type BoardColumnsReplaceInput = z.infer<
 
 /** POST /api/v1/saved-filters */
 export const savedFilterCreateSchema = z.object({
-  project_id: z.string().uuid("project_id must be a UUID").optional(),
+  project_id: z.string().guid("project_id must be a UUID").optional(),
   name: z.string().min(1, "Name is required").max(255),
   query_definition: z.record(z.string(), z.unknown()),
   shared: z.boolean().default(false),
@@ -168,7 +168,7 @@ export type SavedFilterPatchInput = z.infer<typeof savedFilterPatchSchema>;
 
 /** POST /api/v1/labels — project_id omitted means a global (org-wide) label. */
 export const labelCreateSchema = z.object({
-  project_id: z.string().uuid("project_id must be a UUID").optional(),
+  project_id: z.string().guid("project_id must be a UUID").optional(),
   name: z.string().min(1, "Name is required").max(100),
   color: z.string().min(1).max(50).nullable().optional(),
 });
@@ -177,7 +177,7 @@ export type LabelCreateInput = z.infer<typeof labelCreateSchema>;
 
 /** POST /api/v1/tasks/:id/labels */
 export const taskLabelAttachSchema = z.object({
-  label_id: z.string().uuid("label_id must be a UUID"),
+  label_id: z.string().guid("label_id must be a UUID"),
 });
 
 export type TaskLabelAttachInput = z.infer<typeof taskLabelAttachSchema>;

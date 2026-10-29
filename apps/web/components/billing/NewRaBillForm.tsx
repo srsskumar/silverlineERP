@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useForm, useFieldArray } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
+import { zodResolver } from '@/lib/zodResolver';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { apiRequest } from '@/lib/apiClient';
 import { Button } from '@/components/ui/Button';

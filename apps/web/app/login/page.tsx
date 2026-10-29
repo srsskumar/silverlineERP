@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
+import { zodResolver } from '@/lib/zodResolver';
 import { useAuth } from '@/components/AuthProvider';
 import { ApiClientError, apiRequestRaw } from '@/lib/apiClient';
 import { loginSchema, type LoginFormValues } from '@/lib/validation';

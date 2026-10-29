@@ -683,13 +683,13 @@ const MAX_MAP_EVENTS = 5000;
 
 const mapEventsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(MAX_MAP_EVENTS).default(1000),
-  employee_id: z.string().uuid().optional(),
+  employee_id: z.string().guid().optional(),
   from: z.string().optional(),
   to: z.string().optional(),
 });
 
 const recordsListQuerySchema = cursorPageQuerySchema.extend({
-  employee_id: z.string().uuid().optional(),
+  employee_id: z.string().guid().optional(),
   from: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, "Must be a date in YYYY-MM-DD format")

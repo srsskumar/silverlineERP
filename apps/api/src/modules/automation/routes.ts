@@ -44,7 +44,7 @@ export async function registerAutomationRoutes(app:FastifyInstance,opts:{pool:Po
  // Side-effect actions have their own permission, scope, audit and retry boundary.
  app.post('/api/v1/automation-rules/:id/dispatch',{preHandler:guard('automation.manage')},async req=>{
   const u=actor(req);if(!u.worker)fail('FORBIDDEN','This endpoint is reserved for the job runner',403);
-  const id=(req.params as {id:string}).id,i=parse(z.object({event_id:z.string().uuid(),action_index:z.number().int().min(0).max(9)}),req.body);
+  const id=(req.params as {id:string}).id,i=parse(z.object({event_id:z.string().guid(),action_index:z.number().int().min(0).max(9)}),req.body);
   const rule=await inOrg(pool,'automation_rules',id,u.orgId);if(!rule.active||rule.acting_user_id!==u.id)fail('FORBIDDEN','Rule authority changed',403);
   const event=(await pool.query('SELECT * FROM domain_events WHERE id=$1 AND org_id=$2',[i.event_id,u.orgId])).rows[0];if(!event)fail('NOT_FOUND','Event not found',404);
   const project=event.entity_type==='task'?(await inOrg(pool,'tasks',event.entity_id,u.orgId)).project_id:event.payload.project_id;

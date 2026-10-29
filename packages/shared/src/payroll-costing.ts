@@ -173,7 +173,7 @@ export const payrollCostPostSchema = z.object({
    * that has not set its cost heads up should still get its wage bill onto
    * the projects rather than losing it.
    */
-  cost_head_id: z.string().uuid().optional(),
+  cost_head_id: z.string().guid().optional(),
   narration: z.string().max(500).optional(),
 });
 

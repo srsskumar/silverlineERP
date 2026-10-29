@@ -486,7 +486,7 @@ export const PAYSLIP_WARNING_TYPES = ["NO_RECORDS", "NO_SALARY"] as const;
 
 export const payslipWarningSchema = z.object({
   type: z.enum(PAYSLIP_WARNING_TYPES),
-  employee_id: z.string().uuid(),
+  employee_id: z.string().guid(),
   message: z.string(),
 });
 

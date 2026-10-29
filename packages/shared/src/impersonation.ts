@@ -39,7 +39,7 @@ export const IMPERSONATION_MAX_MINUTES = 120;
 export const IMPERSONATION_DEFAULT_MINUTES = 30;
 
 export const impersonateSchema = z.object({
-  user_id: z.string().uuid(),
+  user_id: z.string().guid(),
   /*
    * Required, and required to say something. The register is only worth
    * keeping if the rows in it explain themselves a year later.

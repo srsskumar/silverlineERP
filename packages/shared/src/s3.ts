@@ -83,7 +83,7 @@ export type ApprovalChainStepStatus = z.infer<
 /** One step of a leave request's approval chain (stored as JSONB). */
 export const approvalChainStepSchema = z.object({
   step: z.number().int().min(1),
-  approver_user_id: z.string().uuid(),
+  approver_user_id: z.string().guid(),
   status: approvalChainStepStatusSchema,
   decided_at: z.string().nullable(),
   note: z.string().nullable(),
@@ -157,19 +157,19 @@ export type LeaveRequestStatus = z.infer<typeof leaveRequestStatusSchema>;
  * request is always filed for the caller's own linked employee.
  */
 export const leaveRequestCreateSchema = z.object({
-  leave_type_id: z.string().uuid("leave_type_id must be a UUID"),
+  leave_type_id: z.string().guid("leave_type_id must be a UUID"),
   from_date: dateStringSchema,
   to_date: dateStringSchema,
   reason: z.string().max(2000).optional(),
-  employee_id: z.string().uuid("employee_id must be a UUID").optional(),
+  employee_id: z.string().guid("employee_id must be a UUID").optional(),
 });
 
 export type LeaveRequestCreateInput = z.infer<typeof leaveRequestCreateSchema>;
 
 /** POST /api/v1/leave/balances — upserts the opening balance. */
 export const leaveBalanceUpsertSchema = z.object({
-  employee_id: z.string().uuid("employee_id must be a UUID"),
-  leave_type_id: z.string().uuid("leave_type_id must be a UUID"),
+  employee_id: z.string().guid("employee_id must be a UUID"),
+  leave_type_id: z.string().guid("leave_type_id must be a UUID"),
   period_year: z.number().int().min(2000).max(2100),
   opening_balance: z.number().nonnegative(),
 });
@@ -193,8 +193,8 @@ export const leaveOpenYearSchema = z.object({
    * different zone. The resolved year is echoed back in the response.
    */
   year: z.number().int().min(2000).max(2100).optional(),
-  leave_type_ids: z.array(z.string().uuid("leave_type_ids must be UUIDs")).optional(),
-  employee_ids: z.array(z.string().uuid("employee_ids must be UUIDs")).optional(),
+  leave_type_ids: z.array(z.string().guid("leave_type_ids must be UUIDs")).optional(),
+  employee_ids: z.array(z.string().guid("employee_ids must be UUIDs")).optional(),
 });
 
 export type LeaveOpenYearInput = z.infer<typeof leaveOpenYearSchema>;
@@ -229,7 +229,7 @@ export type InsufficientBalanceDetail = z.infer<
 
 /** 422 LEAVE_OVERLAP detail. */
 export const leaveOverlapDetailSchema = z.object({
-  conflicting_request_ids: z.array(z.string().uuid()),
+  conflicting_request_ids: z.array(z.string().guid()),
 });
 
 export type LeaveOverlapDetail = z.infer<typeof leaveOverlapDetailSchema>;

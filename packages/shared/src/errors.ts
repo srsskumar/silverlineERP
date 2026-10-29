@@ -148,7 +148,8 @@ export function fieldLabel(field: string): string {
  * rewriting it into a generic sentence would throw that away.
  */
 function isZodDefault(message: string): boolean {
-  return /^(Required|Invalid|Expected |Number must |String must |Array must |Date must |Unrecognized keys)/
+  // zod 4 wordings ("Too small: …", "Unrecognized key: …") beside zod 3's.
+  return /^(Required|Invalid|Expected |Too small|Too big|Number must |String must |Array must |Date must |Unrecognized key)/
     .test(message);
 }
 
@@ -157,26 +158,28 @@ function humanise(issue: z.ZodIssue, label: string): string {
   if (!isZodDefault(said)) return said;
   switch (issue.code) {
     case "invalid_type":
-      if (issue.received === "undefined" || issue.received === "null") {
+      // zod 4 issues carry no `received` and omit `input` unless asked to;
+      // the default wording ("…, received undefined") is the only trace.
+      if (/received (undefined|null)$/.test(said)) {
         return `${label} is required`;
       }
       if (issue.expected === "number") return `${label} must be a number`;
       if (issue.expected === "array") return `${label} must be a list`;
       if (issue.expected === "boolean") return `${label} must be yes or no`;
       return `${label} is not in the right format`;
-    case "invalid_string":
-      if (said === "Invalid uuid") return `${label} is not a valid reference`;
-      if (said === "Invalid email") return "That is not a valid email address";
-      if (said === "Invalid url") return "That is not a valid web address";
+    case "invalid_format":
+      if (issue.format === "uuid" || issue.format === "guid") return `${label} is not a valid reference`;
+      if (issue.format === "email") return "That is not a valid email address";
+      if (issue.format === "url") return "That is not a valid web address";
       return said;
     case "too_small":
-      if (issue.type === "string" && Number(issue.minimum) <= 1) {
+      if (issue.origin === "string" && Number(issue.minimum) <= 1) {
         return `${label} cannot be empty`;
       }
-      if (issue.type === "array") {
+      if (issue.origin === "array") {
         return `Choose at least ${issue.minimum} ${Number(issue.minimum) === 1 ? "item" : "items"}`;
       }
-      if (issue.type === "number") {
+      if (issue.origin === "number") {
         // .positive()/.nonnegative() report the same "too_small" issue as
         // .min() but with inclusive:false -- for those, "at least 0" is the
         // one value the check actually rejects, so it told the caller the
@@ -187,14 +190,14 @@ function humanise(issue: z.ZodIssue, label: string): string {
       }
       return said;
     case "too_big":
-      if (issue.type === "string") {
+      if (issue.origin === "string") {
         return `${label} is too long — keep it to ${issue.maximum} characters`;
       }
-      if (issue.type === "array") return `That is more than ${issue.maximum} at a time`;
-      if (issue.type === "number") return `${label} must be ${issue.maximum} or less`;
+      if (issue.origin === "array") return `That is more than ${issue.maximum} at a time`;
+      if (issue.origin === "number") return `${label} must be ${issue.maximum} or less`;
       return said;
-    case "invalid_enum_value":
-      return `${label} must be one of: ${(issue.options ?? []).join(", ")}`;
+    case "invalid_value":
+      return `${label} must be one of: ${issue.values.map(String).join(", ")}`;
     case "unrecognized_keys":
       return `Not a field this accepts: ${(issue.keys ?? []).join(", ")}`;
     default:

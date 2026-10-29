@@ -32,7 +32,7 @@ function ImportForm() {
     parsed.rows.slice(0, 20).forEach((row, i) => {
       const res = importRowSchema.safeParse(row);
       if (!res.success) {
-        issues.push({ index: i + 1, message: res.error.errors[0]?.message ?? 'Invalid row' });
+        issues.push({ index: i + 1, message: res.error.issues[0]?.message ?? 'Invalid row' });
       }
     });
     return issues;

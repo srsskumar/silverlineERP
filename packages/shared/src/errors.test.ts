@@ -10,7 +10,7 @@ import { fieldLabel, toFieldErrors, validationSummary } from './errors.js';
  * somebody looking at a form, which is who reads them.
  */
 
-const problems = (schema: z.ZodTypeAny, value: unknown) => {
+const problems = (schema: z.ZodType, value: unknown) => {
   const r = schema.safeParse(value);
   if (r.success) throw new Error('expected that to fail');
   return toFieldErrors(r.error);
@@ -47,7 +47,7 @@ describe('saying what is actually wrong', () => {
   });
 
   it('does not say "Invalid uuid" to somebody who has never seen one', () => {
-    const [p] = problems(z.object({ survey_village_id: z.string().uuid() }),
+    const [p] = problems(z.object({ survey_village_id: z.string().guid() }),
       { survey_village_id: 'abc' });
     expect(p.message).toBe('Village is not a valid reference');
   });

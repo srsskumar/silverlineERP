@@ -21,8 +21,8 @@ import { z } from 'zod';
  */
 
 export const surveyBoqLinkSchema = z.object({
-  boq_item_id: z.string().uuid(),
-  measure_id: z.string().uuid(),
+  boq_item_id: z.string().guid(),
+  measure_id: z.string().guid(),
   /**
    * Bill this line only for villages that have reached this stage.
    *
@@ -30,7 +30,7 @@ export const surveyBoqLinkSchema = z.object({
    * walked but not vectorised, QC'd and published claims work that cannot be
    * certified, and it comes back as a deduction on the next bill.
    */
-  stage_id: z.string().uuid().nullable().optional(),
+  stage_id: z.string().guid().nullable().optional(),
   /** BOQ units per measure unit — hectares per acre, say. */
   factor: z.number().positive().finite().max(1_000_000).default(1),
 });

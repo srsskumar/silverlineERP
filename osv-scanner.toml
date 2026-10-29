@@ -5,14 +5,15 @@
 # renewed with a new reason. See docs/security/2026-10-28/SECURITY_FINDINGS.md
 # (DEP-*) for the full write-up of each.
 
-# zod 3.x: memory exhaustion on oversized constrained collections. Every
-# request body is capped at 8 MiB by Fastify's bodyLimit and the schemas
-# bound their arrays, so the input that triggers it cannot arrive. Fix is
-# zod 4, which changes the schema API used across packages/shared.
+# zod 3.x: memory exhaustion on oversized constrained collections. The
+# application moved to zod 4 on 2026-10-29 (DEP-2 closed); the one copy of
+# zod 3 left is nested under @expo/cli, Expo's build tooling, which parses
+# the app's own config at build time and never sees request bodies. Clears
+# when Expo's CLI moves to zod 4.
 [[IgnoredVulns]]
 id = "GHSA-mrhx-c7xc-m3w5"
 ignoreUntil = 2026-12-31
-reason = "DoS needs an oversized body the 8 MiB bodyLimit refuses; zod 4 migration tracked as DEP-2"
+reason = "only reachable copy is @expo/cli's nested zod 3 (build tooling); the API, web and mobile code run zod 4"
 
 # deepmerge, reached only through @expo/config / @expo/cli: merges the app's
 # own config files at build time, never untrusted input. Clears when Expo's

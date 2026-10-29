@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import {
   costHeadSchema, budgetSchema, costAdjustmentSchema, budgetPosition, profitability,
-  expensePolicySchema, expenseClaimSchema, claimDecisionSchema, reimbursementSchema,
+  expensePolicySchema, expenseClaimSchema, expenseClaimBaseSchema, claimDecisionSchema, reimbursementSchema,
   evaluateClaim, policyFor, receiptFingerprint, softDuplicateKey, canApproveClaim,
   canTransition, reimbursementPosition, EXPENSE_CLAIM_TRANSITIONS,
   type ExpenseClaimStatus, type ExpensePolicy, type ExpenseCategory, type ExpenseLineInput,
@@ -426,7 +426,7 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
 
   app.put('/api/v1/expense-claims/:id/lines', { preHandler: guard('expense.manage') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const input = parse(expenseClaimSchema.innerType().pick({ lines: true }), req.body);
+    const input = parse(expenseClaimBaseSchema.pick({ lines: true }), req.body);
     return {
       data: await mutate(pool, req, 'expense.claim.lines', 'expense_claim', async db => {
         const claim = await inOrg(db, 'expense_claims', id, u.orgId, true);
@@ -1027,7 +1027,7 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
    */
   app.post('/api/v1/expense-claims/evaluate', { preHandler: guard('expense.manage') }, async req => {
     const u = actor(req);
-    const input = parse(expenseClaimSchema.innerType().pick({ lines: true }), req.body);
+    const input = parse(expenseClaimBaseSchema.pick({ lines: true }), req.body);
     const policies = await policiesFor(pool, u.orgId);
     const evaluation = evaluateClaim({
       lines: toLineInputs(input.lines), policies,

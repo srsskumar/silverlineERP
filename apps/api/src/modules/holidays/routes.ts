@@ -24,7 +24,7 @@ export interface HolidayRoutesOptions {
 const listQuerySchema = cursorPageQuerySchema.extend({
   year: z.coerce.number().int().min(1900).max(2100).optional(),
   scope_type: z.string().max(50).optional(),
-  scope_id: z.string().uuid().optional(),
+  scope_id: z.string().guid().optional(),
   /**
    * Resolve to the holidays actually in effect for one employee (§8.2).
    *
@@ -33,7 +33,7 @@ const listQuerySchema = cursorPageQuerySchema.extend({
    * one day. With it, each date yields the single holiday that applies to this
    * employee's own location chain, finest scope winning.
    */
-  employee_id: z.string().uuid().optional(),
+  employee_id: z.string().guid().optional(),
   /**
    * A-012: withdrawing a holiday (PATCH active=false) removes it from the
    * default list below, which is correct for the calendar -- but with no

@@ -489,7 +489,7 @@ export const approvalLevelSchema = z.object({
   min_amount: z.coerce.number().min(0),
   max_amount: z.coerce.number().min(0).nullable(),
   approver_role: z.string().trim().max(50).nullable().optional(),
-  approver_user_id: z.string().uuid().nullable().optional(),
+  approver_user_id: z.string().guid().nullable().optional(),
   sla_hours: z.coerce.number().int().min(1).max(8760).nullable().optional(),
 }).refine(v => v.approver_role || v.approver_user_id, {
   message: 'A level must name either an approver role or a specific approver',
@@ -503,7 +503,7 @@ export const approvalPolicySchema = z.object({
   document_type: z.enum(APPROVAL_DOCUMENT_TYPES),
   name: z.string().trim().min(1).max(150),
   mode: z.enum(['SINGLE', 'CUMULATIVE']).default('CUMULATIVE'),
-  project_id: z.string().uuid().nullable().optional(),
+  project_id: z.string().guid().nullable().optional(),
   /** Percent by which an amount may rise before approvals are torn up. */
   tolerance_pct: z.coerce.number().min(0).max(25).default(0),
   active: z.boolean().default(true),
@@ -520,9 +520,9 @@ export const approvalPolicySchema = z.object({
 
 export const approvalSubmissionSchema = z.object({
   document_type: z.enum(APPROVAL_DOCUMENT_TYPES),
-  document_id: z.string().uuid(),
+  document_id: z.string().guid(),
   amount: z.coerce.number().finite().min(0),
-  project_id: z.string().uuid().nullable().optional(),
+  project_id: z.string().guid().nullable().optional(),
 });
 
 export const approvalDecisionSchema = z.object({
@@ -534,7 +534,7 @@ export const approvalDecisionSchema = z.object({
 });
 
 export const delegationSchema = z.object({
-  to_user_id: z.string().uuid(),
+  to_user_id: z.string().guid(),
   valid_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   valid_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   document_types: z.array(z.enum(APPROVAL_DOCUMENT_TYPES)).max(20).default([]),

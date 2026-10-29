@@ -59,7 +59,7 @@ export function DocumentList({
         content_base64,
       });
       if (!parsed.success) {
-        setFileError(parsed.error.errors[0]?.message ?? 'Invalid file');
+        setFileError(parsed.error.issues[0]?.message ?? 'Invalid file');
         return;
       }
       mutation.mutate(parsed.data);

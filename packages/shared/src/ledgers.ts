@@ -449,7 +449,7 @@ export const LEDGER_ROLE_GRANTS: Record<RoleCode, string[]> = {
 /* ---------------------------------------------------------------- schemas */
 
 const text = z.string().trim().min(1);
-const uuid = z.string().uuid();
+const uuid = z.string().guid();
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
 
 export const paymentRunSchema = z.object({

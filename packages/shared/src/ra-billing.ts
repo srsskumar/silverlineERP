@@ -390,14 +390,14 @@ export const RA_BILL_STATUS_TONES: Record<RaBillStatus, Tone> = {
 };
 
 export const raBillSchema = z.object({
-  project_id: z.string().uuid(),
+  project_id: z.string().guid(),
   bill_type: z.enum(['RA', 'FINAL']).default('RA'),
   period_from: dateStringSchema,
   period_to: dateStringSchema,
   measurement_book_ref: z.string().trim().max(100).optional(),
   remarks: z.string().trim().max(4000).optional(),
   lines: z.array(z.object({
-    boq_item_id: z.string().uuid(),
+    boq_item_id: z.string().guid(),
     cumulative_quantity: z.coerce.number().nonnegative(),
     remarks: z.string().trim().max(500).optional(),
   })).min(1, 'A bill needs at least one measured item'),
@@ -488,12 +488,12 @@ export const raBillDisputeSchema = z.object({
 });
 
 export const advanceSchema = z.object({
-  project_id: z.string().uuid(),
+  project_id: z.string().guid(),
   advance_type: z.enum(['MOBILISATION', 'MATERIAL', 'PLANT']),
   amount: z.coerce.number().positive(),
   paid_on: dateStringSchema,
   /** Percentage of each bill's gross applied against the outstanding balance. */
   recovery_pct: z.coerce.number().min(0.01).max(100),
-  bank_guarantee_id: z.string().uuid().nullable().optional(),
+  bank_guarantee_id: z.string().guid().nullable().optional(),
   remarks: z.string().trim().max(1000).optional(),
 });

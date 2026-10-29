@@ -85,7 +85,7 @@ export const catalogueItemSchema = z.object({
 export type CatalogueItemInput = z.infer<typeof catalogueItemSchema>;
 
 export const supplyLineSchema = z.object({
-  catalogue_item_id: z.string().uuid().nullable().optional(),
+  catalogue_item_id: z.string().guid().nullable().optional(),
   description: z.string().trim().min(1).max(500),
   hsn_sac: z.string().trim().regex(/^\d{4,8}$/).nullable().optional(),
   uom: z.string().trim().min(1).max(20),

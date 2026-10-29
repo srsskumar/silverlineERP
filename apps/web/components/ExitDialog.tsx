@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
+import { zodResolver } from '@/lib/zodResolver';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ApiClientError } from '@/lib/apiClient';
 import { employeeExitSchema, type EmployeeExitInput } from '@/lib/validation';

@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
+import { zodResolver } from '@/lib/zodResolver';
 import { useMutation } from '@tanstack/react-query';
 import { decideRequest, type LeaveDecision, type LeaveRequest } from '@/lib/leave';
 import { leaveDecisionSchema, type LeaveDecisionFormInput } from '@/lib/validation';

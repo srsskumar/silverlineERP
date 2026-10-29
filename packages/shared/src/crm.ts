@@ -53,7 +53,7 @@ export const CRM_ROLE_GRANTS: Record<RoleCode, string[]> = {
 /* ------------------------------------------------------------------ schemas */
 
 const text = z.string().trim().min(1).max(255);
-const uuid = z.string().uuid();
+const uuid = z.string().guid();
 const money = z.union([z.string(), z.number().finite()]).transform(String)
   .refine(v => /^\d{1,16}(\.\d{1,2})?$/.test(v), 'Use a positive amount with up to two decimals');
 const optionalText = (max = 2000) => z.string().trim().max(max).optional();

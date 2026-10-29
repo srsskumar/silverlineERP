@@ -14,7 +14,7 @@ export const V2_ROLE_GRANTS: Record<RoleCode,string[]> = {
  SALES_BD_EXECUTIVE:[], BID_TENDER_MANAGER:[], GOVT_OBSERVER:[],
 };
 const text = z.string().trim().min(1).max(255);
-const uuid = z.string().uuid();
+const uuid = z.string().guid();
 export const decimalSchema = z.union([z.string(), z.number().finite()]).transform(String).refine(v => /^\d{1,12}(\.\d{1,4})?$/.test(v), 'Use a positive decimal with up to four fractional digits');
 /**
  * MSMED Act 2006 s.15/16 registration (task 5c, finding B-004).

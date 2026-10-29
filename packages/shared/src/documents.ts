@@ -414,7 +414,7 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
 export const documentBaseSchema = z.object({
   type_code: z.string().min(1).max(64),
   owner_type: z.enum(DOCUMENT_OWNERS),
-  owner_id: z.string().uuid().nullable().optional(),
+  owner_id: z.string().guid().nullable().optional(),
   title: z.string().min(1).max(255),
   reference_number: z.string().max(128).nullable().optional(),
   issuing_authority: z.string().max(255).nullable().optional(),
@@ -424,7 +424,7 @@ export const documentBaseSchema = z.object({
   revision: z.string().max(32).nullable().optional(),
   notes: z.string().max(2000).nullable().optional(),
   source_type: z.string().max(64).nullable().optional(),
-  source_id: z.string().uuid().nullable().optional(),
+  source_id: z.string().guid().nullable().optional(),
 });
 
 export const documentCreateSchema = documentBaseSchema.refine(
@@ -480,7 +480,7 @@ export const legalHoldSchema = z.object({
  * for purge" report first.
  */
 export const documentPurgeSchema = z.object({
-  ids: z.array(z.string().uuid()).min(1, 'Select at least one document').max(100),
+  ids: z.array(z.string().guid()).min(1, 'Select at least one document').max(100),
   reason: z.string().min(3, 'Say why these are being purged').max(500),
 });
 

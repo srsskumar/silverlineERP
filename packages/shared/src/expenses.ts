@@ -519,7 +519,7 @@ export const EXPENSE_ROLE_GRANTS: Record<RoleCode, string[]> = {
 /* ----------------------------------------------------------------- schemas */
 
 const text = z.string().trim().min(1);
-const uuid = z.string().uuid();
+const uuid = z.string().guid();
 const money = z.coerce.number().finite().min(0);
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
 
@@ -563,7 +563,13 @@ export const expenseLineSchema = z.object({
   cost_head_id: uuid.nullable().optional(),
 });
 
-export const expenseClaimSchema = z.object({
+/**
+ * The claim's fields before the cross-field check below. Exported so routes
+ * that validate a slice (`.pick({ lines: true })`) start from the plain
+ * object: with zod 4 the refinement travels with the object, and picking
+ * `lines` alone would run it against a value with no `project_id`.
+ */
+export const expenseClaimBaseSchema = z.object({
   claim_no: text.max(50),
   /** Whose expense it is; omitted means the caller is claiming for themselves. */
   employee_id: uuid.nullable().optional(),
@@ -572,7 +578,9 @@ export const expenseClaimSchema = z.object({
   claim_date: dateString,
   purpose: text.max(1000),
   lines: z.array(expenseLineSchema).min(1, 'A claim needs at least one line'),
-}).superRefine((value, ctx) => {
+});
+
+export const expenseClaimSchema = expenseClaimBaseSchema.superRefine((value, ctx) => {
   value.lines.forEach((line, i) => {
     if (line.billable_to_client && !(line.project_id ?? value.project_id)) {
       ctx.addIssue({

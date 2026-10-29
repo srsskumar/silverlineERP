@@ -16,7 +16,7 @@ export async function callProvider(provider:Provider,payload:unknown,key:string,
  try{
   const reader=response.body?.getReader();if(!reader)throw new Error();let length=0;const chunks:Uint8Array[]=[];
   try{while(true){const {done,value}=await reader.read();if(done)break;length+=value.byteLength;if(length>1024*1024)throw new Error();chunks.push(value);}}finally{await reader.cancel();}
-  return z.record(z.unknown()).parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+  return z.record(z.string(), z.unknown()).parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
  }catch{throw new ProviderError('INVALID_PROVIDER_RESPONSE',false);}
 }
 export const weatherResponse=z.object({observed_at:z.string().datetime(),summary:z.string().max(500),temperature_c:z.number().min(-100).max(70),precipitation_probability:z.number().min(0).max(1),alerts:z.array(z.object({severity:z.enum(['INFO','WATCH','WARNING']),message:z.string().max(500)})).max(20)});

@@ -45,7 +45,7 @@ export async function registerAnalyticsRoutes(app:FastifyInstance,opts:{pool:Poo
   return mutate(pool,req,'advisory.review','advisory_case',async db=>{const current=(await db.query('SELECT * FROM advisory_cases WHERE id=$1 FOR UPDATE',[id])).rows[0];version(req,current);if(current.status!=='OPEN')fail('REVIEW_CLOSED','Review is already closed',409);return (await db.query('UPDATE advisory_cases SET status=$2,reason=$3,reviewed_by=$4,reviewed_at=now(),version=version+1 WHERE id=$1 RETURNING *',[id,i.status,i.reason,u.id])).rows[0];});
  });
  app.post('/api/v1/insights/feedback',{preHandler:read},async(req,reply)=>{
-  const i=parse(z.object({project_id:z.string().uuid(),model_version:z.literal('statistical-baseline-v1'),rating:z.enum(['CORRECT','INCORRECT','USEFUL','NOT_USEFUL']),reason:z.string().max(2000).optional()}),req.body),u=actor(req);await projectAccess(pool,req,i.project_id);
+  const i=parse(z.object({project_id:z.string().guid(),model_version:z.literal('statistical-baseline-v1'),rating:z.enum(['CORRECT','INCORRECT','USEFUL','NOT_USEFUL']),reason:z.string().max(2000).optional()}),req.body),u=actor(req);await projectAccess(pool,req,i.project_id);
   const r=await mutate(pool,req,'insight.feedback','insight_feedback',async db=>(await db.query('INSERT INTO insight_feedback(org_id,project_id,model_version,rating,reason,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[u.orgId,i.project_id,i.model_version,i.rating,i.reason??null,u.id])).rows[0]);return reply.code(201).send(r);
  });
  app.get('/api/v1/search',{preHandler:auth},async req=>{

@@ -862,7 +862,7 @@ const headcount = z.number().int('Enter a whole number of people')
 export const surveyProjectSchema = z.object({
   code: z.string().min(1).max(64),
   name: z.string().min(1).max(255),
-  project_id: z.string().uuid().nullable().optional(),
+  project_id: z.string().guid().nullable().optional(),
   started_on: isoDate.nullable().optional(),
   target_completion_on: isoDate.nullable().optional(),
   notes: z.string().max(2000).nullable().optional(),
@@ -873,7 +873,7 @@ export const surveyProjectSchema = z.object({
    * would be a question with one answer. Only an organisation running
    * several has to say which.
    */
-  workspace_id: z.string().uuid().optional(),
+  workspace_id: z.string().guid().optional(),
   /**
    * Whether to create and link a project alongside the programme.
    *
@@ -894,11 +894,11 @@ export const surveyProjectSchema = z.object({
  * back, for the one case where a bulk import is not worth opening.
  */
 export const surveyVillageCreateSchema = z.object({
-  village_id: z.string().uuid().optional(),
+  village_id: z.string().guid().optional(),
   village_name: z.string().trim().min(1).max(255).optional(),
   village_code: z.string().trim().min(1).max(64).optional(),
   /** The mandal it belongs to. Required when creating by name. */
-  mandal_id: z.string().uuid().optional(),
+  mandal_id: z.string().guid().optional(),
   total_extent_ac: z.number().finite().positive().max(MAX_QUANTITY, TOO_BIG).nullable().optional(),
   dgps_base: z.number().int().min(0).optional(),
   dgps_rovers: z.number().int().min(0).optional(),
@@ -920,7 +920,7 @@ export const surveyVillageEditSchema = z.object({
 });
 
 export const surveyVillageSchema = z.object({
-  village_id: z.string().uuid(),
+  village_id: z.string().guid(),
   total_extent_ac: z.number().finite().positive().max(MAX_QUANTITY, TOO_BIG).nullable().optional(),
   dgps_base: z.number().int().min(0).optional(),
   dgps_rovers: z.number().int().min(0).optional(),
@@ -936,12 +936,12 @@ export const surveyVillageSchema = z.object({
  */
 /** One rover's day: used or idle, and if idle, why. */
 export const roverDaySchema = z.object({
-  asset_id: z.string().uuid(),
+  asset_id: z.string().guid(),
   status: z.enum(ROVER_DAY_STATUSES),
   idle_reason: z.enum(DELAY_REASON_CODES as unknown as [string, ...string[]]).nullable().optional(),
   remarks: z.string().max(1000).nullable().optional(),
   area_ac: z.number().finite().min(0).max(MAX_QUANTITY, TOO_BIG).nullable().optional(),
-  employee_id: z.string().uuid().nullable().optional(),
+  employee_id: z.string().guid().nullable().optional(),
 });
 
 /*
@@ -950,7 +950,7 @@ export const roverDaySchema = z.object({
  * the same shape gcpSchema and gcpPatchSchema already deal with.
  */
 export const surveyEntryBase = z.object({
-  survey_village_id: z.string().uuid(),
+  survey_village_id: z.string().guid(),
   entry_date: pastDate,
   teams_deployed: z.number().int().min(0).optional(),
   dgps_base: z.number().int().min(0).optional(),
@@ -1043,7 +1043,7 @@ export const gtStartSchema = z.object({
    */
   expected_end_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD'),
   /** The people put on it. At least one: a village nobody is on has not started. */
-  employee_ids: z.array(z.string().uuid())
+  employee_ids: z.array(z.string().guid())
     .min(1, 'Put at least one person on the village — a village nobody is on has not started')
     .max(100, 'That is more people than any village takes'),
   govt_staff_allocated: headcount.nullable().optional(),
@@ -1685,7 +1685,7 @@ export function pace(args: {
 /* ------------------------------------------------------------- schemas */
 
 export const crewAssignmentSchema = z.object({
-  employee_id: z.string().uuid(),
+  employee_id: z.string().guid(),
   stage_code: z.string().min(1).max(64),
   assigned_on: isoDate.optional(),
   released_on: isoDate.nullable().optional(),
@@ -1699,7 +1699,7 @@ export const crewAssignmentSchema = z.object({
  * because they always are — the kit goes out together.
  */
 export const roverBulkAllocationSchema = z.object({
-  asset_ids: z.array(z.string().uuid()).min(1).max(50),
+  asset_ids: z.array(z.string().guid()).min(1).max(50),
   allocated_on: isoDate,
   released_on: isoDate.nullable().optional(),
 }).refine(v => !v.released_on || v.released_on >= v.allocated_on, {
@@ -1709,7 +1709,7 @@ export const roverBulkAllocationSchema = z.object({
 
 /** Putting several people on the same stage at once, for the same reason. */
 export const crewBulkAssignmentSchema = z.object({
-  employee_ids: z.array(z.string().uuid()).min(1).max(50),
+  employee_ids: z.array(z.string().guid()).min(1).max(50),
   stage_code: z.string().trim().min(1).max(64),
   assigned_on: isoDate.optional(),
 });
@@ -1722,12 +1722,12 @@ export const roverAllocationEditSchema = z.object({
 
 /** Moving villages from one programme to another (enhancement note 4). */
 export const villageMoveSchema = z.object({
-  village_ids: z.array(z.string().uuid()).min(1).max(2000),
-  to_project_id: z.string().uuid(),
+  village_ids: z.array(z.string().guid()).min(1).max(2000),
+  to_project_id: z.string().guid(),
 });
 
 export const roverAllocationSchema = z.object({
-  asset_id: z.string().uuid(),
+  asset_id: z.string().guid(),
   allocated_on: isoDate,
   released_on: isoDate.nullable().optional(),
 }).refine(v => !v.released_on || v.released_on >= v.allocated_on, {
@@ -1737,7 +1737,7 @@ export const roverAllocationSchema = z.object({
 
 /** A stage update now carries the remarks the workflow asks for. */
 export const projectEmployeeSchema = z.object({
-  employee_id: z.string().uuid(),
+  employee_id: z.string().guid(),
   project_role: z.enum(['GT_USER','QC_USER','QGIS_USER','TEAM_LEAD','PROJECT_MANAGER'])
     .default('GT_USER'),
   assigned_on: isoDate.optional(),
@@ -2266,7 +2266,7 @@ export function claimedPercent(
  * claim goes out, and later the department answers it.
  */
 export const villageBillingBulkSchema = z.object({
-  survey_village_ids: z.array(z.string().uuid())
+  survey_village_ids: z.array(z.string().guid())
     .min(1, 'Choose at least one village')
     // A thousand is more villages than any single claim covers, and it caps
     // what one request can do by accident.
@@ -2976,7 +2976,7 @@ export const surveyContactSchema = z.object({
   email: z.string().trim().email('That is not an email address').max(255)
     .nullable().optional(),
   /** A district or mandal, when the contact covers part of the programme. */
-  org_unit_id: z.string().uuid().nullable().optional(),
+  org_unit_id: z.string().guid().nullable().optional(),
   notes: z.string().trim().max(2000).nullable().optional(),
   active: z.boolean().optional(),
 }).strict();
@@ -3011,7 +3011,7 @@ export const QUERY_STATUS_LABELS: Record<QueryStatus, string> = {
  * context cannot be reconstructed is one nobody answers.
  */
 export const surveyQuerySchema = z.object({
-  survey_village_id: z.string().uuid().nullable().optional(),
+  survey_village_id: z.string().guid().nullable().optional(),
   /**
    * A district or a mandal, when the question is about neither one village
    * nor the whole programme (§074).
@@ -3020,7 +3020,7 @@ export const surveyQuerySchema = z.object({
    * hundred villages, and filing it against one picked to satisfy a foreign
    * key puts it in front of the wrong person.
    */
-  org_unit_id: z.string().uuid().nullable().optional(),
+  org_unit_id: z.string().guid().nullable().optional(),
   kind: z.enum(QUERY_KINDS),
   subject: z.string().trim().min(4, 'Give it a subject somebody can scan').max(200),
   body: z.string().trim().min(10,
@@ -3078,7 +3078,7 @@ export const alertSubscriptionSchema = z.object({
     .max(ALERT_KINDS.length).optional(),
   active_until: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD'),
   /** Null follows every programme in the organisation. */
-  survey_project_id: z.string().uuid().nullable().optional(),
+  survey_project_id: z.string().guid().nullable().optional(),
   active: z.boolean().optional(),
 }).strict();
 

@@ -866,7 +866,7 @@ export async function registerSurveyRoutes(
   app.post('/api/v1/survey/projects/:id/pair', { preHandler: guard('survey.manage') },
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
-      const input = parse(z.object({ workspace_id: z.string().uuid().optional() }), req.body);
+      const input = parse(z.object({ workspace_id: z.string().guid().optional() }), req.body);
       return mutate(pool, req, 'survey.project.pair', 'survey_project', async db => {
         const programme = await projectOr404(db, u.orgId, id);
         if (programme.project_id) {
@@ -893,7 +893,7 @@ export async function registerSurveyRoutes(
         dry_run: z.boolean().default(true),
         // Limit to one mandal at a time, because generating for a whole
         // district in one go is rarely what somebody means the first time.
-        mandal_id: z.string().uuid().optional(),
+        mandal_id: z.string().guid().optional(),
         include_stages: z.boolean().default(true),
       }), req.body ?? {});
 
@@ -3711,7 +3711,7 @@ export async function registerSurveyRoutes(
     { preHandler: guard('survey.manage') }, async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
       const input = parse(z.object({
-        asset_ids: z.array(z.string().uuid()).min(1, 'Choose at least one instrument').max(100),
+        asset_ids: z.array(z.string().guid()).min(1, 'Choose at least one instrument').max(100),
         on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       }).strict(), req.body);
 
@@ -4234,7 +4234,7 @@ export async function registerSurveyRoutes(
     async req => {
       const u = actor(req);
       const q = parse(z.object({
-        project_id: z.string().uuid().optional(),
+        project_id: z.string().guid().optional(),
         // Every other survey endpoint that names a programme in its query
         // string calls it `survey_project_id` (alert-subscriptions, the
         // mobile village list). This one alone said `project_id`, so a
@@ -4242,7 +4242,7 @@ export async function registerSurveyRoutes(
         // memory — was refused with "unrecognized key" rather than filtered.
         // Accepted here as a synonym rather than renamed, since existing
         // callers already send `project_id`.
-        survey_project_id: z.string().uuid().optional(),
+        survey_project_id: z.string().guid().optional(),
         milestone: z.coerce.number().int().min(1).max(9).optional(),
         status: z.enum(['SUBMITTED', 'APPROVED', 'REJECTED', 'PAID']).optional(),
         from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),

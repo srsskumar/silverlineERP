@@ -175,7 +175,7 @@ const employeeBaseFields = {
    * export already reads the text, and a record whose title only resolves
    * through a join prints blank wherever the join was forgotten.
    */
-  designation_id: z.string().uuid().nullable().optional(),
+  designation_id: z.string().guid().nullable().optional(),
   department: optionalText(100),
   date_of_joining: dateString('Date of joining must be YYYY-MM-DD'),
   reports_to: optionalText(100),
@@ -263,7 +263,7 @@ export const importRowSchema = z
 export type ImportRowInput = z.infer<typeof importRowSchema>;
 
 export const orgUnitSchema = z.object({
-  type: z.enum(ORG_UNIT_TYPES, { errorMap: () => ({ message: 'Pick a location type' }) }),
+  type: z.enum(ORG_UNIT_TYPES, { error: 'Pick a location type' }),
   code: z.string().trim().min(1, 'Code is required').max(50),
   name: z.string().trim().min(1, 'Name is required').max(255),
   parent_id: z.string().trim().min(1).max(100).optional().nullable(),
@@ -296,7 +296,7 @@ export const holidaySchema = z
   .object({
     date: dateString('Holiday date must be YYYY-MM-DD'),
     name: z.string().trim().min(1, 'Name is required').max(255),
-    type: z.enum(HOLIDAY_TYPES, { errorMap: () => ({ message: 'Pick a holiday type' }) }),
+    type: z.enum(HOLIDAY_TYPES, { error: 'Pick a holiday type' }),
     scope_type: optionalEnum(ORG_UNIT_TYPES),
     // An empty string is what the field's own blank default sends --
     // .optional() alone only forgives `undefined`, so Org-wide (the
@@ -366,7 +366,7 @@ export type PunchFormInput = z.infer<typeof punchFormSchema>;
 export const exceptionSchema = z.object({
   employee_id: z.string().trim().min(1, 'Employee is required').max(100),
   attendance_record_id: z.string().trim().min(1).max(100).optional().nullable(),
-  exception_type: z.enum(EXCEPTION_TYPES, { errorMap: () => ({ message: 'Pick an exception type' }) }),
+  exception_type: z.enum(EXCEPTION_TYPES, { error: 'Pick an exception type' }),
   reason: z.string().trim().min(1, 'Reason is required').max(2000),
   document_id: z.string().trim().min(1).max(100).optional().nullable(),
 });
@@ -499,7 +499,7 @@ export const TASK_STATUSES = [
 
 /** Non-empty UUID text (user ids); empty string is treated as absent by optionalUuid. */
 const userUuid = (message = 'Enter a valid user ID (UUID)') =>
-  z.string().trim().uuid(message);
+  z.string().trim().guid(message);
 
 const optionalUuid = z
   .string()
@@ -691,7 +691,7 @@ export const BOARD_VIEW_TYPES = ['LIST', 'KANBAN'] as const;
 export const boardSchema = z.object({
   project_id: z.string().trim().min(1, 'Project is required'),
   name: z.string().trim().min(1, 'Name is required').max(255),
-  view_type: z.enum(BOARD_VIEW_TYPES, { errorMap: () => ({ message: 'Pick LIST or KANBAN' }) }),
+  view_type: z.enum(BOARD_VIEW_TYPES, { error: 'Pick LIST or KANBAN' }),
   column_config: z.unknown().optional(),
   filter_config: z.unknown().optional(),
 });
@@ -863,7 +863,7 @@ export type ReopenInput = PayrollReopenInput;
 export const REPORT_TYPES = ['employees', 'attendance', 'tasks', 'leave','inventory','assets','invoices','payroll','projects','cycles','audit'] as const;
 
 export const reportSchema = z.object({
-  type: z.enum(REPORT_TYPES, { errorMap: () => ({ message: 'Pick a report type' }) }),
+  type: z.enum(REPORT_TYPES, { error: 'Pick a report type' }),
 });
 export type ReportFormInput = z.infer<typeof reportSchema>;
 
@@ -931,7 +931,7 @@ export type PurchaseOrderLineInput = z.infer<typeof purchaseOrderLineSchema>;
 
 export const purchaseOrderSchema = z.object({
   po_number: z.string().trim().min(1, 'Order number is required').max(50),
-  vendor_id: z.string().trim().uuid('Choose a vendor'),
+  vendor_id: z.string().trim().guid('Choose a vendor'),
   requisition_id: optionalUuid,
   project_id: optionalUuid,
   po_date: dateString('Order date must be YYYY-MM-DD'),
@@ -946,7 +946,7 @@ export type PurchaseOrderFormInput = z.infer<typeof purchaseOrderSchema>;
 
 export const grnLineSchema = z
   .object({
-    po_line_id: z.string().trim().uuid('Pick a line'),
+    po_line_id: z.string().trim().guid('Pick a line'),
     received_quantity: z.coerce.number().min(0, 'Received quantity must be 0 or more'),
     accepted_quantity: z.coerce.number().min(0, 'Accepted quantity must be 0 or more'),
     rejection_reason: optionalText(500),
@@ -977,7 +977,7 @@ export type GrnLineInput = z.infer<typeof grnLineSchema>;
  */
 export const grnSchema = z.object({
   grn_no: z.string().trim().min(1, 'Receipt number is required').max(50),
-  purchase_order_id: z.string().trim().uuid('Pick a purchase order'),
+  purchase_order_id: z.string().trim().guid('Pick a purchase order'),
   received_date: dateString('Received date must be YYYY-MM-DD'),
   challan_no: optionalText(50),
   vehicle_no: optionalText(20),
@@ -1001,7 +1001,7 @@ export const rfqSchema = z.object({
   due_date: dateString('Due date must be YYYY-MM-DD'),
   scope: optionalText(4000),
   vendor_ids: z
-    .array(z.string().trim().uuid('Choose a vendor'))
+    .array(z.string().trim().guid('Choose a vendor'))
     .min(2, 'Invite at least two vendors')
     .max(20, 'At most 20 vendors'),
   lines: z.array(rfqLineSchema).min(1, 'Add at least one line'),
@@ -1015,7 +1015,7 @@ export type RfqFormInput = z.infer<typeof rfqSchema>;
 // ---------------------------------------------------------------------------
 
 export const raBillLineSchema = z.object({
-  boq_item_id: z.string().trim().uuid('Pick a BOQ item'),
+  boq_item_id: z.string().trim().guid('Pick a BOQ item'),
   cumulative_quantity: z.coerce.number().min(0, 'Cumulative quantity must be 0 or more'),
   remarks: optionalText(500),
 });
@@ -1024,7 +1024,7 @@ export type RaBillLineInput = z.infer<typeof raBillLineSchema>;
 export const RA_BILL_DEDUCTION_HEADS = ['LIQUIDATED_DAMAGES', 'PENALTY', 'OTHER'] as const;
 
 export const raBillFixedDeductionSchema = z.object({
-  head: z.enum(RA_BILL_DEDUCTION_HEADS, { errorMap: () => ({ message: 'Pick a deduction head' }) }),
+  head: z.enum(RA_BILL_DEDUCTION_HEADS, { error: 'Pick a deduction head' }),
   label: z.string().trim().min(1, 'Label is required').max(150),
   amount: positiveMoneyField('Enter an amount greater than 0, with at most 2 decimal places'),
   reason: z.string().trim().min(1, 'Reason is required').max(1000),
@@ -1033,7 +1033,7 @@ export type RaBillFixedDeductionInput = z.infer<typeof raBillFixedDeductionSchem
 
 export const raBillSchema = z
   .object({
-    project_id: z.string().trim().uuid('Pick a project'),
+    project_id: z.string().trim().guid('Pick a project'),
     bill_type: z.enum(['RA', 'FINAL']).default('RA'),
     period_from: dateString('Period start must be YYYY-MM-DD'),
     period_to: dateString('Period end must be YYYY-MM-DD'),
@@ -1056,8 +1056,8 @@ export type RaBillFormInput = z.infer<typeof raBillSchema>;
 export const ADVANCE_TYPES = ['MOBILISATION', 'MATERIAL', 'PLANT'] as const;
 
 export const advanceSchema = z.object({
-  project_id: z.string().trim().uuid('Pick a project'),
-  advance_type: z.enum(ADVANCE_TYPES, { errorMap: () => ({ message: 'Pick an advance type' }) }),
+  project_id: z.string().trim().guid('Pick a project'),
+  advance_type: z.enum(ADVANCE_TYPES, { error: 'Pick an advance type' }),
   amount: positiveMoneyField('Enter an amount greater than 0, with at most 2 decimal places'),
   paid_on: dateString('Paid-on date must be YYYY-MM-DD'),
   recovery_pct: z.coerce
@@ -1098,7 +1098,7 @@ export type PaymentRunExecuteFormInput = z.infer<typeof paymentRunExecuteSchema>
 export const holidayEditSchema = z.object({
   date: dateString('Holiday date must be YYYY-MM-DD'),
   name: z.string().trim().min(1, 'Name is required').max(255),
-  type: z.enum(HOLIDAY_TYPES, { errorMap: () => ({ message: 'Pick a holiday type' }) }),
+  type: z.enum(HOLIDAY_TYPES, { error: 'Pick a holiday type' }),
   reason: z.string().trim().min(1, 'Say why the holiday is being changed').max(2000),
 });
 export type HolidayEditInput = z.infer<typeof holidayEditSchema>;
@@ -1172,7 +1172,9 @@ export const approvalPolicyLevelSchema = z
       .optional()
       .or(z.literal('').transform(() => undefined))
       .transform((v) => (v === '' ? undefined : v))
-      .pipe(z.coerce.number().int().min(1).max(8760).optional()),
+      // zod 4 types a coerced number's input as unknown; name the stage's
+      // real input so the pipe typechecks.
+      .pipe(z.coerce.number<string | undefined>().int().min(1).max(8760).optional()),
   })
   .refine((v) => Boolean(v.approver_role) || Boolean(v.approver_user_id), {
     message: 'Name an approver role or a specific approver',
@@ -1186,7 +1188,7 @@ export type ApprovalPolicyLevelInput = z.infer<typeof approvalPolicyLevelSchema>
 
 export const approvalPolicySchema = z
   .object({
-    document_type: z.enum(APPROVAL_DOCUMENT_TYPES, { errorMap: () => ({ message: 'Pick a document type' }) }),
+    document_type: z.enum(APPROVAL_DOCUMENT_TYPES, { error: 'Pick a document type' }),
     name: z.string().trim().min(1, 'Name is required').max(150),
     mode: z.enum(['SINGLE', 'CUMULATIVE']),
     project_id: optionalUuid,
@@ -1239,11 +1241,11 @@ export type ApprovalPolicyFormInput = z.infer<typeof approvalPolicySchema>;
 export { PAYMENT_DIRECTIONS, SHARED_PAYMENT_MODES as PAYMENT_MODES };
 
 export const paymentFormSchema = z.object({
-  direction: z.enum(PAYMENT_DIRECTIONS, { errorMap: () => ({ message: 'Pick a direction' }) }),
+  direction: z.enum(PAYMENT_DIRECTIONS, { error: 'Pick a direction' }),
   payment_no: z.string().trim().min(1, 'Payment number is required').max(50),
   paid_on: dateString(),
   amount: positiveMoneyField('A payment has to be for something'),
-  mode: z.enum(SHARED_PAYMENT_MODES, { errorMap: () => ({ message: 'Pick a mode' }) }),
+  mode: z.enum(SHARED_PAYMENT_MODES, { error: 'Pick a mode' }),
   reference: optionalText(100),
   party_type: z.enum(['CLIENT', 'VENDOR', 'EMPLOYEE']).optional().or(z.literal('').transform(() => undefined)),
   party_id: optionalUuid,
@@ -1256,7 +1258,7 @@ export type PaymentFormInput = z.infer<typeof paymentFormSchema>;
 export const paymentAllocationFormSchema = z
   .object({
     document_type: z.enum(['RA_BILL', 'VENDOR_INVOICE', 'EXPENSE_CLAIM', 'ADVANCE'], {
-      errorMap: () => ({ message: 'Pick a document type' }),
+      error: 'Pick a document type',
     }),
     document_id: userUuid('Enter a valid document ID (UUID)'),
     amount: moneyField(),
@@ -1329,7 +1331,7 @@ export { COST_HEAD_KINDS };
 export const costHeadFormSchema = z.object({
   code: z.string().trim().min(1, 'Code is required').max(30).transform((s) => s.toUpperCase()),
   name: z.string().trim().min(1, 'Name is required').max(120),
-  kind: z.enum(COST_HEAD_KINDS, { errorMap: () => ({ message: 'Pick a kind' }) }),
+  kind: z.enum(COST_HEAD_KINDS, { error: 'Pick a kind' }),
   description: optionalText(500),
   active: z.boolean(),
 });
@@ -1384,7 +1386,7 @@ export const INSTRUMENT_STATUSES = ['ACTIVE', 'RELEASED', 'CLAIMED', 'EXPIRED', 
 
 export const instrumentFormSchema = z
   .object({
-    instrument_type: z.enum(INSTRUMENT_TYPES, { errorMap: () => ({ message: 'Pick an instrument type' }) }),
+    instrument_type: z.enum(INSTRUMENT_TYPES, { error: 'Pick an instrument type' }),
     issuing_bank: z.string().trim().min(1, 'Issuing bank is required'),
     instrument_number: z.string().trim().min(1, 'Instrument number is required').max(100),
     amount: moneyField(),

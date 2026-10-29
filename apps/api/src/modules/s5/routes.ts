@@ -274,15 +274,15 @@ interface NotificationCursor {
 }
 
 const boardsListQuerySchema = z.object({
-  project_id: z.string().uuid().optional(),
+  project_id: z.string().guid().optional(),
 });
 
 const filtersListQuerySchema = z.object({
-  project_id: z.string().uuid().optional(),
+  project_id: z.string().guid().optional(),
 });
 
 const labelsListQuerySchema = z.object({
-  project_id: z.string().uuid().optional(),
+  project_id: z.string().guid().optional(),
 });
 
 const notificationsListQuerySchema = cursorPageQuerySchema.extend({

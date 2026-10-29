@@ -65,7 +65,7 @@ const PII_READ = S1_PERMISSIONS.EMPLOYEE_PII_READ;
 
 const listQuerySchema = cursorPageQuerySchema.extend({
   status: z.enum(EMPLOYEE_STATUSES).optional(),
-  district_id: z.string().uuid().optional(),
+  district_id: z.string().guid().optional(),
   q: z.string().min(1).max(200).optional(),
 });
 

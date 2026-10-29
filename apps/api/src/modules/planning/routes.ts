@@ -148,7 +148,7 @@ export async function registerPlanningRoutes(app:FastifyInstance,opts:{pool:Pool
  app.get('/api/v1/tasks/:id/planning',{preHandler:guard('task.read')},async req=>{const row=await taskAccess(req,(req.params as {id:string}).id);return {id:row.id,version:row.version,cycle_id:row.cycle_id,custom_fields:row.custom_fields,checklist:row.checklist,actual_start_at:row.actual_start_at,actual_end_at:row.actual_end_at};});
  app.patch('/api/v1/tasks/:id/planning',{preHandler:guard('task.update')},async req=>{
   const id=(req.params as {id:string}).id,u=actor(req),snapshot=await taskAccess(req,id,true);
-  const i=parse(z.object({cycle_id:z.string().uuid().nullable().optional(),custom_fields:z.record(z.unknown()).optional(),checklist:z.array(z.object({id:z.string().uuid(),title:z.string().trim().min(1).max(500),done:z.boolean()})).max(100).optional()}),req.body);
+  const i=parse(z.object({cycle_id:z.string().guid().nullable().optional(),custom_fields:z.record(z.string(), z.unknown()).optional(),checklist:z.array(z.object({id:z.string().guid(),title:z.string().trim().min(1).max(500),done:z.boolean()})).max(100).optional()}),req.body);
   return mutate(pool,req,'task.planning','task',async db=>{
    await inOrg(db,'projects',snapshot.project_id,u.orgId,true);
    const task=await inOrg(db,'tasks',id,u.orgId,true);version(req,task as {version:number});
@@ -169,7 +169,7 @@ export async function registerPlanningRoutes(app:FastifyInstance,opts:{pool:Pool
  app.get('/api/v1/tasks/:id/activity',{preHandler:guard('task.read')},async req=>{const id=(req.params as {id:string}).id;await taskAccess(req,id);return {data:(await pool.query('SELECT id,type,actor_id,created_at FROM domain_events WHERE org_id=$1 AND entity_id=$2 ORDER BY created_at DESC LIMIT 100',[actor(req).orgId,id])).rows};});
  // Bulk actions reuse the same authenticated mutation routes and return each outcome.
  app.post('/api/v1/tasks/bulk',{preHandler:guard('task.update')},async(req,reply)=>{
-  const i=parse(z.object({tasks:z.array(z.object({id:z.string().uuid(),version:z.number().int().positive()})).min(1).max(50),action:z.enum(['status','assign','label']),value:z.string().min(1).max(100),reason:z.string().min(1).max(1000).optional()}),req.body);
+  const i=parse(z.object({tasks:z.array(z.object({id:z.string().guid(),version:z.number().int().positive()})).min(1).max(50),action:z.enum(['status','assign','label']),value:z.string().min(1).max(100),reason:z.string().min(1).max(1000).optional()}),req.body);
   const results=[];for(const t of i.tasks){const url=i.action==='status'?`/api/v1/tasks/${t.id}/status`:i.action==='assign'?`/api/v1/tasks/${t.id}/assign`:`/api/v1/tasks/${t.id}/labels`;
    const response=await app.inject({method:i.action==='status'?'PATCH':'POST',url,headers:{authorization:req.headers.authorization,'if-match':String(t.version),'idempotency-key':`${String(req.headers['idempotency-key']??req.requestId)}:${t.id}`},payload:i.action==='status'?{status:i.value}:i.action==='assign'?{assignee_id:i.value,reason:i.reason}:{label_id:i.value}});results.push({id:t.id,status:response.statusCode,result:response.json()});}
   return reply.code(207).send({data:results});

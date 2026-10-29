@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
+import { zodResolver } from '@/lib/zodResolver';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   listFinancialPeriods, createFinancialPeriod, setPeriodClosure, type FinancialPeriod,

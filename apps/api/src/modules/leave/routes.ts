@@ -116,7 +116,7 @@ function daysByYear(
   return out;
 }
 
-const uuidCheck = z.string().uuid();
+const uuidCheck = z.string().guid();
 
 function isUuid(value: unknown): value is string {
   return uuidCheck.safeParse(value).success;
@@ -336,11 +336,11 @@ const listQuerySchema = cursorPageQuerySchema.extend({
   status: z.enum(["PENDING", "APPROVED", "REJECTED", "CANCELLED"]).optional(),
   mine: z.coerce.string().optional(),
   approver_me: z.coerce.string().optional(),
-  employee_id: z.string().uuid().optional(),
+  employee_id: z.string().guid().optional(),
 });
 
 const balancesQuerySchema = z.object({
-  employee_id: z.string().uuid().optional(),
+  employee_id: z.string().guid().optional(),
   period_year: z.coerce.number().int().min(2000).max(2100).optional(),
 });
 
@@ -701,10 +701,10 @@ export async function registerLeaveRoutes(
   // `sandwichSkipDates`) so the two can never disagree, for the employee's
   // own effective holiday scope.
   const leavePreviewQuerySchema = z.object({
-    leave_type_id: z.string().uuid("leave_type_id must be a UUID"),
+    leave_type_id: z.string().guid("leave_type_id must be a UUID"),
     from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "from_date must be YYYY-MM-DD"),
     to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "to_date must be YYYY-MM-DD"),
-    employee_id: z.string().uuid().optional(),
+    employee_id: z.string().guid().optional(),
   });
 
   app.get("/api/v1/leave/preview", { preHandler: canRequest }, async (req, reply) => {
