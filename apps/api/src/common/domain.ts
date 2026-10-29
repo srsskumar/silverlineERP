@@ -53,6 +53,20 @@ export function parse<T>(schema:z.ZodType<T, unknown>,body:unknown):T {
  }
  return result.data;
 }
+/**
+ * Validates a partial update and keeps only the keys the caller sent.
+ *
+ * zod 4's `.partial()` fills `.default()` values for keys that are absent,
+ * where zod 3 left them out. A PATCH that writes every parsed key would then
+ * reset stored flags (`do_not_contact`, `active`, `skills`, ...) on every
+ * edit that omits them, and an empty body would slip past "nothing to
+ * change" guards. The filter restores the one-field-at-a-time contract.
+ */
+export function parsePatch<T extends Record<string,unknown>>(schema:z.ZodType<T, unknown>,body:unknown):Partial<T> {
+ const parsed=parse(schema,body) as Record<string,unknown>;
+ const sent=(typeof body==='object'&&body!==null?body:{}) as Record<string,unknown>;
+ return Object.fromEntries(Object.entries(parsed).filter(([k])=>Object.hasOwn(sent,k))) as Partial<T>;
+}
 export function fail(code:string,message:string,status=422):never {throw new ApiError({status,code,message});}
 export function actor(req:FastifyRequest) {if(!req.authUser) fail('UNAUTHENTICATED','Sign in first',401);return req.authUser;}
 export function version(req:FastifyRequest,row:{version:number},label?:string) {

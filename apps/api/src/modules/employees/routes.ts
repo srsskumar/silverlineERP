@@ -1202,7 +1202,12 @@ export async function registerEmployeeRoutes(
         ],
       });
     }
-    const d = parsed.data;
+    // zod 4's .partial() fills defaults (skills: []) for keys the caller left
+    // out; keep only what was sent so a rename never clears the skills list.
+    const sent = (typeof req.body === "object" && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    const d = Object.fromEntries(
+      Object.entries(parsed.data).filter(([k]) => Object.hasOwn(sent, k)),
+    ) as typeof parsed.data;
     const fieldErrors = [
       ...(await validateUnitRefs(db, user.orgId, d)),
       ...(await validateReportsTo(db, user.orgId, d.reports_to, id)),

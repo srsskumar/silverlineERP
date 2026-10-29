@@ -119,8 +119,11 @@ export async function setup(): Promise<void> {
   const baseClient = new Client({ connectionString: base });
   await baseClient.connect();
   try {
-    await baseClient.query("DELETE FROM roles WHERE org_id IS NOT NULL");
+    // Children first: a designation left behind by an interrupted run still
+    // points at an org role, and deleting the role before the truncate fails
+    // with a foreign-key error that vitest then reports as "no test files".
     await baseClient.query(`TRUNCATE TABLE ${VOLATILE_TABLES}`);
+    await baseClient.query("DELETE FROM roles WHERE org_id IS NOT NULL");
     // Not folded into the TRUNCATE above: `roles` carries a (now all-null)
     // foreign key to `organizations`, and Postgres refuses to truncate a
     // table some other table references unless that other table is

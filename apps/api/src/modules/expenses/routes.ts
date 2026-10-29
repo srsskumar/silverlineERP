@@ -12,7 +12,7 @@ import {
   expenseReceiptUploadSchema, ALLOWED_RECEIPT_EXTENSIONS, MAX_RECEIPT_BYTES, MAX_RECEIPTS_PER_CLAIM,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
-import { actor, parse, page, inOrg, mutate, version, fail, projectAccess } from '../../common/domain.js';
+import { actor, parse, parsePatch, page, inOrg, mutate, version, fail, projectAccess } from '../../common/domain.js';
 import { scanUpload } from '../../common/fileSafety.js';
 import { encodeBlob, readBlob } from '../../common/blobStore.js';
 import { submitForApproval } from '../../common/approvalRouting.js';
@@ -122,7 +122,7 @@ export async function registerExpenseRoutes(app: FastifyInstance, opts: { pool: 
 
   app.patch('/api/v1/cost-heads/:id', { preHandler: guard('costhead.manage') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const input = parse(costHeadSchema.partial(), req.body);
+    const input = parsePatch(costHeadSchema.partial(), req.body);
     return {
       data: await mutate(pool, req, 'costhead.update', 'cost_head', async db => {
         const head = await inOrg(db, 'cost_heads', id, u.orgId, true);

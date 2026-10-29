@@ -35,7 +35,7 @@ import {
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { z } from 'zod';
-import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
+import { actor, parse, parsePatch, page, inOrg, mutate, version, fail } from '../../common/domain.js';
 import { orgTodaySql, orgZoneSql, orgTimeZone, cachedOrgZone } from '../../common/orgTime.js';
 import { onProgramme, mayStaffProgramme, requireStaffing } from '../../common/surveyAuthority.js';
 
@@ -818,7 +818,7 @@ export async function registerSurveyRoutes(
    */
   app.patch('/api/v1/survey/projects/:id', { preHandler: guard('survey.manage') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const input = parse(surveyProjectSchema.partial(), req.body);
+    const input = parsePatch(surveyProjectSchema.partial(), req.body);
     return {
       data: await mutate(pool, req, 'survey.project.update', 'survey_project', async db => {
         const row = await inOrg(db, 'survey_projects', id, u.orgId, true);
@@ -2673,7 +2673,7 @@ export async function registerSurveyRoutes(
    */
   app.patch('/api/v1/survey/entries/:id', { preHandler: guard('survey.enter') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const input = parse(surveyEntryPatchSchema, req.body);
+    const input = parsePatch(surveyEntryPatchSchema, req.body);
     return {
       data: await mutate(pool, req, 'survey.entry.update', 'survey_entry', async db => {
         const row = await inOrg(db, 'survey_entries', id, u.orgId, true);
@@ -3520,7 +3520,7 @@ export async function registerSurveyRoutes(
   app.patch('/api/v1/survey/gcps/:id', { preHandler: guard('survey.enter') },
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
-      const input = parse(gcpPatchSchema, req.body);
+      const input = parsePatch(gcpPatchSchema, req.body);
       return {
         data: await mutate(pool, req, 'survey.gcp.update', 'survey_village_gcp', async db => {
           const row = await inOrg(db, 'survey_village_gcps', id, u.orgId, true);
@@ -4138,7 +4138,7 @@ export async function registerSurveyRoutes(
   app.patch('/api/v1/survey/billing/:id', { preHandler: guard('survey.manage') },
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
-      const input = parse(villageBillingPatchSchema, req.body);
+      const input = parsePatch(villageBillingPatchSchema, req.body);
       return {
         data: await mutate(pool, req, 'survey.village.billing.update', 'survey_village_billing', async db => {
           const row = await inOrg(db, 'survey_village_billing', id, u.orgId, true);
@@ -6299,7 +6299,7 @@ export async function registerSurveyRoutes(
   app.patch('/api/v1/survey/contacts/:id', { preHandler: guard('survey.manage') },
     async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
-      const input = parse(surveyContactPatchSchema, req.body);
+      const input = parsePatch(surveyContactPatchSchema, req.body);
       return {
         data: await mutate(pool, req, 'survey.contact.update', 'survey_contact', async db => {
           const row = await inOrg(db, 'survey_contacts', id, u.orgId, true);
@@ -6586,7 +6586,7 @@ export async function registerSurveyRoutes(
   app.patch('/api/v1/survey/alert-subscriptions/:id',
     { preHandler: guard('survey.manage') }, async req => {
       const u = actor(req), id = (req.params as { id: string }).id;
-      const input = parse(alertSubscriptionPatchSchema, req.body);
+      const input = parsePatch(alertSubscriptionPatchSchema, req.body);
       return {
         data: await mutate(pool, req, 'survey.alert.update',
           'survey_alert_subscription', async db => {

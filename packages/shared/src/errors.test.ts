@@ -117,3 +117,18 @@ describe('one item of a list', () => {
     expect(fieldLabel('widget_ids.0')).toBe('Widget — item 1');
   });
 });
+
+describe('missing choices (zod 4 reports them as invalid_value, not a missing type)', () => {
+  it('says a missing enum field is required, not which values it takes', () => {
+    const [p] = problems(z.object({ status: z.enum(['OPEN', 'CLOSED']) }), {});
+    expect(p.message).toBe('Status is required');
+  });
+  it('says a missing literal field is required', () => {
+    const [p] = problems(z.object({ kind: z.literal('A') }), {});
+    expect(p.message).toBe('Kind is required');
+  });
+  it('still names the values when a wrong one was sent', () => {
+    const [p] = problems(z.object({ status: z.enum(['OPEN', 'CLOSED']) }), { status: 'MAYBE' });
+    expect(p.message).toBe('Status must be one of: OPEN, CLOSED');
+  });
+});

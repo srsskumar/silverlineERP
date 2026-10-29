@@ -151,3 +151,7 @@ OSV ignores now: `deepmerge` (DEP-5, Expo tooling) and the zod 3 copy nested und
 (DEP-2 closed for the application). Two calendar-dependent API tests were made deterministic on
 the way (HR-1 work date, `nonSundayFutureDate`); HR-1's check-out step still depends on the wall
 clock for the first 30 minutes after midnight IST.
+
+Whole-branch review (fresh reviewer) found Z4-1 and Z4-2 (see the findings register); both
+fixed RED→GREEN. Final gate after the fix pass: lint 5/5 · shared 1,059 · mobile 560 · web 992 ·
+api 90 files, 2,417 passed, 13 skipped · build 4/4 · production-critical audit exit 0.

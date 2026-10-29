@@ -1,5 +1,13 @@
 import { z } from "zod";
 
+// zod 4 reports a missing enum or literal as `invalid_value` ("Invalid option:
+// expected one of …") and drops the input from the finished issue, so
+// `humanise` could no longer tell "nothing sent" from "wrong value". The error
+// map still sees the input: name the missing case once, for every schema.
+z.config({
+  customError: (issue) => (issue.input === undefined || issue.input === null ? "Required" : undefined),
+});
+
 export const fieldErrorSchema = z.object({
   field: z.string(),
   message: z.string(),
@@ -158,9 +166,7 @@ function humanise(issue: z.ZodIssue, label: string): string {
   if (!isZodDefault(said)) return said;
   switch (issue.code) {
     case "invalid_type":
-      // zod 4 issues carry no `received` and omit `input` unless asked to;
-      // the default wording ("…, received undefined") is the only trace.
-      if (/received (undefined|null)$/.test(said)) {
+      if (said === "Required") {
         return `${label} is required`;
       }
       if (issue.expected === "number") return `${label} must be a number`;
@@ -197,6 +203,7 @@ function humanise(issue: z.ZodIssue, label: string): string {
       if (issue.origin === "number") return `${label} must be ${issue.maximum} or less`;
       return said;
     case "invalid_value":
+      if (said === "Required") return `${label} is required`;
       return `${label} must be one of: ${issue.values.map(String).join(", ")}`;
     case "unrecognized_keys":
       return `Not a field this accepts: ${(issue.keys ?? []).join(", ")}`;

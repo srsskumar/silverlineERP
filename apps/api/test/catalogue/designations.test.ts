@@ -165,3 +165,22 @@ describe("an employee's designation", () => {
     expect(after.designation).toBe(d.data.label);
   });
 });
+
+describe("an edit that names one field", () => {
+  // zod 4's .partial() fills schema defaults for keys the caller omitted
+  // (skills: []); the route must keep only what was sent, as zod 3 did.
+  it("leaves the skills list exactly as it was", async () => {
+    const e = await call("POST", w.admin, "/api/v1/employees",
+      employee({ skills: ["Survey", "AutoCAD"] }));
+    expect(e.status, JSON.stringify(e.body)).toBe(201);
+    const res = await w.app.inject({
+      method: "PATCH", url: `/api/v1/employees/${e.data.id}`,
+      headers: { ...w.admin, ...idem(), ...(await ifMatch(w, "employees", e.data.id)) },
+      payload: { last_name: "Renamed" },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const after = res.json().data ?? res.json();
+    expect(after.last_name).toBe("Renamed");
+    expect(after.skills).toEqual(["Survey", "AutoCAD"]);
+  });
+});

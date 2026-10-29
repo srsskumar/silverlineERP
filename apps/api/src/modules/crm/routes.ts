@@ -8,7 +8,7 @@ import {
   LEAD_STAGE_TRANSITIONS, type LeadStage, parseGstin,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
-import { actor, parse, page, inOrg, mutate, version, fail, sortClause } from '../../common/domain.js';
+import { actor, parse, parsePatch, page, inOrg, mutate, version, fail, sortClause } from '../../common/domain.js';
 
 /**
  * CRM: client/contact master, leads, opportunities and the activity timeline
@@ -124,7 +124,7 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
 
   app.patch('/api/v1/clients/:id', { preHandler: guard('client.manage') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const parsed = parse(clientBaseSchema.partial(), req.body) as Record<string, unknown>;
+    const parsed = parsePatch(clientBaseSchema.partial(), req.body) as Record<string, unknown>;
     if ('gstin' in parsed) {
       fail('VALIDATION_ERROR',
         'A client holds one GSTIN per state. Manage them through /parties/client/:id/gst-registrations.');
@@ -227,7 +227,7 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
 
   app.patch('/api/v1/contacts/:id', { preHandler: guard('client.manage') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const input = parse(contactBaseSchema.partial(), req.body) as Record<string, unknown>;
+    const input = parsePatch(contactBaseSchema.partial(), req.body) as Record<string, unknown>;
     if (!Object.keys(input).length) fail('VALIDATION_ERROR', 'Send at least one field to change');
     return {
       data: await mutate(pool, req, 'contact.update', 'contact', async db => {
@@ -331,7 +331,7 @@ export async function registerCrmRoutes(app: FastifyInstance, opts: { pool: Pool
 
   app.patch('/api/v1/leads/:id', { preHandler: guard('lead.manage') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const input = parse(leadSchema.partial(), req.body) as Record<string, unknown>;
+    const input = parsePatch(leadSchema.partial(), req.body) as Record<string, unknown>;
     if (!Object.keys(input).length) fail('VALIDATION_ERROR', 'Send at least one field to change');
     return {
       data: await mutate(pool, req, 'lead.update', 'lead', async db => {

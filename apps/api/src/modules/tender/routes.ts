@@ -8,7 +8,7 @@ import {
   TENDER_STATUS_TRANSITIONS, type TenderStatus,
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
-import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
+import { actor, parse, parsePatch, page, inOrg, mutate, version, fail } from '../../common/domain.js';
 
 /** Tender fields a corrigendum is allowed to move (§8.5). */
 const CORRIGENDUM_FIELDS = new Set([
@@ -140,7 +140,7 @@ export async function registerTenderRoutes(app: FastifyInstance, opts: { pool: P
 
   app.patch('/api/v1/tenders/:id', { preHandler: guard('tender.manage') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const input = parse(tenderBaseSchema.partial(), req.body) as Record<string, unknown>;
+    const input = parsePatch(tenderBaseSchema.partial(), req.body) as Record<string, unknown>;
     if (!Object.keys(input).length) fail('VALIDATION_ERROR', 'Send at least one field to change');
     return {
       data: await mutate(pool, req, 'tender.update', 'tender', async db => {
@@ -286,7 +286,7 @@ export async function registerTenderRoutes(app: FastifyInstance, opts: { pool: P
 
   app.patch('/api/v1/tenders/:id/eligibility/:itemId', { preHandler: guard('tender.manage') }, async req => {
     const u = actor(req), { id, itemId } = req.params as { id: string; itemId: string };
-    const input = parse(eligibilityItemSchema.partial(), req.body) as Record<string, unknown>;
+    const input = parsePatch(eligibilityItemSchema.partial(), req.body) as Record<string, unknown>;
     if (!Object.keys(input).length) fail('VALIDATION_ERROR', 'Send at least one field to change');
     return {
       data: await mutate(pool, req, 'tender.eligibility.update', 'tender', async db => {

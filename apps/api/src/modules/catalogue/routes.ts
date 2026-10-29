@@ -12,7 +12,7 @@ import {
   toFieldErrors,
 } from "@silverline/shared";
 import { buildAuthenticate, requirePermission } from "../../common/auth.js";
-import { actor, mutate, version, sortClause } from "../../common/domain.js";
+import { actor, mutate, parsePatch, version, sortClause } from "../../common/domain.js";
 import { VERSION_HEADER } from "../../common/ifMatch.js";
 
 /**
@@ -122,7 +122,7 @@ export async function registerCatalogueRoutes(
       const archiving = body.status === "ARCHIVED" || body.status === "ACTIVE";
       const input = archiving && Object.keys(body).length === 1
         ? null
-        : parse(catalogueItemSchema.partial(), body);
+        : parsePatch(catalogueItemSchema.partial(), body);
       const row = await mutate(pool, req, "catalogue.item.update", "catalogue_item", async (db) => {
         // Locked (D-009): the whole row is written back below, so a read that
         // raced another edit wrote that edit's field back to its old value.

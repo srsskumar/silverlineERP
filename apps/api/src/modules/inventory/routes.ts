@@ -5,7 +5,7 @@ import type { FastifyInstance,FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import { vendorSchema,itemSchema,stockSchema,invoiceSchema,invoiceLinesUpdateSchema,computeInvoice,assetSchema,assetLookupSchema,assetAssignSchema,assetBulkAssignSchema,assetTransferSchema,assetAllocationEditSchema,assetLookupCode,assetTransitionSchema,assetAuditSchema,assetLocation,percentOf,parseGstin,type InvoiceLineInput as GstInvoiceLineInput } from '@silverline/shared';
 import { buildAuthenticate,requirePermission,requireAnyPermission,scopesForPermission } from '../../common/auth.js';
-import { actor,parse,page,inOrg,mutate,version,fail,projectAccess,employeeAccess,sortClause } from '../../common/domain.js';
+import { actor,parse,parsePatch,page,inOrg,mutate,version,fail,projectAccess,employeeAccess,sortClause } from '../../common/domain.js';
 
 /** Sortable columns behind each path's own table, for the shared list loop below. */
 const LIST_SORT_COLUMNS: Record<string, Record<string, string>> = {
@@ -140,15 +140,9 @@ export async function registerInventoryRoutes(app:FastifyInstance,opts:{pool:Poo
    });return reply.code(201).send(row);
   });
   app.patch(`/api/v1/${path}/:id`,{preHandler:guard(`${permission}.manage`)},async req=>{
-   const parsed=parse(schema as any,req.body) as Record<string,unknown>,u=actor(req),id=(req.params as {id:string}).id;
-   // A PATCH is a partial update, but every schema here is the same one POST
-   // uses to create a row -- its zod defaults (status:'ACTIVE', condition:
-   // 'GOOD', ...) fill in any key the caller left out. Left alone, editing
-   // one field (say, a name) would silently reset every defaulted field the
-   // form doesn't carry back to its default, reactivating a deliberately
-   // deactivated item. Keep only the keys the caller actually sent.
-   const sent=(req.body??{}) as Record<string,unknown>;
-   const input=Object.fromEntries(Object.entries(parsed).filter(([k])=>k in sent));
+   // Same POST schema with defaults (status:'ACTIVE', condition:'GOOD', ...);
+   // parsePatch keeps only the keys the caller sent so an edit never resets them.
+   const input=parsePatch(schema as any,req.body) as Record<string,unknown>,u=actor(req),id=(req.params as {id:string}).id;
    // Same rule as a client's own gstin: one per state, managed through the
    // dedicated registrations endpoint after creation, not a generic PATCH.
    if(table==='vendors'&&'gstin' in input)fail('VALIDATION_ERROR','A vendor holds one GSTIN per state. Manage them through /parties/vendor/:id/gst-registrations.');

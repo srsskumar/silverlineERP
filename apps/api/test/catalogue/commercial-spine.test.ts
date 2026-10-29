@@ -749,3 +749,38 @@ describe("UT-CRM-20 pipeline classification", () => {
     expect(converted.data.project_category_id).toBe(cat);
   });
 });
+
+describe("a contact edit that names one field", () => {
+  // zod 4's .partial() fills schema defaults for omitted keys (do_not_contact:
+  // false, contact_type: ADDITIONAL); renaming a contact must not touch them.
+  it("keeps the do-not-contact flag and the contact type", async () => {
+    const client = await post(w.admin, "/api/v1/clients", { name: `Flagged ${uniq()}`, client_type: "PRIVATE" });
+    expect(client.status, JSON.stringify(client.body)).toBe(201);
+    const contact = await post(w.admin, "/api/v1/contacts", {
+      client_id: client.data.id, name: "Do Not Call", phone: "9876500001", contact_type: "PRIMARY", do_not_contact: true,
+    });
+    expect(contact.status, JSON.stringify(contact.body)).toBe(201);
+    const renamed = await w.app.inject({
+      method: "PATCH", url: `/api/v1/contacts/${contact.data.id}`,
+      headers: { ...w.admin, ...idem(), ...(await ifMatchFor("contacts", contact.data.id)) },
+      payload: { name: "Still Do Not Call" },
+    });
+    expect(renamed.statusCode, renamed.body).toBe(200);
+    const row = (await w.pool.query(
+      "SELECT name, do_not_contact, contact_type FROM contacts WHERE id = $1", [contact.data.id],
+    )).rows[0];
+    expect(row).toEqual({ name: "Still Do Not Call", do_not_contact: true, contact_type: "PRIMARY" });
+  });
+
+  it("refuses an empty body instead of treating the defaults as changes", async () => {
+    const client = await post(w.admin, "/api/v1/clients", { name: `Empty ${uniq()}`, client_type: "PRIVATE" });
+    const contact = await post(w.admin, "/api/v1/contacts", { client_id: client.data.id, name: "Nobody", phone: "9876500002" });
+    expect(contact.status, JSON.stringify(contact.body)).toBe(201);
+    const res = await w.app.inject({
+      method: "PATCH", url: `/api/v1/contacts/${contact.data.id}`,
+      headers: { ...w.admin, ...idem(), ...(await ifMatchFor("contacts", contact.data.id)) },
+      payload: {},
+    });
+    expect(res.statusCode, res.body).toBe(422);
+  });
+});

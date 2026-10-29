@@ -12,7 +12,7 @@ import {
 } from '@silverline/shared';
 import { buildAuthenticate, requirePermission } from '../../common/auth.js';
 import { orgTodaySql } from '../../common/orgTime.js';
-import { actor, parse, page, inOrg, mutate, version, fail } from '../../common/domain.js';
+import { actor, parse, parsePatch, page, inOrg, mutate, version, fail } from '../../common/domain.js';
 
 /**
  * Document governance (§46).
@@ -323,7 +323,7 @@ export async function registerDocumentRoutes(
 
   app.patch('/api/v1/documents/:id', { preHandler: guard('document.manage') }, async req => {
     const u = actor(req), id = (req.params as { id: string }).id;
-    const input = parse(documentPatchSchema, req.body);
+    const input = parsePatch(documentPatchSchema, req.body);
     const canSeeConfidential = u.permissions.includes('document.confidential');
     return {
       data: await mutate(pool, req, 'document.update', 'document', async db => {

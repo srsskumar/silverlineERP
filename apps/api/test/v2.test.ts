@@ -268,6 +268,19 @@ describe('v2 delivery and authorization regression',()=>{
   expect((await pool.query("SELECT count(*) FROM notifications WHERE entity_id=$1 AND type='AUTOMATION'",[t.id])).rows[0].count).toBe('0');
   expect((await pool.query('SELECT status FROM automation_executions WHERE rule_id=$1',[created.json().id])).rows[0].status).toBe('FAILED');
  });
+ it('keeps a rule\'s conditions and active flag when an edit names only the name',async()=>{
+  // zod 4's .partial() fills defaults (active:true, conditions:[]) for omitted
+  // keys; the route merges the patch over the stored rule, so a rename must
+  // not re-enable a paused rule or wipe its conditions.
+  const p=await project();
+  const created=await call('POST','automation-rules',{name:'Paused',project_id:p.id,trigger:'task.create',conditions:[{field:'priority',value:'HIGH'}],actions:[{type:'notify',value:adminId}]});expect(created.statusCode).toBe(201);
+  const id=created.json().id;
+  const paused=await call('PATCH',`automation-rules/${id}`,{active:false},{'if-match':'1'});expect(paused.statusCode).toBe(200);
+  const renamed=await call('PATCH',`automation-rules/${id}`,{name:'Paused, renamed'},{'if-match':'2'});expect(renamed.statusCode).toBe(200);
+  const after=(await call('GET',`automation-rules/${id}`)).json();
+  expect(after.name).toBe('Paused, renamed');expect(after.active).toBe(false);
+  expect(after.conditions).toEqual([{field:'priority',value:'HIGH'}]);
+ });
  it('revokes only the selected device and denies subsequent logins from it',async()=>{
   const log=async(device_id:string)=>(await app.inject({method:'POST',url:'/api/v1/auth/login',payload:{username:'admin',password:ADMIN_PASSWORD,device_id}})).json();
   const first=await log('test-device-one'),second=await log('test-device-two');
