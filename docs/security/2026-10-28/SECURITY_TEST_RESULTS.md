@@ -135,3 +135,19 @@ semgrep 0 findings). D-5 closed the same day: `expo-screen-capture` installed vi
 `Verify Silverline` on 96afeb6 failed on one unrelated test: `seed-reentrancy.test.ts` (60
 back-to-back reseeds) hit its 60 s timeout on the shared CI runner; it takes ~10 s alone
 locally. Timeout raised to 180 s; no code under test changed.
+
+## Dependency majors — 2026-10-30
+
+Branch `worktree-deps-majors` (plan: `docs/superpowers/plans/2026-10-29-dependency-majors.md`),
+one commit per upgrade, full gate after each:
+
+| Commit | Upgrade | Gate |
+|---|---|---|
+| vitest 3.2 → 4.1.12 | api, web, shared; `maxWorkers: 1, isolate: false` replaces `singleFork` | lint 5/5 · shared 1,056 · web 992 · api 2,409/13 skipped · build 4/4 · audit 0 |
+| next 15.5 → 16.4.3 | Turbopack default; export unchanged (+`_not-found.html`); build output ignored by eslint | same, plus mobile 560 |
+| zod 3.25 → 4.6.7 | shared, api, web, mobile; `@hookform/resolvers` 6; `.uuid()` → `.guid()`; `humanise` on zod 4 issues | same |
+
+OSV ignores now: `deepmerge` (DEP-5, Expo tooling) and the zod 3 copy nested under `@expo/cli`
+(DEP-2 closed for the application). Two calendar-dependent API tests were made deterministic on
+the way (HR-1 work date, `nonSundayFutureDate`); HR-1's check-out step still depends on the wall
+clock for the first 30 minutes after midnight IST.
