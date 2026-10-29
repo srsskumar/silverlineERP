@@ -31,3 +31,6 @@ ios/
 
 # Graphify knowledge graph (regenerate with /graphify .)
 graphify-out/
+
+# superpowers plan workspaces (ledgers, briefs, review packages)
+.superpowers/
