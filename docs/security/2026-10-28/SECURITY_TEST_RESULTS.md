@@ -119,3 +119,10 @@ null-prototype map still matched `remote-property-injection`; replaced with
 `--fail-on-vuln`, which osv-scanner 2.x does not have (it fails on findings by default).
 Both fixed in the next commit. `Verify Silverline` green again. API `/health` ok and the web
 CSP present on the d561a61 deployments.
+
+Third `Security` run (96afeb6): secret scan and semgrep passed; OSV completed its first real
+scan: 11 advisories filtered by `osv-scanner.toml`, 5 reported — postcss 8.4.31 nested under
+`next` (2) and vite 7.3.6 under vitest (3), all with patched releases available. Fixed with npm
+overrides (`next.postcss` → 8.5.28, `vite` → 7.3.7); verified by a clean `npm ci` from the new
+lockfile (postcss 8.5.28, vite 7.3.7, no nested copy), the web static build, shared 1,056 and
+web 992 tests, and two API files on the new vite.

@@ -14,17 +14,6 @@ id = "GHSA-mrhx-c7xc-m3w5"
 ignoreUntil = 2026-12-31
 reason = "DoS needs an oversized body the 8 MiB bodyLimit refuses; zod 4 migration tracked as DEP-2"
 
-# postcss 8.4.31 pinned by next 15.x: quadratic selector parsing at build
-# time only; nothing parses untrusted CSS at runtime. Fixed by next 16.
-[[IgnoredVulns]]
-id = "GHSA-qx2v-qp2m-jg93"
-ignoreUntil = 2026-12-31
-reason = "build-time only, via next 15's pinned postcss; next 16 upgrade tracked as DEP-3"
-[[IgnoredVulns]]
-id = "GHSA-6g55-p6wh-862q"
-ignoreUntil = 2026-12-31
-reason = "build-time only, via next 15's pinned postcss; next 16 upgrade tracked as DEP-3"
-
 # deepmerge, reached only through @expo/config / @expo/cli: merges the app's
 # own config files at build time, never untrusted input. Clears when Expo's
 # tooling moves off it (DEP-5).
