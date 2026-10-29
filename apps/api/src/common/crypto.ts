@@ -9,6 +9,8 @@ export const DEV_DEFAULT_ENCRYPTION_KEY =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 const ENCRYPTED_PREFIX = "gcm1";
+/** Full 128-bit GCM tag; blobs with a shorter tag are rejected, not partially checked. */
+const GCM_TAG_BYTES = 16;
 
 function keyBytes(): Buffer {
   const hex = process.env["ENCRYPTION_KEY"] ?? DEV_DEFAULT_ENCRYPTION_KEY;
@@ -21,7 +23,7 @@ function keyBytes(): Buffer {
 /** Encrypts a UTF-8 string; returns `gcm1.<ivHex>.<tagHex>.<ctHex>`. */
 export function encryptPii(plaintext: string): string {
   const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", keyBytes(), iv);
+  const cipher = createCipheriv("aes-256-gcm", keyBytes(), iv, { authTagLength: GCM_TAG_BYTES });
   const ct = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
   return `${ENCRYPTED_PREFIX}.${iv.toString("hex")}.${tag.toString("hex")}.${ct.toString("hex")}`;
@@ -34,10 +36,13 @@ export function decryptPii(blob: string): string {
     throw new Error("Unrecognized encrypted payload format");
   }
   const [, ivHex, tagHex, ctHex] = parts as [string, string, string, string];
+  // Naming the tag length makes Node refuse a truncated tag outright instead
+  // of verifying only as many bytes as the blob happens to carry.
   const decipher = createDecipheriv(
     "aes-256-gcm",
     keyBytes(),
     Buffer.from(ivHex, "hex"),
+    { authTagLength: GCM_TAG_BYTES },
   );
   decipher.setAuthTag(Buffer.from(tagHex, "hex"));
   return (

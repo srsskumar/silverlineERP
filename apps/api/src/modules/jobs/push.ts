@@ -13,6 +13,7 @@ export async function runPushDelivery(pool:Pool,fetcher:typeof fetch=fetch):Prom
    else {
     const receipt=d.status==='ACCEPTED';
     const response=await fetcher(`https://exp.host/--/api/v2/push/${receipt?'getReceipts':'send'}`,{method:'POST',headers:{'content-type':'application/json',...(process.env.EXPO_ACCESS_TOKEN?{authorization:`Bearer ${process.env.EXPO_ACCESS_TOKEN}`}:{})},signal:AbortSignal.timeout(10000),body:JSON.stringify(receipt?{ids:[ticket]}:{to:d.push_token,title:'Silverline update',body:'Open the app to review your latest update.',data:{notificationId:d.notification_id,entityType:d.entity_type,entityId:d.entity_id}})});
+// nosemgrep: javascript.express.security.injection.raw-html-format.raw-html-format -- push receipt handling; builds an error code, no HTML
     if(!response.ok){error=`HTTP_${response.status}`;if(response.status<500&&response.status!==429)status='FAILED';}
     else {
      const body=await response.json() as {data?:any},result=receipt?body.data?.[ticket!]:body.data;

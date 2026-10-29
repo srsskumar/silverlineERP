@@ -23,6 +23,7 @@ import { createHash, randomUUID } from "node:crypto";
 import bcrypt from "bcrypt";
 import { Pool, type PoolClient } from "pg";
 import { encryptPii, piiIndex } from "../common/crypto.js";
+import { buildSslOption, resolveSslMode } from "../database/db.js";
 import { defaultTaskWorkflow } from "@silverline/shared";
 
 /** Rows to create per table. */
@@ -1489,9 +1490,11 @@ const invokedAsScript =
 if (invokedAsScript) {
   const databaseUrl = process.env["DATABASE_URL"];
   if (!databaseUrl) throw new Error("DATABASE_URL is required");
+  // Same TLS rules as the API: loopback plain, anything else verified, with
+  // DATABASE_SSL / DATABASE_CA_CERT honoured.
   const pool = new Pool({
     connectionString: databaseUrl,
-    ssl: databaseUrl.includes("localhost") ? false : { rejectUnauthorized: false },
+    ssl: buildSslOption(resolveSslMode(databaseUrl)),
     max: 4,
   });
   try {

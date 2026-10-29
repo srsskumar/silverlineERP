@@ -94,3 +94,21 @@ filters, notifications, survey villages, GRNs, payslip PDF, evidence/document do
 resolver and a 3xx; `report_schedules` filter persistence; worker-token semantics; a
 config-level assertion of `allowBackup` after prebuild; a Playwright check that the
 deployed web sends the CSP.
+
+## Post-deployment verification — 2026-10-29
+
+| Check | Result |
+|---|---|
+| `git push origin main` (0f800c3 → ca75975) | Deployed API `silverline-erp-gv1xbgf4g` and web `silverline-erp-61dmk96fu` on Vercel |
+| `Verify Silverline` on ca75975 | **success** — first green run since 2026-10-09 |
+| `Security` on ca75975 | failure: OSV action tag missing (CI-2); semgrep 47 blocking findings (SA-1..SA-7); secret scan passed |
+| `GET /health` after cutover | 503 `SERVICE_UNAVAILABLE` for ~25 min (OPS-1), then `{"status":"ok"}` after the URL was rewritten without `sslmode` and the build redeployed |
+| `POST /auth/login` as `admin` | 200, `must_change_password: true`, roles `SUPER_ADMIN` |
+| Web headers at `silverline-erp-web.vercel.app` | CSP, COOP `same-origin`, HSTS preload, `X-Frame-Options: DENY` present |
+| New database | `schema_migrations` 109 rows, latest `118_auth_rate_hits`; 165 public tables; seed: 1 org, 13 roles, 182 permissions, 1 user |
+
+Local runs for the follow-up commit: `db-ssl.test.ts` RED (received `{}` for `ssl`) then
+GREEN (22/22) after `withoutLibpqSslParams`; API `tsc` clean; mobile typecheck clean and
+558 tests; web tsc + eslint clean and 992 tests; full API suite 89 files, 2,409 passed, 13 skipped
+(run with only `TEST_DATABASE_URL` exported — sourcing the whole `.env` leaks `SEED_ADMIN_PASSWORD`
+into the seed and turns every admin sign-in in the suite into a 401).

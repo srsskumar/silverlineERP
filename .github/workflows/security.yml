@@ -6,8 +6,8 @@
 #   which sees advisories npm audit does not.
 # - Static analysis with semgrep's default and OWASP rule packs.
 #
-# Actions are pinned to a tag the repository controls the meaning of; bump
-# deliberately. Each job fails the workflow on findings so a red check is a
+# Actions are pinned to full commit SHAs (the tag is noted beside each) so a
+# repointed tag cannot change what runs here; bump deliberately. Each job fails the workflow on findings so a red check is a
 # real one, not a report nobody opens.
 name: Security
 on:
@@ -24,18 +24,18 @@ jobs:
     name: Secret scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   dependencies:
     name: Dependency vulnerabilities (OSV)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: google/osv-scanner-action/osv-scanner-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
         with:
           scan-args: |-
             --lockfile=package-lock.json
@@ -46,5 +46,7 @@ jobs:
     container:
       image: semgrep/semgrep
     steps:
-      - uses: actions/checkout@v4
-      - run: semgrep scan --config p/default --config p/owasp-top-ten --config p/typescript --error --exclude node_modules --exclude 'apps/mobile/android' --exclude 'apps/mobile/ios' --exclude graphify-out
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # scripts/qa holds probes that deliberately speak plain HTTP to a local
+      # API; scripts/vm is the retired single-VM nginx config. Neither ships.
+      - run: semgrep scan --config p/default --config p/owasp-top-ten --config p/typescript --error --exclude node_modules --exclude 'apps/mobile/android' --exclude 'apps/mobile/ios' --exclude graphify-out --exclude scripts/qa --exclude scripts/vm

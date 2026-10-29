@@ -87,6 +87,7 @@ export function buildSslOption(
   env: NodeJS.ProcessEnv = process.env,
 ): false | ConnectionOptions {
   if (mode === "disable") return false;
+  // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification -- refused in production by resolveSslMode unless DATABASE_SSL_ALLOW_NO_VERIFY=true
   if (mode === "no-verify") return { rejectUnauthorized: false };
   const inline = env["DATABASE_CA_CERT"];
   const file = env["DATABASE_CA_CERT_FILE"];
@@ -94,6 +95,28 @@ export function buildSslOption(
   // the public CAs used by managed providers (Supabase, RDS, Neon).
   const ca = inline ?? (file ? readFileSync(file, "utf8") : undefined);
   return ca ? { rejectUnauthorized: true, ca } : { rejectUnauthorized: true };
+}
+
+/**
+ * Drops the libpq TLS parameters from a connection URL.
+ *
+ * `resolveSslMode` has already read `sslmode`, and the CA comes from
+ * DATABASE_CA_CERT; node-postgres, however, also parses these keys and builds
+ * its own `ssl` object from them, which *replaces* the one passed explicitly.
+ * In production that turned `?sslmode=verify-full` plus a configured CA into
+ * "self-signed certificate in certificate chain" on every connection
+ * (2026-10-29). Stripping them leaves exactly one source of truth.
+ */
+export function withoutLibpqSslParams(databaseUrl: string): string {
+  const url = new URL(databaseUrl);
+  let changed = false;
+  for (const key of ["sslmode", "sslrootcert", "sslcert", "sslkey", "ssl"]) {
+    if (url.searchParams.has(key)) {
+      url.searchParams.delete(key);
+      changed = true;
+    }
+  }
+  return changed ? url.toString() : databaseUrl;
 }
 
 export function createPool(
@@ -110,7 +133,7 @@ export function createPool(
   };
   const max = size("PGPOOL_MAX", 10);
   return new Pool({
-    connectionString: databaseUrl,
+    connectionString: withoutLibpqSslParams(databaseUrl),
     // Keep one established connection for interactive traffic. The default
     // pool minimum is zero and its 10s idle eviction makes the first request
     // after a quiet period pay the full remote TLS/database handshake.

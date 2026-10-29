@@ -157,3 +157,24 @@ describe("describeConnectionError", () => {
     expect(out).toContain("DATABASE_SSL=disable");
   });
 });
+
+describe("createPool with libpq ssl parameters in the URL", () => {
+  // Regression for the 2026-10-29 production outage: `?sslmode=verify-full`
+  // in DATABASE_URL made node-postgres build its own empty `ssl` object from
+  // the query string, which replaced the `{ ca }` option we pass explicitly
+  // and failed every connection with "self-signed certificate in chain".
+  it("keeps the configured CA when the URL also names an sslmode", async () => {
+    const { Client } = await import("pg");
+    const pool = createPool(
+      "postgresql://u:p@db.example.com:6543/x?sslmode=verify-full&application_name=api",
+      { DATABASE_CA_CERT: "PEM" },
+    );
+    const client = new Client(pool.options);
+    const params = (client as unknown as { connectionParameters: { ssl: unknown; application_name?: string; host: string; port: number } }).connectionParameters;
+    expect(params.ssl).toEqual({ rejectUnauthorized: true, ca: "PEM" });
+    expect(params.host).toBe("db.example.com");
+    expect(params.port).toBe(6543);
+    expect(params.application_name).toBe("api");
+    await pool.end();
+  });
+});

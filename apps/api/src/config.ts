@@ -151,6 +151,8 @@ export function originAllowed(origin: string, patterns: readonly string[]): bool
       // A wildcard never matches a dot, so it cannot widen to a parent domain:
       // `https://a-*.example.com` must not admit `https://a-x.evil.example.com`.
       .join("[^.]*");
+    // Built from an operator-set allow-list, every metacharacter escaped above.
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
     return new RegExp(`^${escaped}$`).test(origin);
   });
 }

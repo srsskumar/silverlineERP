@@ -14,7 +14,7 @@ try{
    const path=resolve(row.file_path);if(!path.startsWith(root+sep))throw new Error('An upload is outside UPLOADS_DIR; reconcile storage roots first');
    const data=await readFile(path);let plain=data;
    if(data.subarray(0,5).toString()==='gcm1.'){
-    const [,iv,tag,ct]=data.toString().split('.'),dec=createDecipheriv('aes-256-gcm',Buffer.from(key,'hex'),Buffer.from(iv,'hex'));dec.setAuthTag(Buffer.from(tag,'hex'));plain=Buffer.from(Buffer.concat([dec.update(Buffer.from(ct,'hex')),dec.final()]).toString(),'base64');encrypted++;
+    const [,iv,tag,ct]=data.toString().split('.'),dec=createDecipheriv('aes-256-gcm',Buffer.from(key,'hex'),Buffer.from(iv,'hex'),{authTagLength:16});dec.setAuthTag(Buffer.from(tag,'hex'));plain=Buffer.from(Buffer.concat([dec.update(Buffer.from(ct,'hex')),dec.final()]).toString(),'base64');encrypted++;
    }else legacy++;
    if(createHash('sha256').update(plain).digest('hex')!==row.checksum)throw new Error('Checksum mismatch; no further files will be changed');
    if(apply&&plain===data){

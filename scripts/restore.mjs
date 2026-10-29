@@ -13,7 +13,7 @@ if(!name.endsWith('_restore'))throw new Error('Restore requires a fresh database
 const db=new Pool({connectionString:url});try{const r=await db.query("SELECT count(*) FROM information_schema.tables WHERE table_schema='public'");if(Number(r.rows[0].count))throw new Error('Restore target is not empty; existing data will not be overwritten');}finally{await db.end();}
 const size=(await stat(file)).size,fd=await open(file,'r'),header=Buffer.alloc(16),tag=Buffer.alloc(16);try{await fd.read(header,0,16,0);await fd.read(tag,0,16,size-16);}finally{await fd.close();}
 if(header.subarray(0,4).toString()!=='SLE1'||size<33)throw new Error('Invalid encrypted backup');
-const decrypt=()=>{const d=createDecipheriv('aes-256-gcm',Buffer.from(key,'hex'),header.subarray(4));d.setAuthTag(tag);return d;};
+const decrypt=()=>{const d=createDecipheriv('aes-256-gcm',Buffer.from(key,'hex'),header.subarray(4),{authTagLength:16});d.setAuthTag(tag);return d;};
 const input=()=>createReadStream(file,{start:16,end:size-17});
 // Verify the complete authentication tag before allowing any restore writes.
 await pipeline(input(),decrypt(),new Writable({write(_chunk,_encoding,done){done();}}));

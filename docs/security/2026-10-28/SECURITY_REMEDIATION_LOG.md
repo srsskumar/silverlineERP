@@ -102,15 +102,39 @@ See `SECURITY_TEST_RESULTS.md`.
 - Bulk employee edits by a scoped caller that include an out-of-scope person are
   refused whole.
 
+## Deployment — 2026-10-29
+
+- Owner decision: production moved to a fresh Supabase project (`uelashezstjohwpmuqfr`,
+  eu-central-1, PostgreSQL 17) with **no data copy**; the previous project is untouched and
+  can be restored by pointing `DATABASE_URL` back at it. Applied there from this machine:
+  all migrations (001–118) and the production seed (`admin` with a one-time password and
+  `must_change_password=true`).
+- Vercel `DATABASE_URL` (production, sensitive) → the project's transaction pooler
+  `aws-1-eu-central-1.pooler.supabase.com:6543`, user `postgres.<ref>`. The direct
+  `db.<ref>.supabase.co` host is IPv6-only and unreachable from Vercel functions.
+- Outage: the first value carried `?sslmode=verify-full`, which broke certificate
+  verification (OPS-1). Fixed in the environment within ~25 minutes and then in code.
+- `main` pushed (0f800c3 → ca75975); `Verify Silverline` green; `Security` triaged
+  (CI-2, SA-1..SA-7) in the follow-up commit.
+
+Follow-up commit files: `apps/api/src/database/db.ts` (+`withoutLibpqSslParams`),
+`apps/api/test/db-ssl.test.ts`, `apps/api/src/common/crypto.ts`, `scripts/restore.mjs`,
+`scripts/encrypt-legacy-files.mjs`, `apps/api/src/modules/survey/routes.ts`,
+`apps/api/src/scripts/seed-volume.ts`, `apps/api/Dockerfile`, `apps/web/lib/apiClient.ts`,
+`apps/mobile/src/api/client.ts`, `nosemgrep` notes in `xlsx.ts`, `config.ts`,
+`auth/service.ts`, `integrations/worker.ts`, `jobs/push.ts`, `database/db.ts`;
+`.github/workflows/ci.yml` and `security.yml` (SHA pins, OSV v2.7.0, semgrep excludes).
+
 ## Manual actions still required
 
-1. Apply migrations 117 and 118 to production before deploying the API (or in the
-   same deploy window): `DATABASE_URL=<prod> npx tsx src/database/migrate.ts` from
-   `apps/api` on a trusted machine, after a backup.
+1. ~~Apply migrations 117 and 118 to production~~ — done 2026-10-29 on the new project.
 2. Add `expo-screen-capture` and `usePreventScreenCapture()` on `my-payslip.tsx` and
    `(auth)/enroll.tsx` (D-5), then rebuild the APK (the owner asked for no builds in
    this round; D-3/D-4 also only take effect in the next build).
-3. Confirm in Vercel that `NODE_ENV=production` is set on the API project (the MFA
-   floor and secret-strength checks are gated on it).
+3. ~~Confirm in Vercel that `NODE_ENV=production` is set~~ — confirmed 2026-10-29.
 4. Plan the `zod` 4, `next` 16 and `vitest` 4 upgrades before 2026-12-31, when the
    OSV ignores expire.
+5. Reset the new project's database password in Supabase (it was pasted into a chat
+   transcript during the cutover) and update the Vercel `DATABASE_URL` with the new value,
+   then redeploy.
+6. Sign in as `admin` with the one-time password and set a real one; rename `Demo Org`.

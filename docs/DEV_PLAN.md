@@ -62,6 +62,14 @@ A punch whose device reports a mock location is refused, not held for review. Th
 
 The attendance screen on the phone shows the fix as coordinates and accuracy instead of a map (no Google Maps key is needed for capture; `MapCanvas` is kept but unused). The stored position is the evidence; a map tile is not.
 
+## Decision 2026-10-29: production restarted on a fresh database
+
+Production now runs on a new, empty Supabase project (eu-central-1). No data was copied
+from the previous project, by owner instruction; it is kept untouched as a fallback. The
+schema (migrations 001–118) and the standard seed were applied; the first sign-in is
+`admin` with a one-time password that must be changed. Operational details are in
+`docs/security/2026-10-28/SECURITY_REMEDIATION_LOG.md` ("Deployment — 2026-10-29").
+
 ## 6. Risk Register (top, merged)
 
 1. Morning check-in herd (15–25 rps, one box) → batch sync endpoint, PgBouncer, upsert path, jittered retries, 2× load test S6.

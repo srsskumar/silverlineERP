@@ -80,10 +80,10 @@ async function fetchWithApiTiming(
   if (!DEV_API_LOGS) return request();
   const startedAt = performance.now();
   const route = safeLogPath(path);
-  console.debug(`[api] request ${method} ${route}`, { attempt });
+  console.debug("[api] request", method, route, { attempt });
   try {
     const response = await request();
-    console.info(`[api] response ${method} ${route}`, {
+    console.info("[api] response", method, route, {
       attempt,
       status: response.status,
       duration_ms: Math.round(performance.now() - startedAt),
@@ -91,7 +91,7 @@ async function fetchWithApiTiming(
     });
     return response;
   } catch (error) {
-    console.warn(`[api] network error ${method} ${route}`, {
+    console.warn("[api] network error", method, route, {
       attempt,
       duration_ms: Math.round(performance.now() - startedAt),
       error: error instanceof Error ? error.message : 'Network request failed',

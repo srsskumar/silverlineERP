@@ -26,7 +26,7 @@ Create it: **Add New → Project → import `srsskumar/silverlineERP` → Root D
 | Variable | Value |
 |---|---|
 | `NODE_ENV` | `production` |
-| `DATABASE_URL` | Supabase **transaction pooler** URL, port **6543** (Supabase → Connect → Transaction pooler). Serverless opens many short connections; the direct `:5432` URL will run out of slots. |
+| `DATABASE_URL` | Supabase **transaction pooler** URL, port **6543** (Supabase → Connect → Transaction pooler), **without** any `?sslmode=` suffix — the API verifies TLS against `DATABASE_CA_CERT` on its own. Serverless opens many short connections; the direct `:5432` URL will run out of slots, and on newer projects it is IPv6-only, which Vercel cannot reach. |
 | `DATABASE_SSL` | `verify-full` |
 | `DATABASE_CA_CERT` | Paste the full contents of the Supabase CA certificate (`-----BEGIN CERTIFICATE-----` …). Use this instead of `DATABASE_CA_CERT_FILE`, because `/certs` is not uploaded. |
 | `PGPOOL_MAX` | `2` |

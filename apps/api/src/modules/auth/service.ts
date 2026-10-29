@@ -22,6 +22,7 @@ const LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
  * with a stopwatch. A literal rather than hashed at start-up, because
  * hashing it costs a quarter of a second of boot for nothing.
  */
+// nosemgrep: generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash -- hash of a random throwaway string, compared against and never accepted
 export const TIMING_DUMMY_HASH = "$2a$12$aV3NAbJdFxf/3kcziB6mS.RR3TW0NZ1DO1jg.sjdKi7Nj1IRvAq4C";
 
 /** Thrown when the login username matches no account (audited without actor). */

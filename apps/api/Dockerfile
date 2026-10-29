@@ -20,4 +20,6 @@ COPY --from=builder /app/apps/api/dist ./dist
 COPY --from=builder /app/apps/api/package.json ./package.json
 COPY --from=builder /app/packages/shared ./packages/shared
 EXPOSE 8080
+# The image ships the unprivileged `node` user; nothing here needs root.
+USER node
 CMD ["node", "dist/main.js"]

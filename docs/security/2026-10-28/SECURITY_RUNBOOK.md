@@ -16,6 +16,11 @@ Vercel project settings, then redeploy; never commit values.
   **not** run on Vercel: run `npx tsx src/database/migrate.ts` from `apps/api` with the
   production `DATABASE_URL` from a trusted machine, after a backup, before or with the
   deploy. `REQUIRE_CURRENT_SCHEMA=true` makes the API refuse to boot otherwise.
+- `DATABASE_URL` must be the Supabase **transaction pooler** URL (`aws-1-eu-central-1.pooler.supabase.com:6543`,
+  user `postgres.<project ref>`) with **no `sslmode` parameter**: the API verifies the
+  certificate against `DATABASE_CA_CERT` itself, and the direct `db.<ref>.supabase.co`
+  host is IPv6-only, which Vercel functions cannot reach. Since 2026-10-29 the code strips
+  libpq TLS keys from the URL, but keep the value plain anyway.
 - Required API env: `NODE_ENV=production`, `TRUST_PROXY=true`, `JWT_SECRET` (≥32 chars),
   `ENCRYPTION_KEY` (64 hex), `CRON_SECRET`, `DATABASE_SSL=verify-full` with the CA,
   `PGPOOL_MAX=2`, `MALWARE_SCANNER_DISABLED=true` (no ClamAV on Vercel; uploads are

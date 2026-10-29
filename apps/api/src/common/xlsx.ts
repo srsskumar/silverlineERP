@@ -9,6 +9,8 @@ function zip(files:Record<string,string>):Buffer {
  }
  const directory=Buffer.concat(central),end=Buffer.alloc(22);end.writeUInt32LE(0x06054b50);end.writeUInt16LE(local.length/3,8);end.writeUInt16LE(local.length/3,10);end.writeUInt32LE(directory.length,12);end.writeUInt32LE(offset,16);return Buffer.concat([...local,directory,end]);
 }
+// XML text escaping for cells we generate ourselves; the four entities below are the complete set for text nodes/attributes, not an HTML sanitiser.
+// nosemgrep: javascript.audit.detect-replaceall-sanitization.detect-replaceall-sanitization
 function xml(value:string):string{return value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g,'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');}
 export function spreadsheet(headers:string[],rows:string[][],metadata:string[][]=[]):Buffer {
  const sheet=[...metadata,...(metadata.length?[[]]:[]),headers,...rows].map((row,i)=>`<row r="${i+1}">${row.map(value=>`<c t="inlineStr"><is><t xml:space="preserve">${xml(String(value))}</t></is></c>`).join('')}</row>`).join('');
