@@ -131,3 +131,7 @@ Fourth `Security` run (398b682): all three jobs green (secret scan, OSV with the
 semgrep 0 findings). D-5 closed the same day: `expo-screen-capture` installed via
 `npx expo install`, wiring test RED (payslip) then GREEN, mobile typecheck clean, 560 tests,
 `expo export` bundles both platforms, production-critical `npm audit` exit 0.
+
+`Verify Silverline` on 96afeb6 failed on one unrelated test: `seed-reentrancy.test.ts` (60
+back-to-back reseeds) hit its 60 s timeout on the shared CI runner; it takes ~10 s alone
+locally. Timeout raised to 180 s; no code under test changed.

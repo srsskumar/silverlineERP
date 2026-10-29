@@ -65,5 +65,6 @@ describe("seedDatabase() reseeding the same reused organization", () => {
     // pass for a different reason without anyone noticing the shape of
     // what it was proving changed too.
     expect(ids.size).toBe(1);
-  }, 60_000);
+    // ~10 s alone; CI runs four shards on two cores and has hit 60 s.
+  }, 180_000);
 });
