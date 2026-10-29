@@ -16,6 +16,9 @@
 import reactHooks from 'eslint-plugin-react-hooks';
 
 export default [
+  // Build output. Next 16 (Turbopack) writes .js chunks under .next/ that
+  // carry their own eslint comments; without this they are linted too.
+  { ignores: ['.next/**', '.next-verify/**', 'out/**'] },
   {
     files: ['app/**/*.{ts,tsx}', 'components/**/*.{ts,tsx}', 'lib/**/*.{ts,tsx}'],
     plugins: {
