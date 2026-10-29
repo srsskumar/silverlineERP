@@ -80,7 +80,9 @@ beforeEach(() => {
   }));
 });
 
-afterEach(() => vi.unstubAllGlobals());
+// vitest 4: spyOn on an already-spied window.confirm returns the same spy,
+// so without a restore its call count carries from one test into the next.
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 function mount(node: React.ReactElement) {
   return render(<AuthProvider>{node}</AuthProvider>);

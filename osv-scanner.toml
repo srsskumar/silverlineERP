@@ -21,32 +21,3 @@ reason = "DoS needs an oversized body the 8 MiB bodyLimit refuses; zod 4 migrati
 id = "GHSA-gcqx-w48m-w2h4"
 ignoreUntil = 2026-12-31
 reason = "build-time config merging of trusted files via @expo/config; tracked as DEP-5"
-
-# vitest 3 / @vitest/mocker / tinypool / vite: test runner and dev server
-# only, never installed in a production image or shipped to a client. The
-# mocker advisories need a browser-mode server nobody runs. vitest 4 moves
-# the project config format; tracked as DEP-4.
-[[IgnoredVulns]]
-id = "GHSA-82fw-gwwq-j7x9"
-ignoreUntil = 2026-12-31
-reason = "dev-only test runner; vitest 4 upgrade tracked as DEP-4"
-[[IgnoredVulns]]
-id = "GHSA-qxg6-89mg-rqv8"
-ignoreUntil = 2026-12-31
-reason = "dev-only test runner; vitest 4 upgrade tracked as DEP-4"
-[[IgnoredVulns]]
-id = "GHSA-5gmw-xhrv-c9v3"
-ignoreUntil = 2026-12-31
-reason = "dev-only (tinypool via vitest); vitest 4 upgrade tracked as DEP-4"
-[[IgnoredVulns]]
-id = "GHSA-85c8-ppgw-ccpr"
-ignoreUntil = 2026-12-31
-reason = "dev-only (tinypool via vitest); vitest 4 upgrade tracked as DEP-4"
-[[IgnoredVulns]]
-id = "GHSA-698v-4r3x-3vcv"
-ignoreUntil = 2026-12-31
-reason = "dev-only (vite via vitest); vitest 4 upgrade tracked as DEP-4"
-[[IgnoredVulns]]
-id = "GHSA-r825-w8mm-5pxw"
-ignoreUntil = 2026-12-31
-reason = "dev-only (vite via vitest); vitest 4 upgrade tracked as DEP-4"

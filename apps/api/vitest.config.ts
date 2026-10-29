@@ -29,8 +29,9 @@ export default defineConfig({
      * back on for itself.
      */
     env: { GEOCODING_REVERSE: "off" },
-    poolOptions: {
-      forks: { singleFork: true },
-    },
+    // vitest 4 spelling of the old `poolOptions.forks.singleFork`: one
+    // process, shared module graph. See the comment above for why one.
+    maxWorkers: 1,
+    isolate: false,
   },
 });
