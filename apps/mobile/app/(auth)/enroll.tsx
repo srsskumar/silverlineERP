@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
+import { usePreventScreenCapture } from "expo-screen-capture";
 import { Ionicons } from "@expo/vector-icons";
 import { apiFetch } from "../../src/api/client";
 import { useAuth } from "../../src/auth/AuthContext";
@@ -18,6 +19,8 @@ import { font, radius, space, useTheme } from "../../src/theme";
 
 export default function Enroll() {
   const t = useTheme();
+  // The TOTP secret is on screen; no screenshots or recordings while it is.
+  usePreventScreenCapture("mfa-enrol");
   const { logout } = useAuth();
   const [secret, setSecret] = useState("");
   const [code, setCode] = useState("");

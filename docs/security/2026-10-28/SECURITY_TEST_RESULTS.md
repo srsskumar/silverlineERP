@@ -126,3 +126,8 @@ scan: 11 advisories filtered by `osv-scanner.toml`, 5 reported — postcss 8.4.3
 overrides (`next.postcss` → 8.5.28, `vite` → 7.3.7); verified by a clean `npm ci` from the new
 lockfile (postcss 8.5.28, vite 7.3.7, no nested copy), the web static build, shared 1,056 and
 web 992 tests, and two API files on the new vite.
+
+Fourth `Security` run (398b682): all three jobs green (secret scan, OSV with the dated ignores,
+semgrep 0 findings). D-5 closed the same day: `expo-screen-capture` installed via
+`npx expo install`, wiring test RED (payslip) then GREEN, mobile typecheck clean, 560 tests,
+`expo export` bundles both platforms, production-critical `npm audit` exit 0.

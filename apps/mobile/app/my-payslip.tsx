@@ -15,6 +15,7 @@
  * retrying could help), or the slip itself.
  */
 import { router } from "expo-router";
+import { usePreventScreenCapture } from "expo-screen-capture";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { View } from "react-native";
@@ -46,6 +47,8 @@ function currentMonth(): string {
 }
 
 function MyPayslipScreen() {
+  // Salary figures stay off the camera roll and out of screen recordings.
+  usePreventScreenCapture("payslip");
   const { canDo } = useAuth();
   const canRead = canDo("payslip.read");
   const [month, setMonth] = useState(() => currentMonth());

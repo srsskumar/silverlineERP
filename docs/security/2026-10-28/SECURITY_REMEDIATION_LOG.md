@@ -128,9 +128,10 @@ Follow-up commit files: `apps/api/src/database/db.ts` (+`withoutLibpqSslParams`)
 ## Manual actions still required
 
 1. ~~Apply migrations 117 and 118 to production~~ — done 2026-10-29 on the new project.
-2. Add `expo-screen-capture` and `usePreventScreenCapture()` on `my-payslip.tsx` and
-   `(auth)/enroll.tsx` (D-5), then rebuild the APK (the owner asked for no builds in
-   this round; D-3/D-4 also only take effect in the next build).
+2. ~~Add `expo-screen-capture` and `usePreventScreenCapture()`~~ — done 2026-10-29 (D-5).
+   **Rebuild the APK** when builds are allowed again: D-3, D-4 and D-5 all ship only in
+   the next native build (`EXPO_PUBLIC_API_URL=https://silverline-erp-api.vercel.app
+   node scripts/build-android-production.mjs`).
 3. ~~Confirm in Vercel that `NODE_ENV=production` is set~~ — confirmed 2026-10-29.
 4. Plan the `zod` 4, `next` 16 and `vitest` 4 upgrades before 2026-12-31, when the
    OSV ignores expire.
