@@ -37,9 +37,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
         with:
+          # osv-scanner 2.x exits non-zero on any unignored vulnerability by
+          # default; it has no --fail-on-vuln flag (the 2.7 run refused it).
           scan-args: |-
             --lockfile=package-lock.json
-            --fail-on-vuln
+            --config=osv-scanner.toml
   static-analysis:
     name: Static analysis (semgrep)
     runs-on: ubuntu-latest

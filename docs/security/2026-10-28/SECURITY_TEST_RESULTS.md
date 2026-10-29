@@ -112,3 +112,10 @@ GREEN (22/22) after `withoutLibpqSslParams`; API `tsc` clean; mobile typecheck c
 558 tests; web tsc + eslint clean and 992 tests; full API suite 89 files, 2,409 passed, 13 skipped
 (run with only `TEST_DATABASE_URL` exported — sourcing the whole `.env` leaks `SEED_ADMIN_PASSWORD`
 into the seed and turns every admin sign-in in the suite into a 401).
+
+Second `Security` run (d561a61): secret scan passed; semgrep down from 47 to 1 finding (the
+null-prototype map still matched `remote-property-injection`; replaced with
+`Object.fromEntries`, survey suite 486/486); OSV job started this time but rejected
+`--fail-on-vuln`, which osv-scanner 2.x does not have (it fails on findings by default).
+Both fixed in the next commit. `Verify Silverline` green again. API `/health` ok and the web
+CSP present on the d561a61 deployments.

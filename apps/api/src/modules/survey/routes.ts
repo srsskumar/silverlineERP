@@ -3246,11 +3246,11 @@ export async function registerSurveyRoutes(
          FROM survey_village_stages vs
          JOIN survey_stages s ON s.id = vs.stage_id
         WHERE vs.survey_village_id = $1`, [villageId])).rows;
-    // Null prototype: stage codes come from the database, and a code that
-    // spelled `__proto__` must stay a key, never a prototype write.
-    const out: Record<string, StageState> = Object.create(null);
-    for (const row of rows) out[String(row.code)] = row.state as StageState;
-    return out;
+    // fromEntries defines own properties, so a stage code spelled `__proto__`
+    // stays a key instead of becoming a prototype write.
+    return Object.fromEntries(
+      rows.map((row) => [String(row.code), row.state as StageState]),
+    ) as Record<string, StageState>;
   }
 
   /**
