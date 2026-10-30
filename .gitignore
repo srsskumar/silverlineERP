@@ -34,3 +34,6 @@ graphify-out/
 
 # superpowers plan workspaces (ledgers, briefs, review packages)
 .superpowers/
+
+# Claude Code worktrees
+.claude/worktrees/
