@@ -367,13 +367,18 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
   for(const g of grants){if(!held.has(g.role_code))held.set(g.role_code,new Set());held.get(g.role_code)!.add(g.permission_code);}
   const overrides=(await pool.query("SELECT role_code,module_code,visible FROM role_module_visibility WHERE org_id=$1",[u.orgId])).rows as Array<{role_code:string;module_code:string;visible:boolean}>;
   const overrideMap=new Map<string,boolean>(overrides.map(o=>[`${o.role_code}:${o.module_code}`,o.visible]));
-  const cells=roles.flatMap(r=>MODULE_CATALOG.map(m=>{
-   // No permission at all (only /security today) is offered to anybody
-   // signed in, so it defaults to visible the same way nav.ts renders it.
-   const defaultVisible=m.permission?(held.get(r.code)?.has(m.permission)??false):true;
-   const override=overrideMap.get(`${r.code}:${m.code}`);
-   return {role_code:r.code,module_code:m.code,visible:override??defaultVisible,default_visible:defaultVisible,source:override===undefined?'default':'override'};
-  }));
+  // Same resolver as /auth/me and the Employees view, one role at a time, so
+  // the two tabs of the Configuration screen can never disagree (anyOf and
+  // requires included -- the old per-permission check missed both).
+  const cells=roles.flatMap(r=>{
+   const base={roles:[r.code],heldByRole:held,userOverrides:new Map<string,boolean>(),superAdmin:mfaFloorRole(r.code)};
+   const defaults=resolveModuleVisibility({...base,roleOverrides:new Map()});
+   const resolved=resolveModuleVisibility({...base,roleOverrides:overrideMap});
+   return MODULE_CATALOG.map(m=>{
+    const override=overrideMap.get(`${r.code}:${m.code}`);
+    return {role_code:r.code,module_code:m.code,visible:resolved[m.code]!.visible,default_visible:defaults[m.code]!.visible,source:override===undefined?'default':'override'};
+   });
+  });
   return {data:{roles,modules:MODULE_CATALOG.map(m=>({code:m.code,label:m.label,group:m.group,permission:m.permission??null})),cells}};
  });
 
@@ -465,7 +470,9 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
   for(const c of i.changes){
    if(!(MODULE_CODES as readonly string[]).includes(c.module_code))fail('NOT_FOUND','There is no such module. Reload the list to see the modules as they stand.',404);
   }
-  return {data:await mutate(pool,req,'admin.user_module_visibility','user',async db=>{
+  // Entity is the visibility record, not 'user': mutate() redacts user payloads
+  // to {id}, and this trail has to say who was changed and how.
+  return {data:await mutate(pool,req,'admin.user_module_visibility','user_module_visibility',async db=>{
    const users=(await db.query('SELECT u.id,COALESCE((SELECT array_agg(r.code) FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id),\'{}\') AS roles FROM users u WHERE u.org_id=$1 AND u.id=ANY($2::uuid[])',[u.orgId,i.user_ids])).rows as Array<{id:string;roles:string[]}>;
    if(users.length!==new Set(i.user_ids).size)fail('NOT_FOUND','One of the people is not in this organisation. Reload the list and try again.',404);
    const hides=i.changes.filter(c=>c.visible===false);

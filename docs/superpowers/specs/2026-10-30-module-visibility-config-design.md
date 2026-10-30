@@ -82,7 +82,10 @@ past screens they never open.
 For a user and module: if a user row exists → its value; else the existing
 role-level result (role override OR permission default, OR-ed across roles).
 Super administrators: always visible, and a user-level hide for one is refused
-with the existing `ROLE_MUST_SEE_ALL` code. The `configuration` module can never
+with the existing `ROLE_MUST_SEE_ALL` code. A module no role of the person may
+use is never visible, whatever the rows say -- a "show" switch cannot grant a
+screen the roles cannot open; this applies to role rows as well as user rows
+(the role matrix allowed it before this work). The `configuration` module can never
 be hidden — at role or user level — for anyone holding `admin.configure`
 (ordinary ADMIN is not a floor role), so an administrator cannot lock themselves
 out of the screen that undoes a mistake. Modules the user has no permission
@@ -117,7 +120,7 @@ them; the API would refuse the routes anyway).
 - New page `/configuration` (nav group "Administration", permission
   `admin.configure`) with two tabs: **Roles** (move `ModuleVisibility.tsx` here,
   keep it on `/admin` as a link only) and **Employees**.
-- Employees tab: filter bar (role, unit, designation, status, project, search);
+- Employees tab: filter bar (role, district, employee status, search);
   table with one row per employee and one column per module showing the
   resolved state and its source (role/default vs person override marked);
   row click opens an editor with a three-state control per module (show,
@@ -174,8 +177,9 @@ them; the API would refuse the routes anyway).
 
 ## Calls I made (for the owner to check)
 
-- Visibility is stored per **user** and shown per employee; employees with no
-  login are listed read-only.
+- Visibility is stored per **user**; the Employees view lists every login of
+  the organisation (employee details joined when there is a record). Employees
+  who never had a login are not listed, since there is nothing to show them.
 - Precedence: person beats role; "follow role" clears the person's row.
 - Bulk update works on the rows selected under the current filter, capped at
   500 per call, never on "all matching".

@@ -155,6 +155,18 @@ export function resolveModuleVisibility(input: {
   const out: Record<string, ResolvedModule> = {};
   for (const m of MODULE_CATALOG) {
     if (input.superAdmin) { out[m.code] = { visible: true, source: 'default' }; continue; }
+    // Whether a role may use the module at all: the named permission or any
+    // alternative, and every `requires`. A "show" switch never grants a
+    // screen the person's roles cannot use -- the phone would render a tile
+    // that opens into refusals.
+    const permits = (roleCode: string): boolean => {
+      const held = input.heldByRole.get(roleCode);
+      const named = !m.permission || (held?.has(m.permission) ?? false);
+      const alternative = (m.anyOf ?? []).some((code) => held?.has(code) ?? false);
+      if (!named && !alternative) return false;
+      return (m.requires ?? []).every((code) => held?.has(code) ?? false);
+    };
+    if (!input.roles.some(permits)) { out[m.code] = { visible: false, source: 'default' }; continue; }
     const own = input.userOverrides.get(m.code);
     if (own !== undefined) { out[m.code] = { visible: own, source: 'user' }; continue; }
     let visible = false;
@@ -162,11 +174,7 @@ export function resolveModuleVisibility(input: {
     for (const roleCode of input.roles) {
       const row = input.roleOverrides.get(`${roleCode}:${m.code}`);
       if (row !== undefined) { fromRow = true; if (row) visible = true; continue; }
-      const held = input.heldByRole.get(roleCode);
-      const named = !m.permission || (held?.has(m.permission) ?? false);
-      const alternative = (m.anyOf ?? []).some((code) => held?.has(code) ?? false);
-      if (!named && !alternative) continue;
-      if ((m.requires ?? []).every((code) => held?.has(code) ?? false)) visible = true;
+      if (permits(roleCode)) visible = true;
     }
     out[m.code] = { visible, source: fromRow ? 'role' : 'default' };
   }

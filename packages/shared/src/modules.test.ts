@@ -88,6 +88,16 @@ describe('resolveModuleVisibility', () => {
     expect(out['my-work']).toEqual({ visible: true, source: 'default' });
   });
 
+  it('never shows a module the roles lack the permission for, whatever the rows say', () => {
+    // A "show" switch cannot grant a screen the person's role cannot use: the
+    // phone would render a tile that opens into 403s.
+    const base = { roles: ['EMPLOYEE'], heldByRole: held({ EMPLOYEE: ['task.read'] }), superAdmin: false };
+    const byUser = resolveModuleVisibility({ ...base, roleOverrides: new Map(), userOverrides: userRows({ payroll: true }) });
+    expect(byUser.payroll).toEqual({ visible: false, source: 'default' });
+    const byRole = resolveModuleVisibility({ ...base, roleOverrides: roleRows({ 'EMPLOYEE:payroll': true }), userOverrides: new Map() });
+    expect(byRole.payroll).toEqual({ visible: false, source: 'default' });
+  });
+
   it('needs no permission for security', () => {
     const out = resolveModuleVisibility({
       roles: ['EMPLOYEE'],

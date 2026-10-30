@@ -134,26 +134,34 @@ describe("GET /api/v1/auth/me exposes the caller's own resolved modules", () => 
     const username = `cat_combo_${uniq()}`;
     await createUser(w.pool, w.orgId, { username, roles: ["EMPLOYEE", "TEAM_LEAD"] });
     try {
-      // Neither EMPLOYEE nor TEAM_LEAD holds audit.read by default, so
-      // "audit" starts hidden for both.
+      // Both roles hold task.read, so "my-work" starts visible. Hiding it for
+      // one of the two roles is not enough to hide it -- the merge is an OR,
+      // not an AND; hiding it for both is. (A "show" switch cannot be used for
+      // this check any more: since 2026-10-30 it never grants a module the
+      // roles lack the permission for.)
       const before = await w.app.inject({
         method: "GET", url: "/api/v1/auth/me", headers: await signIn(username),
       });
-      expect(before.json().modules.audit).toBe(false);
+      expect(before.json().modules["my-work"]).toBe(true);
 
-      // An override on just one of the two roles this account holds is
-      // enough to show it -- the merge is an OR, not an AND.
-      expect((await setModule("EMPLOYEE", "audit", true)).status).toBe(200);
-      const after = await w.app.inject({
+      expect((await setModule("EMPLOYEE", "my-work", false)).status).toBe(200);
+      const oneHidden = await w.app.inject({
         method: "GET", url: "/api/v1/auth/me", headers: await signIn(username),
       });
-      expect(after.json().modules.audit).toBe(true);
+      expect(oneHidden.json().modules["my-work"]).toBe(true);
+
+      expect((await setModule("TEAM_LEAD", "my-work", false)).status).toBe(200);
+      const bothHidden = await w.app.inject({
+        method: "GET", url: "/api/v1/auth/me", headers: await signIn(username),
+      });
+      expect(bothHidden.json().modules["my-work"]).toBe(false);
     } finally {
       // The user itself is left in place rather than deleted: signing in
       // wrote an audit event that references it, and audit_events keeps a
       // foreign key to the actor on purpose. The next suite's beforeAll
       // truncates the world fresh.
-      await setModule("EMPLOYEE", "audit", null);
+      await setModule("EMPLOYEE", "my-work", null);
+      await setModule("TEAM_LEAD", "my-work", null);
     }
   });
 
@@ -303,6 +311,44 @@ describe("the employees view", () => {
     const byRole = await setModule("ADMIN", "configuration", false);
     expect(byRole.status, JSON.stringify(byRole.body)).toBe(422);
     expect(byRole.body.code).toBe("ROLE_MUST_SEE_ALL");
+  });
+
+  it("records who was changed and how in the audit trail", async () => {
+    const id = await createUser(w.pool, w.orgId, { username: `vis-audit-${uniq()}`, roles: ["EMPLOYEE"] });
+    const r = await bulk({ user_ids: [id], changes: [{ module_code: "inbox", visible: false }] });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const row = (await w.pool.query(
+      `SELECT after_state FROM audit_events
+        WHERE action = 'admin.user_module_visibility' AND org_id = $1
+        ORDER BY created_at DESC LIMIT 1`, [w.orgId],
+    )).rows[0];
+    expect(row, "an audit row exists").toBeTruthy();
+    const after = row.after_state as { user_ids?: string[]; changes?: unknown[] };
+    expect(after.user_ids).toEqual([id]);
+    expect(after.changes).toEqual([{ module_code: "inbox", visible: false }]);
+  });
+
+  it("never hides configuration for an ordinary administrator either, and leaves other hides alone", async () => {
+    // The seeded admin is a super administrator, whose guard comes first; this
+    // one holds ADMIN only, so the admin.configure guard is what answers.
+    const adminOnly = await createUser(w.pool, w.orgId, { username: `vis-adm-${uniq()}`, roles: ["ADMIN"] });
+    const refused = await bulk({ user_ids: [adminOnly], changes: [{ module_code: "configuration", visible: false }] });
+    expect(refused.status, JSON.stringify(refused.body)).toBe(422);
+    expect(refused.body.code).toBe("ROLE_MUST_SEE_ALL");
+    expect((await w.pool.query("SELECT 1 FROM user_module_visibility WHERE user_id = $1", [adminOnly])).rowCount).toBe(0);
+    const allowed = await bulk({ user_ids: [adminOnly], changes: [{ module_code: "inbox", visible: false }] });
+    expect(allowed.status, JSON.stringify(allowed.body)).toBe(200);
+  });
+
+  it("agrees with the Roles tab about defaults that come from an alternative permission", async () => {
+    // EMPLOYEE holds attendance.punch, not attendance.read: the module is
+    // usable, so both views must say so -- the role matrix once read only the
+    // named permission.
+    const matrix = await getMatrix();
+    const cell = matrix.data.cells.find((c: any) => c.role_code === "EMPLOYEE" && c.module_code === "attendance");
+    expect(cell.default_visible).toBe(true);
+    const people = await list("status=ALL&limit=100");
+    expect(rowFor(people, w.directUserId).modules.attendance.visible).toBe(true);
   });
 
   it("needs admin.configure", async () => {
