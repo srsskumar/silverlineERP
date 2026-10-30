@@ -19,6 +19,10 @@
  * between the two fails a test rather than silently mis-gating a screen.
  */
 
+import { z } from 'zod';
+import { cursorPageQuerySchema } from './pagination.js';
+import { EMPLOYEE_STATUSES } from './s1.js';
+
 export interface ModuleCatalogEntry {
   /** Stable identifier, independent of the href nav.ts happens to use. */
   code: string;
@@ -95,6 +99,8 @@ export const MODULE_CATALOG: ModuleCatalogEntry[] = [
   { code: 'admin', label: 'Administration', group: 'Organisation', permission: 'users.read' },
   { code: 'admin-import-templates', label: 'Upload & download', group: 'Organisation',
     permission: 'users.read' },
+  { code: 'configuration', label: 'Configuration', group: 'Organisation',
+    permission: 'admin.configure' },
   { code: 'audit', label: 'Audit trail', group: 'Organisation', permission: 'audit.read' },
   // No permission: see the field comment above.
   { code: 'security', label: 'Security', group: 'Organisation' },
@@ -166,3 +172,26 @@ export function resolveModuleVisibility(input: {
   }
   return out;
 }
+
+/** Filters for the Configuration screen's Employees view (one row per login). */
+export const userModuleVisibilityQuerySchema = cursorPageQuerySchema.extend({
+  role_code: z.string().min(1).max(100).optional(),
+  district_id: z.string().guid().optional(),
+  /** Employee status; `ALL` also lists logins with no employee record. */
+  status: z.enum([...EMPLOYEE_STATUSES, 'ALL']).default('ACTIVE'),
+  q: z.string().trim().min(1).max(200).optional(),
+});
+
+/**
+ * One bulk change: the selected people and, per module, show / hide / follow
+ * the role (`null` clears the person's row). Capped so a mistaken "select
+ * all" cannot rewrite an organisation in one call.
+ */
+export const userModuleVisibilityUpdateSchema = z.object({
+  user_ids: z.array(z.string().guid()).min(1).max(500),
+  changes: z.array(z.object({
+    module_code: z.string().min(1).max(64),
+    visible: z.boolean().nullable(),
+  })).min(1).max(MODULE_CATALOG.length),
+});
+export type UserModuleVisibilityUpdate = z.infer<typeof userModuleVisibilityUpdateSchema>;

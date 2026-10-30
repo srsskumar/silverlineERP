@@ -223,3 +223,91 @@ describe("a person's own row", () => {
     expect(plainMe.data.modules["my-work"]).toBe(true);
   });
 });
+
+describe("the employees view", () => {
+  const list = (query = "", h = w.admin) =>
+    call("GET", h, `/api/v1/admin/module-visibility/users${query ? `?${query}` : ""}`);
+  const bulk = (payload: unknown, h = w.admin) =>
+    call("PUT", h, "/api/v1/admin/module-visibility/users", payload);
+  const rowFor = (res: { data: any[] }, userId: string) => res.data.find((r) => r.user_id === userId);
+
+  it("lists the organisation's logins with resolved modules and their source", async () => {
+    const r = await list("limit=100");
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const direct = rowFor(r, w.directUserId);
+    expect(direct, "the linked EMPLOYEE login is listed").toBeTruthy();
+    expect(direct.employee_id).toBe(w.directEmployee);
+    expect(direct.roles).toContain("EMPLOYEE");
+    expect(direct.modules["my-work"]).toEqual({ visible: true, source: "default" });
+    expect(typeof r.body.next_cursor === "string" || r.body.next_cursor === null).toBe(true);
+  });
+
+  it("filters by role, district and search", async () => {
+    // The fixture's role users have no employee record, so they appear only under ALL.
+    const byRole = await list(`role_code=HR_MANAGER&status=ALL&limit=100`);
+    expect(byRole.data.every((row: any) => row.roles.includes("HR_MANAGER"))).toBe(true);
+    expect(rowFor(byRole, w.roleUserId.HR_MANAGER)).toBeTruthy();
+    const byDistrict = await list(`district_id=${w.chainA.district}&limit=100`);
+    expect(rowFor(byDistrict, w.directUserId)).toBeTruthy();
+    expect(rowFor(byDistrict, w.siteUserId), "chain B's employee is in another district").toBeUndefined();
+    const empNo = (await w.pool.query("SELECT emp_no FROM employees WHERE id = $1", [w.directEmployee])).rows[0].emp_no;
+    const bySearch = await list(`q=${encodeURIComponent(empNo)}&limit=100`);
+    expect(bySearch.data.map((row: any) => row.user_id)).toEqual([w.directUserId]);
+  });
+
+  it("includes accounts with no employee record only when status is ALL", async () => {
+    expect(rowFor(await list("limit=100"), w.adminId)).toBeUndefined();
+    const all = await list("status=ALL&limit=100");
+    const admin = rowFor(all, w.adminId);
+    expect(admin).toBeTruthy();
+    expect(admin.employee_id).toBeNull();
+  });
+
+  it("bulk-hides a module for the selected people and clears it again", async () => {
+    const a = `vis-a-${uniq()}`, b = `vis-b-${uniq()}`;
+    const aId = await createUser(w.pool, w.orgId, { username: a, roles: ["EMPLOYEE"] });
+    const bId = await createUser(w.pool, w.orgId, { username: b, roles: ["EMPLOYEE"] });
+    const hidden = await bulk({ user_ids: [aId, bId], changes: [{ module_code: "my-work", visible: false }] });
+    expect(hidden.status, JSON.stringify(hidden.body)).toBe(200);
+    expect(hidden.data.updated).toBe(2);
+    const after = await list("status=ALL&limit=100");
+    expect(rowFor(after, aId).modules["my-work"]).toEqual({ visible: false, source: "user" });
+    expect(rowFor(after, bId).modules["my-work"]).toEqual({ visible: false, source: "user" });
+    expect(rowFor(after, w.directUserId).modules["my-work"].source).not.toBe("user");
+    expect((await call("GET", await signIn(a), "/api/v1/auth/me")).data.modules["my-work"]).toBe(false);
+    const cleared = await bulk({ user_ids: [aId, bId], changes: [{ module_code: "my-work", visible: null }] });
+    expect(cleared.status).toBe(200);
+    expect((await call("GET", await signIn(a), "/api/v1/auth/me")).data.modules["my-work"]).toBe(true);
+    const rows = await w.pool.query("SELECT 1 FROM user_module_visibility WHERE user_id = ANY($1::uuid[])", [[aId, bId]]);
+    expect(rows.rowCount).toBe(0);
+  });
+
+  it("refuses a login from another organisation and writes nothing", async () => {
+    const outsider = await createUser(w.pool, w.otherOrgId, { username: `vis-out-${uniq()}`, roles: ["EMPLOYEE"] });
+    const insider = await createUser(w.pool, w.orgId, { username: `vis-in-${uniq()}`, roles: ["EMPLOYEE"] });
+    const r = await bulk({ user_ids: [insider, outsider], changes: [{ module_code: "my-work", visible: false }] });
+    expect(r.status).toBe(404);
+    const rows = await w.pool.query("SELECT 1 FROM user_module_visibility WHERE user_id = ANY($1::uuid[])", [[insider, outsider]]);
+    expect(rows.rowCount).toBe(0);
+  });
+
+  it("refuses an unknown module", async () => {
+    const r = await bulk({ user_ids: [w.directUserId], changes: [{ module_code: "no-such-module", visible: false }] });
+    expect(r.status).toBe(404);
+  });
+
+  it("never hides configuration for an administrator, by person or by role", async () => {
+    const byUser = await bulk({ user_ids: [w.adminId], changes: [{ module_code: "configuration", visible: false }] });
+    expect(byUser.status, JSON.stringify(byUser.body)).toBe(422);
+    expect(byUser.body.code).toBe("ROLE_MUST_SEE_ALL");
+    const byRole = await setModule("ADMIN", "configuration", false);
+    expect(byRole.status, JSON.stringify(byRole.body)).toBe(422);
+    expect(byRole.body.code).toBe("ROLE_MUST_SEE_ALL");
+  });
+
+  it("needs admin.configure", async () => {
+    expect((await list("", w.role.EMPLOYEE)).status).toBeGreaterThanOrEqual(401);
+    expect((await bulk({ user_ids: [w.directUserId], changes: [{ module_code: "my-work", visible: false }] }, w.role.EMPLOYEE)).status)
+      .toBeGreaterThanOrEqual(401);
+  });
+});

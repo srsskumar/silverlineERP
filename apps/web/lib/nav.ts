@@ -15,7 +15,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   FileCheck,
-  Compass, ScrollText, ArrowLeftRight, Banknote, Landmark, CalendarClock } from 'lucide-react';
+  Compass, ScrollText, ArrowLeftRight, Banknote, Landmark, CalendarClock, SlidersHorizontal } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { PERMISSIONS } from './permissions';
 
@@ -163,6 +163,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/org/holidays', label: 'Holidays', permission: PERMISSIONS.HOLIDAY_READ, icon: CalendarDays },
       { href: '/admin', label: 'Administration', permission: 'users.read', icon: Settings },
       { href: '/admin/import-templates', label: 'Upload & download', permission: 'users.read', icon: Download },
+      // Which modules each role and each employee sees (owner request 2026-10-30).
+      { href: '/configuration', label: 'Configuration', permission: 'admin.configure', icon: SlidersHorizontal },
       // The trail was written from the beginning and readable only as an
       // export, which nobody hunting "who changed this" would think to open.
       { href: '/audit', label: 'Audit trail', permission: 'audit.read', icon: ScrollText },

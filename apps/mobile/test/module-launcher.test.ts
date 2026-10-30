@@ -63,6 +63,7 @@ describe("buildModuleLauncher", () => {
     const codes = groups.flatMap((g) => g.items.map((i) => i.code));
     assert.equal(codes.includes("org-locations"), false);
     assert.equal(WEB_ONLY_CODES.includes("org-locations"), true);
+    assert.equal(WEB_ONLY_CODES.includes("configuration"), true);
     assert.equal("org-locations" in BUILT_MODULE_ROUTES, false);
   });
 

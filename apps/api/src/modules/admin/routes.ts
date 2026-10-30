@@ -5,7 +5,7 @@ import {writeAudit} from '../../common/audit.js';
 import { z } from 'zod';
 import { buildAuthenticate,requirePermission } from '../../common/auth.js';
 import { actor,parse,page,mutate,inOrg,fail,sortClause } from '../../common/domain.js';
-import { isIndianMobile,formatIndianMobile,MFA_POLICIES,mfaFloorRole,GST_STATE_CODES,canManageAccount,MODULE_CATALOG,MODULE_CODES } from '@silverline/shared';
+import { isIndianMobile,formatIndianMobile,MFA_POLICIES,mfaFloorRole,GST_STATE_CODES,canManageAccount,MODULE_CATALOG,MODULE_CODES,resolveModuleVisibility,userModuleVisibilityQuerySchema,userModuleVisibilityUpdateSchema,encodeCursor,decodeCursor,type ResolvedModule } from '@silverline/shared';
 
 export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jwtSecret:string}) {
  const {pool}=opts,auth=buildAuthenticate(opts),guard=(p:string)=>requirePermission(auth,p);
@@ -390,6 +390,11 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
     * role that puts things right when a rule has been set wrong, and a
     * screen it cannot see is a control it cannot reach.
     */
+   // The screen that undoes a wrong rule can never be hidden from a role that
+   // administers it: an ADMIN who hid Configuration from ADMIN would be locked out.
+   if(i.visible===false&&i.module_code==='configuration'&&await roleHoldsPermission(db,i.role_code,'admin.configure')){
+    fail('ROLE_MUST_SEE_ALL','Configuration cannot be hidden from a role that administers it.',422);
+   }
    if(i.visible===false&&mfaFloorRole(i.role_code)){
     fail('ROLE_MUST_SEE_ALL',
      'A super administrator has to be able to see every screen — it is the role that puts '
@@ -408,4 +413,89 @@ export async function registerAdminRoutes(app:FastifyInstance,opts:{pool:Pool;jw
    return {role_code:i.role_code,module_code:i.module_code,visible:i.visible};
   })};
  });
+
+ /*
+  * The Employees view (owner request 2026-10-30): one row per login of the
+  * organisation, with the employee record joined when there is one, and every
+  * module resolved the same way /auth/me resolves it -- own row, then role
+  * rows, then the permission default. Display only, like the role matrix.
+  */
+ app.get('/api/v1/admin/module-visibility/users',{preHandler:guard('admin.configure')},async req=>{
+  const u=actor(req);
+  const q=parse(userModuleVisibilityQuerySchema,req.query);
+  const cursor=q.cursor?decodeCursor<{username:string;id:string}>(q.cursor):null;
+  const params:unknown[]=[u.orgId];
+  const where=['u.org_id=$1'];
+  if(q.status!=='ALL'){params.push(q.status);where.push(`e.status=$${params.length}`);}
+  if(q.district_id){params.push(q.district_id);where.push(`e.district_id=$${params.length}`);}
+  if(q.role_code){params.push(q.role_code);where.push(`EXISTS (SELECT 1 FROM user_roles urf JOIN roles rf ON rf.id=urf.role_id WHERE urf.user_id=u.id AND rf.code=$${params.length})`);}
+  if(q.q){params.push(`%${q.q}%`);where.push(`(u.username ILIKE $${params.length} OR e.emp_no ILIKE $${params.length} OR (e.first_name||' '||COALESCE(e.last_name,'')) ILIKE $${params.length})`);}
+  if(cursor){params.push(cursor.username,cursor.id);where.push(`(u.username,u.id)>($${params.length-1},$${params.length}::uuid)`);}
+  params.push(q.limit+1);
+  const rows=(await pool.query(
+   `SELECT u.id AS user_id,u.username,e.id AS employee_id,e.emp_no,
+           NULLIF(TRIM(COALESCE(e.first_name,'')||' '||COALESCE(e.last_name,'')),'') AS name,
+           e.designation,e.district_id,d.name AS district,e.status AS employee_status,
+           COALESCE((SELECT array_agg(r.code ORDER BY r.code) FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id),'{}') AS roles
+      FROM users u
+      LEFT JOIN employees e ON e.id=u.employee_id
+      LEFT JOIN org_units d ON d.id=e.district_id
+     WHERE ${where.join(' AND ')}
+     ORDER BY u.username,u.id
+     LIMIT $${params.length}`,params)).rows as Array<{user_id:string;username:string;employee_id:string|null;emp_no:string|null;name:string|null;designation:string|null;district_id:string|null;district:string|null;employee_status:string|null;roles:string[]}>;
+  const pageRows=rows.slice(0,q.limit);
+  const next=rows.length>q.limit?encodeCursor({username:pageRows[pageRows.length-1]!.username,id:pageRows[pageRows.length-1]!.user_id}):null;
+  const roleCodes=[...new Set(pageRows.flatMap(r=>r.roles))];
+  const userIds=pageRows.map(r=>r.user_id);
+  const grants=roleCodes.length?(await pool.query('SELECT r.code AS role_code,rp.permission_code FROM roles r LEFT JOIN role_permissions rp ON rp.role_id=r.id WHERE r.code=ANY($1::text[])',[roleCodes])).rows as Array<{role_code:string;permission_code:string|null}>:[];
+  const heldByRole=new Map<string,Set<string>>();
+  for(const g of grants){if(!heldByRole.has(g.role_code))heldByRole.set(g.role_code,new Set());if(g.permission_code)heldByRole.get(g.role_code)!.add(g.permission_code);}
+  const roleRows=roleCodes.length?(await pool.query('SELECT role_code,module_code,visible FROM role_module_visibility WHERE org_id=$1 AND role_code=ANY($2::text[])',[u.orgId,roleCodes])).rows as Array<{role_code:string;module_code:string;visible:boolean}>:[];
+  const roleOverrides=new Map<string,boolean>(roleRows.map(r=>[`${r.role_code}:${r.module_code}`,r.visible]));
+  const userRows=userIds.length?(await pool.query('SELECT user_id,module_code,visible FROM user_module_visibility WHERE org_id=$1 AND user_id=ANY($2::uuid[])',[u.orgId,userIds])).rows as Array<{user_id:string;module_code:string;visible:boolean}>:[];
+  const byUser=new Map<string,Map<string,boolean>>();
+  for(const r of userRows){if(!byUser.has(r.user_id))byUser.set(r.user_id,new Map());byUser.get(r.user_id)!.set(r.module_code,r.visible);}
+  const data=pageRows.map(r=>({...r,modules:resolveModuleVisibility({roles:r.roles,heldByRole,roleOverrides,userOverrides:byUser.get(r.user_id)??new Map(),superAdmin:r.roles.some(code=>mfaFloorRole(code))}) as Record<string,ResolvedModule>}));
+  return {data,next_cursor:next};
+ });
+
+ app.put('/api/v1/admin/module-visibility/users',{preHandler:guard('admin.configure')},async req=>{
+  const u=actor(req);
+  const i=parse(userModuleVisibilityUpdateSchema,req.body);
+  for(const c of i.changes){
+   if(!(MODULE_CODES as readonly string[]).includes(c.module_code))fail('NOT_FOUND','There is no such module. Reload the list to see the modules as they stand.',404);
+  }
+  return {data:await mutate(pool,req,'admin.user_module_visibility','user',async db=>{
+   const users=(await db.query('SELECT u.id,COALESCE((SELECT array_agg(r.code) FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id),\'{}\') AS roles FROM users u WHERE u.org_id=$1 AND u.id=ANY($2::uuid[])',[u.orgId,i.user_ids])).rows as Array<{id:string;roles:string[]}>;
+   if(users.length!==new Set(i.user_ids).size)fail('NOT_FOUND','One of the people is not in this organisation. Reload the list and try again.',404);
+   const hides=i.changes.filter(c=>c.visible===false);
+   if(hides.length){
+    const floor=users.filter(x=>x.roles.some(code=>mfaFloorRole(code)));
+    if(floor.length)fail('ROLE_MUST_SEE_ALL','A super administrator has to be able to see every screen — it is the role that puts the others right when a visibility rule is set wrong.',422);
+    if(hides.some(c=>c.module_code==='configuration')){
+     const admins=(await db.query('SELECT DISTINCT ur.user_id FROM user_roles ur JOIN role_permissions rp ON rp.role_id=ur.role_id WHERE ur.user_id=ANY($1::uuid[]) AND rp.permission_code=$2',[users.map(x=>x.id),'admin.configure'])).rowCount??0;
+     if(admins>0)fail('ROLE_MUST_SEE_ALL','Configuration cannot be hidden from someone who administers it.',422);
+    }
+   }
+   for(const c of i.changes){
+    if(c.visible===null){
+     await db.query('DELETE FROM user_module_visibility WHERE org_id=$1 AND module_code=$2 AND user_id=ANY($3::uuid[])',[u.orgId,c.module_code,i.user_ids]);
+    } else {
+     await db.query(
+      `INSERT INTO user_module_visibility(org_id,user_id,module_code,visible,updated_by)
+       SELECT $1,x,$2,$3,$4 FROM unnest($5::uuid[]) AS x
+       ON CONFLICT (org_id,user_id,module_code)
+       DO UPDATE SET visible=EXCLUDED.visible, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+      [u.orgId,c.module_code,c.visible,u.id,i.user_ids]);
+    }
+   }
+   return {updated:users.length,user_ids:i.user_ids,changes:i.changes};
+  })};
+ });
+}
+
+/** Whether a role (system or this org's) holds a permission -- for the lockout guards above. */
+async function roleHoldsPermission(db:{query:Pool['query']},roleCode:string,permission:string):Promise<boolean> {
+ const r=await db.query('SELECT 1 FROM roles ro JOIN role_permissions rp ON rp.role_id=ro.id WHERE ro.code=$1 AND rp.permission_code=$2 LIMIT 1',[roleCode,permission]);
+ return (r.rowCount??0)>0;
 }

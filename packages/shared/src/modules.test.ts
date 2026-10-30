@@ -1,5 +1,35 @@
 import { describe, expect, it } from 'vitest';
-import { resolveModuleVisibility } from './modules.js';
+import {
+  resolveModuleVisibility,
+  userModuleVisibilityQuerySchema,
+  userModuleVisibilityUpdateSchema,
+} from './modules.js';
+
+const guid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+describe('userModuleVisibilityUpdateSchema', () => {
+  it('needs at least one user and one change', () => {
+    expect(userModuleVisibilityUpdateSchema.safeParse({ user_ids: [], changes: [{ module_code: 'my-work', visible: false }] }).success).toBe(false);
+    expect(userModuleVisibilityUpdateSchema.safeParse({ user_ids: [guid(1)], changes: [] }).success).toBe(false);
+  });
+  it('caps a bulk update at 500 people', () => {
+    const ids = Array.from({ length: 501 }, (_, i) => guid(i + 1));
+    expect(userModuleVisibilityUpdateSchema.safeParse({ user_ids: ids, changes: [{ module_code: 'my-work', visible: true }] }).success).toBe(false);
+    expect(userModuleVisibilityUpdateSchema.safeParse({ user_ids: ids.slice(0, 500), changes: [{ module_code: 'my-work', visible: true }] }).success).toBe(true);
+  });
+  it('rejects an id that is not a guid and accepts null for "follow the role"', () => {
+    expect(userModuleVisibilityUpdateSchema.safeParse({ user_ids: ['nope'], changes: [{ module_code: 'my-work', visible: true }] }).success).toBe(false);
+    expect(userModuleVisibilityUpdateSchema.safeParse({ user_ids: [guid(1)], changes: [{ module_code: 'my-work', visible: null }] }).success).toBe(true);
+  });
+});
+
+describe('userModuleVisibilityQuerySchema', () => {
+  it('defaults the status filter to ACTIVE and accepts ALL', () => {
+    expect(userModuleVisibilityQuerySchema.parse({}).status).toBe('ACTIVE');
+    expect(userModuleVisibilityQuerySchema.parse({ status: 'ALL' }).status).toBe('ALL');
+    expect(userModuleVisibilityQuerySchema.safeParse({ status: 'SOMETIMES' }).success).toBe(false);
+  });
+});
 
 /*
  * One function decides what a person sees: their own row, else their roles'

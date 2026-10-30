@@ -59,6 +59,8 @@ export const LAUNCHER_EXCLUDED_CODES: readonly string[] = [
 export const WEB_ONLY_CODES: readonly string[] = [
   "org-locations", "approval-policies", "payments", "bank-reconciliation", "financial-periods",
   "cost-heads", "shifts",
+  // Module visibility per role and employee (2026-10-30): admin set-up, desktop only.
+  "configuration",
 ];
 
 /** Catalog codes mobile has built a real screen for (not "Coming soon"). */
