@@ -88,7 +88,7 @@ afterAll(async () => {
  *  GET /api/v1/integrations/gstin-verify (guardAny(['client.manage',
  *  'inventory.manage'])), rate-limited and permission-tagged, so it too is
  *  covered mechanically. */
-const EXPECTED_ROUTE_COUNT = 485;
+const EXPECTED_ROUTE_COUNT = 487; // +2 on 2026-10-30: GET/PUT /admin/module-visibility/users
 
 interface Violation {
   route: string;

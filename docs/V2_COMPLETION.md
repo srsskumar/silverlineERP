@@ -19,6 +19,7 @@ Baseline verification: 276 API integration tests, 204 web tests, 50 mobile unit 
 | Automation and integrations | Missing durable events, automation execution, webhooks and provider adapters | In progress |
 | Analytics and AI | Existing role counters; missing cycle/flow metrics and explainable advisory predictions | In progress |
 | Administration | Missing user/role/security configuration screens and device management | In progress |
+| Module visibility | Configuration page: role matrix plus per-employee overrides with filters and bulk update; web navigation and landing honour the map (2026-10-30) | Done |
 | Operations | Missing reproducible release packaging, CI, backup/restore, load checks and training/runbook | In progress |
 
 ## Release acceptance requiring external evidence

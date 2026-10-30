@@ -70,6 +70,22 @@ schema (migrations 001–118) and the standard seed were applied; the first sign
 `admin` with a one-time password that must be changed. Operational details are in
 `docs/security/2026-10-28/SECURITY_REMEDIATION_LOG.md` ("Deployment — 2026-10-29").
 
+## Decision 2026-10-30: module visibility per role and per employee
+
+An administrator decides which modules each role and each employee sees, from
+Administration → Configuration (web only). Roles carry the defaults (the matrix
+that existed since 2026-09-24); a person's own setting beats the role's, and
+"follow role" removes it. Bulk update applies one set of choices to the rows the
+administrator selected under the current filter, never to "everything matching";
+500 people per call at most. The configuration screen can never be hidden from
+anyone who administers it, and a super administrator sees everything. Visibility
+is display only: every route keeps its permission and scope checks
+(`MODULE_VISIBILITY_IS_NOT_A_PERMISSION`). The web navigation and landing page
+now honour the map (they ignored it before); a direct link to a hidden page still
+opens for somebody who holds the permission. Mobile already honoured it.
+Table `user_module_visibility` (migration 119). Design:
+`docs/superpowers/specs/2026-10-30-module-visibility-config-design.md`.
+
 ## 6. Risk Register (top, merged)
 
 1. Morning check-in herd (15–25 rps, one box) → batch sync endpoint, PgBouncer, upsert path, jittered retries, 2× load test S6.
