@@ -117,6 +117,7 @@ const MIGRATIONS: Array<{ version: string; file: string }> = [
   { version: "116_sync_task_linked_stage", file: "116_sync_task_linked_stage.sql" },
   { version: "117_role_mfa_policies", file: "117_role_mfa_policies.sql" },
   { version: "118_auth_rate_hits", file: "118_auth_rate_hits.sql" },
+  { version: "119_user_module_visibility", file: "119_user_module_visibility.sql" },
 ];
 
 /**

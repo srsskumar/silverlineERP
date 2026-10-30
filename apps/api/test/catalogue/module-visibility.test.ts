@@ -201,3 +201,25 @@ describe("the invariant: visibility never gates the API", () => {
     expect(after.data.map((p: any) => p.id)).toEqual(before.data.map((p: any) => p.id));
   });
 });
+
+describe("a person's own row", () => {
+  // Owner request 2026-10-30: visibility per employee as well as per role.
+  // A row for the person beats the role's row and the permission default;
+  // no row means the role result, exactly as before.
+  it("hides a module for one user that the role still shows", async () => {
+    const hidden = `vis-user-${uniq()}`;
+    const plain = `vis-plain-${uniq()}`;
+    const hiddenId = await createUser(w.pool, w.orgId, { username: hidden, roles: ["EMPLOYEE"] });
+    await createUser(w.pool, w.orgId, { username: plain, roles: ["EMPLOYEE"] });
+    await w.pool.query(
+      `INSERT INTO user_module_visibility (org_id, user_id, module_code, visible)
+       VALUES ($1, $2, 'my-work', false)`,
+      [w.orgId, hiddenId],
+    );
+    const hiddenMe = await call("GET", await signIn(hidden), "/api/v1/auth/me");
+    expect(hiddenMe.status, JSON.stringify(hiddenMe.body)).toBe(200);
+    expect(hiddenMe.data.modules["my-work"]).toBe(false);
+    const plainMe = await call("GET", await signIn(plain), "/api/v1/auth/me");
+    expect(plainMe.data.modules["my-work"]).toBe(true);
+  });
+});

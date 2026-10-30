@@ -14,7 +14,8 @@ import {
   canImpersonate,
   impersonateSchema,
   IMPERSONATION_DEFAULT_MINUTES,
-  MODULE_CATALOG,
+  mfaFloorRole,
+  resolveModuleVisibility,
 } from "@silverline/shared";
 import { writeAudit } from "../../common/audit.js";
 import { buildAuthenticate, requirePermission } from "../../common/auth.js";
@@ -522,27 +523,25 @@ export async function registerAuthRoutes(
       const overrideMap = new Map<string, boolean>(
         moduleOverrides.map((o) => [`${o.role_code}:${o.module_code}`, o.visible]),
       );
-      const modules: Record<string, boolean> = {};
-      for (const m of MODULE_CATALOG) {
-        modules[m.code] = user.roles.some((roleCode) => {
-          const override = overrideMap.get(`${roleCode}:${m.code}`);
-          if (override !== undefined) return override;
-          // Mirrors web's navItemVisible (lib/landing.ts): named permission or
-          // any alternative makes it worth opening, but every `requires` must
-          // still hold. Checking only `m.permission` left `anyOf` (attendance,
-          // survey) and `requires` (dashboard, planning, project finance,
-          // analytics) silently unenforced here -- e.g. EMPLOYEE holds
-          // attendance.punch but not attendance.read, so modules.attendance
-          // resolved false and the mobile Attendance tab, this role's one
-          // daily action, was unreachable even though the route itself never
-          // gated on module visibility.
-          const held = heldByRole.get(roleCode);
-          const named = !m.permission || (held?.has(m.permission) ?? false);
-          const alternative = (m.anyOf ?? []).some((code) => held?.has(code) ?? false);
-          if (!named && !alternative) return false;
-          return (m.requires ?? []).every((code) => held?.has(code) ?? false);
-        });
-      }
+      // The person's own rows (owner request 2026-10-30) beat the role rows.
+      const userRows = (
+        await opts.pool.query(
+          `SELECT module_code, visible FROM user_module_visibility WHERE org_id = $1 AND user_id = $2`,
+          [user.orgId, user.id],
+        )
+      ).rows as Array<{ module_code: string; visible: boolean }>;
+      // One resolver, shared with the Configuration screen (packages/shared
+      // modules.ts), so the two can never disagree about what a person sees.
+      const resolved = resolveModuleVisibility({
+        roles: user.roles,
+        heldByRole,
+        roleOverrides: overrideMap,
+        userOverrides: new Map(userRows.map((r) => [r.module_code, r.visible])),
+        superAdmin: user.roles.some((code) => mfaFloorRole(code)),
+      });
+      const modules: Record<string, boolean> = Object.fromEntries(
+        Object.entries(resolved).map(([code, r]) => [code, r.visible]),
+      );
       return reply.status(200).send({
         user: {
           ...full,

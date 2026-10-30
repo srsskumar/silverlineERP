@@ -124,3 +124,45 @@ export const MODULE_CODES: readonly string[] = MODULE_CATALOG.map(m => m.code);
  * security-invariant test in the API test suite.
  */
 export const MODULE_VISIBILITY_IS_NOT_A_PERMISSION = true;
+
+export type VisibilitySource = 'user' | 'role' | 'default';
+export interface ResolvedModule { visible: boolean; source: VisibilitySource }
+
+/**
+ * What one person sees, decided once for `/auth/me` and the Configuration
+ * screen alike: their own row, else their roles' rows, else whether a role
+ * holds the module's permission -- the same rule `navItemVisible` applies on
+ * the web (named permission or any `anyOf`, and every `requires`). Visible if
+ * ANY role shows it: a person with two roles is not stuck with the stricter
+ * view. A super administrator sees everything, whatever the rows say; it is
+ * the role that puts a wrong rule right.
+ */
+export function resolveModuleVisibility(input: {
+  roles: readonly string[];
+  heldByRole: ReadonlyMap<string, ReadonlySet<string>>;
+  /** `${roleCode}:${moduleCode}` -> visible */
+  roleOverrides: ReadonlyMap<string, boolean>;
+  /** moduleCode -> visible */
+  userOverrides: ReadonlyMap<string, boolean>;
+  superAdmin: boolean;
+}): Record<string, ResolvedModule> {
+  const out: Record<string, ResolvedModule> = {};
+  for (const m of MODULE_CATALOG) {
+    if (input.superAdmin) { out[m.code] = { visible: true, source: 'default' }; continue; }
+    const own = input.userOverrides.get(m.code);
+    if (own !== undefined) { out[m.code] = { visible: own, source: 'user' }; continue; }
+    let visible = false;
+    let fromRow = false;
+    for (const roleCode of input.roles) {
+      const row = input.roleOverrides.get(`${roleCode}:${m.code}`);
+      if (row !== undefined) { fromRow = true; if (row) visible = true; continue; }
+      const held = input.heldByRole.get(roleCode);
+      const named = !m.permission || (held?.has(m.permission) ?? false);
+      const alternative = (m.anyOf ?? []).some((code) => held?.has(code) ?? false);
+      if (!named && !alternative) continue;
+      if ((m.requires ?? []).every((code) => held?.has(code) ?? false)) visible = true;
+    }
+    out[m.code] = { visible, source: fromRow ? 'role' : 'default' };
+  }
+  return out;
+}

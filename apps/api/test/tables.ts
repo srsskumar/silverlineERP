@@ -19,7 +19,7 @@
 export const VOLATILE_TABLES = `
   impersonation_sessions,
   project_supply_lines, catalogue_items,
-  role_scope_policies, role_mfa_policies, role_module_visibility, auth_rate_hits,
+  role_scope_policies, role_mfa_policies, role_module_visibility, user_module_visibility, auth_rate_hits,
   password_reset_requests,
   task_collaborators,
   survey_alert_sent, survey_alert_subscriptions, survey_queries, survey_contacts,
