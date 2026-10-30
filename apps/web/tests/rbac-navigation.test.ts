@@ -10,7 +10,7 @@ import {
 } from '@silverline/shared';
 import { Clock } from 'lucide-react';
 import { NAV_GROUPS, QUICK_CREATE, type NavItem } from '../lib/nav';
-import { landingRoute, canOpen, navItemVisible } from '../lib/landing';
+import { landingRoute, canOpen, navItemVisible, navItemShown } from '../lib/landing';
 import { attendanceView } from '../lib/attendance-view';
 import { hasPermission, PERMISSIONS } from '../lib/permissions';
 
@@ -36,6 +36,42 @@ function permissionsFor(role: RoleCode): string[] {
 }
 
 const ROLES = ROLE_CODES as readonly RoleCode[];
+
+/*
+ * Module visibility (role and employee settings, 2026-10-30): the sidebar and
+ * the landing page honour the session's module map; opening a page does not.
+ * Hiding is cosmetic -- a bookmark to a hidden page still works for somebody
+ * who holds the permission.
+ */
+describe('the shell honours module visibility', () => {
+  const item = (href: string): NavItem => {
+    for (const g of NAV_GROUPS) for (const i of g.items) if (i.href === href) return i;
+    throw new Error(`no nav item ${href}`);
+  };
+
+  it('hides a module the map switches off even when the permission is held', () => {
+    const perms = [PERMISSIONS.TASK_READ];
+    expect(navItemShown(perms, { 'my-work': false }, item('/my-work'))).toBe(false);
+    expect(navItemShown(perms, {}, item('/my-work'))).toBe(true);
+    expect(navItemShown(perms, undefined, item('/my-work'))).toBe(true);
+  });
+
+  it('never hides Security or Configuration by the map', () => {
+    expect(navItemShown([], { security: false }, item('/security'))).toBe(true);
+    expect(navItemShown(['admin.configure'], { configuration: false }, item('/configuration'))).toBe(true);
+    expect(navItemShown([], { configuration: true }, item('/configuration'))).toBe(false);
+  });
+
+  it('lands on the first module the person will actually see', () => {
+    const perms = permissionsFor('ADMIN');
+    expect(landingRoute(perms)).toBe('/dashboard');
+    expect(landingRoute(perms, { dashboard: false })).toBe('/my-work');
+  });
+
+  it('still opens a hidden page for somebody who holds the permission', () => {
+    expect(canOpen([PERMISSIONS.TASK_READ], '/my-work')).toBe(true);
+  });
+});
 
 describe('every destination is gated', () => {
   it('gives every navigation item a permission, bar the one deliberate exception', () => {

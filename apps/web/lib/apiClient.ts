@@ -601,6 +601,8 @@ export interface MeResponse {
   user: SessionUser;
   roles: string[];
   permissions: string[];
+  /** Which modules this session's roles and employee settings show; display only. */
+  modules?: Record<string, boolean>;
   /** §075: null unless an administrator is holding this session. */
   impersonation: {
     session_id: string | null;

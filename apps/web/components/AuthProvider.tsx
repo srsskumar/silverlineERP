@@ -25,6 +25,8 @@ export interface Session {
   user: MeResponse['user'];
   roles: string[];
   permissions: string[];
+  /** Module map from /auth/me (role and employee visibility settings); display only. */
+  modules?: MeResponse['modules'];
   /** §075: who is really at the keyboard, when it is not this user. */
   impersonation: MeResponse['impersonation'];
 }
@@ -113,6 +115,7 @@ function AuthInner({ children }: { children: React.ReactNode }) {
         user: sessionQuery.data.user,
         roles: sessionQuery.data.roles,
         permissions: sessionQuery.data.permissions,
+        modules: sessionQuery.data.modules,
         impersonation: sessionQuery.data.impersonation ?? null,
       }
     : null;

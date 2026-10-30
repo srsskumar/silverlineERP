@@ -1,5 +1,46 @@
+import { MODULE_CATALOG } from '@silverline/shared';
 import { NAV_GROUPS, QUICK_CREATE, type NavItem } from './nav';
 import { hasPermission } from './permissions';
+
+/**
+ * The catalog code for a sidebar destination. nav.ts and the catalog are the
+ * same list in the same order (tests/module-catalog.test.ts holds them in
+ * lock-step), so the n-th destination is the n-th catalog entry.
+ */
+export function navItemCode(href: string): string | undefined {
+  let index = 0;
+  for (const group of NAV_GROUPS) {
+    for (const item of group.items) {
+      if (item.href === href) return MODULE_CATALOG[index]?.code;
+      index += 1;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Whether the session's module map (role and employee visibility settings,
+ * resolved by /auth/me) leaves this destination on the sidebar. No map, or no
+ * entry for the code, means visible: an organisation that never configured
+ * anything sees what it always saw. Security and Configuration are never
+ * hidden this way -- one is where a locked-out person recovers, the other is
+ * where a wrong rule gets put right.
+ */
+export function moduleVisible(modules: Record<string, boolean> | undefined, item: NavItem): boolean {
+  if (item.href === '/security' || item.href === '/configuration') return true;
+  const code = navItemCode(item.href);
+  if (!code || !modules) return true;
+  return modules[code] !== false;
+}
+
+/** Permission gate and module map together: what the sidebar actually shows. */
+export function navItemShown(
+  permissions: string[] | undefined,
+  modules: Record<string, boolean> | undefined,
+  item: NavItem,
+): boolean {
+  return navItemVisible(permissions, item) && moduleVisible(modules, item);
+}
 
 /**
  * Whether a user can open a destination.
@@ -29,10 +70,15 @@ export function navItemVisible(permissions: string[] | undefined, item: NavItem)
  * to the work, which makes it the right order to fall back through — and it
  * means a role added later needs no special case here.
  */
-export function landingRoute(permissions: string[] | undefined): string {
+export function landingRoute(
+  permissions: string[] | undefined,
+  modules?: Record<string, boolean>,
+): string {
   for (const group of NAV_GROUPS) {
     for (const item of group.items) {
-      if (navItemVisible(permissions, item)) return item.href;
+      // Not a destination the sidebar hides: nobody should land on a page
+      // their own navigation does not show.
+      if (navItemShown(permissions, modules, item)) return item.href;
     }
   }
   // Every destination is gated and none matched. /security is reachable by

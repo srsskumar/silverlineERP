@@ -113,7 +113,7 @@ export default function DashboardPage() {
   // can actually do. Previously this page fired a project query at them and
   // rendered a refusal.
   if (!canSeeBoards) {
-    const onward = landingRoute(session?.permissions);
+    const onward = landingRoute(session?.permissions, session?.modules);
     return (
       <AppShell>
         <div className="flex items-baseline gap-3">

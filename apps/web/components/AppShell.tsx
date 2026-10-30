@@ -7,7 +7,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from './AuthProvider';
 import { hasPermission } from '@/lib/permissions';
-import { navItemVisible } from '@/lib/landing';
+import { navItemShown } from '@/lib/landing';
 import { PERMISSIONS } from '@/lib/permissions';
 import { hasUnreadDot, listInbox } from '@/lib/notifications';
 import { queryKeys } from '@/lib/query-keys';
@@ -128,7 +128,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const visibleGroups = NAV_GROUPS.map((group) => ({
     ...group,
-    items: group.items.filter((item) => session && navItemVisible(session.permissions, item)),
+    items: group.items.filter((item) => session && navItemShown(session.permissions, session.modules, item)),
   })).filter((group) => group.items.length > 0);
   // Fails closed. Without a session there are no permissions to check, so the
   // honest answer is an empty rail rather than the full one: showing every

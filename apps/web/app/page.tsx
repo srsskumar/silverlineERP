@@ -24,7 +24,7 @@ export default function RootPage() {
   useEffect(() => {
     if (status === 'loading') return;
     if (status === 'unauthenticated') { router.replace('/login'); return; }
-    router.replace(landingRoute(session?.permissions));
+    router.replace(landingRoute(session?.permissions, session?.modules));
   }, [router, session, status]);
 
   return (
